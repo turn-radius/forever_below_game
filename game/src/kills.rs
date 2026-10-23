@@ -52,7 +52,7 @@ fn kind_from_word(word: &str) -> Option<CreatureKind> {
 pub fn victim_of(denizen: &Denizen) -> Victim {
     let person = &denizen.person;
     let class = [Outfit::Fighter, Outfit::Ranger, Outfit::Mage, Outfit::Cleric, Outfit::Scavenger].into_iter().find(|o| o.key() == person.outfit).and_then(Outfit::class);
-    Victim::Member { faction: person.faction.id, folk: person.spec.folk, class }
+    Victim::Member { faction: person.faction.id, folk: Some(person.spec.folk), class }
 }
 
 /// Weighs each of the delver's kills this frame against every faction.
@@ -122,7 +122,7 @@ mod tests {
         assert!(standings.get(liker).value() < 0 && !standings.has_met(liker), "they hear of it, without meeting the delver");
         let member = world.factions().iter().map(|f| f.id).find(|f| *f != liker).unwrap();
         let before = standings.get(member).value();
-        weigh(&world, &mut standings, &[Victim::Member { faction: member, folk: world.faction(member).folk, class: None }]);
+        weigh(&world, &mut standings, &[Victim::Member { faction: member, folk: Some(world.faction(member).folk), class: None }]);
         assert!(standings.get(member).value() <= before - 40 + 10 && standings.has_met(member));
     }
 

@@ -12,6 +12,16 @@
 //! [`insular`](FactionSpec::insular). Three in four of its members are its folk; an insular
 //! faction is wholly its own folk ([`FactionSpec::member_folk`]).
 //!
+//! Below [`DENIZEN_DEPTH`] the abyss also holds denizen factions: a separate, salted part of the
+//! pool that follows the folk factions (so the folk factions of a world are what they were before
+//! denizens existed). A denizen faction ([`FactionSpec::denizen`]) is made of one kind of
+//! denizen ([`FactionSpec::member_body`]); it rolls a name, alignment, intention, likes and
+//! hates, colours and crest like any faction (a denizen faction can like or hate a folk faction,
+//! and a [`Preference::Faction`] can name a denizen one, but the folk factions' own tastes are
+//! rolled as ever, so a world's folk factions and the levels above the denizens do not change). A level
+//! draws the folk factions it always did and, from [`DENIZEN_DEPTH`] down, usually one denizen
+//! faction and sometimes two ([`World::draw_at`]).
+//!
 //! The seven factions of `data/factions.json` are examples the grammar was written from, not a
 //! list this crate reads.
 
@@ -23,6 +33,7 @@ pub use trade::{Master, Masters, Profession, Style, Tier, Trade, TradeRules, arm
 use armory::families::shield::roll_field;
 use armory::heraldry::{Division, Field};
 use fb_body::Folk;
+pub use fb_denizens::{DENIZEN_DEPTH, DenizenBody, DenizenKind, denizens_at};
 use procgen_grammar::faction_name;
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -35,10 +46,19 @@ pub const PER_LEVEL: (u32, u32) = (2, 4);
 pub const FOLK_LEAN: f64 = 0.75;
 /// Chance that a faction dislikes other folk and is made wholly of its own.
 const INSULAR_ODDS: f64 = 0.25;
+/// Denizen factions in a world's pool, inclusive: one of each kind, then up to two more.
+pub const DENIZEN_POOL: (u32, u32) = (4, 6);
+/// Chance that a level at or below [`DENIZEN_DEPTH`] holds a denizen faction.
+pub const DENIZEN_ODDS: f64 = 0.85;
+/// Chance that such a level holds a second one.
+pub const SECOND_DENIZEN_ODDS: f64 = 0.2;
 
 const SIZE_SALT: u32 = 0xFAC7_0001;
 const FACTION_SALT: u32 = 0xFAC7_0002;
 const DRAW_SALT: u32 = 0xFAC7_0003;
+const DENIZEN_SIZE_SALT: u32 = 0xFAC7_0004;
+const DENIZEN_SALT: u32 = 0xFAC7_0005;
+const DENIZEN_DRAW_SALT: u32 = 0xFAC7_0006;
 
 /// One faction, an index into its world's pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -215,7 +235,8 @@ pub struct FactionSpec {
     pub id: Faction,
     /// As the grammar writes it, article and all ("the Scale Court").
     pub name: String,
-    /// The folk most of its members are.
+    /// The folk most of its members are. For a denizen faction ([`FactionSpec::denizen`]) this is
+    /// a placeholder (human) that nothing may read: its members are denizens, not folk.
     pub folk: Folk,
     /// Its members dress from these two outfits, which differ.
     pub outfits: [Outfit; 2],
@@ -228,8 +249,11 @@ pub struct FactionSpec {
     /// Its colours (two tinctures of opposite kinds, in a divided field) and its crest.
     pub field: Field,
     pub armour: ArmourLean,
-    /// Dislikes other folk, and is made wholly of its own.
+    /// Dislikes other folk, and is made wholly of its own. Never set for a denizen faction.
     pub insular: bool,
+    /// The kind of denizen its members are, if it is a denizen faction rather than a folk one.
+    #[serde(default)]
+    pub denizen: Option<DenizenKind>,
 }
 
 impl FactionSpec {
@@ -237,6 +261,17 @@ impl FactionSpec {
     /// chance [`FOLK_LEAN`] and any folk else, from the member's stream `rng`.
     pub fn member_folk(&self, rng: &mut Mulberry32) -> Folk {
         if self.insular || rng.chance(FOLK_LEAN) { self.folk } else { *rng.pick(&Folk::ALL) }
+    }
+
+    /// Whether this is a denizen faction, whose members are denizens and never folk.
+    pub fn is_denizen(&self) -> bool {
+        self.denizen.is_some()
+    }
+
+    /// The body of a denizen member, picked from the bodies of its kind from the member's stream
+    /// `rng`; `None` for a folk faction, whose members come from [`FactionSpec::member_folk`].
+    pub fn member_body(&self, rng: &mut Mulberry32) -> Option<DenizenBody> {
+        self.denizen.map(|kind| *rng.pick(kind.bodies()))
     }
 
     /// The outfit keys of `data/outfits.json` its members dress from.
@@ -275,14 +310,44 @@ impl World {
         debug_assert!(POOL_SIZE.1 <= u8::MAX as u32, "a faction id is a u8");
         let count = Mulberry32::new(mix(seed, SIZE_SALT, 0)).int(POOL_SIZE.0, POOL_SIZE.1) as usize;
         let mut taken = HashSet::new();
-        let factions = (0..count)
+        let mut factions: Vec<FactionSpec> = (0..count)
             .map(|i| {
                 let spec = roll_faction(seed, i, count, &taken);
                 taken.insert(spec.name.clone());
                 spec
             })
             .collect();
+
+        // The denizen factions follow, from their own salted streams, so the folk factions above
+        // are what they were before denizens existed: one of each kind, then up to two more.
+        let mut kinds: Vec<DenizenKind> = DenizenKind::ALL.to_vec();
+        let mut size = Mulberry32::new(mix(seed, DENIZEN_SIZE_SALT, 0));
+        let extra = size.int(DENIZEN_POOL.0, DENIZEN_POOL.1) as usize - kinds.len();
+        kinds.extend((0..extra).map(|_| *size.pick(&DenizenKind::ALL)));
+        debug_assert!(count + kinds.len() <= u8::MAX as usize, "a faction id is a u8");
+        let total = count + kinds.len();
+        for (j, kind) in kinds.into_iter().enumerate() {
+            let spec = roll_denizen_faction(seed, count + j, total, kind, &taken);
+            taken.insert(spec.name.clone());
+            factions.push(spec);
+        }
+
         World { seed, factions }
+    }
+
+    /// How many of the pool are folk factions: the first ones, which every level draws from.
+    pub fn folk_count(&self) -> usize {
+        self.factions.iter().take_while(|f| f.denizen.is_none()).count()
+    }
+
+    /// The folk factions of the pool, in order.
+    pub fn folk_factions(&self) -> &[FactionSpec] {
+        &self.factions[..self.folk_count()]
+    }
+
+    /// The denizen factions of the pool, in order: they follow the folk factions.
+    pub fn denizen_factions(&self) -> &[FactionSpec] {
+        &self.factions[self.folk_count()..]
     }
 
     /// The whole pool, in order.
@@ -294,11 +359,13 @@ impl World {
         &self.factions[id.0 as usize % self.factions.len()]
     }
 
-    /// The two to four factions a level of seed `level_seed` holds, in a seeded order.
+    /// The two to four folk factions a level of seed `level_seed` holds, in a seeded order. Never
+    /// a denizen faction: see [`World::draw_at`].
     pub fn draw(&self, level_seed: u32) -> Vec<Faction> {
         let mut rng = Mulberry32::new(mix(self.seed, DRAW_SALT, level_seed));
-        let count = (rng.int(PER_LEVEL.0, PER_LEVEL.1) as usize).min(self.factions.len());
-        let mut ids: Vec<Faction> = self.factions.iter().map(|f| f.id).collect();
+        let folk = self.folk_factions();
+        let count = (rng.int(PER_LEVEL.0, PER_LEVEL.1) as usize).min(folk.len());
+        let mut ids: Vec<Faction> = folk.iter().map(|f| f.id).collect();
         shuffle(&mut ids, &mut rng);
         ids.truncate(count);
         ids
@@ -307,6 +374,34 @@ impl World {
     /// The specs a level of seed `level_seed` holds ([`World::draw`]).
     pub fn draw_specs(&self, level_seed: u32) -> Vec<FactionSpec> {
         self.draw(level_seed).into_iter().map(|id| self.faction(id).clone()).collect()
+    }
+
+    /// The factions a level of seed `level_seed`, `depth` levels down, holds: the folk draw, and
+    /// from [`DENIZEN_DEPTH`] down usually one denizen faction ([`DENIZEN_ODDS`]) and sometimes
+    /// a second ([`SECOND_DENIZEN_ODDS`]), last in the list. Above that depth it is exactly
+    /// [`World::draw`].
+    pub fn draw_at(&self, level_seed: u32, depth: u32) -> Vec<Faction> {
+        let mut ids = self.draw(level_seed);
+        let denizens = self.denizen_factions();
+        if denizens_at(depth) && !denizens.is_empty() {
+            let mut rng = Mulberry32::new(mix(self.seed, DENIZEN_DRAW_SALT, level_seed));
+            if rng.chance(DENIZEN_ODDS) {
+                let first = rng.pick(denizens).id;
+                ids.push(first);
+                if rng.chance(SECOND_DENIZEN_ODDS) {
+                    let others: Vec<Faction> = denizens.iter().map(|f| f.id).filter(|id| *id != first).collect();
+                    if !others.is_empty() {
+                        ids.push(*rng.pick(&others));
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    /// The specs a level of seed `level_seed` at `depth` holds ([`World::draw_at`]).
+    pub fn draw_specs_at(&self, level_seed: u32, depth: u32) -> Vec<FactionSpec> {
+        self.draw_at(level_seed, depth).into_iter().map(|id| self.faction(id).clone()).collect()
     }
 }
 
@@ -407,7 +502,84 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
         name = format!("{name} of the {}th Hall", index + 1);
     }
 
-    FactionSpec { id, name, folk, outfits, alignment, intention, likes, hates, field, armour, insular }
+    FactionSpec { id, name, folk, outfits, alignment, intention, likes, hates, field, armour, insular, denizen: None }
+}
+
+/// A denizen faction of `kind` at pool index `index` of `total`. Its members are denizens, so its
+/// `folk` is a placeholder and it is never insular. Denizens wear little: the outfits are the
+/// gear they carry (a fighter's weapons, a mage's trinkets) more than clothes, and the armour
+/// lean is light for fauns and heavier for minotaurs and cyclopes, which the body code may
+/// ignore. The kind sets the odds of an alignment (demons lean evil, fauns chaotic good or
+/// neutral) and of an intention.
+fn roll_denizen_faction(world: u32, index: usize, total: usize, kind: DenizenKind, taken: &HashSet<String>) -> FactionSpec {
+    use Alignment::*;
+    use Outfit::*;
+    let mut rng = Mulberry32::new(mix(world, DENIZEN_SALT, index as u32));
+    let id = Faction(index as u8);
+
+    let (intentions, alignments, dress, armours): (&[(Intention, u32)], &[(Alignment, u32)], &[(Outfit, u32)], &[(ArmourLean, u32)]) = match kind {
+        DenizenKind::Minotaur => (
+            &[(Intention::Plunder, 3), (Intention::WayOut, 2), (Intention::Worship, 1)],
+            &[(ChaoticEvil, 3), (NeutralEvil, 2), (LawfulNeutral, 1), (TrueNeutral, 1)],
+            &[(Fighter, 4), (Scavenger, 3), (Ranger, 1)],
+            &[(ArmourLean::Leather, 3), (ArmourLean::Scale, 2), (ArmourLean::Plate, 1)],
+        ),
+        DenizenKind::Cyclops => (
+            &[(Intention::Trade, 3), (Intention::Worship, 2), (Intention::Plunder, 1), (Intention::WayOut, 1)],
+            &[(LawfulNeutral, 3), (TrueNeutral, 2), (LawfulEvil, 2), (ChaoticEvil, 1)],
+            &[(Fighter, 3), (Scavenger, 3), (Cleric, 1)],
+            &[(ArmourLean::Leather, 2), (ArmourLean::Mail, 2), (ArmourLean::Plate, 1)],
+        ),
+        DenizenKind::Faun => (
+            &[(Intention::Worship, 3), (Intention::Trade, 2), (Intention::WayOut, 1)],
+            &[(ChaoticGood, 3), (ChaoticNeutral, 3), (NeutralGood, 2), (TrueNeutral, 1)],
+            &[(Ranger, 4), (Mage, 2), (Cleric, 2)],
+            &[(ArmourLean::Padded, 3), (ArmourLean::Leather, 2)],
+        ),
+        DenizenKind::Demon => (
+            &[(Intention::Worship, 3), (Intention::Plunder, 2), (Intention::Trade, 1), (Intention::WayOut, 1)],
+            &[(LawfulEvil, 3), (ChaoticEvil, 3), (NeutralEvil, 2), (ChaoticNeutral, 1)],
+            &[(Mage, 3), (Cleric, 3), (Fighter, 2)],
+            &[(ArmourLean::Leather, 3), (ArmourLean::Scale, 3), (ArmourLean::Padded, 1)],
+        ),
+    };
+    let intention = *rng.weighted(intentions);
+    let alignment = *rng.weighted(alignments);
+    let first = *rng.weighted(dress);
+    let rest: Vec<(Outfit, u32)> = dress.iter().copied().filter(|(o, _)| *o != first).collect();
+    let outfits = [first, *rng.weighted(&rest)];
+    let armour = *rng.weighted(armours);
+    let field = roll_field(&mut rng, true, &DIVISIONS, 1.0);
+
+    // Tastes come off two shuffled lists with nothing in both, from everything in the world:
+    // creatures, the classes they do not dress in, every other faction and, unlike a folk
+    // faction, any folk.
+    let mut pool: Vec<Preference> = CreatureKind::ALL.iter().map(|&k| Preference::Creature(k)).collect();
+    let worn: Vec<ClassKind> = outfits.iter().filter_map(|o| o.class()).collect();
+    pool.extend(ClassKind::ALL.iter().filter(|c| !worn.contains(c)).map(|&c| Preference::Class(c)));
+    pool.extend((0..total).filter(|&i| i != index).map(|i| Preference::Faction(Faction(i as u8))));
+    pool.extend(Folk::ALL.iter().map(|&f| Preference::Folk(f)));
+    let mut like_pool = pool.clone();
+    let mut hate_pool = pool;
+    shuffle(&mut like_pool, &mut rng);
+    shuffle(&mut hate_pool, &mut rng);
+    let likes: Vec<Preference> = like_pool.into_iter().take(rng.int(1, 3) as usize).collect();
+    let hate_count = rng.int(1, 3) as usize;
+    let hates: Vec<Preference> = hate_pool.into_iter().filter(|p| !likes.contains(p)).take(hate_count).collect();
+
+    let (kind_key, intention_key) = (kind.key(), intention.key());
+    let mut name = faction_name(kind_key, intention_key, rng.int(0, u32::MAX));
+    for _ in 0..64 {
+        if !taken.contains(&name) {
+            break;
+        }
+        name = faction_name(kind_key, intention_key, rng.int(0, u32::MAX));
+    }
+    if taken.contains(&name) {
+        name = format!("{name} of the {}th Pit", index + 1);
+    }
+
+    FactionSpec { id, name, folk: Folk::Human, outfits, alignment, intention, likes, hates, field, armour, insular: false, denizen: Some(kind) }
 }
 
 fn shuffle<T>(items: &mut [T], rng: &mut Mulberry32) {

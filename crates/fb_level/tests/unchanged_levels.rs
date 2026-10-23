@@ -92,7 +92,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 5262717835022530330, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when corridors took widths by rank (#581), and when rough rock's main width became two to three, and again when levels took a past and cell blocks were carved (#587), rooms were furnished by their purpose (#588) and braziers left the front of cell gates, and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618), and again when wild groups took rooms of their own (#662) and the rats and snakes made way for them (#662)");
+    assert_eq!(all_levels_hash(), 17128194721267019627, "snapshot taken before finishes; retaken when levels from the denizen depth down drew denizen factions (#627), which moves their claims and everything that reads them; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when corridors took widths by rank (#581), and when rough rock's main width became two to three, and again when levels took a past and cell blocks were carved (#587), rooms were furnished by their purpose (#588) and braziers left the front of cell gates, and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618), and again when wild groups took rooms of their own (#662) and the rats and snakes made way for them (#662)");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
@@ -122,5 +122,26 @@ fn all_levels_before_folk_hash() -> u64 {
 
 #[test]
 fn layout_items_and_lights_match_those_before_factions() {
-    assert_eq!(all_levels_before_folk_hash(), 6637469238529347463, "snapshot of everything before the folk; retaken when corridors took widths by rank (#581), and when rough rock's main width became two to three, and when cell blocks were carved (#587), purposed rooms took braziers, books and loot off their walls (#588) and braziers left the front of cell gates, and again when floor items left claimed rooms (#618)");
+    assert_eq!(all_levels_before_folk_hash(), 4734665856605645261, "snapshot of everything before the folk; retaken when levels from the denizen depth down drew denizen factions (#627), whose claims take items and add braziers (depths 1 and 2 are held apart by levels_above_the_denizen_depth_are_unchanged); retaken when corridors took widths by rank (#581), and when rough rock's main width became two to three, and when cell blocks were carved (#587), purposed rooms took braziers, books and loot off their walls (#588) and braziers left the front of cell gates, and again when floor items left claimed rooms (#618)");
+}
+
+/// A hash of the levels of seeds 1..=50 at `depth`, with the `denizen: None` every folk spot gained
+/// (#627) left out of its text, so it can be compared with one taken before the field existed.
+fn depth_hash(depth: u32) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for seed in 1..=50 {
+        let text = round_floats(&format!("{:?}", generate(seed, depth))).replace(", denizen: None", "");
+        for b in text.bytes() {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// Levels above the depth denizens live at (3) are exactly what they were before denizen factions
+/// existed: the hashes were taken at the commit before they were rolled.
+#[test]
+fn levels_above_the_denizen_depth_are_unchanged() {
+    assert_eq!(depth_hash(1), 4009953272901259597);
+    assert_eq!(depth_hash(2), 1591081753721234687);
 }

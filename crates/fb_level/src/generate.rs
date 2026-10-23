@@ -206,7 +206,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
     }
     furnish(&mut level, &mut Mulberry32::new(layout_seed ^ FURNISH_SALT), p);
     let start_room = level.start_room().expect("the entrance leads into a room");
-    level.factions = fb_faction::World::new(world_seed).draw_specs(seed);
+    level.factions = fb_faction::World::new(world_seed).draw_specs_at(seed, depth);
     // A room too cramped or crowded for its claim's folk to stand in cannot start a claim; the
     // claims are grown again without it, until every claim holds a few folk at least.
     let mut cramped: Vec<usize> = Vec::new();
@@ -1350,7 +1350,9 @@ mod tests {
         let text = format!(
             "{:?}",
             (&level.seed, &level.width, &level.height, &level.cells, &level.ceiling, &level.entrance, &level.rooms, &level.items, &level.lights, &level.folk, &level.props, level.creatures.iter().filter(|c| c.species.is_rat() || c.species.is_snake()).collect::<Vec<_>>())
-        );
+        )
+        // Folk spots gained a `denizen` field (#627), which the old text did not have.
+        .replace(", denizen: None", "");
         text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
     }
 

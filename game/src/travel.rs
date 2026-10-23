@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(background.stone, stone_chunks(&level));
         // Each folk figure, mesh buffers and all, is the one built here, one at a time.
         assert!(!level.folk.is_empty(), "the level has folk to make");
-        assert_eq!(background.folk.len(), level.folk.len());
+        assert_eq!(background.folk.len(), level.folk.iter().filter(|s| crate::folk::has_figure(s)).count());
         for spot in &level.folk {
             let person = Person::of(spot, level.faction(spot.faction), 2);
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);

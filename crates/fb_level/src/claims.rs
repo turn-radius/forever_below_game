@@ -62,6 +62,9 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
     let total = rng.int(TARGET_COUNT.0, TARGET_COUNT.1) as usize;
     let mut order: Vec<usize> = (0..n).collect();
     shuffle(&mut order, rng);
+    // A denizen faction is why the level is deep: when the creatures leave room for only some of
+    // the factions, the denizens are the ones that keep theirs (the shuffle's order otherwise).
+    order.sort_by_key(|&k| !level.factions[k].is_denizen());
     order.truncate(budget.min(n));
     let m = order.len();
     let mut strength = vec![0; n];

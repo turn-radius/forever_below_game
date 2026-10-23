@@ -161,6 +161,15 @@ pub fn footprint(figure: &Figure) -> f32 {
     figure.body.shoulder_half_width * 1.2 + 0.3
 }
 
+/// Whether the game makes a person and a figure for `spot`. Denizens of the abyss
+/// ([`FolkSpot::denizen`]) are not dressed as folk bodies, and have no body of their own in the
+/// game yet, so for now their spots stay in [`Level::folk`] (the saved records of the others
+/// still count them) but nobody is made or spawned for them. When the denizen bodies land
+/// (`fb_creatures`) this goes, and their spots are spawned as creature rigs.
+pub fn has_figure(spot: &FolkSpot) -> bool {
+    spot.denizen.is_none()
+}
+
 /// Figures already built, by spot seed, so a level drawn again reuses them.
 #[derive(Resource, Default)]
 pub struct FolkFigures {
@@ -174,7 +183,7 @@ impl FolkFigures {
     /// The person and figure for every spot in `spots` on a level `depth` down, building (in
     /// parallel) those not yet built.
     pub fn for_spots(&mut self, spots: &[FolkSpot], factions: &[FactionSpec], depth: u32) -> Vec<Arc<(Person, Figure)>> {
-        let missing: Vec<FolkSpot> = spots.iter().filter(|s| !self.built.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
+        let missing: Vec<FolkSpot> = spots.iter().filter(|s| has_figure(s)).filter(|s| !self.built.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
         self.built_here += missing.len();
         self.keep(build_figures(&missing, factions, depth));
         spots.iter().filter_map(|s| self.built.get(&s.seed).cloned()).collect()
@@ -193,7 +202,7 @@ impl FolkFigures {
 /// the async compute pool so that, ahead of time, it leaves the frame's own pool free.
 pub fn build_figures(spots: &[FolkSpot], factions: &[FactionSpec], depth: u32) -> Vec<(Person, Figure)> {
     AsyncComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
-        for spot in spots {
+        for spot in spots.iter().filter(|s| has_figure(s)) {
             scope.spawn(async move {
                 let faction = factions.iter().find(|f| f.id == spot.faction).expect("a spot's faction is on its level");
                 let person = Person::of(spot, faction, depth);
@@ -333,7 +342,9 @@ pub(crate) fn spawn_folk(
     }
     // On a level that was left, each folk is as they were left (`crate::record`).
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
-    for (index, built) in figures.for_spots(&level.0.folk, &level.0.factions, level.0.depth).into_iter().enumerate() {
+    // A saved record is kept by a spot's place in the whole list, denizens' spots included.
+    let indices = level.0.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).map(|(i, _)| i);
+    for (index, built) in indices.zip(figures.for_spots(&level.0.folk, &level.0.factions, level.0.depth)) {
         let (person, figure) = &*built;
         let left = saved.and_then(|l| l.folk.get(&index));
         let Some(left) = left else {
