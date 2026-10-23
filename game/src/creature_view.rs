@@ -22,6 +22,9 @@ use crate::turntable::{PLATE, PLATE_INK, SPIN_SPEED, framing_distance};
 const FILL: f32 = 0.8;
 /// How far above level the camera looks down, radians.
 const ELEVATION: f32 = 0.42;
+/// How much more room a moving minotaur is framed in than it needs at rest, across and up: its
+/// blows and gestures reach well past where it stands.
+const MINOTAUR_MOTION_ROOM: Vec3 = Vec3::new(1.5, 1.1, 1.5);
 
 pub struct CreatureViewPlugin;
 
@@ -289,7 +292,7 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
     }
     // A minotaur's blows and gestures reach well past where it stands at rest.
     if matches!(creature, Creature::Minotaur(_)) && choice.motion != ViewMotion::Still {
-        size = size * Vec3::new(1.5, 1.1, 1.5);
+        size *= MINOTAUR_MOTION_ROOM;
     }
     if matches!(creature, Creature::Jackalope(_)) && choice.motion == ViewMotion::Rearing {
         // Sat up it stands well taller than at rest.
@@ -319,7 +322,7 @@ fn show_creature(mut commands: Commands, choice: Res<CreatureChoice>, old: Query
         Creature::Skeleton(skeleton) => Some(skeleton.dims()),
         Creature::Troll(troll) => Some(troll.dims()),
         Creature::Minotaur(minotaur) => Some(minotaur.dims()),
-        _ => None,
+        Creature::Rat(_) | Creature::Snake(_) | Creature::Spider(_) | Creature::Jackalope(_) | Creature::Centipede(_) | Creature::Bat(_) => None,
     };
     commands.entity(pivot).insert(Shown { creature, bones, size, time: 0.0, cycle: 0.0, dims, stance });
 }
@@ -372,7 +375,7 @@ fn move_creature(time: Res<Time>, choice: Res<CreatureChoice>, mut shown: Query<
             }
             Creature::Minotaur(minotaur) => {
                 let dims = shown.dims.get_or_insert_with(|| minotaur.dims());
-                shown.cycle = (shown.cycle + speed * dt / pose::minotaur_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                shown.cycle = (shown.cycle + speed * dt / pose::denizen_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
                 // A chop or a gore every 2.4 seconds, wound up and thrown over 1.6 and then held
                 // at the guard; a gesture a phrase of four seconds, over and over.
                 let blow = (t % 2.4 / 1.6).min(1.0);

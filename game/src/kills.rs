@@ -27,19 +27,20 @@ impl Plugin for KillsPlugin {
     }
 }
 
-/// The kind of creature factions know a species as.
-pub fn kind_of(species: Species) -> CreatureKind {
-    match species {
+/// The kind of creature factions know a species as; denizens are no kind of creature, they
+/// are folk of factions of their own, and have none.
+pub fn kind_of(species: Species) -> Option<CreatureKind> {
+    Some(match species {
         Species::Rat | Species::GiantRat => CreatureKind::Rats,
         Species::PoisonousSnake | Species::ConstrictorSnake => CreatureKind::Snakes,
         Species::Skeleton => CreatureKind::Undead,
         Species::GiantSpider => CreatureKind::Spiders,
-        // The nearest kind there is until the denizens' own factions give them one.
-        Species::Troll | Species::Minotaur => CreatureKind::Trolls,
+        Species::Troll => CreatureKind::Trolls,
         Species::Jackalope => CreatureKind::Jackalopes,
         Species::GiantCentipede => CreatureKind::Centipedes,
         Species::Bat | Species::GiantBat => CreatureKind::Bats,
-    }
+        Species::Minotaur => return None,
+    })
 }
 
 /// Reads a dev kind word ("spider", "rats") as a kind.
@@ -62,7 +63,7 @@ pub fn kills_move_standing(mut slain: MessageReader<Slain>, abyss: Option<Res<Ab
         .read()
         .filter(|s| !s.by_ally)
         .filter_map(|s| match (creatures.get(s.target), folk.get(s.target)) {
-            (Ok(critter), _) => Some(Victim::Creature(kind_of(critter.creature.species()))),
+            (Ok(critter), _) => kind_of(critter.creature.species()).map(Victim::Creature),
             (_, Ok(denizen)) => Some(victim_of(denizen)),
             _ => None,
         })
@@ -106,8 +107,10 @@ mod tests {
 
     #[test]
     fn every_species_has_a_kind_and_words_read() {
-        assert_eq!(kind_of(Species::GiantRat), CreatureKind::Rats);
-        assert_eq!(kind_of(Species::Skeleton), CreatureKind::Undead);
+        assert_eq!(kind_of(Species::GiantRat), Some(CreatureKind::Rats));
+        assert_eq!(kind_of(Species::Skeleton), Some(CreatureKind::Undead));
+        // Every species but the denizens is a kind of creature.
+        assert!(Species::ALL.iter().all(|s| kind_of(*s).is_some() != s.denizen_body().is_some()));
         assert_eq!(kind_from_word("spider"), Some(CreatureKind::Spiders));
         assert_eq!(kind_from_word("Rats"), Some(CreatureKind::Rats));
         assert_eq!(kind_from_word("dragon"), None);
@@ -131,7 +134,7 @@ mod tests {
     fn a_kill_by_an_allied_folk_moves_no_standing_and_the_delvers_does() {
         let level = fb_level::generate(1207, 1);
         let spot = level.creatures[0];
-        let kind = kind_of(spot.species);
+        let kind = kind_of(spot.species).expect("a wild creature has a kind");
         let thing = fb_faction::Preference::Creature(kind);
         let run_seed = (0..500).find(|s| fb_faction::World::new(*s).factions().iter().any(|f| f.likes.contains(&thing) || f.hates.contains(&thing))).expect("a world whose factions care");
         let standings_after = |by_ally: bool| {

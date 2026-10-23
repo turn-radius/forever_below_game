@@ -618,6 +618,8 @@ impl Species {
             Species::Skeleton => Foe::Undead,
             Species::GiantSpider => Foe::Spider,
             Species::PoisonousSnake | Species::ConstrictorSnake => Foe::Serpent,
+            // The minotaur's is the nearest kind of foe there is: the denizens get their own with
+            // their factions.
             Species::Jackalope | Species::Minotaur => Foe::Beast,
             Species::Troll => Foe::Troll,
         }
@@ -652,7 +654,7 @@ impl Species {
     pub fn denizen_body(self) -> Option<fb_denizens::DenizenBody> {
         match self {
             Species::Minotaur => Some(fb_denizens::DenizenBody::Minotaur),
-            _ => None,
+            Species::Rat | Species::GiantRat | Species::PoisonousSnake | Species::ConstrictorSnake | Species::Skeleton | Species::GiantSpider | Species::Troll | Species::Jackalope | Species::GiantCentipede | Species::Bat | Species::GiantBat => None,
         }
     }
 
@@ -868,12 +870,15 @@ mod tests {
         use fb_denizens::DenizenBody;
         assert_eq!(Species::Minotaur.denizen_body(), Some(DenizenBody::Minotaur));
         assert_eq!(Species::of_denizen(DenizenBody::Minotaur), Some(Species::Minotaur));
-        // The bodies not built yet have no species, and no other species is a denizen.
+        // The bodies not built yet have no species.
         for body in [DenizenBody::Cyclops, DenizenBody::Faun, DenizenBody::WingedDemon, DenizenBody::HornedDemon, DenizenBody::Succubus] {
             assert_eq!(Species::of_denizen(body), None, "{body:?}");
         }
-        assert!(Species::ALL.iter().filter(|s| s.denizen_body().is_some()).all(|&s| Species::of_denizen(s.denizen_body().unwrap()) == Some(s)));
-        assert_eq!(Species::ALL.iter().filter(|s| s.denizen_body().is_some()).count(), 1);
+        // No other species is a denizen.
+        for species in [Species::Rat, Species::GiantRat, Species::PoisonousSnake, Species::ConstrictorSnake, Species::Skeleton, Species::GiantSpider, Species::Troll, Species::Jackalope, Species::GiantCentipede, Species::Bat, Species::GiantBat] {
+            assert_eq!(species.denizen_body(), None, "{species:?}");
+        }
+        assert_eq!(Species::ALL.len(), 12);
     }
 
     #[test]

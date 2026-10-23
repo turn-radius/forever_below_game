@@ -38,8 +38,9 @@
 //!   skeleton's; a swing is a two-claw rake, both arms raised and brought down one just behind
 //!   the other.
 //!
-//! - [`minotaur_with`]: a denizen's stand, walk on digitigrade legs, two-handed chop, gore and
-//!   talking gesture ([`DenizenPose`]), with a tail that swings and lifts.
+//! - [`denizen_with`]: a denizen's stand and walk on its frame's legs (digitigrade or not), with
+//!   a tail that swings; [`minotaur_with`] adds the minotaur's two-handed chop, gore and talking
+//!   gesture ([`DenizenPose`]).
 //!
 //! The gait's timing, the wave's shape and every amplitude here are our own tuning.
 
@@ -1379,38 +1380,38 @@ pub fn troll_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Denizens: the minotaur's stand, walk, chop, gore and talking gesture, on a denizen frame.
+// Denizens: stand, walk and fall on a denizen frame, and the minotaur's own blows and speech.
 //
-// - Standing breathes, the head swaying a little and the tail swinging from its root.
-// - Walking is the skeleton's gait on digitigrade legs: the hock is the leg's "ankle", the
-//   pastern keeps the hoof level, so the planted hoof's sole is on the floor, and a lifted foot
-//   flexes its toe up to clear it.
-// - A chop is a two-handed blow over the shoulder, as a greataxe is swung: both arms raised
-//   together, thrown down through the blow with the trunk and the weight going forward onto the
-//   planted front foot.
-// - A gore lowers the head and shoulders, draws back, and drives the horns forward with the
-//   weight, the tail lifting.
-// - A gesture is how a denizen talks until the delver knows its tongue: an open hand raised and
-//   turned palm up, beckoning, the other hand answering lower, the head nodding and the jaw
-//   moving in time.
+// - [`denizen_with`] is every denizen's base: standing breathes, the head swaying a little and
+//   the tail swinging from its root; walking is the skeleton's gait, on the legs the frame gave
+//   it. Digitigrade legs take the hock as the leg's "ankle", the pastern keeps the hoof level, so
+//   the planted hoof's sole is on the floor, and a lifted foot flexes its toe up to clear it;
+//   plantigrade legs are the skeleton's own.
+// - [`minotaur_with`] adds what is the minotaur's: a two-handed chop over the shoulder, as a
+//   greataxe is swung (both arms raised together, thrown down through the blow with the weight
+//   going onto the planted front foot); a gore that lowers the head and shoulders, draws back and
+//   drives the horns forward, the tail lifting; and a gesture, how a denizen talks until the
+//   delver knows its tongue: an open hand raised and turned palm up, beckoning, the other hand
+//   answering lower, the head nodding and the jaw moving in time.
 // ---------------------------------------------------------------------------------------------
 
 /// How a denizen is moving at a moment.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DenizenPose {
-    /// The step cycle, radians: one turn per [`minotaur_stride`] walked.
+    /// The step cycle, radians: one turn per [`denizen_stride`] walked.
     pub stride: f32,
     /// Speed as a share of its walking speed: 0 standing, 1 walking.
     pub pace: f32,
     /// Seconds, for what it does standing: breathing, the head's sway and the tail.
     pub time: f32,
     /// How far through a two-handed chop it is, 0 at the guard, through the wind-up and the
-    /// blow to 1 back at the guard; `None` for no chop.
+    /// blow to 1 back at the guard; `None` for no chop. Only [`minotaur_with`] reads it.
     pub swing: Option<f32>,
     /// How far through a gore it is, 0 at rest through the draw back and the thrust to 1; `None`
-    /// for none.
+    /// for none. Only [`minotaur_with`] reads it.
     pub gore: Option<f32>,
     /// How far through a gesture of speech it is, 0 to 1 over the whole phrase; `None` for none.
+    /// Only [`minotaur_with`] reads it.
     pub gesture: Option<f32>,
     /// How far the head turns toward its left (+X), radians.
     pub look: f32,
@@ -1418,13 +1419,18 @@ pub struct DenizenPose {
     pub jaw: f32,
 }
 
-/// The ground a minotaur covers in one full step cycle: the skeleton's, a step of 0.7 of its leg.
-pub fn minotaur_stride(dims: &SkeletonDims) -> f32 {
+/// The ground a denizen covers in one full step cycle: the skeleton's, a step of 0.7 of its leg.
+pub fn denizen_stride(dims: &SkeletonDims) -> f32 {
     skeleton_stride(dims)
 }
 
 fn rot_z(a: f32) -> Mat3 {
     Mat3::from_axis_angle([0.0, 0.0, 1.0], a)
+}
+
+/// Whether the legs stand on the toes, the hock held high above the floor.
+fn is_digitigrade(d: &SkeletonDims) -> bool {
+    d.ankles[0][1] > 0.2 * d.legs[0][0][1]
 }
 
 /// Both legs solved to hold the hocks at `feet` (z in body space, right then left) and `lift`
@@ -1449,28 +1455,31 @@ fn plant_legs(d: &SkeletonDims, out: &mut [Placement], pelvis_z: f32, feet: [f32
     }
 }
 
-/// Every bone's placement on its parent for a minotaur moving as `pose` says: the skeleton's
-/// eighteen, then the tail's three ([`crate::denizen::TAIL_FIRST`]). Our own timings.
-pub fn minotaur_with(d: &SkeletonDims, pose: &DenizenPose) -> Vec<Placement> {
-    use crate::denizen::{TAIL_BONES, TAIL_FIRST, TAIL_REST, tail_offsets};
-    use skeleton_bone as bone;
-    let attacking = pose.swing.is_some() || pose.gore.is_some();
-    let moving = if attacking { 0.0 } else { pose.pace.clamp(0.0, 1.0) };
-    let t = pose.time;
-    let base = SkeletonPose { stride: pose.stride, pace: moving, time: t, swing: None, look: pose.look, jaw: pose.jaw };
-    let mut out = skeleton_armed(d, &base, &[None, None]);
-    let leg_len = d.thigh + d.shin;
-    let u = 0.1 * leg_len;
-    let arm_pose = |out: &mut Vec<Placement>, k: usize, forward: f32, bend: f32, abduct: f32, twist: f32| {
-        let side = Side::BOTH[k];
-        let out_way = if k == 0 { -1.0 } else { 1.0 };
-        let b = arm_bone(side);
-        out[b].rotation = rot_x(-forward).mul_mat(&rot_z(out_way * abduct)).mul_mat(&rot_y(twist));
-        out[b + 1].rotation = rot_x(-bend);
-    };
+/// The tail's placements, after the skeleton's bones in `out` (which is cut back to them): hung
+/// from behind the seat, swinging from its root in a wave (in step with the legs when walking at
+/// `moving`), and lifted by `lift`, 0 to 1, in a blow.
+fn set_tail(out: &mut Vec<Placement>, d: &SkeletonDims, tail_bones: usize, pose: &DenizenPose, moving: f32, lift: f32) {
+    use crate::denizen::{TAIL_FIRST, TAIL_REST, tail_offsets};
+    out.truncate(TAIL_FIRST);
+    let offsets = tail_offsets(d, tail_bones);
+    let wave = if moving > 0.0 { 0.22 * moving } else { 0.14 };
+    for (i, &origin) in offsets.iter().enumerate() {
+        let phase = if moving > 0.0 { pose.stride - 0.9 * i as f32 } else { 1.3 * pose.time - 0.9 * i as f32 };
+        let yaw = wave * phase.sin();
+        let pitch = (if i == 0 { TAIL_REST } else { 0.0 }) + 0.06 * (0.9 * pose.time - i as f32).sin() + (0.7 - 0.2 * i as f32).max(0.1) * lift;
+        out.push(Placement { rotation: rot_x(pitch).mul_mat(&rot_y(yaw)), origin });
+    }
+}
 
+/// Every bone's placement on its parent for a denizen standing or walking as `pose` says (its
+/// blows and gestures are for the species' own poses): the skeleton's eighteen, then a tail of
+/// `tail_bones` ([`crate::denizen::TAIL_FIRST`]), and any bones after are for the caller.
+pub fn denizen_with(d: &SkeletonDims, tail_bones: usize, pose: &DenizenPose) -> Vec<Placement> {
+    let moving = pose.pace.clamp(0.0, 1.0);
+    let base = SkeletonPose { stride: pose.stride, pace: moving, time: pose.time, swing: None, look: pose.look, jaw: pose.jaw };
+    let mut out = skeleton_armed(d, &base, &[None, None]);
     // The walk's toes: a lifted hoof flexes up through its swing, to clear the floor.
-    if moving > 0.0 {
+    if moving > 0.0 && is_digitigrade(d) {
         for (k, side) in Side::BOTH.into_iter().enumerate() {
             let c = (pose.stride / TAU + if k == 0 { 0.5 } else { 0.0 }).rem_euclid(1.0);
             if c >= DUTY {
@@ -1480,6 +1489,40 @@ pub fn minotaur_with(d: &SkeletonDims, pose: &DenizenPose) -> Vec<Placement> {
             }
         }
     }
+    set_tail(&mut out, d, tail_bones, pose, moving, 0.0);
+    out
+}
+
+/// A denizen `share` of the way (0 to 1) through collapsing onto its back: the skeleton's fall,
+/// with a tail of `tail_bones` left hanging.
+pub fn denizen_fallen(d: &SkeletonDims, tail_bones: usize, share: f32) -> Vec<Placement> {
+    let mut out = skeleton_fallen(d, share);
+    set_tail(&mut out, d, tail_bones, &DenizenPose::default(), 0.0, 0.0);
+    out
+}
+
+/// A minotaur `share` of the way through collapsing onto its back ([`denizen_fallen`]).
+pub fn minotaur_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
+    denizen_fallen(d, crate::minotaur::TAIL_BONES, share)
+}
+
+/// Every bone's placement on its parent for a minotaur moving as `pose` says: the denizen's
+/// stand and walk ([`denizen_with`]) with its chop, gore and gesture. Our own timings.
+pub fn minotaur_with(d: &SkeletonDims, pose: &DenizenPose) -> Vec<Placement> {
+    use crate::minotaur::TAIL_BONES;
+    use skeleton_bone as bone;
+    let attacking = pose.swing.is_some() || pose.gore.is_some();
+    let on_foot = DenizenPose { pace: if attacking { 0.0 } else { pose.pace }, ..*pose };
+    let mut out = denizen_with(d, TAIL_BONES, &on_foot);
+    let leg_len = d.thigh + d.shin;
+    let u = 0.1 * leg_len;
+    let arm_pose = |out: &mut Vec<Placement>, k: usize, forward: f32, bend: f32, abduct: f32, twist: f32| {
+        let side = Side::BOTH[k];
+        let out_way = if k == 0 { -1.0 } else { 1.0 };
+        let b = arm_bone(side);
+        out[b].rotation = rot_x(-forward).mul_mat(&rot_z(out_way * abduct)).mul_mat(&rot_y(twist));
+        out[b + 1].rotation = rot_x(-bend);
+    };
 
     let mut jaw = pose.jaw;
     let mut tail_lift = 0.0;
@@ -1537,28 +1580,8 @@ pub fn minotaur_with(d: &SkeletonDims, pose: &DenizenPose) -> Vec<Placement> {
         tail_lift = 0.15 * e;
     }
     out[bone::JAW].rotation = rot_x(0.5 * jaw);
-
-    // The tail: hung from behind the seat, swinging from its root in a wave, lifting in a blow.
-    let offsets = tail_offsets(d);
-    let wave = if moving > 0.0 { 0.22 * moving } else { 0.14 };
-    for i in 0..TAIL_BONES {
-        let phase = if moving > 0.0 { pose.stride - 0.9 * i as f32 } else { 1.3 * t - 0.9 * i as f32 };
-        let yaw = wave * phase.sin();
-        let pitch = (if i == 0 { TAIL_REST } else { 0.0 }) + 0.06 * (0.9 * t - i as f32).sin() + (0.7 - 0.2 * i as f32) * tail_lift;
-        out.push(Placement { rotation: rot_x(pitch).mul_mat(&rot_y(yaw)), origin: offsets[i] });
-    }
-    debug_assert_eq!(out.len(), TAIL_FIRST + TAIL_BONES);
-    out
-}
-
-/// A minotaur `share` of the way through collapsing onto its back: the skeleton's fall, with
-/// the tail left hanging.
-pub fn minotaur_fallen(d: &SkeletonDims, share: f32) -> Vec<Placement> {
-    use crate::denizen::{TAIL_BONES, TAIL_REST, tail_offsets};
-    let mut out = skeleton_fallen(d, share);
-    let offsets = tail_offsets(d);
-    for (i, &origin) in offsets.iter().enumerate().take(TAIL_BONES) {
-        out.push(Placement { rotation: rot_x(if i == 0 { TAIL_REST } else { 0.0 }), origin });
+    if tail_lift > 0.0 {
+        set_tail(&mut out, d, TAIL_BONES, &on_foot, 0.0, tail_lift);
     }
     out
 }
@@ -2442,6 +2465,7 @@ mod minotaur_tests {
             let state = MinotaurState::roll(seed);
             let (rig, d) = (state.build(), state.dims());
             let h = state.height();
+            let mut lifted = [f32::MIN; 2];
             for step in 0..32 {
                 let pose = walking(step as f32 / 32.0 * TAU, step as f32 * 0.13);
                 let places = minotaur_with(&d, &pose);
@@ -2456,9 +2480,12 @@ mod minotaur_tests {
                         assert!(sole.abs() < 0.02 * h, "seed {seed}: hoof {k} at {sole}, step {step}");
                     } else {
                         assert!(sole > -0.02 * h, "seed {seed}: hoof {k} sinks to {sole}, step {step}");
+                        lifted[k] = lifted[k].max(sole);
                     }
                 }
             }
+            // Each swing carries the hoof clear of the floor at some point.
+            assert!(lifted.iter().all(|&sole| sole > 0.5), "seed {seed}: the hooves skim the floor, {lifted:?}");
         }
     }
 
@@ -2532,6 +2559,6 @@ mod minotaur_tests {
             }
         }
         // Fallen, it has every bone too.
-        assert_eq!(minotaur_fallen(&d, 0.7).len(), TAIL_FIRST + crate::denizen::TAIL_BONES);
+        assert_eq!(minotaur_fallen(&d, 0.7).len(), TAIL_FIRST + crate::minotaur::TAIL_BONES);
     }
 }

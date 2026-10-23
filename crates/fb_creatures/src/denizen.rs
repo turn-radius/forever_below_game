@@ -12,10 +12,12 @@
 //!   numbers alone.
 //! - [`digitigrade_foot`] and [`hoof`] build the lower leg that stands on the toes: a pastern
 //!   sloping down to a cloven hoof whose sole is flat on the floor.
-//! - [`tail`] hangs a tail of segment bones with a tuft at its end, and [`hand`] a heavy
+//! - [`tail`] hangs a tail of any number of segment bones ([`TailSpec`]) ending in a tuft
+//!   ([`TailEnd`]), and [`hand`] a heavy
 //!   five-fingered hand with blunt nails.
-//! - [`Loft`] and the little mesh helpers (`limb_tube`, `ball`, `blot`) are the troll's, moved
-//!   here: a surface lofted between rings along a curved line, and tubes and balls for limbs.
+//! - [`Loft`] and the little mesh helpers (`limb_tube`, `ball`, `blot`) are shared by the troll
+//!   and the denizens: a surface lofted between rings along a curved line, and tubes and balls
+//!   for limbs.
 //!
 //! Space is the skeleton's: 1 unit = 10 cm, soles on y = 0, facing +Z, the creature's left +X.
 //! Every piece is a pure function of its numbers.
@@ -34,7 +36,7 @@ use crate::skeleton::{SkeletonDims, arm_bone, index, leg_bone};
 
 /// A surface lofted between rings along a curved centre line: each ring is a squared ellipse in
 /// the plane across the line, with its own half width and depths in front of the line and behind
-/// it. The torso, and the head's upper half, are lofts.
+/// it. The torso, and the head's upper half, are lofts: the troll's and the denizens' share it.
 #[derive(Clone, Debug)]
 pub struct Loft {
     pub(crate) length: f32,
@@ -148,7 +150,7 @@ pub(crate) fn blot(at: V3, normal: V3, r: f32, height: f32) -> MeshBuilder {
     m
 }
 
-/// The troll's skin, one bone's worth: `mesh` shifted to be about `origin`.
+/// A bone's skin: `mesh` shifted to be about the bone's `origin`.
 pub(crate) fn about(mut mesh: MeshBuilder, origin: V3) -> MeshBuilder {
     mesh.translate(vec3::neg(origin));
     mesh
@@ -169,6 +171,7 @@ pub(crate) fn tube_surface(line: &[V3; 2], t: f32, around: f32, radius: f32) -> 
 pub(crate) fn cran_y(loft: &Loft, y: f32) -> f32 {
     (y - loft.samples[0][1]).clamp(0.0, loft.length)
 }
+
 // ── The frame ──
 
 /// How a denizen's legs stand.
@@ -234,6 +237,9 @@ pub struct FrameSpec {
     /// How much longer its legs are than a human's, as a share of the hip's height: a folded
     /// digitigrade leg is shorter than it stands, so the hips ride higher.
     pub leg_lift: f32,
+    /// Where the jaw hinges in the head's space, from its centre: down in half heights and
+    /// forward in half depths; `None` for a human's, under the middle of the skull.
+    pub jaw_hinge: Option<(f32, f32)>,
     /// How far apart the hips stand, as a multiple of a human's: heavy thighs need room.
     pub hip_spread: f32,
 }
@@ -336,7 +342,8 @@ impl Frame {
             arms[k] = [shoulder, elbow, wrist];
         }
         dims.arms = arms;
-        let hinge_local = [0.0, -0.18 * head.1, -0.3 * head.2];
+        let (hinge_y, hinge_z) = spec.jaw_hinge.unwrap_or((-0.18, -0.3));
+        let hinge_local = [0.0, hinge_y * head.1, hinge_z * head.2];
         let hinge = vec3::add(head_centre, [hinge_local[0], hinge_local[1] * cos - hinge_local[2] * sin, hinge_local[1] * sin + hinge_local[2] * cos]);
         dims.hinge = hinge;
         dims.origins[index::PELVIS] = [0.0, hip_y, 0.0];
@@ -534,73 +541,95 @@ pub fn digitigrade_foot(spec: &FootSpec) -> (MeshBuilder, MeshBuilder) {
 
 // ── Tail ──
 
-/// How many bones a tail has.
-pub const TAIL_BONES: usize = 3;
-/// The index of the tail's first bone: after the skeleton's eighteen.
+/// The index of the tail's first bone: after the skeleton's eighteen. A tail of `n` bones fills
+/// `TAIL_FIRST..TAIL_FIRST + n`, and a body's further extra bones (wings) follow from
+/// [`extras_first`].
 pub const TAIL_FIRST: usize = index::COUNT;
 /// How far the tail's root swings back from hanging straight down, radians.
 pub const TAIL_REST: f32 = 0.3;
 
-/// The length of one of the tail's segments.
-pub fn tail_segment(d: &SkeletonDims) -> f32 {
-    0.2 * d.legs[0][0][1]
+/// The index of the first bone after a tail of `tail_bones`.
+pub fn extras_first(tail_bones: usize) -> usize {
+    TAIL_FIRST + tail_bones
+}
+
+/// The length of one of the segments of a tail of `bones`: together they reach three fifths of
+/// the way down the hip's height.
+pub fn tail_segment(d: &SkeletonDims, bones: usize) -> f32 {
+    0.6 * d.legs[0][0][1] / bones.max(1) as f32
 }
 
 /// Where each tail bone sits on its parent at rest: the first on the pelvis, behind the seat, the
 /// others one segment down their parent.
-pub fn tail_offsets(d: &SkeletonDims) -> [V3; TAIL_BONES] {
-    let seg = tail_segment(d);
-    [[0.0, 0.25 * d.body.hip.half_depth, -1.3 * d.body.hip.half_depth], [0.0, -seg, 0.0], [0.0, -seg, 0.0]]
+pub fn tail_offsets(d: &SkeletonDims, bones: usize) -> Vec<V3> {
+    let seg = tail_segment(d, bones);
+    (0..bones).map(|i| if i == 0 { [0.0, 0.25 * d.body.hip.half_depth, -1.3 * d.body.hip.half_depth] } else { [0.0, -seg, 0.0] }).collect()
+}
+
+/// What a tail ends in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TailEnd {
+    /// A tuft of hair, of this fullness, 0..=1.
+    Tuft(f32),
 }
 
 /// What a tail is built from.
 #[derive(Clone, Copy, Debug)]
 pub struct TailSpec {
     pub seed: u32,
+    /// How many bones it has, 0 for none.
+    pub bones: usize,
     /// The cord's radius at the root.
     pub radius: f32,
-    /// The tuft's fullness, 0..=1.
-    pub tuft: f32,
+    pub end: TailEnd,
     pub cord: Rgb,
     pub hair: Rgb,
 }
 
-/// A tail of [`TAIL_BONES`] segments hanging down their bones' -Y, tapering to a tuft at the
-/// last one's end: for each bone, the cord (`"tail"`, skin) and, on the last, the tuft (`"hair"`).
+/// A tail of `spec.bones` segments hanging down their bones' -Y, tapering to its end: for each
+/// bone, the cord (`"tail"`, skin) and, on the last, the end (a tuft is `"hair"`).
 pub fn tail(d: &SkeletonDims, spec: &TailSpec) -> Vec<Vec<Part>> {
-    let seg = tail_segment(d);
+    let n = spec.bones;
+    let seg = tail_segment(d, n);
     let mut rng = procgen_rng::Mulberry32::new(spec.seed ^ 0x7a11_7ef7);
     let mut out = Vec::new();
-    for i in 0..TAIL_BONES {
-        let r0 = spec.radius * (1.0 - 0.28 * i as f32);
-        let r1 = spec.radius * (1.0 - 0.28 * (i + 1) as f32);
+    for i in 0..n {
+        let r0 = spec.radius * (1.0 - 0.84 * i as f32 / n as f32);
+        let r1 = spec.radius * (1.0 - 0.84 * (i + 1) as f32 / n as f32);
         let mut cord = limb_tube(&[[0.0, 0.0, 0.0], [0.0, -0.5 * seg, 0.0], [0.0, -1.04 * seg, 0.0]], 10, |t| r0 + (r1 - r0) * t);
         cord.append(&ball([0.0, 0.0, 0.0], r0 * 1.02, [1.0, 1.0, 1.0]));
         let mut parts = vec![part(cord, "tail", MaterialKind::Skin, spec.cord, true)];
-        if i == TAIL_BONES - 1 {
-            // The tuft: strands from the tip, falling and flaring.
-            let root = [0.0, -seg, 0.0];
-            let strands = 14 + (14.0 * spec.tuft) as usize;
-            let mut tuft = MeshBuilder::new();
-            tuft.append(&ball(vec3::add(root, [0.0, -0.18 * seg, 0.0]), 0.75 * spec.radius * (1.0 + spec.tuft), [1.0, 1.5, 1.0]));
-            for _ in 0..strands {
-                let a = rng.range_f32(0.0, TAU);
-                let spread = rng.range_f32(0.15, 0.6);
-                let len = rng.range_f32(0.55, 1.1) * seg * (0.7 + 0.6 * spec.tuft);
-                let out_dir = [a.cos(), 0.0, a.sin()];
-                let path: Vec<V3> = (0..=5)
-                    .map(|k| {
-                        let s = k as f32 / 5.0;
-                        vec3::add(root, vec3::add(vec3::scale(out_dir, spread * len * s * (1.3 - s) * 0.9), [0.0, -len * s - 0.05 * seg, 0.0]))
-                    })
-                    .collect();
-                tuft.append(&tube(&path, 5, &SweepOptions::default(), |s| 0.2 * spec.radius * (1.0 + 0.4 * spec.tuft) * (1.0 - 0.85 * s) + 0.01));
+        if i == n - 1 {
+            match spec.end {
+                TailEnd::Tuft(fullness) => parts.push(part(tuft(seg, spec.radius, fullness, &mut rng), "hair", MaterialKind::Hair, spec.hair, false)),
             }
-            parts.push(part(tuft, "hair", MaterialKind::Hair, spec.hair, false));
         }
         out.push(parts);
     }
     out
+}
+
+/// A tuft at the end of a segment `seg` long on a cord `radius` thick: strands from the tip,
+/// falling and flaring.
+fn tuft(seg: f32, radius: f32, fullness: f32, rng: &mut procgen_rng::Mulberry32) -> MeshBuilder {
+    let root = [0.0, -seg, 0.0];
+    let strands = 14 + (14.0 * fullness) as usize;
+    let mut tuft = MeshBuilder::new();
+    tuft.append(&ball(vec3::add(root, [0.0, -0.18 * seg, 0.0]), 0.75 * radius * (1.0 + fullness), [1.0, 1.5, 1.0]));
+    for _ in 0..strands {
+        let a = rng.range_f32(0.0, TAU);
+        let spread = rng.range_f32(0.15, 0.6);
+        let len = rng.range_f32(0.55, 1.1) * seg * (0.7 + 0.6 * fullness);
+        let out_dir = [a.cos(), 0.0, a.sin()];
+        let path: Vec<V3> = (0..=5)
+            .map(|k| {
+                let s = k as f32 / 5.0;
+                vec3::add(root, vec3::add(vec3::scale(out_dir, spread * len * s * (1.3 - s) * 0.9), [0.0, -len * s - 0.05 * seg, 0.0]))
+            })
+            .collect();
+        tuft.append(&tube(&path, 5, &SweepOptions::default(), |s| 0.2 * radius * (1.0 + 0.4 * fullness) * (1.0 - 0.85 * s) + 0.01));
+    }
+    tuft
 }
 
 // ── Hands ──

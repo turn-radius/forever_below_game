@@ -33,7 +33,7 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::denizen::{self, Digitigrade, Frame, FrameSpec, HandSpec, HornSpec, Legs, Loft, TailSpec, about, ball, blot, limb_tube, some, tube_surface};
+use crate::denizen::{self, Digitigrade, Frame, FrameSpec, HandSpec, HornSpec, Legs, Loft, TailEnd, TailSpec, about, ball, blot, limb_tube, some, tube_surface};
 use crate::rat::{mix, part};
 use crate::rig::Rig;
 use crate::shape::eye;
@@ -42,6 +42,9 @@ use crate::{Dice, Size, Species};
 
 /// Mixed into a minotaur's seed so it does not roll the same numbers as a body of that seed.
 const MINOTAUR_SALT: u32 = 0x31_0a7a_e5;
+
+/// How many bones a minotaur's tail has.
+pub const TAIL_BONES: usize = 3;
 
 /// The greataxe's damage on a hit: 17 (2d12 + 4) slashing ([SRD 5.1 p. 333](https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf#page=333)).
 /// The gore is the stat block's [`crate::StatBlock::bite`], 13 (2d8 + 4) piercing.
@@ -239,20 +242,15 @@ impl MinotaurState {
             head_set: (0.1, 1.0),
             legs: Legs::Digitigrade(Digitigrade::BULL),
             leg_lift: 0.17,
+            // The jaw hinges under the back of the skull, low, where a bull's does.
+            jaw_hinge: Some((-0.42, -1.0 + 0.22 * skull_length(self, 1.0))),
             hip_spread: 1.55,
         }
     }
 
     /// The frame its bones are laid out on.
     pub fn frame(&self) -> Frame {
-        let mut frame = Frame::new(&self.frame_spec());
-        // The jaw hinges under the back of the skull, low, where a bull's does.
-        let (_, hh, hd) = frame.head;
-        let (sin, cos) = frame.spec.head_lean.sin_cos();
-        let (y, z) = (-0.42 * hh, -hd + 0.22 * skull_length(self, hd));
-        frame.dims.hinge = vec3::add(frame.head_centre, [0.0, y * cos - z * sin, y * sin + z * cos]);
-        frame.dims.origins[index::JAW] = frame.dims.hinge;
-        frame
+        Frame::new(&self.frame_spec())
     }
 
     /// The minotaur's joints and measures, in the shape the skeleton's poses take them.
@@ -518,8 +516,8 @@ fn build(state: &MinotaurState) -> Rig {
         rig.add(NAMES[bone], parent_of(bone), Placement::translation(d.offset(bone)), parts);
     }
     // The tail, hung from behind the seat.
-    let tail = denizen::tail(d, &TailSpec { seed: state.seed, radius: 0.34 * l.leg_radius, tuft: state.tuft, cord: state.hide_colour(), hair: state.hair_colour() });
-    let offsets = denizen::tail_offsets(d);
+    let tail = denizen::tail(d, &TailSpec { seed: state.seed, bones: TAIL_BONES, radius: 0.34 * l.leg_radius, end: TailEnd::Tuft(state.tuft), cord: state.hide_colour(), hair: state.hair_colour() });
+    let offsets = denizen::tail_offsets(d, TAIL_BONES);
     for (i, parts) in tail.into_iter().enumerate() {
         let parent = if i == 0 { index::PELVIS } else { denizen::TAIL_FIRST + i - 1 };
         let rest = if i == 0 { Placement { rotation: armory::geom::vec3::Mat3::from_axis_angle([1.0, 0.0, 0.0], denizen::TAIL_REST), origin: offsets[0] } } else { Placement::translation(offsets[i]) };
@@ -775,7 +773,7 @@ mod tests {
         let state = MinotaurState::roll(7);
         let rig = state.build();
         rig.validate().unwrap();
-        assert_eq!(rig.bones.len(), index::COUNT + denizen::TAIL_BONES);
+        assert_eq!(rig.bones.len(), index::COUNT + TAIL_BONES);
         for (bone, name) in NAMES.iter().enumerate() {
             assert_eq!(rig.bones[bone].name, *name);
             assert_eq!(rig.bones[bone].parent, parent_of(bone));
