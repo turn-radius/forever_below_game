@@ -292,7 +292,8 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
         let values = gear_values(character, &character.derive_with(rules, inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
             row(sheet, fonts, label, Some(i), |row| {
-                row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
+                let colour = if i == 0 { crate::ui::load_colour(character.derive_with(rules, inventory).load_band).unwrap_or(BRIGHT) } else { BRIGHT };
+                row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, colour)));
             });
         }
         heading(sheet, fonts, "status");
@@ -475,7 +476,7 @@ pub fn update_gear(
     inventory: Res<Inventory>,
     rules: Option<Res<GameRules>>,
     mut attributes: Query<(&AttributeLine, &mut Text), Without<GearLine>>,
-    mut gear: Query<(&GearLine, &mut Text), Without<AttributeLine>>,
+    mut gear: Query<(&GearLine, &mut Text, &mut TextColor), Without<AttributeLine>>,
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
     if !character.is_changed() && !inventory.is_changed() && !rules_changed {
@@ -487,10 +488,14 @@ pub fn update_gear(
             text.0 = lines[*i].clone();
         }
     }
-    let values = gear_values(&character, &character.derive_with(GameRules::of(&rules), &inventory));
-    for (GearLine(i), mut text) in &mut gear {
+    let derived = character.derive_with(GameRules::of(&rules), &inventory);
+    let values = gear_values(&character, &derived);
+    for (GearLine(i), mut text, mut colour) in &mut gear {
         if text.0 != values[*i] {
             text.0 = values[*i].clone();
+        }
+        if *i == 0 {
+            colour.set_if_neq(TextColor(crate::ui::load_colour(derived.load_band).unwrap_or(BRIGHT)));
         }
     }
 }

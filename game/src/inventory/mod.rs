@@ -2546,6 +2546,42 @@ mod tests {
         assert_eq!(header_purse(&mut app), "Purse 2 gp 3 sp");
     }
 
+    /// The colour of the header's span that reads `word`, and of the gear row 0 text.
+    fn load_colours(app: &mut App, word: &str) -> (Color, Color) {
+        let mut lines = app.world_mut().query_filtered::<&Children, With<header::HeaderStats>>();
+        let line = lines.single(app.world()).unwrap()[0];
+        let spans: Vec<Entity> = app.world().get::<Children>(line).map(|c| c.to_vec()).unwrap_or_default();
+        let span = spans.iter().find(|s| app.world().get::<TextSpan>(**s).is_some_and(|t| t.0.trim() == word)).unwrap_or_else(|| panic!("a span reading {word}"));
+        let header = app.world().get::<TextColor>(*span).unwrap().0;
+        let mut rows = app.world_mut().query::<(&sheet::GearLine, &TextColor)>();
+        let row = rows.iter(app.world()).find(|(l, _)| l.0 == 0).map(|(_, c)| c.0).expect("the load row");
+        (header, row)
+    }
+
+    #[test]
+    fn the_carried_load_is_coloured_by_its_band_in_the_header_and_on_the_sheet() {
+        use crate::ui::{AMBER, BRIGHT, ORANGE, RED};
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 11, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        press(&mut app, KeyCode::KeyK);
+        let mut pack = None;
+        // STR 11 carries 165 lb: Light to 55, Burdened to 110, Encumbered to 165.
+        for (lb, word, colour) in [(40.0, "40/165", BRIGHT), (65.0, "65/165", AMBER), (137.5, "138/165", ORANGE), (172.0, "172/165", RED)] {
+            {
+                let mut inventory = app.world_mut().resource_mut::<Inventory>();
+                if let Some(old) = pack {
+                    inventory.forget(old);
+                }
+                let new = inventory.add(weighed_with("Pack", 7, None, lb));
+                inventory.wear(new, Slot::Back).unwrap();
+                pack = Some(new);
+            }
+            app.update();
+            assert_eq!(load_colours(&mut app, word), (colour, colour), "{lb} lb");
+        }
+    }
+
     #[test]
     fn the_header_s_stats_update_when_equipping() {
         let mut app = screen_app();
