@@ -2475,10 +2475,21 @@ mod tests {
 
     /// The header's line of numbers, as read from its spans.
     fn header_stats(app: &mut App) -> String {
+        header_spans(app).into_iter().map(|parts| parts.into_iter().map(|(text, _)| text).collect::<String>()).collect::<Vec<_>>().join("   ")
+    }
+
+    /// The header's stats as spans with their colours, one list for each part.
+    fn header_spans(app: &mut App) -> Vec<Vec<(String, Color)>> {
         let mut lines = app.world_mut().query_filtered::<&Children, With<header::HeaderStats>>();
-        let line = lines.single(app.world()).unwrap()[0];
-        let spans: Vec<Entity> = app.world().get::<Children>(line).map(|c| c.to_vec()).unwrap_or_default();
-        spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect()
+        let parts = lines.single(app.world()).unwrap().to_vec();
+        parts
+            .into_iter()
+            .map(|part| {
+                let text = app.world().get::<Children>(part).unwrap()[0];
+                let spans: Vec<Entity> = app.world().get::<Children>(text).map(|c| c.to_vec()).unwrap_or_default();
+                spans.iter().filter_map(|s| Some((app.world().get::<TextSpan>(*s)?.0.clone(), app.world().get::<TextColor>(*s)?.0))).collect()
+            })
+            .collect()
     }
 
     /// The header's purse line, as read from its text and spans.
@@ -2548,11 +2559,7 @@ mod tests {
 
     /// The colour of the header's span that reads `word`, and of the gear row 0 text.
     fn load_colours(app: &mut App, word: &str) -> (Color, Color) {
-        let mut lines = app.world_mut().query_filtered::<&Children, With<header::HeaderStats>>();
-        let line = lines.single(app.world()).unwrap()[0];
-        let spans: Vec<Entity> = app.world().get::<Children>(line).map(|c| c.to_vec()).unwrap_or_default();
-        let span = spans.iter().find(|s| app.world().get::<TextSpan>(**s).is_some_and(|t| t.0.trim() == word)).unwrap_or_else(|| panic!("a span reading {word}"));
-        let header = app.world().get::<TextColor>(*span).unwrap().0;
+        let header = header_spans(app).into_iter().flatten().find(|(text, _)| text.trim() == word).unwrap_or_else(|| panic!("a span reading {word}")).1;
         let mut rows = app.world_mut().query::<(&sheet::GearLine, &TextColor)>();
         let row = rows.iter(app.world()).find(|(l, _)| l.0 == 0).map(|(_, c)| c.0).expect("the load row");
         (header, row)
@@ -2601,6 +2608,25 @@ mod tests {
             app.update();
             assert_eq!(load_colours(&mut app, word), (colour, colour), "{lb} lb");
         }
+    }
+
+    #[test]
+    fn the_headers_load_is_a_hover_target_for_the_breakdown() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        let mut targets = app.world_mut().query::<(&sheet::GearRow, &Children)>();
+        let found: Vec<usize> = targets.iter(app.world()).map(|(row, _)| row.0).collect();
+        assert_eq!(found, vec![0], "only the load part of the header is a target, on the inventory tab");
+        let (_, children) = targets.single(app.world()).unwrap();
+        let text = children[0];
+        let spans: String = app.world().get::<Children>(text).unwrap().iter().filter_map(|s| app.world().get::<TextSpan>(s)).map(|t| t.0.clone()).collect();
+        assert!(spans.starts_with("Load "), "{spans:?}");
+        // Hovered from the header, on the inventory tab, the breakdown opens.
+        hover_row(&mut app, Some(0));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR ")), "{tip:?}");
+        let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
+        assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
     }
 
     #[test]

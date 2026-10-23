@@ -19,7 +19,7 @@ use super::items::Inventory;
 use crate::carry::ViewModelCamera;
 use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Derived};
 use crate::exhaustion::Exhaustion;
-use crate::play::{Player, Screen, ScreenOpen, SheetTab};
+use crate::play::{Player, Screen, ScreenOpen};
 use crate::rules::GameRules;
 use crate::status::{ConditionIcons, ShownConditions, badge, severity_colour};
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect};
@@ -424,7 +424,6 @@ pub fn spawn_tip(mut commands: Commands, tips: Query<(), With<BreakdownTip>>, ca
 pub fn show_breakdown(
     mut commands: Commands,
     open: Res<ScreenOpen>,
-    tab: Res<SheetTab>,
     hovered: Res<HoveredNumber>,
     character: Res<Character>,
     inventory: Res<Inventory>,
@@ -435,7 +434,8 @@ pub fn show_breakdown(
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
     for (tip, mut node, mut visibility, computed, target) in &mut tips {
-        let over = hovered.0.filter(|_| open.is(Screen::Inventory) && *tab == SheetTab::Character);
+        // The sheet's rows exist only while its tab is shown, and the header's load on every tab.
+        let over = hovered.0.filter(|_| open.is(Screen::Inventory));
         let Some((row, rect)) = over else {
             visibility.set_if_neq(Visibility::Hidden);
             *shown = None;
@@ -623,6 +623,27 @@ pub fn update_vitals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cursor_over_a_load_target_hovers_row_0_in_ui_space() {
+        let mut app = App::new();
+        app.init_resource::<ScreenOpen>().init_resource::<HoveredNumber>().add_systems(Update, hover_numbers);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(150.0, 140.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        // The header's load part: 120 by 16 around (150, 140).
+        app.world_mut().spawn((
+            GearRow(0),
+            ComputedNode { size: Vec2::new(120.0, 16.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(150.0, 140.0))),
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<HoveredNumber>().0.map(|(row, _)| row), Some(0));
+        app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(400.0, 140.0)));
+        app.update();
+        assert_eq!(app.world().resource::<HoveredNumber>().0, None, "off the target nothing is hovered");
+    }
 
     fn meter_at(kind: MeterKind, value: f64) -> Meter {
         Meter { value, ..Meter::new(kind) }
