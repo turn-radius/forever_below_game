@@ -81,6 +81,15 @@ impl Default for Playlist {
                 "audio/let-me-think.ogg",
                 "audio/meant-to-be-here.ogg",
                 "audio/what-am-i-doing.ogg",
+                "audio/am-i-seeing-the-light.ogg",
+                "audio/bitter-pulse.ogg",
+                "audio/descenso-al-infierno.ogg",
+                "audio/falling-apart.ogg",
+                "audio/i-should-have-stayed.ogg",
+                "audio/i-went-too-far.ogg",
+                "audio/im-right-where-i-started.ogg",
+                "audio/missing-friends.ogg",
+                "audio/sinking-bass.ogg",
             ]
             .map(String::from)
             .into(),
@@ -523,9 +532,9 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_forever_below_and_holds_all_ten_tracks() {
+    fn playlist_opens_on_forever_below_and_holds_all_nineteen_tracks() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(tracks.len(), 10);
+        assert_eq!(tracks.len(), 19);
         assert_eq!(tracks[0], "audio/forever-below.ogg");
     }
 
