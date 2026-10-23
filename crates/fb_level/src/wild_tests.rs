@@ -148,7 +148,7 @@ fn holding(seeds: std::ops::Range<u32>, depth: u32, species: Species) -> usize {
 
 #[test]
 fn jackalope_and_troll_frequencies_smoke() {
-    let jackalopes = holding(1..81, 2, Species::Jackalope);
+    let jackalopes = holding(1..81, 3, Species::Jackalope);
     assert!((1..=24).contains(&jackalopes), "{jackalopes} of 80");
     let trolls = holding(1..81, 7, Species::Troll);
     assert!((10..=45).contains(&trolls), "{trolls} of 80");
@@ -157,10 +157,100 @@ fn jackalope_and_troll_frequencies_smoke() {
 #[test]
 #[ignore = "sweeps hundreds of levels"]
 fn jackalope_and_troll_frequencies() {
+    // The jackalope is counted on the third level: the rough-rock levels (the even ones) have few rooms the others leave free, so it is rare there (#662).
     // About one level in ten, and a little under one in three: a troll's odds are one in three,
     // but now and then folk hold the only hall large enough for it.
-    let jackalopes = holding(1..401, 2, Species::Jackalope);
+    let jackalopes = holding(1..401, 3, Species::Jackalope);
     assert!((20..=62).contains(&jackalopes), "{jackalopes} of 400 levels hold a jackalope");
     let trolls = holding(1..401, 7, Species::Troll);
     assert!((75..=160).contains(&trolls), "{trolls} of 400 levels hold a troll");
+}
+
+/// Each group of creatures (a pack) with the room it stands in and its members, over a level.
+fn packs(level: &Level) -> Vec<(u32, Option<usize>, Vec<Species>)> {
+    let mut packs: Vec<(u32, Option<usize>, Vec<Species>)> = Vec::new();
+    for c in &level.creatures {
+        match packs.iter_mut().find(|p| p.0 == c.pack) {
+            Some(p) => p.2.push(c.species),
+            None => packs.push((c.pack, room_of(level, c), vec![c.species])),
+        }
+    }
+    packs
+}
+
+/// Checks #662 on one level: no room holds a wild group and another group, and no room with a
+/// wild group holds more creatures than its floor does.
+fn assert_spread(level: &Level) {
+    let (seed, depth) = (level.seed, level.depth);
+    for (r, room) in level.rooms.iter().enumerate() {
+        let here: Vec<_> = packs(level).into_iter().filter(|p| p.1 == Some(r)).collect();
+        if here.iter().any(|p| p.2.iter().any(|&s| newcomer(s))) {
+            assert_eq!(here.len(), 1, "seed {seed} depth {depth}: room {r} holds {} groups", here.len());
+            let cap = (room.area() / CELLS_PER_CREATURE).max(1) as usize;
+            assert!(here[0].2.len() <= cap, "seed {seed} depth {depth}: {} creatures in the {} cells of room {r}", here[0].2.len(), room.area());
+        }
+    }
+}
+
+fn sweep_spread(seeds: std::ops::RangeInclusive<u32>) {
+    for depth in 1..=4 {
+        for seed in seeds.clone() {
+            assert_spread(&generate(seed, depth));
+        }
+    }
+}
+
+#[test]
+fn wild_groups_keep_a_room_each_smoke() {
+    sweep_spread(1..=25);
+}
+
+#[test]
+#[ignore]
+fn wild_groups_keep_a_room_each() {
+    sweep_spread(1..=300);
+}
+
+/// How many large rooms the level's own creatures and folk leave free for the wild species.
+fn spare_rooms(level: &Level) -> usize {
+    let old = before(level.seed, level.depth);
+    let start = old.start_room();
+    (0..old.rooms.len())
+        .filter(|&i| {
+            let stair = old.stairs.iter().any(|s| {
+                let (ax, ay) = s.approach();
+                old.room_at(s.x as i32, s.y as i32) == Some(i) || old.room_at(ax as i32, ay as i32) == Some(i)
+            });
+            Some(i) != start && old.rooms[i].area() >= MIN_ROOM_AREA && !stair && !has_folk(&old, i) && !old.creatures.iter().any(|c| room_of(&old, c) == Some(i))
+        })
+        .count()
+}
+
+#[test]
+fn levels_with_rooms_to_spare_keep_their_wild_groups() {
+    let (mut levels, mut bats, mut centipedes, mut spiders, mut beside, mut groups) = (0, 0, 0, 0, 0, 0);
+    for seed in 1..=300 {
+        let level = generate(seed, SPIDERS_FROM_DEPTH);
+        if spare_rooms(&level) < 3 {
+            continue;
+        }
+        levels += 1;
+        let has = |f: fn(Species) -> bool| level.creatures.iter().any(|c| f(c.species)) as u32;
+        bats += has(Species::is_bat);
+        centipedes += has(Species::is_centipede);
+        spiders += has(Species::is_spider);
+        let links = room_links(&level);
+        let occupied: Vec<_> = packs(&level).iter().filter_map(|p| p.1).collect();
+        for p in packs(&level).iter().filter(|p| p.2.iter().any(|&s| newcomer(s))) {
+            groups += 1;
+            beside += links[p.1.unwrap()].iter().any(|j| occupied.contains(j)) as u32;
+        }
+    }
+    assert!(levels >= 20, "{levels} levels with room to spare");
+    // Before #662: bats on 0.4 of levels, centipedes on all, spiders on 0.48.
+    let rate = |n: u32| n as f64 / levels as f64;
+    assert!(bats > 0, "bats on {bats} of {levels}");
+    assert!(rate(centipedes) >= 0.9, "centipedes on {centipedes} of {levels}");
+    assert!(rate(spiders) >= 0.35, "spiders on {spiders} of {levels}");
+    assert!(beside * 100 < groups * 88, "{beside} of {groups} wild groups open onto an occupied room");
 }

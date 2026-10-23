@@ -6,8 +6,10 @@
 //! seed and depth mixed with the species' salt). Nothing is drawn from the creature stream, so no
 //! wall, item, light, folk, prop, stair or earlier creature moves on any seed. Each keeps out of
 //! the starting room, any room folk stand in, doorways (and the cells beside them), corridors,
-//! the stairs and their approach cells, and clear of everything else ([`crate::creatures::fits`]). A species takes a
-//! room no other creature holds when one is left; only when none is does it share.
+//! the stairs and their approach cells, and clear of everything else ([`crate::creatures::fits`]). A group takes a
+//! room no other creature holds, and by preference one that opens onto no occupied room; when no
+//! such room is left the group is left off the level (#662). A room holds one creature to every
+//! four cells of floor at most.
 //!
 //! A bat's spot is on the floor grid; the game hangs it from the ceiling. The room where giant
 //! spiders are placed is their nest, hung with webs ([`WebSpot`]) drawn from the spiders' own
@@ -108,17 +110,79 @@ fn standing(level: &Level, room: &Room, x: f32, y: f32, radius: f32, placed: &[C
     fits(level, room, x, y, radius, placed) && !straight_in_from_a_door(level, cx, cy) && off_stairs(level, x, y, radius)
 }
 
+/// For each room, the rooms it opens straight onto: reached from it through doorways and
+/// corridors without crossing another room.
+pub(crate) fn room_links(level: &Level) -> Vec<Vec<usize>> {
+    let (w, h) = (level.width as i32, level.height as i32);
+    level
+        .rooms
+        .iter()
+        .enumerate()
+        .map(|(i, room)| {
+            let mut seen = vec![false; (w * h) as usize];
+            let mut queue = std::collections::VecDeque::new();
+            for y in room.y..room.y + room.h {
+                for x in room.x..room.x + room.w {
+                    seen[(y as i32 * w + x as i32) as usize] = true;
+                    queue.push_back((x as i32, y as i32));
+                }
+            }
+            let mut links = Vec::new();
+            while let Some((x, y)) = queue.pop_front() {
+                for (nx, ny) in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)] {
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h || seen[(ny * w + nx) as usize] || !level.is_open(nx, ny) {
+                        continue;
+                    }
+                    seen[(ny * w + nx) as usize] = true;
+                    match level.room_at(nx, ny) {
+                        Some(j) => {
+                            if j != i && !links.contains(&j) {
+                                links.push(j);
+                            }
+                        }
+                        None => queue.push_back((nx, ny)),
+                    }
+                }
+            }
+            links
+        })
+        .collect()
+}
+
 struct Placer<'a> {
     level: &'a Level,
     start_room: Option<usize>,
     /// Every creature so far, the level's own first and then the new ones.
     placed: Vec<CreatureSpot>,
     pack: u32,
+    /// Which rooms open straight onto which ([`room_links`]).
+    links: Vec<Vec<usize>>,
 }
 
+/// The most creatures a room holds, wild ones and the rest together: one to every this many
+/// cells of floor.
+const CELLS_PER_CREATURE: u32 = 4;
+
 impl Placer<'_> {
-    /// Rooms of at least `area` that are not the starting room and hold no folk, shuffled,
-    /// those no creature stands in first and colonnaded halls last.
+    /// Whether any creature stands in room `i`.
+    fn held(&self, i: usize) -> bool {
+        self.placed.iter().any(|c| self.level.room_at(c.x as i32, c.y as i32) == Some(i))
+    }
+
+    /// Whether a room that `i` opens straight onto holds a creature.
+    fn next_to_held(&self, i: usize) -> bool {
+        self.links[i].iter().any(|&j| self.held(j))
+    }
+
+    /// Puts rooms that open onto no occupied room first and colonnaded halls last, keeping the
+    /// order otherwise.
+    fn prefer_apart(&self, rooms: &mut [usize]) {
+        rooms.sort_by_key(|&i| (self.next_to_held(i), is_colonnaded(self.level, &self.level.rooms[i])));
+    }
+
+    /// Rooms of at least `area` that are not the starting room and hold no folk and no
+    /// creature, shuffled, those opening onto no occupied room first and colonnaded halls last.
+    /// A level with none left gets no group rather than a doubled one (#662).
     fn rooms(&self, area: u32, rng: &mut Mulberry32) -> Vec<usize> {
         let level = self.level;
         // Never a room with a stair in it, nor the one a stair opens into: whoever comes down
@@ -130,11 +194,10 @@ impl Placer<'_> {
             })
         };
         let mut rooms: Vec<usize> = (0..level.rooms.len())
-            .filter(|&i| Some(i) != self.start_room && level.rooms[i].area() >= area && !by_stair(i) && !has_folk(level, i))
+            .filter(|&i| Some(i) != self.start_room && level.rooms[i].area() >= area && !by_stair(i) && !has_folk(level, i) && !self.held(i))
             .collect();
         shuffle(&mut rooms, rng);
-        let held = |i: usize| self.placed.iter().any(|c| level.room_at(c.x as i32, c.y as i32) == Some(i));
-        rooms.sort_by_key(|&i| (held(i), is_colonnaded(level, &level.rooms[i])));
+        self.prefer_apart(&mut rooms);
         rooms
     }
 
@@ -160,6 +223,10 @@ impl Placer<'_> {
     fn group(&mut self, rooms: &[usize], count: u32, spread: f32, species: Species, rng: &mut Mulberry32) -> Option<usize> {
         for &i in rooms {
             let room = &self.level.rooms[i];
+            if self.held(i) {
+                continue;
+            }
+            let count = count.min((room.area() / CELLS_PER_CREATURE).max(1));
             let centre = (rng.range_f32(room.x as f32 + 1.0, (room.x + room.w) as f32 - 1.0), rng.range_f32(room.y as f32 + 1.0, (room.y + room.h) as f32 - 1.0));
             let mut members = 0;
             for _ in 0..count {
@@ -179,7 +246,7 @@ impl Placer<'_> {
 /// The newer species of a finished level (stairs and all) as extra creatures, and the webs of
 /// its spiders' nest.
 pub(crate) fn place_wild(level: &Level) -> (Vec<CreatureSpot>, Vec<WebSpot>) {
-    let mut p = Placer { level, start_room: level.start_room(), placed: level.creatures.clone(), pack: level.creatures.iter().map(|c| c.pack + 1).max().unwrap_or(0) };
+    let mut p = Placer { level, start_room: level.start_room(), placed: level.creatures.clone(), pack: level.creatures.iter().map(|c| c.pack + 1).max().unwrap_or(0), links: room_links(level) };
     let old = p.placed.len();
     let mut webs = Vec::new();
 
@@ -222,6 +289,7 @@ pub(crate) fn place_wild(level: &Level) -> (Vec<CreatureSpot>, Vec<WebSpot>) {
         let count = rng.int(CENTIPEDES_PER_ROOM.0, CENTIPEDES_PER_ROOM.1);
         if let Some(i) = p.group(&rooms, count, 1.5, Species::GiantCentipede, &mut rng) {
             rooms.retain(|&r| r != i);
+            p.prefer_apart(&mut rooms);
         }
     }
     (p.placed.split_off(old), webs)

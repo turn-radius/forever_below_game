@@ -1021,7 +1021,8 @@ mod tests {
     #[test]
     fn every_creature_on_1207_animates() {
         let (mut app, roots) = level_app();
-        assert!(roots.len() >= 5);
+        // Three since #662, which stopped the wild groups doubling up in the rooms the rats and snakes hold; the newer species are covered by the test above.
+        assert!(roots.len() >= 3);
         for _ in 0..10 {
             app.update();
         }

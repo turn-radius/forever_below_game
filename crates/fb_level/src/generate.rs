@@ -1483,8 +1483,8 @@ mod tests {
             beasts_in += level.creatures.iter().filter(|c| !c.species.is_skeleton() && in_hall(c.x, c.y)).count();
         }
         assert!(folk_in * 3 >= folk, "only {folk_in} of {folk} folk stand in a colonnade");
-        // Creatures keep out of the halls more than the halls' share of the rooms they could take.
-        assert!(beasts_in * rooms * 3 <= beasts * halls * 2, "{beasts_in} of {beasts} creatures stand in a colonnade, in {halls} of {rooms} rooms");
+        // Creatures keep out of the halls more than the halls' share of the rooms they could take. The wild species, which no longer share a held room (#662), take the halls that are left, so the bound is the share itself.
+        assert!(beasts_in * rooms <= beasts * halls, "{beasts_in} of {beasts} creatures stand in a colonnade, in {halls} of {rooms} rooms");
     }
 
     #[test]
