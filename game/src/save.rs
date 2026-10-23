@@ -349,6 +349,32 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
     })
 }
 
+/// A command: saves the delve now that the delver has lain down in `bed`, if this delve may
+/// save, and says so in the toast (a failed write says that, and sleep goes on).
+pub fn save_in_camp(bed: Entity) -> impl FnOnce(&mut World) {
+    move |world: &mut World| {
+        if !may_touch(world.get_resource::<Saveable>()) {
+            return;
+        }
+        let Some(path) = world.get_resource::<SaveFile>().and_then(|f| f.0.clone()) else { return };
+        let saved = gather(world, bed).and_then(|delve| write(&path, &delve));
+        let now = world.get_resource::<Time<Real>>().map_or(0.0, |t| t.elapsed_secs());
+        let line = match saved {
+            Ok(()) => {
+                info!("save: the delve is saved to {}", path.display());
+                "Your delve is saved."
+            }
+            Err(error) => {
+                warn!("save: could not save the delve to {}: {error}", path.display());
+                "Your delve could not be saved."
+            }
+        };
+        if let Some(mut toast) = world.get_resource_mut::<crate::inventory::Toast>() {
+            toast.say(line, now);
+        }
+    }
+}
+
 /// The saved delve a delve being begun resumes: the title puts it here ([`begin_resume`]) and the
 /// first frame of the delve takes it ([`restore_delve`]).
 #[derive(Resource, Clone, Debug)]
