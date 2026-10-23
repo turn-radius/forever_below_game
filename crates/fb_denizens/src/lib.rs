@@ -9,7 +9,12 @@
 //!   others in one. The bodies themselves are `fb_creatures` species.
 //! - Denizens live only at [`DENIZEN_DEPTH`] and below; shallower levels hold folk factions only.
 //!
+//! - [`tongue`] holds the tongues: each kind's vocabulary and native words, the script its speech
+//!   shows in until it is learned, what a book or scroll teaches, and the delver's `Lexicon`.
+//!
 //! Plain Rust, no Bevy; everything here is a pure function of its inputs.
+
+pub mod tongue;
 
 use serde::{Deserialize, Serialize};
 
