@@ -81,7 +81,7 @@ pub struct StatusCard;
 
 /// The conditions the delver is under, from their simulation.
 #[allow(clippy::type_complexity)]
-fn read_conditions(
+pub(crate) fn read_conditions(
     character: Option<Res<Character>>,
     inventory: Option<Res<crate::inventory::Inventory>>,
     tuning: Option<Res<crate::tuning::Tuning>>,

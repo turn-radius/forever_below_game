@@ -453,15 +453,33 @@ impl Character {
         let loadout = self.loadout(inventory);
         let capacity = loadout.capacity_with(rules, strength).value();
         let per = rules.load.capacity_per_strength;
-        let carried_capacity: Vec<String> = loadout.worn.iter().filter(|(_, w)| w.carry != 0.0).map(|(label, w)| format!(" + {label} ({}{})", if w.carry < 0.0 { "" } else { "+" }, number(w.carry))).collect();
-        lines.push(format!("Capacity: STR {strength} \u{d7} {}{} = {} lb", number(per), carried_capacity.concat(), number(capacity)));
-        let plain = carried_capacity.is_empty();
+        // Weights are to one decimal and signed with a plus where they add, throughout.
+        let carries: Vec<(&String, f64)> = loadout.worn.iter().filter(|(_, w)| w.carry != 0.0).map(|(label, w)| (label, w.carry)).collect();
+        let added: String = carries.iter().map(|(label, carry)| format!(" + {label} ({carry:+.1})")).collect();
+        lines.push(format!("Capacity: STR {strength} \u{d7} {}{added} = {} lb", number(per), number(capacity)));
+        let moved_by = carries.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ");
         for (word, multiple, edge) in [("Burdened", rules.load.burdened_multiple, rules.load.burdened_edge(capacity)), ("Encumbered", rules.load.encumbered_multiple, rules.load.encumbered_edge(capacity))] {
-            let from = if plain { format!("STR {strength} \u{d7} {}", number(multiple)) } else { format!("capacity {} lb \u{d7} {}/{}", number(capacity), number(multiple), number(per)) };
-            lines.push(format!("{word} past {from} = {} lb", number((edge * 10.0).round() / 10.0)));
+            let edge = number((edge * 10.0).round() / 10.0);
+            lines.push(if carries.is_empty() {
+                format!("{word} past STR {strength} \u{d7} {} = {edge} lb", number(multiple))
+            } else {
+                // The edges are shares of the whole capacity, so what adds to it moves them.
+                format!("{word} past capacity {} lb \u{d7} {}/{} = {edge} lb (moved by {moved_by})", number(capacity), number(multiple), number(per))
+            });
         }
         let carried = self.load_explained(inventory);
-        lines.push(format!("Carried: {} = {} lb", carried.terms_line(), number(carried.value())));
+        lines.push(format!("Carried: {} lb", number((carried.value() * 10.0).round() / 10.0)));
+        for (slot, item) in inventory.equipped() {
+            lines.push(format!("  {}  {:.1} lb", item.name, item.profile.stats.weight));
+            let Some(container) = inventory.worn(slot) else { continue };
+            for entry in inventory.grid(container).map(|g| g.entries()).unwrap_or_default() {
+                let Some(inside) = inventory.item(entry.id) else { continue };
+                // What a bag inside the bag holds counts with it.
+                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight + inventory.contents_weight(entry.id)));
+            }
+        }
+        let band = LoadBand::from_load_with(rules, carried.value(), capacity);
+        lines.push(format!("{} now", band.word()));
         let pace = fb_character::Burden::new(carried.value(), capacity).walk_multiplier_with(rules) as f64;
         lines.push(format!("Pace now: {}", fb_character::conditions::pace_percent(pace)));
         lines
@@ -714,7 +732,9 @@ mod tests {
                 "Capacity: STR 11 \u{d7} 15 = 165 lb".to_string(),
                 "Burdened past STR 11 \u{d7} 5 = 55 lb".to_string(),
                 "Encumbered past STR 11 \u{d7} 10 = 110 lb".to_string(),
-                format!("Carried: {mail} (65) = 65 lb"),
+                "Carried: 65 lb".to_string(),
+                format!("  {mail}  65.0 lb"),
+                "Burdened now".to_string(),
                 "Pace now: 99.7%".to_string(),
             ]
         );
@@ -729,10 +749,51 @@ mod tests {
         let ring = inventory.equipped().iter().find(|(slot, _)| *slot == fb_items::Slot::Ring1).unwrap().1.name.clone();
         assert_eq!(lines[0], format!("STR 13: 11 base + {ring} (+2)"));
         assert_eq!(&lines[1..4], ["Capacity: STR 13 \u{d7} 15 = 195 lb", "Burdened past STR 13 \u{d7} 5 = 65 lb", "Encumbered past STR 13 \u{d7} 10 = 130 lb"]);
-        assert_eq!(lines.last().unwrap(), "Pace now: 100%", "65 lb is the new Burdened edge, so full pace");
+        assert_eq!(&lines[lines.len() - 2..], ["Light now", "Pace now: 100%"], "65 lb is the new Burdened edge, so full pace");
         // The game's own derivation agrees with the breakdown.
         let derived = delver.derive(&inventory);
         assert_eq!((derived.capacity, derived.load_band), (195.0, fb_character::LoadBand::Light));
+    }
+
+    #[test]
+    fn the_breakdown_marks_the_band_the_load_is_in() {
+        let now = |lb: f32| {
+            let (delver, inventory) = laden_str_11(lb, false);
+            let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+            lines[lines.len() - 2].clone()
+        };
+        assert_eq!([40.0, 55.0, 65.0, 110.0, 137.5, 165.0, 172.0].map(now), ["Light now", "Light now", "Burdened now", "Burdened now", "Encumbered now", "Encumbered now", "Overloaded now"]);
+    }
+
+    #[test]
+    fn a_pack_lists_what_it_holds_under_it_and_a_belt_says_it_moved_the_edges() {
+        let (delver, mut inventory) = laden_str_11(10.0, false);
+        let mut pack = fb_items::roll_item("Pack", 3).unwrap();
+        pack.profile.stats.weight = 2.0;
+        pack.profile.stats.carry = 0.0;
+        let pack_name = pack.name.clone();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let mut dagger = fb_items::roll_item("Dagger", 1).unwrap();
+        dagger.profile.stats.weight = 3.25;
+        let dagger_name = dagger.name.clone();
+        let dagger = inventory.add(dagger);
+        inventory.put(dagger, pack, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert!(lines.contains(&"Carried: 15.3 lb".to_string()), "{lines:?}");
+        let at = lines.iter().position(|l| l == &format!("  {pack_name}  2.0 lb")).unwrap_or_else(|| panic!("{lines:?}"));
+        assert_eq!(lines[at + 1], format!("    {dagger_name}  3.2 lb"), "contents sit under their bag, one step in");
+        // A belt that adds capacity moves both edges and the lines say so.
+        let mut belt = fb_items::roll_item("Belt", 2).unwrap();
+        belt.profile.stats.weight = 0.0;
+        belt.profile.stats.carry = 30.0;
+        let belt_name = belt.name.clone();
+        let belt = inventory.add(belt);
+        inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert_eq!(lines[0], format!("Capacity: STR 11 \u{d7} 15 + {belt_name} (+30.0) = 195 lb"));
+        assert_eq!(lines[1], format!("Burdened past capacity 195 lb \u{d7} 5/15 = 65 lb (moved by {belt_name})"));
+        assert_eq!(lines[2], format!("Encumbered past capacity 195 lb \u{d7} 10/15 = 130 lb (moved by {belt_name})"));
     }
 
     #[test]

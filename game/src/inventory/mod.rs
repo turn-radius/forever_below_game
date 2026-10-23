@@ -2346,8 +2346,8 @@ mod tests {
         assert!(tip_text(&mut app).is_empty());
         hover_row(&mut app, Some(0));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR 10 \u{d7} 15 + ") && l.contains("Belt") && l.ends_with("(+25) = 175 lb")), "{tip:?}");
-        assert!(tip.iter().any(|l| l.starts_with("Carried: ") && l.ends_with("= 1 lb")), "{tip:?}");
+        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR 10 \u{d7} 15 + ") && l.contains("Belt") && l.ends_with("(+25.0) = 175 lb")), "{tip:?}");
+        assert!(tip.iter().any(|l| l == "Carried: 1 lb"), "{tip:?}");
         let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
         assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
         hover_row(&mut app, None);
@@ -2556,6 +2556,27 @@ mod tests {
         let mut rows = app.world_mut().query::<(&sheet::GearLine, &TextColor)>();
         let row = rows.iter(app.world()).find(|(l, _)| l.0 == 0).map(|(_, c)| c.0).expect("the load row");
         (header, row)
+    }
+
+    #[test]
+    fn a_delver_carrying_65_lb_shows_the_load_condition_on_the_sheet() {
+        use crate::character::{DelverNeeds, DelverStamina, Load};
+        use crate::exhaustion::Exhaustion;
+        use crate::play::Player;
+        let mut app = screen_app();
+        app.init_resource::<crate::status::ShownConditions>().init_resource::<crate::rules::GameRules>().add_systems(Update, (crate::status::read_conditions, sheet::update_conditions).chain().after(build_screen));
+        let delver = app.world_mut().spawn((Player, DelverNeeds::default(), Exhaustion::default(), DelverStamina::default(), Load::of(65.0, 165.0))).id();
+        press(&mut app, KeyCode::KeyK);
+        app.update();
+        let said = sheet_text(&mut app);
+        let line = "Burdened";
+        assert!(said.iter().any(|t| t == line), "{said:?}");
+        assert!(said.iter().any(|t| t == "65 lb, 39% of your capacity. Encumbered from 110 lb. Walking at 99.7% pace; sprinting tires you 1.01x as fast."), "{said:?}");
+        assert!(!said.iter().any(|t| t == "No conditions"));
+        // Setting it down clears the condition from the list.
+        *app.world_mut().get_mut::<Load>(delver).unwrap() = Load::of(40.0, 165.0);
+        app.update();
+        assert!(sheet_text(&mut app).iter().any(|t| t == "No conditions"));
     }
 
     #[test]
