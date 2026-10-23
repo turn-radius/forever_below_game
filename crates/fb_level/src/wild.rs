@@ -17,6 +17,7 @@
 //!
 //! How many, of what and where is our own proposal.
 
+use std::collections::{BTreeSet, VecDeque};
 use std::f32::consts::{PI, TAU};
 
 use fb_creatures::{Creature, Species};
@@ -110,8 +111,8 @@ fn standing(level: &Level, room: &Room, x: f32, y: f32, radius: f32, placed: &[C
     fits(level, room, x, y, radius, placed) && !straight_in_from_a_door(level, cx, cy) && off_stairs(level, x, y, radius)
 }
 
-/// For each room, the rooms it opens straight onto: reached from it through doorways and
-/// corridors without crossing another room.
+/// For each room, the rooms it opens straight onto: reached from it through a doorway or a
+/// corridor, without crossing another room or a junction of corridors.
 pub(crate) fn room_links(level: &Level) -> Vec<Vec<usize>> {
     let (w, h) = (level.width as i32, level.height as i32);
     level
@@ -120,7 +121,7 @@ pub(crate) fn room_links(level: &Level) -> Vec<Vec<usize>> {
         .enumerate()
         .map(|(i, room)| {
             let mut seen = vec![false; (w * h) as usize];
-            let mut queue = std::collections::VecDeque::new();
+            let mut queue = VecDeque::new();
             for y in room.y..room.y + room.h {
                 for x in room.x..room.x + room.w {
                     seen[(y as i32 * w + x as i32) as usize] = true;
@@ -129,6 +130,12 @@ pub(crate) fn room_links(level: &Level) -> Vec<Vec<usize>> {
             }
             let mut links = Vec::new();
             while let Some((x, y)) = queue.pop_front() {
+                // A corridor cell with three or more ways on is a junction: what lies past it is
+                // not a direct neighbour.
+                let ways = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)].iter().filter(|&&(nx, ny)| level.is_open(nx, ny)).count();
+                if level.room_at(x, y).is_none() && ways > 2 {
+                    continue;
+                }
                 for (nx, ny) in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)] {
                     if nx < 0 || ny < 0 || nx >= w || ny >= h || seen[(ny * w + nx) as usize] || !level.is_open(nx, ny) {
                         continue;
@@ -174,8 +181,9 @@ impl Placer<'_> {
         self.links[i].iter().any(|&j| self.held(j))
     }
 
-    /// Puts rooms that open onto no occupied room first and colonnaded halls last, keeping the
-    /// order otherwise.
+    /// Puts rooms that open onto no occupied room first, then those that are not colonnaded halls,
+    /// then the small rooms ahead of the large (so the large stay free for the bats), keeping the
+    /// order otherwise (the sort is stable).
     fn prefer_apart(&self, rooms: &mut [usize]) {
         rooms.sort_by_key(|&i| (self.next_to_held(i), is_colonnaded(self.level, &self.level.rooms[i]), self.level.rooms[i].area() >= BAT_ROOM_AREA));
     }
@@ -257,22 +265,43 @@ fn open_rooms(level: &Level, area: u32) -> Vec<usize> {
     (0..level.rooms.len()).filter(|&i| Some(i) != start && level.rooms[i].area() >= area && !by_stair(level, i) && !has_folk(level, i)).collect()
 }
 
-/// How many wild groups the level's streams ask for, and whether one is a flock that needs a
-/// large room. Reads the first draws of each species' stream, as [`place_wild`] does.
-fn wanted(level: &Level) -> (usize, bool) {
-    let mut groups = 0;
-    if level.depth >= SPIDERS_FROM_DEPTH && stream(level, SPIDER_SALT).chance(SPIDER_ODDS) {
-        groups += 1;
+/// What the wild species' streams ask of a level, read once and shared by [`make_room_for_wild`]
+/// (how many rooms to free) and [`place_wild`] (what to place). Each stream is handed on after
+/// the draws that settle what it wants, so the placing goes on from the same state.
+struct Plan {
+    /// A nest of this many spiders, and the stream to place it with.
+    spiders: Option<(u32, Mulberry32)>,
+    /// A flock, or giant bats, and its stream.
+    bats: Option<Mulberry32>,
+    /// Rooms of centipedes wanted, and the stream.
+    centipedes: (u32, Mulberry32),
+    /// A jackalope, and its stream.
+    jackalope: Option<Mulberry32>,
+}
+
+impl Plan {
+    fn of(level: &Level) -> Plan {
+        let mut spiders = None;
+        if level.depth >= SPIDERS_FROM_DEPTH {
+            let mut rng = stream(level, SPIDER_SALT);
+            if rng.chance(SPIDER_ODDS) {
+                let count = if rng.chance(SPIDER_PAIR) { 2 } else { 1 };
+                spiders = Some((count, rng));
+            }
+        }
+        let mut rng = stream(level, BAT_SALT);
+        let bats = if rng.chance(BAT_ODDS) { Some(rng) } else { None };
+        let mut cent = stream(level, CENTIPEDE_SALT);
+        let wanted = if level.depth >= CENTIPEDES_FROM_DEPTH { cent.int(CENTIPEDE_ROOMS.0, CENTIPEDE_ROOMS.1) } else { 0 };
+        let mut rng = stream(level, JACKALOPE_SALT);
+        let jackalope = if rng.chance(JACKALOPE_ODDS) { Some(rng) } else { None };
+        Plan { spiders, bats, centipedes: (wanted, cent), jackalope }
     }
-    if stream(level, JACKALOPE_SALT).chance(JACKALOPE_ODDS) {
-        groups += 1;
+
+    /// How many groups it asks for.
+    fn groups(&self) -> usize {
+        self.spiders.is_some() as usize + self.bats.is_some() as usize + self.jackalope.is_some() as usize + self.centipedes.0 as usize
     }
-    let flock = stream(level, BAT_SALT).chance(BAT_ODDS);
-    groups += flock as usize;
-    if level.depth >= CENTIPEDES_FROM_DEPTH {
-        groups += stream(level, CENTIPEDE_SALT).int(CENTIPEDE_ROOMS.0, CENTIPEDE_ROOMS.1) as usize;
-    }
-    (groups, flock)
 }
 
 /// Frees rooms for the wild groups on a crowded level (#662). The rats and snakes took their
@@ -282,14 +311,18 @@ fn wanted(level: &Level) -> (usize, bool) {
 /// before any gets a second; then a lone snake, then a lone rat pack (not on the first level, which keeps its rats). Skeletons and trolls
 /// stay. The pick is by count and then the highest pack, so it is deterministic.
 fn make_room_for_wild(level: &mut Level) {
-    // A rat pack or snake never shares a room with a skeleton or troll, or with one another.
+    // No room holds two groups. The level's own creatures share only in the stone halls, where
+    // the rats and snakes fall back on rooms the skeletons guard (the first and the odd levels
+    // never double up: see the test `only_skeleton_rooms_are_shared_before_the_wild_species`).
+    // A rat pack or snake gives way, then a surplus skeleton pack; the last rat pack stays on
+    // the first level, which has nothing to undo here anyway.
     for r in 0..level.rooms.len() {
         loop {
-            let packs: std::collections::BTreeSet<u32> = level.creatures.iter().filter(|c| level.room_at(c.x as i32, c.y as i32) == Some(r)).map(|c| c.pack).collect();
+            let packs: BTreeSet<u32> = level.creatures.iter().filter(|c| level.room_at(c.x as i32, c.y as i32) == Some(r)).map(|c| c.pack).collect();
             if packs.len() < 2 {
                 break;
             }
-            let groups = |f: fn(Species) -> bool| level.creatures.iter().filter(|c| f(c.species)).map(|c| c.pack).collect::<std::collections::BTreeSet<_>>().len();
+            let groups = |f: fn(Species) -> bool| level.creatures.iter().filter(|c| f(c.species)).map(|c| c.pack).collect::<BTreeSet<_>>().len();
             let here = |f: fn(Species) -> bool, spare: bool| {
                 let enough = |s: Species| !spare || if s.is_skeleton() { groups(Species::is_skeleton) } else if s.is_rat() { groups(Species::is_rat) } else { groups(Species::is_snake) } > 1;
                 level.creatures.iter().filter(|c| f(c.species) && enough(c.species) && level.room_at(c.x as i32, c.y as i32) == Some(r)).map(|c| c.pack).max()
@@ -297,12 +330,13 @@ fn make_room_for_wild(level: &mut Level) {
             let beast = |s: Species| s.is_rat() || s.is_snake();
             // A beast that has a fellow elsewhere goes first, then a surplus skeleton pack, then
             // any beast: every kind keeps a group where it can.
-            let give_way = here(beast, true).or_else(|| here(Species::is_skeleton, true)).or_else(|| here(beast, false).filter(|_| level.depth > 1));
+            let give_way = here(beast, true).or_else(|| here(Species::is_skeleton, true)).or_else(|| here(Species::is_snake, false)).or_else(|| here(beast, false).filter(|_| level.depth > 1));
             let Some(pack) = give_way else { break };
             level.creatures.retain(|c| c.pack != pack);
         }
     }
-    let (want, flock) = wanted(level);
+    let plan = Plan::of(level);
+    let (want, flock) = (plan.groups(), plan.bats.is_some());
     if want == 0 {
         return;
     }
@@ -323,7 +357,7 @@ fn make_room_for_wild(level: &mut Level) {
                 }
             }
         }
-        let on_level = |s: Species| level.creatures.iter().filter(|c| c.species.is_rat() == s.is_rat() && (c.species.is_rat() || c.species.is_snake())).map(|c| c.pack).collect::<std::collections::BTreeSet<_>>().len();
+        let on_level = |s: Species| level.creatures.iter().filter(|c| c.species.is_rat() == s.is_rat() && (c.species.is_rat() || c.species.is_snake())).map(|c| c.pack).collect::<BTreeSet<_>>().len();
         // Surplus first, then a lone snake; a room too small for the flock does not help it.
         let rank = |g: &(u32, Species, usize)| {
             let n = on_level(g.1);
@@ -353,22 +387,18 @@ pub(crate) fn place_wild(level: &mut Level) -> (Vec<CreatureSpot>, Vec<WebSpot>)
     let old = p.placed.len();
     let mut webs = Vec::new();
 
+    let plan = Plan::of(level);
     // Spiders: a nest in a quiet room, from depth 3.
-    if level.depth >= SPIDERS_FROM_DEPTH {
-        let mut rng = stream(level, SPIDER_SALT);
-        if rng.chance(SPIDER_ODDS) {
-            let count = if rng.chance(SPIDER_PAIR) { 2 } else { 1 };
-            let rooms = p.rooms(MIN_ROOM_AREA, &mut rng);
-            let before = p.placed.len();
-            if let Some(i) = p.group(&rooms, count, 1.2, Species::GiantSpider, &mut rng) {
-                let spiders: Vec<(f32, f32)> = p.placed[before..].iter().map(|c| (c.x, c.y)).collect();
-                webs = hang_webs(level, &level.rooms[i], &spiders, &mut rng);
-            }
+    if let Some((count, mut rng)) = plan.spiders {
+        let rooms = p.rooms(MIN_ROOM_AREA, &mut rng);
+        let before = p.placed.len();
+        if let Some(i) = p.group(&rooms, count, 1.2, Species::GiantSpider, &mut rng) {
+            let spiders: Vec<(f32, f32)> = p.placed[before..].iter().map(|c| (c.x, c.y)).collect();
+            webs = hang_webs(level, &level.rooms[i], &spiders, &mut rng);
         }
     }
     // Bats in a flock, or giant bats from depth 4 under a high enough ceiling, in a large room.
-    let mut rng = stream(level, BAT_SALT);
-    if rng.chance(BAT_ODDS) {
+    if let Some(mut rng) = plan.bats {
         let rooms = p.rooms(BAT_ROOM_AREA, &mut rng);
         if level.depth >= GIANT_BATS_FROM_DEPTH && level.ceiling >= GIANT_BAT_CEILING {
             let count = rng.int(GIANT_BATS.0, GIANT_BATS.1);
@@ -379,12 +409,10 @@ pub(crate) fn place_wild(level: &mut Level) -> (Vec<CreatureSpot>, Vec<WebSpot>)
         }
     }
     // Giant centipedes, one or two in each of a room or two, from depth 2.
-    let mut rng = stream(level, CENTIPEDE_SALT);
-    let wanted = if level.depth >= CENTIPEDES_FROM_DEPTH { rng.int(CENTIPEDE_ROOMS.0, CENTIPEDE_ROOMS.1) } else { 0 };
+    let (wanted, mut rng) = plan.centipedes;
     // A jackalope, alone in a quiet room, from depth 1. It is placed before the centipedes so
     // the rarest species is not the one left out on a level short of rooms (#662).
-    let mut jackalope = stream(level, JACKALOPE_SALT);
-    if jackalope.chance(JACKALOPE_ODDS) {
+    if let Some(mut jackalope) = plan.jackalope {
         let rooms = p.rooms(MIN_ROOM_AREA, &mut jackalope);
         p.group(&rooms, 1, 1.5, Species::Jackalope, &mut jackalope);
     }

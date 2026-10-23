@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::creatures::{CREATURE_SALT, TROLLS_FROM_DEPTH, place_creatures};
 use crate::generate::{generate, generate_without_creatures};
@@ -235,7 +237,7 @@ fn spare_rooms(level: &Level) -> usize {
 
 #[test]
 fn levels_with_rooms_to_spare_keep_their_wild_groups() {
-    let (mut levels, mut bats, mut centipedes, mut spiders, mut beside, mut groups) = (0, 0, 0, 0, 0, 0);
+    let (mut levels, mut bats, mut centipedes, mut spiders) = (0, 0, 0, 0);
     for seed in 1..=300 {
         let level = generate(seed, SPIDERS_FROM_DEPTH);
         if spare_rooms(&level) < 3 {
@@ -246,18 +248,109 @@ fn levels_with_rooms_to_spare_keep_their_wild_groups() {
         bats += has(Species::is_bat);
         centipedes += has(Species::is_centipede);
         spiders += has(Species::is_spider);
-        let links = room_links(&level);
-        let occupied: Vec<_> = packs(&level).iter().filter_map(|p| p.1).collect();
-        for p in packs(&level).iter().filter(|p| p.2.iter().any(|&s| newcomer(s))) {
-            groups += 1;
-            beside += links[p.1.unwrap()].iter().any(|j| occupied.contains(j)) as u32;
-        }
     }
     assert!(levels >= 20, "{levels} levels with room to spare");
     // Before #662: bats on 0.4 of levels, centipedes on all, spiders on 0.48.
     let rate = |n: u32| n as f64 / levels as f64;
-    assert!(bats > 0, "bats on {bats} of {levels}");
+    assert!(rate(bats) >= 0.3, "bats on {bats} of {levels}");
     assert!(rate(centipedes) >= 0.9, "centipedes on {centipedes} of {levels}");
     assert!(rate(spiders) >= 0.35, "spiders on {spiders} of {levels}");
-    assert!(beside * 100 < groups * 88, "{beside} of {groups} wild groups open onto an occupied room");
 }
+
+/// The level as it stands when the wild species are about to be placed: the creatures made room
+/// for them, the stairs in.
+fn ready(seed: u32, depth: u32) -> Level {
+    let mut level = before(seed, depth);
+    make_room_for_wild(&mut level);
+    level
+}
+
+#[test]
+fn rooms_opening_onto_no_occupied_room_are_offered_first() {
+    let (mut mixed, mut checked) = (0, 0);
+    for depth in 1..=4 {
+        for seed in 1..=150 {
+            let level = ready(seed, depth);
+            let p = Placer { level: &level, start_room: level.start_room(), placed: level.creatures.clone(), pack: 0, links: room_links(&level) };
+            let rooms = p.rooms(MIN_ROOM_AREA, &mut Mulberry32::new(seed));
+            let beside: Vec<bool> = rooms.iter().map(|&i| p.next_to_held(i)).collect();
+            checked += 1;
+            assert!(beside.windows(2).all(|w| !w[0] || w[1]), "seed {seed} depth {depth}: a room beside an occupied one comes before one that is not");
+            mixed += (beside.contains(&true) && beside.contains(&false)) as u32;
+        }
+    }
+    assert!(mixed >= 20, "only {mixed} of {checked} levels offered both kinds of room");
+}
+
+#[test]
+fn links_are_direct_neighbours() {
+    let (mut rooms, mut linked) = (0, 0);
+    for seed in 1..=60 {
+        let level = generate(seed, 2);
+        for (i, l) in room_links(&level).iter().enumerate() {
+            assert!(!l.contains(&i));
+            rooms += 1;
+            linked += (l.len() > 3) as u32;
+        }
+    }
+    assert!(linked * 4 < rooms, "{linked} of {rooms} rooms open onto more than three others");
+}
+
+#[test]
+fn the_plan_is_what_is_placed() {
+    let mut roomy = 0;
+    for depth in 1..=4 {
+        for seed in 1..=150 {
+            let level = generate(seed, depth);
+            let plan = Plan::of(&level);
+            let placed = |f: fn(Species) -> bool| level.creatures.iter().any(|c| f(c.species));
+            // Nothing is placed that the plan did not ask for.
+            assert!(!placed(Species::is_spider) || plan.spiders.is_some(), "seed {seed} depth {depth}: spiders unplanned");
+            assert!(!placed(Species::is_bat) || plan.bats.is_some(), "seed {seed} depth {depth}: bats unplanned");
+            assert!(!placed(Species::is_jackalope) || plan.jackalope.is_some(), "seed {seed} depth {depth}: a jackalope unplanned");
+            let cent: BTreeSet<u32> = level.creatures.iter().filter(|c| c.species.is_centipede()).map(|c| c.pack).collect();
+            assert!(cent.len() as u32 <= plan.centipedes.0, "seed {seed} depth {depth}: {} centipede groups of {}", cent.len(), plan.centipedes.0);
+            // And with rooms in plenty the spiders and centipedes it asked for are there.
+            if spare_rooms(&level) >= 4 {
+                roomy += 1;
+                assert_eq!(placed(Species::is_spider), plan.spiders.is_some(), "seed {seed} depth {depth}: spiders");
+                assert_eq!(cent.len() as u32, plan.centipedes.0, "seed {seed} depth {depth}: centipedes");
+            }
+        }
+    }
+    assert!(roomy >= 5, "{roomy} levels with rooms in plenty");
+}
+
+/// Before the wild species, the level's own creatures share a room only where a skeleton pack
+/// and a rat pack or snake do (the stone halls, where the rats fall back on the guarded halls):
+/// the odd levels and the first never double up, so `make_room_for_wild` has nothing to undo there.
+#[test]
+fn only_skeleton_rooms_are_shared_before_the_wild_species() {
+    for depth in 1..=4 {
+        for seed in 1..=100 {
+            let level = before(seed, depth);
+            for r in 0..level.rooms.len() {
+                let here: Vec<_> = level.creatures.iter().filter(|c| room_of(&level, c) == Some(r)).collect();
+                let packs: BTreeSet<u32> = here.iter().map(|c| c.pack).collect();
+                assert!(packs.len() < 2 || here.iter().any(|c| c.species.is_skeleton()), "seed {seed} depth {depth}: room {r} holds {} groups and no skeleton", packs.len());
+            }
+        }
+    }
+}
+
+/// Giving every group a room costs the small levels creatures; this keeps the cost from growing
+/// unnoticed. Measured over seeds 1 to 300 at the time (#662): the even depths, which have the
+/// fewest free rooms, held 2 on their barest level and 7.4 and 5.9 on average.
+#[test]
+fn small_levels_keep_a_crowd_of_creatures() {
+    for depth in [2, 4] {
+        let counts: Vec<usize> = (1..=150).map(|s| generate(s, depth).creatures.len()).collect();
+        let (least, mean) = (*counts.iter().min().unwrap(), counts.iter().sum::<usize>() as f64 / counts.len() as f64);
+        assert!(least >= 2, "depth {depth}: a level holds only {least} creatures");
+        assert!(mean >= 5.0, "depth {depth}: {mean:.2} creatures a level");
+    }
+    // Seed 1207's first level keeps its two rats.
+    let species: Vec<_> = generate(1207, 1).creatures.iter().map(|c| c.species).collect();
+    assert_eq!(species, [Species::Rat, Species::Rat]);
+}
+
