@@ -6,11 +6,15 @@
 //! `expand(&grammar, "#origin#", seed)` always gives the same text for the same seed.
 //! `##` is a literal `#`.
 //!
-//! Actions, as in Tracery's `#[hero:#name#]story#`: `[key:value]` in a rule sets `key` for the
-//! rest of the expansion (the value is itself expanded, so `[who:#name#]` works), writes
+//! Actions, after Tracery's `[key:value]`: a rule with `[key:value]` in its text sets `key` for
+//! the rest of the expansion (the value is itself expanded, so `[who:#name#]` works), writes
 //! nothing, and `#key#` reads it back. [`expand_tagged`] returns what was set beside the text:
-//! `[sex:female]Daughters of the #place#` gives "Daughters of the Gate" and `sex = female`. A
-//! rule with no actions expands exactly as before, so a grammar without them keeps its seeds.
+//! `[sex:female]Daughters of the #place#` gives "Daughters of the Gate" and `sex = female`.
+//! Actions are rule-level only: Tracery's `#[hero:#name#]story#`, an action inside a tag, is not
+//! supported (such a tag names a symbol that does not exist), and a value ends at the first `]`,
+//! so actions do not nest. A key set to two different values keeps the last and is listed in
+//! [`Expansion::conflicts`]. A rule with no actions expands exactly as before, so a grammar
+//! without them keeps its seeds.
 //!
 //! Modifiers: `capitalize`, `upper`, `lower`, `s` (plural), `a` (article: "a" or "an").
 //!

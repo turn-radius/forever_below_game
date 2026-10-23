@@ -187,22 +187,18 @@ impl BodySpec {
 
     /// A woman's face and hair, from the man's the seed rolled (our own, since the creator
     /// varies only hips, bust and beard by sex): the jaw narrower, the nose and brow lighter,
-    /// and the hair longer. Every style turns to the folk's
-    /// long one, from its own stream of the seed. Lizardfolk keep
-    /// their crest and goblins their ridge, which carry no sex.
+    /// and the hair longer. Every style turns to the folk's long one (a human's sometimes tied
+    /// back, drawn from its own stream of the seed). Lizardfolk keep their crest and goblins
+    /// their ridge, which carry no sex.
     fn soften_face(&mut self) {
         self.jaw *= 0.5;
         self.brow *= 0.55;
         self.nose *= 0.8;
         let longer = match self.folk {
-            Folk::Human => HairStyle::Long,
-            Folk::Dwarf | Folk::Gnome => HairStyle::Long,
+            Folk::Human | Folk::Dwarf | Folk::Gnome => HairStyle::Long,
             Folk::Goblin | Folk::Pigfolk => HairStyle::Shaggy,
             Folk::Lizardfolk => return,
         };
-        if self.hair == HairStyle::Mohawk {
-            return;
-        }
         if self.hair == HairStyle::Mohawk {
             return;
         }
