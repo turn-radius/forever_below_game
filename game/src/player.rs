@@ -51,7 +51,10 @@ impl Plugin for PlayerPlugin {
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
             .add_systems(OnEnter(AppState::Delving), (spawn_player, grab_cursor))
-            .add_systems(Update, (take_cursor, look, weigh_the_delver, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems))
+            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems))
+            // The load follows the pack even with the sheet open, where the pack is changed and the
+            // load condition is read.
+            .add_systems(Update, weigh_the_delver.before(walk).after(crate::play::switch_screens).in_set(DelveSystems))
             .add_systems(Update, widen_player_view.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
     }
 }
