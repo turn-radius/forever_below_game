@@ -671,7 +671,7 @@ mod tests {
         assert!(traders > 50 && in_market + 3 >= traders, "{in_market} of {traders} traders stand in a market");
     }
 
-    /// The levels of worlds 1..=48 at depths 3 and 4 (a rough-rock level and a stone-halls one),
+    /// The levels of worlds 1..=48 at the denizen depth and the one below,
     /// made once for the denizen tests.
     fn deep_levels() -> &'static [Level] {
         static LEVELS: std::sync::OnceLock<Vec<Level>> = std::sync::OnceLock::new();
@@ -726,21 +726,26 @@ mod tests {
     }
 
     #[test]
-    fn denizens_stand_wider_apart_and_deeper_levels_are_deterministic() {
+    fn denizens_stand_wider_apart() {
         for level in deep_levels() {
             for (i, a) in level.folk.iter().enumerate() {
                 for b in &level.folk[i + 1..] {
                     // Guards at a doorway's posts are placed by the doorway, not by their size.
                     let posted = |f: &FolkSpot| f.trade.is_some_and(|t| t.profession == Profession::Guard);
                     if (a.denizen.is_some() || b.denizen.is_some()) && !(posted(a) && posted(b)) {
-                        assert!((a.x - b.x).hypot(a.y - b.y) >= FOLK_SPACING, "seed {} depth {}: {a:?} and {b:?}", level.seed, level.depth);
+                        assert!((a.x - b.x).hypot(a.y - b.y) >= DENIZEN_SPACING, "seed {} depth {}: {a:?} and {b:?}", level.seed, level.depth);
                     }
                 }
             }
         }
+    }
+
+    #[test]
+    fn deeper_levels_are_deterministic() {
         for seed in [1, 1207] {
-            assert_eq!(generate(seed, 3), generate(seed, 3));
-            assert_eq!(generate(seed, 5).folk, generate(seed, 5).folk);
+            let depth = fb_faction::DENIZEN_DEPTH;
+            assert_eq!(generate(seed, depth), generate(seed, depth));
+            assert_eq!(generate(seed, depth + 2).folk, generate(seed, depth + 2).folk);
         }
     }
 

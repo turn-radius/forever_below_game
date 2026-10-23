@@ -19,7 +19,7 @@ pub mod tongue;
 use serde::{Deserialize, Serialize};
 
 /// The shallowest level (1 is the first) on which denizen factions are found. Our own rule.
-pub const DENIZEN_DEPTH: u32 = 3;
+pub const DENIZEN_DEPTH: u32 = 10;
 
 /// Whether denizen factions can be found on a level `depth` down.
 pub fn denizens_at(depth: u32) -> bool {

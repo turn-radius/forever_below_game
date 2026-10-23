@@ -16,10 +16,10 @@
 //! pool that follows the folk factions (so the folk factions of a world are what they were before
 //! denizens existed). A denizen faction ([`FactionSpec::denizen`]) is made of one kind of
 //! denizen ([`FactionSpec::member_body`]); it rolls a name, alignment, intention, likes and
-//! hates, colours and crest like any faction (a denizen faction can like or hate a folk faction,
-//! and a [`Preference::Faction`] can name a denizen one, but the folk factions' own tastes are
-//! rolled as ever, so a world's folk factions and the levels above the denizens do not change). A level
-//! draws the folk factions it always did and, from [`DENIZEN_DEPTH`] down, usually one denizen
+//! hates, colours and crest like any faction. Folk and denizen factions are alike in their
+//! tastes: any faction can like or hate any other, and a folk faction takes a taste for a given
+//! denizen faction with chance [`DENIZEN_TASTE_ODDS`], by a separate stream so nothing else it
+//! rolled moves. A level draws the folk factions it always did and, from [`DENIZEN_DEPTH`] down, usually one denizen
 //! faction and sometimes two ([`World::draw_at`]).
 //!
 //! The seven factions of `data/factions.json` are examples the grammar was written from, not a
@@ -52,6 +52,9 @@ pub const DENIZEN_POOL: (u32, u32) = (4, 6);
 pub const DENIZEN_ODDS: f64 = 0.85;
 /// Chance that such a level holds a second one.
 pub const SECOND_DENIZEN_ODDS: f64 = 0.2;
+/// Chance that a folk faction likes or hates a given denizen faction (half each), in place of
+/// one of its other tastes. Low, since most folk have never met a denizen.
+pub const DENIZEN_TASTE_ODDS: f64 = 0.05;
 
 const SIZE_SALT: u32 = 0xFAC7_0001;
 const FACTION_SALT: u32 = 0xFAC7_0002;
@@ -59,6 +62,7 @@ const DRAW_SALT: u32 = 0xFAC7_0003;
 const DENIZEN_SIZE_SALT: u32 = 0xFAC7_0004;
 const DENIZEN_SALT: u32 = 0xFAC7_0005;
 const DENIZEN_DRAW_SALT: u32 = 0xFAC7_0006;
+const DENIZEN_TASTE_SALT: u32 = 0xFAC7_0007;
 
 /// One faction, an index into its world's pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -332,6 +336,27 @@ impl World {
             factions.push(spec);
         }
 
+
+        // Folk and denizen factions are alike in what they like and hate: any faction can name
+        // any other. Most folk have never met a denizen, so each folk faction takes a liking or a
+        // grudge against a given denizen faction only with chance [`DENIZEN_TASTE_ODDS`]. It takes
+        // the place of its last taste that is not a folk, so its list keeps its length and
+        // nothing else it rolled (name, folk, dress, colours) moves.
+        for i in 0..count {
+            let mut rng = Mulberry32::new(mix(seed, DENIZEN_TASTE_SALT, i as u32));
+            for d in count..total {
+                if !rng.chance(DENIZEN_TASTE_ODDS) {
+                    continue;
+                }
+                let likes = rng.chance(0.5);
+                let spec = &mut factions[i];
+                let list = if likes { &mut spec.likes } else { &mut spec.hates };
+                let target = Preference::Faction(Faction(d as u8));
+                if let Some(at) = list.iter().rposition(|p| !matches!(p, Preference::Folk(_))) {
+                    list[at] = target;
+                }
+            }
+        }
         World { seed, factions }
     }
 

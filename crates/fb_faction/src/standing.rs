@@ -581,6 +581,20 @@ mod tests {
     }
 
     #[test]
+    fn killing_a_member_of_a_denizen_faction_pleases_the_folk_faction_that_hates_it() {
+        let hates = |w: &World| w.folk_factions().iter().find_map(|f| f.hates.iter().find_map(|p| match p {
+            Preference::Faction(d) if w.faction(*d).is_denizen() => Some((f.id, *d)),
+            _ => None,
+        }));
+        let world = (0..500).map(World::new).find(|w| hates(w).is_some()).expect("a folk faction hates a denizen one");
+        let (folk, denizen) = hates(&world).unwrap();
+        let mut s = Standings::start_from_alignment(Alignment::TrueNeutral, &world);
+        let before = s.get(folk).value();
+        s.on_kill(&world, Victim::Member { faction: denizen, folk: None, class: None });
+        assert!(s.get(folk).value() > before, "{} vs {before}", s.get(folk).value());
+    }
+
+    #[test]
     fn trades_and_gifts_raise_and_theft_lowers() {
         let mut s = Standings::default();
         let f = Faction(0);

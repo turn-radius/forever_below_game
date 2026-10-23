@@ -535,6 +535,9 @@ pub fn dev_folk(level: &Level) -> Vec<fb_level::FolkSpot> {
 }
 
 /// [`dev_folk`] for the value `spec`.
+///
+/// TODO: a denizen faction's spot made here is not stood either, since [`crate::folk::has_figure`]
+/// leaves it out; the denizen-spawn task removes both together.
 pub fn dev_folk_for(level: &Level, spec: &str) -> Vec<fb_level::FolkSpot> {
     if level.factions.is_empty() {
         return Vec::new();

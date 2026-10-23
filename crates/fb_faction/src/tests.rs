@@ -352,6 +352,25 @@ fn denizen_tastes_reach_across_factions_and_folk() {
 }
 
 #[test]
+fn folk_factions_rarely_like_or_hate_a_denizen_faction() {
+    let (mut factions, mut with_taste) = (0, 0);
+    for seed in 0..200 {
+        let world = World::new(seed);
+        for spec in world.folk_factions() {
+            factions += 1;
+            let tastes = spec.likes.iter().chain(&spec.hates).filter(|p| matches!(p, Preference::Faction(f) if world.faction(*f).is_denizen())).count();
+            with_taste += (tastes > 0) as u32;
+            assert!((1..=3).contains(&spec.likes.len()) && (1..=3).contains(&spec.hates.len()), "{}", spec.name);
+            assert!(spec.likes.iter().all(|p| !spec.hates.contains(p)), "{}", spec.name);
+            assert_eq!(spec.hated_folk().count() > 0, spec.insular, "{}", spec.name);
+        }
+    }
+    // 5 in 100 for each of four to six denizen factions, a good share of them replaced again.
+    let share = with_taste as f64 / factions as f64;
+    assert!((0.1..0.4).contains(&share), "{with_taste} of {factions} folk factions have a denizen taste");
+}
+
+#[test]
 fn above_the_denizen_depth_a_level_draws_exactly_the_folk_draw() {
     for seed in WORLDS {
         let world = World::new(seed);

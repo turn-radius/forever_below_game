@@ -166,6 +166,9 @@ pub fn footprint(figure: &Figure) -> f32 {
 /// game yet, so for now their spots stay in [`Level::folk`] (the saved records of the others
 /// still count them) but nobody is made or spawned for them. When the denizen bodies land
 /// (`fb_creatures`) this goes, and their spots are spawned as creature rigs.
+///
+/// TODO: the denizen-spawn task removes this and the `FB_SPAWN` dev filter in
+/// `creatures::dev_folk_for` together.
 pub fn has_figure(spot: &FolkSpot) -> bool {
     spot.denizen.is_none()
 }
