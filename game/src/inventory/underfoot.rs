@@ -142,6 +142,9 @@ pub enum FloorChange {
     /// The item has been let go, to land at a spot on the floor (cells) turned `yaw`: where
     /// what took its place lay.
     SetDownAt(ItemId, Vec2, f32),
+    /// A camp good already in its set-down form, put down in front of the eye without the checks
+    /// of `crate::camp::lay_out`. For captures only.
+    SetDownCamp(ItemId),
 }
 
 /// Changes to make to the level this frame.
@@ -183,6 +186,11 @@ pub fn apply_floor_changes(
             }
             FloorChange::SetDownAt(id, at, yaw) => {
                 set_down_at(&mut spawner, &inventory, level, id, at, yaw, &tuning);
+            }
+            FloorChange::SetDownCamp(id) => {
+                if let Some(eye) = eyes.iter().next() {
+                    crate::carry::set_camp_down_unchecked(&mut spawner, &inventory, level, eye, id, &tuning);
+                }
             }
         }
     }
@@ -302,9 +310,10 @@ pub fn set_down_for_capture(mut inventory: ResMut<Inventory>, mut changes: ResMu
     let drops = drops_for_capture(&std::env::var("FB_DROP").unwrap_or_default());
     let count = drops.len();
     for (i, item) in drops.into_iter().enumerate() {
+        let set_camp = item.is_set_camp();
         let id = inventory.add(item);
         let aside = if count > 1 { (i as f32 / (count - 1) as f32 * 2.0 - 1.0) * crate::carry::DROP_SPREAD } else { 0.0 };
-        changes.0.push(FloorChange::SetDown(id, aside));
+        changes.0.push(if set_camp { FloorChange::SetDownCamp(id) } else { FloorChange::SetDown(id, aside) });
     }
 }
 

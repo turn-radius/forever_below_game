@@ -66,6 +66,19 @@ impl Item {
     }
 }
 
+/// Half the floor the canvas of a pitched tent covers, along its item x and z: a ridge tent's
+/// length along the ridge and its width across the eaves, a bell tent's diameter. Guy lines and
+/// pegs reach past it, and are not in the way. `None` for anything but a tent.
+pub fn canvas_half(shape: &armory::Item) -> Option<(f32, f32)> {
+    use armory::families::tent::TentStyle;
+    let armory::Item::Tent(s) = shape else { return None };
+    let t = &s.tent;
+    Some(match t.style {
+        TentStyle::Ridge => (t.length * 0.5, t.width * 0.5),
+        TentStyle::Bell => (t.width * 0.5, t.width * 0.5),
+    })
+}
+
 /// `item` in its set-down form: a bedroll laid out, a tent pitched. `None` for anything else, and
 /// for a camp good that is set down already.
 pub fn set_up(item: &Item) -> Option<Item> {
@@ -126,6 +139,17 @@ mod tests {
         // A pitched tent stays where it was put; a carried one fits a pack.
         assert!(packed.profile.packable && !pitched.profile.packable);
         assert!(armory::Family::Tent == pitched.shape.family());
+    }
+
+    #[test]
+    fn a_tents_canvas_is_inside_all_its_ropes_and_pegs() {
+        for seed in 1..20 {
+            let pitched = set_up(&tent(seed)).unwrap();
+            let (cx, cz) = canvas_half(&pitched.shape).unwrap();
+            let (lo, hi) = pitched.shape.build().bounds().unwrap();
+            assert!(cx <= (hi[0] - lo[0]) * 0.5 + 1e-3 && cz <= (hi[2] - lo[2]) * 0.5 + 1e-3, "{seed}: canvas {cx} {cz} in {lo:?} {hi:?}");
+        }
+        assert_eq!(canvas_half(&roll_item("Bedroll", 1).unwrap().shape), None);
     }
 
     #[test]

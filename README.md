@@ -217,6 +217,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_OPEN_CONTAINER=<n>` | opens the level's `n`th container (0 the first, in `print_level`'s order) a moment in, with the inventory showing what it holds |
 | `FB_DEBUG_KIT=1` | dresses you in your class's outfit with a lit light in the off hand, a filled pack, and a sack and a shield set down in front of you |
 | `FB_DROP=<base>[:<rarity>][,...]` | sets an item of each named base down in front of you a moment in, of that rarity if one is named (`Sword:legendary,Sword:common`), spread left to right; for captures of floor items such as a legendary's shimmer; `Tent+set` or `Bedroll+set` is that camp good already pitched or laid out |
+| `FB_LAY_OUT=<Tent\|Bedroll>` | a few frames in, sets that camp good down in front of you as F does, checks and all, and says so or why not in the toast |
 | `FB_SWING=1` | swings the main hand over and over, for captures of the swing and of blows landing (with `FB_HOLD` and `FB_DEBUG_POSE`) |
 | `FB_HOLD=<main>[,<off>]` | puts an item of each named base in that hand, after the starting or debug kit (`Mace,Torch`, `Sword,Shield`, `Staff,none`; a torch or lantern is lit, `none` empties the hand) |
 | `FB_CONDITIONS=<list>` | holds the delver under conditions for the status badges, comma separated: `hunger:<0 to 1>`, `thirst:<0 to 1>`, `sleep:<0 to 1>`, `exhaustion:<level>`, `winded`, `load:<light\|burdened\|encumbered\|overloaded>`, `poisoned` (an hour) or `poisoned:<minutes>` (`FB_CONDITIONS=hunger:0.8,winded,load:encumbered`) |

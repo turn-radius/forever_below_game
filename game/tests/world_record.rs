@@ -182,18 +182,24 @@ fn set_camp_where(app: &mut App, base: &str, seed: u32) -> (ItemId, Vec2, Vec2) 
     let lvl = level(app).clone();
     let blocked = app.world().resource::<forever_below::play::BlockedCells>().clone();
     let obstacles = app.world().resource::<forever_below::play::Obstacles>().0.clone();
-    // The first open floor with room ahead for the biggest tent.
-    let roomy = Vec2::new(10.5, 8.5);
+    // The first open floor where this camp, as `lay_out` would set it, is taken.
+    let set = fb_items::camp::set_up(&fb_items::roll_item(base, seed).unwrap()).unwrap();
+    let (half, offset) = forever_below::camp::footprint(&set).unwrap();
+    let gap = forever_below::camp::gap_for(set.camp().unwrap());
     let (feet, forward) = (0..lvl.height as i32)
         .flat_map(|y| (0..lvl.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| lvl.cell(x, y) == fb_level::Cell::Floor)
         .flat_map(|(x, y)| [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West].map(move |f| (x, y, f)))
         .map(|(x, y, f)| (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * fb_level::CELL, Vec2::new(f.step().0 as f32, f.step().1 as f32)))
-        .find(|&(feet, forward)| forever_below::camp::check_site(&forever_below::camp::site_ahead(feet, forward, roomy), &lvl, &blocked, &obstacles, &[]).is_ok())
+        .find(|&(feet, forward)| {
+            let site = forever_below::camp::site_ahead(feet, forward, half, gap);
+            let canvas = fb_items::camp::canvas_half(&set.shape).map(|(x, z)| forever_below::camp::Site { centre: site.centre - site.to_floor(offset), half: Vec2::new(x, z), yaw: site.yaw });
+            forever_below::camp::check_site(&site, &lvl, &blocked, &obstacles, &[]).is_ok() && canvas.is_none_or(|c| forever_below::camp::check_passage(&c, &lvl, &blocked, &obstacles, 3.5).is_ok())
+        })
         .expect("somewhere in the level a camp fits");
     let id = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item(base, seed).unwrap());
     let mut changes = FloorChanges::default();
-    let said = forever_below::camp::lay_out(&mut app.world_mut().resource_mut::<Inventory>(), &mut changes, id, feet, forward, &lvl, &blocked, &obstacles, &[]);
+    let said = forever_below::camp::lay_out(&mut app.world_mut().resource_mut::<Inventory>(), &mut changes, id, feet, forward, &lvl, &blocked, &obstacles, &[], 3.5);
     assert!(said.is_ok(), "{base}: {said:?}");
     app.world_mut().resource_mut::<FloorChanges>().0.extend(changes.0);
     run(app, 5);

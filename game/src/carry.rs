@@ -884,9 +884,11 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
     // tent blocks the way as a prop does, from a child at the middle of what it covers.
     if let Some(camp) = item.camp().filter(|_| item.is_set_camp()) {
         let site = crate::camp::Site { centre: at.xz(), half: Vec2::new(max.x - min.x, max.z - min.z) * 0.5, yaw: spot.yaw };
-        root.insert(crate::camp::SetCamp { camp, site });
-        if let Some(shape) = crate::camp::blocks_the_way(camp, &site) {
-            root.with_child((crate::play::BlocksTheWay(shape), Transform::from_xyz((min.x + max.x) * 0.5, 0.0, (min.z + max.z) * 0.5)));
+        let set = crate::camp::SetCamp::new(camp, &item.shape, site, min, max);
+        root.insert(set);
+        // What stops the way is the canvas, round the item's origin, not the ropes and pegs.
+        if let Some(shape) = crate::camp::blocks_the_way(camp, &set.canvas) {
+            root.with_child((crate::play::BlocksTheWay(shape), Transform::default()));
         }
     }
     if let Some(anchor) = light {
@@ -981,19 +983,22 @@ pub fn set_down(
     let item = inventory.item(id)?;
     // Straight down, the top of the head points the way the body faces.
     let forward = crate::camp::facing(eye);
-    // A camp already set down (a capture's `FB_DROP=Tent+set`) lies where setting it down puts it,
-    // without the check.
-    if item.is_set_camp()
-        && let Some((half, _)) = crate::camp::footprint(item)
-    {
-        let site = crate::camp::site_ahead(eye.translation().xz(), forward, half);
-        return set_down_at(spawner, inventory, level, id, site.centre / CELL, site.yaw, tuning);
-    }
     let radius = floor_radius(&item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), tuning.view.floor_item_scale);
     let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
     set_down_at(spawner, inventory, level, id, at, yaw, tuning)
+}
+
+/// Sets loose camp good `id`, already in its set-down form, where setting it down in front of the
+/// eye puts it, without asking whether the place takes it ([`crate::camp::check_site`]). Only
+/// for captures (`FB_DROP=Tent+set`); the player's own set-down checks first
+/// ([`crate::camp::lay_out`]). `None` if it is not a set camp.
+pub fn set_camp_down_unchecked(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut Level, eye: &GlobalTransform, id: ItemId, tuning: &Tuning) -> Option<Entity> {
+    let item = inventory.item(id)?;
+    let (half, _) = crate::camp::footprint(item).filter(|_| item.is_set_camp())?;
+    let site = crate::camp::site_ahead(eye.translation().xz(), crate::camp::facing(eye), half, crate::camp::gap_for(item.camp()?));
+    set_down_at(spawner, inventory, level, id, site.centre / CELL, site.yaw, tuning)
 }
 
 /// Sets loose item `id` down at `at` on the floor (cells), turned `yaw`, into the level data

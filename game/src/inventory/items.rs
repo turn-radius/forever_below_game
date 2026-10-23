@@ -332,6 +332,17 @@ impl Inventory {
         }
     }
 
+    /// [`Inventory::replace_form`] for an item that is still in a pack or a slot: takes `id` out
+    /// of it and gives it `item`'s form in one step. Nothing changes, and it is `false`, for an
+    /// unknown id or another item, so a camp good is never left out of its pack in its old form.
+    pub fn set_form_out(&mut self, id: ItemId, item: Item) -> bool {
+        if !self.items.get(&id).is_some_and(|old| old.base == item.base && old.seed == item.seed) {
+            return false;
+        }
+        self.take_out(id);
+        self.replace_form(id, item)
+    }
+
     /// Mutable access to the shape of `id`, for state that changes in play (the arrow nocked
     /// on a bow, the ammunition a quiver shows). Not for changing what the item is.
     pub fn shape_mut(&mut self, id: ItemId) -> Option<&mut armory::Item> {

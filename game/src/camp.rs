@@ -55,6 +55,7 @@ impl Plugin for CampPlugin {
             .init_resource::<GameRules>()
             .add_systems(OnEnter(crate::launch::AppState::Delving), |mut asleep: ResMut<Asleep>| asleep.0 = None)
             .add_systems(Update, (lay_out_hovered, pack_hovered).run_if(inventory_open).run_if(crate::barter::not_bartering).before(apply_floor_changes).in_set(DelveSystems))
+            .add_systems(Update, debug_lay_out.run_if(|| std::env::var_os("FB_LAY_OUT").is_some()).in_set(DelveSystems))
             .add_systems(Update, pack_aimed.run_if(level_has_focus).before(apply_floor_changes).in_set(DelveSystems))
             .add_systems(Update, (go_to_sleep.run_if(level_has_focus), wake_up, spawn_veil, fade_veil).chain().in_set(DelveSystems));
     }
@@ -64,11 +65,40 @@ impl Plugin for CampPlugin {
 /// the body, within reach of the eye.
 pub const GAP: f32 = 3.0;
 
+/// How far ahead of the feet a tent's near edge lies, in world units: further than a bedroll's,
+/// so the whole tent reads from where the delver stands.
+pub const TENT_GAP: f32 = 6.0;
+
+/// The gap a camp is set down at ([`GAP`] or [`TENT_GAP`]).
+pub fn gap_for(camp: Camp) -> f32 {
+    match camp {
+        Camp::Bedroll => GAP,
+        Camp::Tent => TENT_GAP,
+    }
+}
+
 /// A set bedroll or tent, on its [`FloorItem`]: what it is and the floor it covers.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct SetCamp {
     pub camp: Camp,
+    /// Everything of it on the floor, guy lines and pegs included.
     pub site: Site,
+    /// What stops the way: a tent's canvas, which is inside `site`; the same as `site` for a
+    /// bedroll, which stops nothing.
+    pub canvas: Site,
+}
+
+impl SetCamp {
+    /// A camp `shape` lying at `site`, whose mesh bounds are `min..max` in item space.
+    pub fn new(camp: Camp, shape: &armory::Item, site: Site, min: Vec3, max: Vec3) -> SetCamp {
+        let canvas = fb_items::camp::canvas_half(shape).map_or(site, |(x, z)| {
+            // The canvas is centred on the item's origin, which the bounds' centre is off by a
+            // little (a guy line on one side).
+            let offset = Vec2::new((min.x + max.x) * 0.5, (min.z + max.z) * 0.5);
+            Site { centre: site.centre - site.to_floor(offset), half: Vec2::new(x, z), yaw: site.yaw }
+        });
+        SetCamp { camp, site, canvas }
+    }
 }
 
 /// The floor a camp covers: a rectangle on the floor plane (world `(x, z)`), its half extents
@@ -89,6 +119,12 @@ impl Site {
     fn axes(&self) -> [Vec2; 2] {
         let (sin, cos) = self.yaw.sin_cos();
         [Vec2::new(cos, -sin), Vec2::new(sin, cos)]
+    }
+
+    /// A vector of the site's own x and z as it lies on the floor.
+    pub fn to_floor(&self, v: Vec2) -> Vec2 {
+        let [x, z] = self.axes();
+        x * v.x + z * v.y
     }
 
     /// How far the rectangle reaches along the unit `axis`, from its centre.
@@ -141,6 +177,8 @@ pub enum CampRefusal {
     Wall,
     /// It would overlap a prop, someone standing, or another camp.
     Prop,
+    /// It would leave no room to walk past it, or cut the floor round it in two.
+    Seals,
 }
 
 impl CampRefusal {
@@ -150,16 +188,82 @@ impl CampRefusal {
             CampRefusal::Stair => "It cannot be set across a stair.",
             CampRefusal::Wall => "There is not room for it against the wall.",
             CampRefusal::Prop => "There is something in the way.",
+            CampRefusal::Seals => "It would block the way.",
         }
     }
 }
 
 /// The site for a camp of item-space half extents `half` (along its x and z) set down by a
 /// delver at `feet` (world `(x, z)`) facing `forward` (a unit floor direction): its near edge
-/// [`GAP`] ahead, square to the delver. Item +X points back at the delver, so a bedroll lies
-/// lengthways with its foot to them and a tent has its door toward them.
-pub fn site_ahead(feet: Vec2, forward: Vec2, half: Vec2) -> Site {
-    Site { centre: feet + forward * (GAP + half.x), half, yaw: forward.y.atan2(-forward.x) }
+/// `gap` ahead ([`gap_for`]), square to the delver. Item +X points back at the delver, so a
+/// bedroll lies lengthways with its foot to them and a tent has its door toward them.
+pub fn site_ahead(feet: Vec2, forward: Vec2, half: Vec2, gap: f32) -> Site {
+    Site { centre: feet + forward * (gap + half.x), half, yaw: forward.y.atan2(-forward.x) }
+}
+
+/// How finely [`check_passage`] samples the floor, in world units.
+const PASSAGE_STEP: f32 = 1.0;
+
+/// Whether a body of `radius` can stand at `at`: clear of rock, shut cells, obstacles and, if
+/// given, the `canvas` of a camp.
+fn walkable(at: Vec2, radius: f32, level: &Level, blocked_cells: &BlockedCells, obstacles: &[Obstacle], canvas: Option<&Site>) -> bool {
+    let cell = (at / CELL).floor().as_ivec2();
+    for y in cell.y - 1..=cell.y + 1 {
+        for x in cell.x - 1..=cell.x + 1 {
+            if level.is_open(x, y) && !blocked_cells.0.contains(&(x, y)) {
+                continue;
+            }
+            let (low, high) = (Vec2::new(x as f32, y as f32) * CELL, Vec2::new(x as f32 + 1.0, y as f32 + 1.0) * CELL);
+            if at.distance(at.clamp(low, high)) < radius {
+                return false;
+            }
+        }
+    }
+    let body = Obstacle::Circle { centre: at, radius };
+    !(obstacles.iter().any(|o| o.overlaps(at, radius)) || canvas.is_some_and(|c| c.blocked_by(&body)))
+}
+
+/// How many separate stretches of floor the delver (a body of `radius`) could stand on in the
+/// window of cells round `canvas`, with the canvas standing in the way or not.
+fn stretches(canvas: &Site, standing: bool, radius: f32, level: &Level, blocked_cells: &BlockedCells, obstacles: &[Obstacle]) -> usize {
+    let (low, high) = canvas.cells();
+    let (origin, columns, rows) = (Vec2::new((low.x - 1) as f32, (low.y - 1) as f32) * CELL, ((high.x - low.x + 3) as f32 * CELL / PASSAGE_STEP) as usize, ((high.y - low.y + 3) as f32 * CELL / PASSAGE_STEP) as usize);
+    let at = |c: usize, r: usize| origin + Vec2::new(c as f32 + 0.5, r as f32 + 0.5) * PASSAGE_STEP;
+    let open: Vec<bool> = (0..rows).flat_map(|r| (0..columns).map(move |c| (c, r))).map(|(c, r)| walkable(at(c, r), radius, level, blocked_cells, obstacles, standing.then_some(canvas))).collect();
+    let mut seen = vec![false; open.len()];
+    let mut count = 0;
+    for start in 0..open.len() {
+        if !open[start] || seen[start] {
+            continue;
+        }
+        count += 1;
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(i) = stack.pop() {
+            let (c, r) = (i % columns, i / columns);
+            for (dc, dr) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let (nc, nr) = (c as i32 + dc, r as i32 + dr);
+                if nc < 0 || nr < 0 || nc >= columns as i32 || nr >= rows as i32 {
+                    continue;
+                }
+                let j = nr as usize * columns + nc as usize;
+                if open[j] && !seen[j] {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Whether a tent with this `canvas` would leave the way open: no gap past it narrower than the
+/// delver (a body of `radius`), and the floor round it no more in pieces than before. A bedroll
+/// is walked over and never asks. Refused with [`CampRefusal::Seals`].
+pub fn check_passage(canvas: &Site, level: &Level, blocked_cells: &BlockedCells, obstacles: &[Obstacle], radius: f32) -> Result<(), CampRefusal> {
+    let before = stretches(canvas, false, radius, level, blocked_cells, obstacles);
+    let after = stretches(canvas, true, radius, level, blocked_cells, obstacles);
+    if after > before { Err(CampRefusal::Seals) } else { Ok(()) }
 }
 
 /// Whether `site` is clear to set a camp on: not across a doorway, a stair, rock or a blocked
@@ -233,17 +337,22 @@ pub fn lay_out(
     blocked_cells: &BlockedCells,
     obstacles: &[Obstacle],
     camps: &[Site],
+    body_radius: f32,
 ) -> Result<String, &'static str> {
     let item = inventory.item(id).ok_or("That is not here.")?;
     let set = fb_items::camp::set_up(item).ok_or("That cannot be set down.")?;
-    let (half, _) = footprint(&set).ok_or("That cannot be set down.")?;
-    let site = site_ahead(feet, forward, half);
+    let (half, offset) = footprint(&set).ok_or("That cannot be set down.")?;
+    let camp = set.camp().ok_or("That cannot be set down.")?;
+    let site = site_ahead(feet, forward, half, gap_for(camp));
     check_site(&site, level, blocked_cells, obstacles, camps).map_err(CampRefusal::reason)?;
+    // The way past a tent: its canvas, not its ropes, is what stands in it.
+    if camp == Camp::Tent {
+        let canvas = fb_items::camp::canvas_half(&set.shape).map_or(site, |(x, z)| Site { centre: site.centre - site.to_floor(offset), half: Vec2::new(x, z), yaw: site.yaw });
+        check_passage(&canvas, level, blocked_cells, obstacles, body_radius).map_err(CampRefusal::reason)?;
+    }
     let line = set_down_line(&set);
-    // Out of its pack first: only a loose item changes form, since a grid holds it at the
-    // footprint it had.
-    inventory.take_out(id);
-    if !inventory.replace_form(id, set) {
+    // Out of its pack and into its new form in one step, or not at all.
+    if !inventory.set_form_out(id, set) {
         return Err("That cannot be set down.");
     }
     changes.0.push(FloorChange::SetDownAt(id, site.centre / CELL, site.yaw));
@@ -265,6 +374,7 @@ fn lay_out_hovered(
     blocked_cells: Res<BlockedCells>,
     obstacles: Res<Obstacles>,
     camps: Query<&SetCamp>,
+    tuning: Option<Res<crate::tuning::Tuning>>,
     time: Option<Res<Time<Real>>>,
 ) {
     if !input.just_pressed(Action::Primary) {
@@ -278,7 +388,7 @@ fn lay_out_hovered(
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     let (Some(eye), Some(body)) = (eyes.iter().next(), players.iter().next()) else { return };
     let sites: Vec<Site> = camps.iter().map(|c| c.site).collect();
-    match lay_out(&mut inventory, &mut changes, id, body.translation.xz(), facing(eye), &level.0, &blocked_cells, &obstacles.0, &sites) {
+    match lay_out(&mut inventory, &mut changes, id, body.translation.xz(), facing(eye), &level.0, &blocked_cells, &obstacles.0, &sites, tuning.map_or(3.5, |t| t.moving.body_radius)) {
         Ok(line) => toast.say(line, now),
         Err(reason) => toast.say(reason, now),
     }
@@ -297,7 +407,7 @@ pub struct Sleeping {
     pub camp: Camp,
     /// The set camp's entity: if it goes, they wake.
     pub bed: Entity,
-    /// Their hit points when they lay down; any fewer wakes them.
+    /// Their hit points as last seen; any fewer wakes them.
     pub hit_points: i32,
     /// The game hour they lay down.
     pub since: f64,
@@ -419,28 +529,13 @@ fn go_to_sleep(
     toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
 }
 
-/// The actions whose press wakes a sleeper: any move, a blow, using or taking something, a screen.
-const WAKING: [Action; 13] = [
-    Action::WalkForward,
-    Action::WalkBack,
-    Action::StepLeft,
-    Action::StepRight,
-    Action::Jump,
-    Action::Crouch,
-    Action::Attack,
-    Action::Block,
-    Action::Primary,
-    Action::Secondary,
-    Action::Back,
-    Action::Inventory,
-    Action::Map,
-];
-
-/// Ends the sleep: rested, hurt, hungry, thirsty, a hostile near, a key, a screen opened, or the
-/// camp gone from under them.
+/// Ends the sleep: rested, hurt (any fall in their hit points since they were last looked at,
+/// so healing in their sleep hides no later blow), hungry, thirsty, a hostile near, any key or
+/// mouse button pressed, a screen opened, or the camp gone from under them.
 #[allow(clippy::too_many_arguments)]
 fn wake_up(
-    input: ActionInput,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
     screen: Res<ScreenOpen>,
     rules: Res<GameRules>,
     clock: Res<GameClock>,
@@ -458,11 +553,19 @@ fn wake_up(
         return;
     };
     let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
-    let keyed = now - sleep.began > KEY_GRACE && (screen.0.is_some() || WAKING.into_iter().any(|a| input.just_pressed(a)));
-    let reason = reason_to_wake(&rules, &needs.0, health.map_or(sleep.hit_points, |h| h.hp), sleep.hit_points, watched)
+    let pressed = keys.is_some_and(|k| k.get_just_pressed().next().is_some()) || mouse.is_some_and(|m| m.get_just_pressed().next().is_some());
+    let keyed = now - sleep.began > KEY_GRACE && (screen.0.is_some() || pressed);
+    let hit_points = health.map_or(sleep.hit_points, |h| h.hp);
+    let reason = reason_to_wake(&rules, &needs.0, hit_points, sleep.hit_points, watched)
         .or_else(|| (!beds.contains(sleep.bed)).then_some("Your bed is gone, and you wake."))
         .or_else(|| keyed.then_some("You wake."));
-    let Some(reason) = reason else { return };
+    let Some(reason) = reason else {
+        // Healed in their sleep: the next blow is measured from here.
+        if hit_points != sleep.hit_points {
+            asleep.0 = Some(Sleeping { hit_points, ..sleep });
+        }
+        return;
+    };
     asleep.0 = None;
     toast.say(format!("{reason} You slept {}.", hours_slept(sleep.since, clock.time.hours())), now);
 }
@@ -619,6 +722,34 @@ fn pack_hovered(
     }
 }
 
+/// For captures (`FB_LAY_OUT=<base>`, `Tent` or `Bedroll`): a few frames in, sets a fresh one of
+/// that base down in front of the delver as F would, with the same checks, and says so or why not
+/// in the toast.
+#[allow(clippy::too_many_arguments)]
+fn debug_lay_out(
+    mut frames: Local<u32>,
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    players: Query<&Transform, With<Player>>,
+    level: Res<CurrentLevel>,
+    blocked_cells: Res<BlockedCells>,
+    obstacles: Res<Obstacles>,
+    time: Option<Res<Time<Real>>>,
+) {
+    *frames += 1;
+    if *frames != 6 {
+        return;
+    }
+    let (Some(eye), Some(body)) = (eyes.iter().next(), players.iter().next()) else { return };
+    let Some(item) = std::env::var("FB_LAY_OUT").ok().and_then(|base| fb_items::roll_item(base.trim(), 1)) else { return };
+    let id = inventory.add(item);
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    let said = lay_out(&mut inventory, &mut changes, id, body.translation.xz(), facing(eye), &level.0, &blocked_cells, &obstacles.0, &[], 3.5);
+    toast.say(said.unwrap_or_else(|why| why.to_string()), now);
+}
+
 /// The floor shape a set camp blocks the way with: a tent, but not a bedroll, which is walked
 /// over.
 pub fn blocks_the_way(camp: Camp, site: &Site) -> Option<FloorShape> {
@@ -652,7 +783,7 @@ mod tests {
     fn a_site_lies_ahead_square_to_the_delver_with_item_x_toward_them() {
         let feet = at_cell(3.5, 3.5);
         for forward in [Vec2::NEG_Y, Vec2::X, Vec2::new(0.6, 0.8)] {
-            let site = site_ahead(feet, forward, Vec2::new(8.5, 3.0));
+            let site = site_ahead(feet, forward, Vec2::new(8.5, 3.0), GAP);
             // Its near edge is the gap ahead of the feet.
             let near = site.centre - forward * site.half.x;
             assert!(((near - feet).dot(forward) - GAP).abs() < 1e-4, "{forward}");
@@ -667,10 +798,10 @@ mod tests {
     fn open_floor_takes_a_camp_and_rock_does_not() {
         let level = room();
         let half = Vec2::new(8.5, 3.0);
-        let site = site_ahead(at_cell(3.5, 3.5), Vec2::NEG_Y, half);
+        let site = site_ahead(at_cell(3.5, 3.5), Vec2::NEG_Y, half, GAP);
         assert_eq!(clear(&site, &level), Ok(()));
         // Facing the wall from beside it: the camp would lie in the rock.
-        let against = site_ahead(at_cell(3.5, 1.2), Vec2::NEG_Y, half);
+        let against = site_ahead(at_cell(3.5, 1.2), Vec2::NEG_Y, half, GAP);
         assert_eq!(clear(&against, &level), Err(CampRefusal::Wall));
         // A site laid exactly flush to the wall is not overlapping it.
         let flush = Site { centre: at_cell(3.5, 1.0) + Vec2::new(0.0, half.y), half, yaw: 0.0 };
@@ -685,7 +816,7 @@ mod tests {
     fn a_doorway_a_stair_a_prop_and_another_camp_refuse() {
         let mut level = room();
         let half = Vec2::new(8.5, 3.0);
-        let site = site_ahead(at_cell(3.5, 3.5), Vec2::NEG_Y, half);
+        let site = site_ahead(at_cell(3.5, 3.5), Vec2::NEG_Y, half, GAP);
         let site_cell = (site.centre / CELL).floor().as_ivec2();
         let was = level.cells.clone();
         for door in [Cell::Door, Cell::Gate] {
@@ -732,7 +863,7 @@ mod tests {
         assert!(inventory.is_carried(bedroll));
         let mut changes = FloorChanges::default();
         let feet = at_cell(3.5, 3.5);
-        let line = lay_out(&mut inventory, &mut changes, bedroll, feet, Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[]).unwrap();
+        let line = lay_out(&mut inventory, &mut changes, bedroll, feet, Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
         assert!(line.starts_with("You lay out the"), "{line}");
         // Out of the pack, loose, in its laid form, set down in front of the feet.
         assert_eq!(inventory.location(bedroll), Some(crate::inventory::Location::Loose));
@@ -755,11 +886,92 @@ mod tests {
         inventory.stow(tent).unwrap();
         let mut changes = FloorChanges::default();
         // Facing the rock from the room's edge.
-        let reason = lay_out(&mut inventory, &mut changes, tent, at_cell(3.5, 1.3), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[]).unwrap_err();
+        let reason = lay_out(&mut inventory, &mut changes, tent, at_cell(3.5, 1.3), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap_err();
         assert_eq!(reason, CampRefusal::Wall.reason());
         assert!(changes.0.is_empty());
         assert_eq!(inventory.item(tent), Some(&before));
         assert!(inventory.is_carried(tent), "still in the pack");
+    }
+
+    /// An open row of floor `width` cells tall through the middle of the `room()` rock.
+    fn corridor(cells_wide: u32) -> Level {
+        let mut level = room();
+        level.cells = (0..64).map(|i| if i / 8 >= 1 && i / 8 < 1 + cells_wide && i % 8 != 0 && i % 8 != 7 { Cell::Floor } else { Cell::Rock }).collect();
+        level
+    }
+
+    #[test]
+    fn a_tent_that_would_seal_a_corridor_is_refused_and_one_in_a_room_is_not() {
+        let tent = |centre: Vec2, half: Vec2| Site { centre, half, yaw: 0.0 };
+        let none = BlockedCells::default();
+        // One cell is 20 across: a canvas 14 wide leaves 3 each side, less than a body of 7.
+        let narrow = corridor(1);
+        let across = tent(at_cell(3.5, 1.5), Vec2::new(9.0, 7.0));
+        assert_eq!(check_passage(&across, &narrow, &none, &[], 3.5), Err(CampRefusal::Seals));
+        // A small canvas that leaves a body's width either side does not.
+        let small = tent(at_cell(3.5, 1.5), Vec2::new(5.0, 1.5));
+        assert_eq!(check_passage(&small, &narrow, &none, &[], 3.5), Ok(()));
+        // The same tent in a room, with the way round it, is fine.
+        let wide = room();
+        assert_eq!(check_passage(&tent(at_cell(3.5, 3.5), Vec2::new(9.0, 7.0)), &wide, &none, &[], 3.5), Ok(()));
+        // Two cells wide, a canvas nearly as wide leaves less than a body past it.
+        let two = corridor(2);
+        assert_eq!(check_passage(&tent(at_cell(3.5, 2.0), Vec2::new(9.0, 18.5)), &two, &none, &[], 3.5), Err(CampRefusal::Seals));
+    }
+
+    #[test]
+    fn a_tent_that_would_cut_off_the_far_end_of_a_corridor_is_refused() {
+        // A dead end three cells long: a canvas across it cuts the floor beyond from the floor before.
+        let level = corridor(1);
+        let across = Site { centre: at_cell(4.0, 1.5), half: Vec2::new(4.0, 7.0), yaw: 0.0 };
+        assert_eq!(check_passage(&across, &level, &BlockedCells::default(), &[], 3.5), Err(CampRefusal::Seals));
+    }
+
+    #[test]
+    fn lay_out_refuses_a_tent_across_a_corridor_through_the_whole_path() {
+        let level = corridor(1);
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        // A ridge tent, whose canvas is 10 or more across the eaves, lying across 20 of floor.
+        let tent = (1..200).filter_map(|s| fb_items::roll_item("Tent", s)).find(|t| fb_items::camp::set_up(t).and_then(|p| fb_items::camp::canvas_half(&p.shape)).is_some_and(|(x, z)| z > 5.5 && x < 9.5)).expect("a ridge tent");
+        let id = inventory.add(tent);
+        inventory.stow(id).unwrap();
+        let mut changes = FloorChanges::default();
+        let said = lay_out(&mut inventory, &mut changes, id, at_cell(1.5, 1.5), Vec2::X, &level, &BlockedCells::default(), &[], &[], 3.5);
+        assert_eq!(said, Err(CampRefusal::Seals.reason()), "stays in the pack");
+        assert!(inventory.is_carried(id) && changes.0.is_empty());
+    }
+
+    #[test]
+    fn the_way_is_blocked_by_the_canvas_not_the_ropes_and_a_tent_stands_further_off() {
+        for seed in 1..12 {
+            let pitched = fb_items::camp::set_up(&fb_items::roll_item("Tent", seed).unwrap()).unwrap();
+            let (lo, hi) = pitched.shape.build().bounds().unwrap();
+            let site = Site { centre: Vec2::ZERO, half: Vec2::new(hi[0] - lo[0], hi[2] - lo[2]) * 0.5, yaw: 0.0 };
+            let set = SetCamp::new(Camp::Tent, &pitched.shape, site, Vec3::from_array(lo), Vec3::from_array(hi));
+            assert!(set.canvas.half.x <= site.half.x + 1e-3 && set.canvas.half.y <= site.half.y + 1e-3, "{seed}");
+            let Some(FloorShape::Square { half_width, half_depth }) = blocks_the_way(Camp::Tent, &set.canvas) else { panic!("a tent blocks") };
+            assert_eq!((half_width, half_depth), (set.canvas.half.x, set.canvas.half.y));
+        }
+        assert!(gap_for(Camp::Tent) > gap_for(Camp::Bedroll));
+        let (feet, forward, half) = (Vec2::ZERO, Vec2::X, Vec2::new(9.0, 7.0));
+        assert!((site_ahead(feet, forward, half, gap_for(Camp::Tent)).centre.x - (TENT_GAP + 9.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_form_change_that_cannot_happen_leaves_the_item_in_its_pack() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let id = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
+        inventory.stow(id).unwrap();
+        let other = fb_items::camp::set_up(&fb_items::roll_item("Bedroll", 4).unwrap()).unwrap();
+        assert!(!inventory.set_form_out(id, other), "another bedroll is not this one");
+        assert!(inventory.is_carried(id), "still in the pack");
+        let mine = fb_items::camp::set_up(inventory.item(id).unwrap()).unwrap();
+        assert!(inventory.set_form_out(id, mine));
+        assert_eq!(inventory.location(id), Some(crate::inventory::Location::Loose));
     }
 
     #[test]
@@ -843,7 +1055,7 @@ mod tests {
             .add_systems(Update, (go_to_sleep, wake_up).chain());
         let item = fb_items::camp::set_up(&fb_items::roll_item(camp_base, 5).unwrap()).unwrap();
         let camp = item.camp().unwrap();
-        let bed = app.world_mut().spawn(SetCamp { camp, site: Site { centre: Vec2::ZERO, half: Vec2::new(8.0, 3.0), yaw: 0.0 } }).id();
+        let bed = app.world_mut().spawn(SetCamp { camp, site: Site { centre: Vec2::ZERO, half: Vec2::new(8.0, 3.0), yaw: 0.0 }, canvas: Site { centre: Vec2::ZERO, half: Vec2::new(8.0, 3.0), yaw: 0.0 } }).id();
         app.world_mut().resource_mut::<Aimed>().0 = Some(bed);
         let mut tired = DelverNeeds::default();
         tired.0.sleepiness.value = 0.8;
@@ -900,6 +1112,35 @@ mod tests {
         press(&mut app, KeyCode::KeyW);
         assert_eq!(app.world().resource::<Asleep>().0, None);
         assert!(app.world().resource::<Toast>().text.starts_with("You wake."), "{}", app.world().resource::<Toast>().text);
+    }
+
+    #[test]
+    fn healing_in_their_sleep_hides_no_later_blow() {
+        let (mut app, delver, _) = sleeper("Bedroll");
+        app.world_mut().get_mut::<Health>(delver).unwrap().hp = 5;
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0.map(|s| s.hit_points), Some(5), "lay down hurt");
+        // Mended to 9 while they sleep: still asleep, the next blow measured from 9.
+        app.world_mut().get_mut::<Health>(delver).unwrap().hp = 9;
+        app.update();
+        let sleep = app.world().resource::<Asleep>().0.expect("still asleep");
+        assert_eq!(sleep.hit_points, 9);
+        // A hit that leaves them above where they lay down still wakes them.
+        app.world_mut().get_mut::<Health>(delver).unwrap().hp = 7;
+        app.update();
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert!(app.world().resource::<Toast>().text.starts_with("You wake in pain."));
+    }
+
+    #[test]
+    fn any_key_wakes_them_not_only_the_movement_keys() {
+        for key in [KeyCode::ShiftLeft, KeyCode::Digit3, KeyCode::KeyL, KeyCode::KeyV, KeyCode::KeyX] {
+            let (mut app, _, _) = sleeper("Bedroll");
+            press(&mut app, KeyCode::KeyF);
+            std::thread::sleep(std::time::Duration::from_millis(450));
+            press(&mut app, key);
+            assert_eq!(app.world().resource::<Asleep>().0, None, "{key:?}");
+        }
     }
 
     #[test]
@@ -1002,7 +1243,7 @@ mod tests {
         let id = inventory.add(worn.clone());
         inventory.stow(id).unwrap();
         let (mut changes, level) = (FloorChanges::default(), room());
-        lay_out(&mut inventory, &mut changes, id, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[]).unwrap();
+        lay_out(&mut inventory, &mut changes, id, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
         assert!(inventory.item(id).unwrap().is_set_camp());
         super::pack(&mut inventory, &mut changes, id).unwrap();
         assert_eq!(inventory.item(id), Some(&worn), "wear, rot and the maker's line as they were");
