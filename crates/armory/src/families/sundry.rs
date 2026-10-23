@@ -566,7 +566,15 @@ fn ease(lo: f32, hi: f32, t: f32) -> f32 {
 fn laid_bedroll(s: &SundryState, parts: &mut Parts) {
     let a = &s.article;
     // A short folk's length to a tall one's; never past [`LAID_BEDROLL_HALF`].
-    let k = (a.size / 1.2).clamp(0.85, 1.0);
+    laid_bedroll_parts(parts, (a.size / 1.2).clamp(0.85, 1.0), a.color, a.pattern, a.color2);
+}
+
+/// The one laid-out bedroll, for a delver's own ([`Article::laid`]) and the faction camps' lying
+/// along their sleeping rooms' walls (`build::scenery::bedroll`): `k` scales its length from a
+/// short folk's (0.85) to a tall one's (1), `color` is the blanket's dye and `pattern` and
+/// `color2` its weave. The parts are not yet set on the ground ([`Parts::rest_on_ground`]).
+pub fn laid_bedroll_parts(parts: &mut Parts, k: f32, color: Rgb, pattern: FabricPattern, color2: Rgb) {
+    let a = Article { color, pattern, color2, ..Article::default() };
     let (len, wide) = (16.0 * k, 6.0 * k);
     let (hl, hw) = (len * 0.5, wide * 0.5);
     let opts = GridOptions::default();
