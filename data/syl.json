@@ -238,5 +238,86 @@
    "adon",
    "ira"
   ]
+ ],
+ "winged_demon": [
+  [
+   "Vael",
+   "Zar",
+   "Mal",
+   "Sith",
+   "Kaz",
+   "Ish",
+   "Nex",
+   "Vor",
+   "Xar",
+   "Zeph",
+   "Drav"
+  ],
+  [
+   "azel",
+   "ioth",
+   "ruk",
+   "eth",
+   "ash",
+   "thul",
+   "ix",
+   "ark",
+   "oth",
+   "yss"
+  ]
+ ],
+ "horned_demon": [
+  [
+   "Gor",
+   "Krag",
+   "Baal",
+   "Mog",
+   "Zul",
+   "Rak",
+   "Thrag",
+   "Urk",
+   "Bel",
+   "Dro",
+   "Gul"
+  ],
+  [
+   "zul",
+   "goth",
+   "rax",
+   "mog",
+   "dar",
+   "kul",
+   "nur",
+   "ghul",
+   "bar",
+   "zod"
+  ]
+ ],
+ "succubus": [
+  [
+   "Lil",
+   "Sel",
+   "Mor",
+   "Vi",
+   "Isa",
+   "Nyx",
+   "Lys",
+   "Ere",
+   "Ash",
+   "Cae",
+   "Mal"
+  ],
+  [
+   "ith",
+   "ara",
+   "ene",
+   "ixa",
+   "aya",
+   "ys",
+   "ira",
+   "elle",
+   "ia",
+   "ora"
+  ]
  ]
 }

@@ -65,6 +65,7 @@ impl Face {
         let front = bump(az, 0.75);
         let one = self.one_eyed();
         let brow = if self.folk == Folk::Lizardfolk { 0.0 } else if one { 0.17 } else if self.folk == Folk::Dwarf { 0.09 } else { 0.065 };
+        let brow = brow + self.folk.race().brow;
         // One heavy brow runs unbroken over the single eye, a little above it.
         let ridge_at = if one { self.eye_polar - 0.14 * PI } else { 0.43 * PI };
         let ridge = brow * bump(polar - ridge_at, if one { 0.055 * PI } else { 0.05 * PI }) * if one { bump(az, 0.95) } else { front };

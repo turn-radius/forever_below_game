@@ -557,5 +557,342 @@
   "brawn": 0.3,
   "toes": 5,
   "depth": 1.22
+ },
+ "winged_demon": {
+  "label": "Winged demon",
+  "h": 19.0,
+  "headR": 1.0,
+  "hw": 0.84,
+  "hh": 1.16,
+  "hd": 0.98,
+  "jaw": 0.8,
+  "chin": 0.6,
+  "flat": 0.45,
+  "neck": 1.1,
+  "neckR": 0.95,
+  "leg": 0.54,
+  "girth": 1.0,
+  "limb": 0.98,
+  "arm": 1.1,
+  "foot": 1.0,
+  "belly": 0.0,
+  "skins": [
+   "#8c2a24",
+   "#a13a2c",
+   "#6e1f1c",
+   "#3a2f33",
+   "#2b2527",
+   "#7a746f",
+   "#5a4b52",
+   "#b0463a"
+  ],
+  "hairs": [
+   "bald",
+   "mohawk",
+   "long"
+  ],
+  "beardP": 0,
+  "ears": "pointed",
+  "nose": "human",
+  "eyes": "yellow",
+  "stats": [
+   17,
+   15,
+   18,
+   8,
+   13
+  ],
+  "dv": 120,
+  "hunch": 0.25,
+  "shoulders": 1.05,
+  "claws": true,
+  "horns": {
+   "length": [
+    1.1,
+    2.0
+   ],
+   "curve": [
+    0.0,
+    0.5
+   ],
+   "spread": [
+    0.2,
+    0.9
+   ],
+   "rise": [
+    0.5,
+    1.0
+   ],
+   "wear": [
+    0,
+    0.15
+   ],
+   "broken": 0.05,
+   "root": 0.4,
+   "radius": [
+    0.2,
+    0.28
+   ],
+   "curl": [
+    0.5,
+    1.3
+   ]
+  },
+  "legs": {
+   "hock": 0.28,
+   "knee_height": 0.5,
+   "knee_forward": 0.13,
+   "pastern": 0.55,
+   "hoof": 0.55,
+   "split": 0.35
+  },
+  "tail_shape": {
+   "bones": 4,
+   "end": "spade",
+   "length": 0.7,
+   "radius": 0.2,
+   "curve": 0.2
+  },
+  "wings": {
+   "span": [
+    1.25,
+    1.55
+   ],
+   "open": [
+    0.0,
+    0.2
+   ],
+   "tear": 0.35,
+   "fingers": 4,
+   "membrane": [
+    "#5a1815",
+    "#3a1f2a",
+    "#2e2528",
+    "#6b2a1c"
+   ]
+  },
+  "srd": {
+   "creature": "Vrock",
+   "page": 273,
+   "cr": "6",
+   "ac": 15,
+   "hp": 104,
+   "note": "Vrock scores; our winged demon is Medium-sized and lean, so its Large frame is not used."
+  }
+ },
+ "horned_demon": {
+  "label": "Horned demon",
+  "h": 24.0,
+  "headR": 1.5,
+  "hw": 1.02,
+  "hh": 1.0,
+  "hd": 1.0,
+  "jaw": 0.35,
+  "chin": 0.3,
+  "flat": 0.2,
+  "neck": 0.9,
+  "neckR": 2.2,
+  "leg": 0.52,
+  "girth": 1.6,
+  "limb": 1.4,
+  "arm": 1.1,
+  "foot": 1.0,
+  "belly": 0.25,
+  "skins": [
+   "#5a1d1a",
+   "#4a1815",
+   "#3a1a1a",
+   "#2d2323",
+   "#3b3a3d",
+   "#6b2a22"
+  ],
+  "hairs": [
+   "bald"
+  ],
+  "beardP": 0,
+  "ears": "pointed",
+  "nose": "broad",
+  "eyes": "yellow",
+  "stats": [
+   22,
+   17,
+   21,
+   12,
+   16
+  ],
+  "dv": 120,
+  "brow": 0.14,
+  "depth": 1.45,
+  "stoop": 0.3,
+  "hunch": 0.5,
+  "hump": 0.5,
+  "shoulders": 1.35,
+  "claws": true,
+  "horns": {
+   "length": [
+    2.6,
+    4.0
+   ],
+   "curve": [
+    0.5,
+    1.0
+   ],
+   "spread": [
+    0.4,
+    1.0
+   ],
+   "rise": [
+    0.0,
+    0.5
+   ],
+   "wear": [
+    0,
+    0.4
+   ],
+   "broken": 0.15,
+   "root": 0.3,
+   "radius": [
+    0.4,
+    0.55
+   ],
+   "curl": [
+    2.8,
+    4.5
+   ]
+  },
+  "legs": {
+   "hock": 0.3,
+   "knee_height": 0.5,
+   "knee_forward": 0.15,
+   "pastern": 0.5,
+   "hoof": 0.9,
+   "split": 0.4
+  },
+  "tail_shape": {
+   "bones": 3,
+   "end": "spade",
+   "length": 0.7,
+   "radius": 0.3,
+   "curve": 0.3
+  },
+  "srd": {
+   "creature": "Horned Devil",
+   "page": 276,
+   "cr": "11",
+   "ac": 18,
+   "hp": 178,
+   "note": "Horned Devil scores; flight and wings removed, and its Large size is the 2.4 m of the body."
+  }
+ },
+ "succubus": {
+  "label": "Succubus",
+  "h": 17.0,
+  "headR": 1.0,
+  "hw": 0.84,
+  "hh": 1.12,
+  "hd": 0.98,
+  "jaw": 0.6,
+  "chin": 0.45,
+  "flat": 0.55,
+  "neck": 1.15,
+  "neckR": 0.9,
+  "leg": 0.52,
+  "girth": 0.95,
+  "limb": 0.9,
+  "arm": 1.0,
+  "foot": 0.95,
+  "belly": 0.1,
+  "skins": [
+   "#cdb8dc",
+   "#b79bc9",
+   "#c9a3b8",
+   "#d89aa6",
+   "#c25a6a",
+   "#a8323f",
+   "#7a1f2e",
+   "#5b2a63"
+  ],
+  "hairs": [
+   "long",
+   "ponytail"
+  ],
+  "beardP": 0,
+  "ears": "pointed",
+  "nose": "human",
+  "eyes": "yellow",
+  "stats": [
+   8,
+   17,
+   13,
+   15,
+   12
+  ],
+  "dv": 60,
+  "shoulders": 0.95,
+  "claws": false,
+  "horns": {
+   "length": [
+    0.9,
+    1.6
+   ],
+   "curve": [
+    0.2,
+    0.8
+   ],
+   "spread": [
+    0.3,
+    1.0
+   ],
+   "rise": [
+    0.4,
+    1.0
+   ],
+   "wear": [
+    0,
+    0.1
+   ],
+   "broken": 0.0,
+   "root": 0.45,
+   "radius": [
+    0.18,
+    0.24
+   ],
+   "curl": [
+    0.8,
+    1.8
+   ]
+  },
+  "tail_shape": {
+   "bones": 4,
+   "end": "spade",
+   "length": 0.8,
+   "radius": 0.16,
+   "curve": 0.25
+  },
+  "wings": {
+   "span": [
+    0.9,
+    1.15
+   ],
+   "open": [
+    0.0,
+    0.35
+   ],
+   "tear": 0.1,
+   "fingers": 4,
+   "membrane": [
+    "#6b2a63",
+    "#7a1f2e",
+    "#3a2a5a",
+    "#8a3a52"
+   ]
+  },
+  "srd": {
+   "creature": "Succubus/Incubus",
+   "page": 349,
+   "cr": "4",
+   "ac": 15,
+   "hp": 66
+  }
  }
 }

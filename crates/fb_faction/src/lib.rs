@@ -302,6 +302,7 @@ pub fn folk_key(folk: Folk) -> &'static str {
         Folk::Faun => "faun",
         // A denizen's name grammar is its own people's, not the folk's.
         Folk::Cyclops => "cyclops",
+        Folk::WingedDemon | Folk::HornedDemon | Folk::Succubus => "demon",
     }
 }
 
@@ -484,6 +485,9 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
         Folk::Faun => &[(Ranger, 3), (Mage, 2), (Cleric, 1)],
         // Denizens are not rolled into folk factions; their kit is a fighter's.
         Folk::Cyclops => &[(Fighter, 3), (Scavenger, 1)],
+        Folk::WingedDemon => &[(Fighter, 3), (Ranger, 2), (Mage, 2)],
+        Folk::HornedDemon => &[(Fighter, 5), (Scavenger, 1)],
+        Folk::Succubus => &[(Mage, 3), (Cleric, 2), (Ranger, 1)],
     };
     // The two differ: the second is drawn from its folk's table without the first.
     let first = *rng.weighted(by_intention);

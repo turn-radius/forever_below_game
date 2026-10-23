@@ -32,18 +32,18 @@ use crate::limb::Side;
 use crate::parts::{mix, shade};
 
 /// Bone lengths as shares of the wing's reach: upper arm, forearm, then the fingers.
-const HUMERUS: f32 = 0.22;
-const FOREARM: f32 = 0.3;
+const HUMERUS: f32 = 0.2;
+const FOREARM: f32 = 0.27;
 const FINGERS: [f32; 4] = [0.64, 0.62, 0.52, 0.4];
 
 /// A bone's heading: how far above level and how far toward the back from straight out.
 type Heading = (f32, f32);
 
-const HUMERUS_FOLDED: Heading = (1.0, 0.5);
+const HUMERUS_FOLDED: Heading = (1.35, 1.0);
 const HUMERUS_OPEN: Heading = (0.7, 0.35);
-const FOREARM_FOLDED: Heading = (1.2, 0.3);
+const FOREARM_FOLDED: Heading = (0.9, 1.0);
 const FOREARM_OPEN: Heading = (0.4, 0.5);
-const FINGERS_FOLDED: [Heading; 4] = [(-1.1, 0.0), (-1.28, 0.25), (-1.4, 0.5), (-1.48, 0.8)];
+const FINGERS_FOLDED: [Heading; 4] = [(-1.5, 0.0), (-1.52, 0.3), (-1.54, 0.6), (-1.56, 0.9)];
 const FINGERS_OPEN: [Heading; 4] = [(0.18, 0.5), (-0.25, 0.62), (-0.62, 0.74), (-0.98, 0.86)];
 
 fn heading(sg: f32, (theta, psi): Heading) -> V3 {
@@ -109,7 +109,7 @@ impl Body {
             (y, self.back_floor(y))
         }).collect();
         let long_hair = matches!(self.spec.hair, crate::folk::HairStyle::Long | crate::folk::HairStyle::Ponytail);
-        let clearance = (0.3 + if long_hair { 0.5 } else { 0.0 }) * s;
+        let clearance = (0.12 + if long_hair { 0.5 } else { 0.0 }) * s;
         let root_skin = [x_root, y_root, self.back_z(x_root, y_root)];
         let root = vec3::add(root_skin, [0.0, 0.0, -lift - 0.25 * s]);
         let wing = Wing {
@@ -120,7 +120,7 @@ impl Body {
             wrist: root,
             tips: vec![],
             edge: vec![],
-            bone_radius: 0.62 * self.arm(side).radius,
+            bone_radius: 0.45 * self.arm(side).radius,
             open,
             tears: Self::tears(row, &tr),
             sag: 0.35 * s.sqrt(),
@@ -206,7 +206,7 @@ impl Body {
                 }
             }
         }
-        if y > self.chin_y {
+        if y > self.chin_y && y < self.height {
             z = z.min(self.head.centre[2] - self.head.half_depth);
         }
         z
@@ -380,7 +380,7 @@ impl Wing {
             for j in 0..=cols {
                 let t = j as f32 / cols as f32;
                 let in_free = if free > 0.0 { (t / free).min(1.0) } else { 0.0 };
-                let cup = scallop * (PI * in_free).sin().powf(0.8) * if t < free { 1.0 } else { 0.0 };
+                let cup = scallop * (PI * in_free).sin().max(0.0).powf(0.8) * if t < free { 1.0 } else { 0.0 };
                 let far = vec3::sub(edge(t), hub);
                 let reach = 1.0 - cup * smoothstep(0.35, 1.0, s);
                 let bulge = slack * (PI * t).sin() * s * (1.0 - 0.3 * s);
