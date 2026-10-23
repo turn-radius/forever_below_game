@@ -32,6 +32,22 @@ pub const TRUNK_BACK: f32 = 0.92;
 const RUN: f32 = 0.15;
 /// The share of the front filled out to the thighs; more raises a pooch over the hip on a body whose thighs are as deep as its hips.
 const FRONT_FILL: f32 = 0.4;
+/// The hips' half width at the widest, in units of the girth: the hip bone (the top of the hip, a little above the hip joint). A human's ends up about 1.12 to 1.15 times the waist's at a typical figure.
+const HIP_WIDTH: f32 = 1.56;
+/// Where the widest is, above the hip joint, as a share of the trunk's length.
+const ILIAC: f32 = 0.14;
+/// The skin's width at the hip bone, as a share of the hip ring's (which the legs and the garment forms hang from): the visible hips are narrower than the ring.
+const ILIAC_WIDTH: f32 = 0.94;
+/// The skin's width at the hip joint, below the widest, as a share of it.
+const HIP_JOINT: f32 = 0.88;
+/// How far each hip joint is from the midline, as a share of the hips' half width.
+const HIP_JOINT_X: f32 = 0.48;
+/// How much deeper than wide a thigh is toward its top, as a share of its radius: the narrower hips left a thigh round, which stood the hips out in front of it.
+const THIGH_DEEP: f32 = 0.2;
+/// How much thicker legs widen the hips (they stand out past the hips otherwise), per unit of the folk's limb thickness over a human's.
+const HIP_LIMB: f32 = 0.5;
+/// How far out the top of a thigh reaches, as a share of the hips' half width: inside the hip line, so the thigh never stands out past it.
+const THIGH_TOP: f32 = 0.92;
 /// Angles sampled round a section to find how wide it is.
 const SIDE_STEPS: usize = 48;
 /// How far past the thighs the garment form's section over them reaches sideways, as a share of their reach.
@@ -179,7 +195,7 @@ impl Body {
         let hip_y = h * race.leg;
         let t = shoulder_y - hip_y;
         let sw = 2.1 * ws * (1.07 - fem * 0.15) * (0.92 + 0.16 * mu);
-        let hip = FormRing::new(hip_y, 1.66 * ws * (0.95 + fem * 0.13), 1.12 * ws);
+        let hip = FormRing::new(hip_y, HIP_WIDTH * (1.0 + HIP_LIMB * (race.limb - 1.0).max(0.0)) * ws * (0.95 + fem * 0.13), 1.12 * ws);
         let waist_y = hip_y + 0.3 * t;
         let chest_y = hip_y + 0.7 * t;
         // Muscle narrows the waist under a broad chest; weight fills it.
@@ -231,7 +247,8 @@ impl Body {
         let skin = TorsoProfile::new(
             &[
                 FormRing::new(hip_y - 0.14 * t, hip.half_width * 0.62, hip.half_depth * 0.8),
-                hip,
+                FormRing::new(hip_y, hip.half_width * HIP_JOINT, hip.half_depth),
+                FormRing::new(hip_y + ILIAC * t, hip.half_width * ILIAC_WIDTH, hip.half_depth),
                 waist,
                 chest,
                 FormRing::new(shoulder_y - 0.05 * t, sw * 0.95, chest.half_depth * 0.88),
@@ -565,7 +582,7 @@ impl Body {
             // narrows into the thigh as the thigh does.
             let side_reach = |profile: &TorsoProfile, y: f32| (0..=SIDE_STEPS).map(|k| profile.section(TAU * k as f32 / SIDE_STEPS as f32, y, 0.0)[0].abs()).fold(0.0f32, f32::max);
             let body_x = side_reach(&self.skin, y).max(self.thigh_outer(y).unwrap_or(0.0));
-            let side = (body_x + margin - side_reach(&form, y - w)).min(0.0);
+            let side = body_x + margin - side_reach(&form, y - w);
             (form.at(y - w).1, [y - w, front * window_front, back * window_back], side * window_front)
         });
         GarmentFill { rows: rows.map(|r| r.1), floor: rows.map(|r| r.0), side: rows.map(|r| r.2) }
@@ -635,7 +652,7 @@ impl Body {
             // Half of how far out the real thigh reaches there (the two halves meet at the
             // midline), not its own half width again: the crotch section stood out past the
             // thigh as a lobe.
-            thigh_half_width: (self.hip.half_width * 0.47).max(0.5 * (top.x + top.half_width) * 1.02),
+            thigh_half_width: 0.5 * (top.x + top.half_width) * 1.02,
             thigh_half_depth: (leg.radius * 1.08).max(top.front.max(top.back) * 1.04),
             // The thigh's own reach at the crotch each way (flat in front, full behind), not the
             // deeper of the two both ways, which stood the cloth out in front as a pouch.
@@ -837,7 +854,7 @@ impl Body {
         let calf = (0.06 + 0.1 * self.spec.muscle) * (-((t - calf_t) / 0.12).powi(2)).exp() * (-front).max(0.0).powi(2);
         let knee = 0.05 * (-((t - tk) / 0.05).powi(2)).exp() * front.max(0.0).powi(3);
         // The thigh is a little deeper front to back than across, below the seat.
-        let thigh = 0.05 * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * (front * front - 0.5);
+        let thigh = THIGH_DEEP * smoothstep(0.0, th, t) * (1.0 - smoothstep(th, tk, t)) * front * front;
         // The back of the thigh's top fills out under the seat, so the buttock rounds into the
         // thigh in a fold instead of overhanging it as a rim.
         let under_seat = 0.24 * (-((t - 1.7 * th) / th).powi(2)).exp() * (-front).max(0.0).powi(2);
@@ -978,7 +995,7 @@ fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ank
     let sg = side.sign();
     let lr = 0.78 * ws * race.limb * (0.95 + fem * 0.06) * (0.93 + 0.14 * mu);
     let hw = hip.half_width;
-    let hj = [sg * hw * 0.48, hip.y - 0.05 * s, 0.0];
+    let hj = [sg * hw * HIP_JOINT_X, hip.y - 0.05 * s, 0.0];
     let a = [sg * hw * 0.36, ankle_y, 0.0];
     let k = [sg * hw * 0.41, a[1] + (hj[1] - a[1]) * 0.48, 0.12 * s];
     let root = vec3::add(hj, [0.0, s, 0.0]);
@@ -986,9 +1003,9 @@ fn leg_limb(race: &Race, s: f32, ws: f32, fem: f32, mu: f32, hip: &FormRing, ank
     // instead of standing out over them as a ledge; then it tapers to the knee (the plate's stayed
     // even to mid-thigh). Its root, up inside the trunk, stays narrow so it never shows through
     // the waist.
-    let top = (1.04 * hw - hj[0].abs()) / lr;
+    let top = (THIGH_TOP * hw - hj[0].abs()) / lr;
     Limb::new(side, root, [hj, k, a], vec![root, hj, k, a], lr, |th, tk| {
-        vec![(0.0, 0.75), (th, top.max(1.05)), (th + 0.3 * (tk - th), (0.86 * top).max(0.9)), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66), (1.0, 0.42)]
+        vec![(0.0, 0.75), (th, top.max(0.8)), (th + 0.3 * (tk - th), (0.86 * top).max(0.68)), (tk, 0.6), (tk + 0.35 * (1.0 - tk), 0.66), (1.0, 0.42)]
     })
 }
 
