@@ -29,7 +29,7 @@
 use std::sync::Arc;
 
 use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, platform::collections::HashMap, prelude::*, tasks::{AsyncComputeTaskPool, TaskPool}, ui::ComputedUiRenderTargetInfo};
-use fb_body::{BodySpec, Joint};
+use fb_body::{BodySpec, Folk, Joint};
 use fb_items::{Item, Rarity, Slot, roll_item_with};
 use fb_level::{FactionSpec, FolkSpot, Level};
 use procgen_rng::Mulberry32;
@@ -114,10 +114,13 @@ impl Person {
     pub fn of(spot: &FolkSpot, faction: &FactionSpec, depth: u32) -> Person {
         let odds = fb_items::Odds::kit(depth);
         let mut rng = spot.name_stream();
-        let name = fb_items::naming::folk_name(&mut rng, spot.folk.key());
+        // A denizen's body is a race of the folk body ([`Folk::of_denizen`]): dressed, named and
+        // rolled as that race.
+        let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
+        let name = fb_items::naming::folk_name(&mut rng, folk.key());
         let outfit = *rng.pick(&faction.outfit_keys());
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
-            let set = o.roll_in(spot.seed, spot.folk.key(), odds, Some(&livery(faction)));
+            let set = o.roll_in(spot.seed, folk.key(), odds, Some(&livery(faction)));
             let ammunition: Vec<Item> = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
             (set.worn, ammunition)
         });
@@ -137,7 +140,7 @@ impl Person {
         // Every member carries their faction's key, which falls with their belongings.
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll(spot.folk, spot.seed), outfit, gear, goods, dirt }
+        Person { spot: *spot, depth, faction: faction.clone(), name, spec: BodySpec::roll(folk, spot.seed), outfit, gear, goods, dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -657,6 +660,16 @@ mod tests {
         fb_level::generate(1207, 1).folk
     }
 
+
+    #[test]
+    fn a_minotaur_spot_is_a_dressed_minotaur() {
+        let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Minotaur), ..folk_1207()[0] };
+        let person = person_1207(&spot);
+        assert_eq!(person.spec.folk, Folk::Minotaur);
+        assert_eq!(person, person_1207(&spot));
+        let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
+        assert!(figure.body.height > 22.0 && figure.pieces.len() >= 4, "{} tall", figure.body.height);
+    }
 
     #[test]
     fn the_same_spot_is_the_same_person() {

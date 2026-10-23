@@ -36,6 +36,7 @@ armory = { workspace = true }
 fb_denizens = { workspace = true }
 fb_items = { workspace = true }
 fb_body = { workspace = true }
+fb_denizens = { workspace = true }
 fb_level = { workspace = true }
 fb_faction = { workspace = true }
 fb_creatures = { workspace = true }

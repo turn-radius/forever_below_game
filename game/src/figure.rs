@@ -232,6 +232,27 @@ mod tests {
     }
 
     #[test]
+    fn a_minotaur_is_dressed_and_holds_a_weapon_in_its_fist() {
+        for outfit in ["fighter", "ranger", "mage", "cleric"] {
+            let worn = fb_items::outfit::outfit(outfit).unwrap().roll(7, Folk::Minotaur.key()).worn;
+            let figure = Figure::dress(&BodySpec::roll(Folk::Minotaur, 7), &worn, 0.2);
+            let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
+            assert!(figure.pieces.len() >= 4 && figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()), "{outfit}: {names:?}");
+            // Hooves are bare, the horns are drawn, the tail is skinned to its bones.
+            let parts = |piece: &str| figure.pieces.iter().find(|p| p.name == piece).unwrap().mesh.parts.iter().map(|p| p.name).collect::<Vec<_>>();
+            assert!(parts("Body").contains(&"hooves") && parts("Head").contains(&"horns"), "{outfit}");
+            let body = figure.pieces.iter().find(|p| p.name == "Body").unwrap();
+            assert!(body.skin.as_ref().is_some_and(|s| s.len() == body.mesh.parts.len()));
+            if let Some((_, weapon)) = worn.iter().find(|(s, _)| *s == Slot::Mainhand) {
+                let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
+                let held = &figure.pieces.iter().find(|p| p.name == weapon.title()).unwrap().mesh;
+                let nearest = held.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+                assert!(nearest < 0.7, "{outfit}: weapon {nearest} from the fist");
+            }
+        }
+    }
+
+    #[test]
     fn the_same_folk_seed_and_outfit_look_the_same() {
         let dress = || {
             let figure = Figure::dress(&BodySpec::roll(Folk::Dwarf, 7), &fighter(Folk::Dwarf, 7), 0.3);
