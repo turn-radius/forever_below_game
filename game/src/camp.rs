@@ -10,6 +10,9 @@
 //!   delver, a bedroll lengthways and a tent with its door toward them. [`check_site`] refuses a
 //!   place it does not fit: a doorway, the way to a stair, rock or a wall, a prop or someone
 //!   standing, or another camp. A refusal says why in the toast.
+//! - G on a set camp (in reach, or hovered underfoot with the inventory open) packs it back up
+//!   ([`pack`]): the same item in its carried form, in the first bag with room, its wear and
+//!   history as they were. A full pack refuses, and the camp stays as it is.
 //! - A set tent blocks the way as a prop does ([`BlocksTheWay`]); a bedroll is walked over.
 //! - F on a set camp within reach sleeps in it ([`go_to_sleep`]): the delver is [`Asleep`], the
 //!   view goes dark, the world holds still round them but for the game clock, which runs at the
@@ -35,7 +38,7 @@ use crate::folk::Denizen;
 use crate::game_clock::GameClock;
 use crate::hostility::Hostility;
 use crate::interact::{self, Slot, Verb};
-use crate::inventory::{FloorChange, FloorChanges, Hovered, Inventory, ItemId, Toast};
+use crate::inventory::{FloorChange, FloorChanges, Hovered, Inventory, ItemId, Toast, underfoot::apply_floor_changes};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, inventory_open, level_has_focus};
 use crate::player::Locomotion;
@@ -51,7 +54,8 @@ impl Plugin for CampPlugin {
             .init_resource::<Asleep>()
             .init_resource::<GameRules>()
             .add_systems(OnEnter(crate::launch::AppState::Delving), |mut asleep: ResMut<Asleep>| asleep.0 = None)
-            .add_systems(Update, lay_out_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems))
+            .add_systems(Update, (lay_out_hovered, pack_hovered).run_if(inventory_open).run_if(crate::barter::not_bartering).before(apply_floor_changes).in_set(DelveSystems))
+            .add_systems(Update, pack_aimed.run_if(level_has_focus).before(apply_floor_changes).in_set(DelveSystems))
             .add_systems(Update, (go_to_sleep.run_if(level_has_focus), wake_up, spawn_veil, fade_veil).chain().in_set(DelveSystems));
     }
 }
@@ -546,6 +550,75 @@ fn fade_veil(
     }
 }
 
+/// What the toast says when a set camp is packed up.
+const PACK_FULL: &str = "There is no room in your pack for it.";
+
+/// Packs the set camp `id`, lying in the level, back into the first bag of the pack with room: the
+/// same item in its carried form ([`fb_items::camp::pack_up`]), its wear and history kept. It is
+/// taken up off the floor through `changes`. Returns what the toast says, or why not; a refused
+/// camp stays as it was, set down.
+pub fn pack(inventory: &mut Inventory, changes: &mut FloorChanges, id: ItemId) -> Result<String, &'static str> {
+    let item = inventory.item(id).ok_or("That is not here.")?;
+    let before = item.clone();
+    let packed = fb_items::camp::pack_up(&before).ok_or("That cannot be packed.")?;
+    let line = format!("You pack up the {}", packed.title().to_lowercase());
+    if !inventory.replace_form(id, packed) {
+        return Err("That cannot be packed.");
+    }
+    if inventory.stow(id).is_err() {
+        // Nowhere to put it: it is still lying loose, and goes back as it was.
+        inventory.replace_form(id, before);
+        return Err(PACK_FULL);
+    }
+    changes.0.push(FloorChange::Lifted(id));
+    Ok(line)
+}
+
+/// G on a set camp in the level within reach: packs it up ([`pack`]), or says why not.
+fn pack_aimed(
+    input: ActionInput,
+    aimed: Res<Aimed>,
+    camps: Query<&crate::carry::FloorItem, With<SetCamp>>,
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
+    if !input.just_pressed(Action::Secondary) {
+        return;
+    }
+    let Some(floor) = aimed.0.and_then(|entity| camps.get(entity).ok()) else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    match pack(&mut inventory, &mut changes, floor.id) {
+        Ok(line) => toast.say(line, now),
+        Err(reason) => toast.say(reason, now),
+    }
+}
+
+/// G in the inventory on a set camp lying underfoot: packs it up ([`pack`]).
+fn pack_hovered(
+    input: ActionInput,
+    hovered: Res<Hovered>,
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
+    if !input.just_pressed(Action::Secondary) {
+        return;
+    }
+    let Some((id, _)) = hovered.0 else { return };
+    let Some(target) = interact::item_target(&inventory, id) else { return };
+    if interact::verbs_for(&target, &interact::Delver::default()).get(Slot::Secondary) != Some(Verb::PackUp) {
+        return;
+    }
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    match pack(&mut inventory, &mut changes, id) {
+        Ok(line) => toast.say(line, now),
+        Err(reason) => toast.say(reason, now),
+    }
+}
+
 /// The floor shape a set camp blocks the way with: a tent, but not a bedroll, which is walked
 /// over.
 pub fn blocks_the_way(camp: Camp, site: &Site) -> Option<FloorShape> {
@@ -713,7 +786,7 @@ mod tests {
         inventory.take_out(bedroll);
         let laid = fb_items::camp::set_up(inventory.item(bedroll).unwrap()).unwrap();
         assert!(inventory.replace_form(bedroll, laid));
-        assert_eq!(verbs(&inventory), interact::Verbs { primary: Some(Verb::Sleep), ..interact::Verbs::default() });
+        assert_eq!(verbs(&inventory), interact::Verbs { primary: Some(Verb::Sleep), secondary: Some(Verb::PackUp), ..interact::Verbs::default() });
     }
 
     fn rules() -> fb_character::rules::Rules {
@@ -762,6 +835,7 @@ mod tests {
             .init_resource::<Aimed>()
             .init_resource::<Inventory>()
             .init_resource::<Toast>()
+            .init_resource::<FloorChanges>()
             .init_resource::<ScreenOpen>()
             .init_resource::<GameClock>()
             .init_resource::<GameRules>()
@@ -887,6 +961,97 @@ mod tests {
             dark = veil_step(dark, 0.0, 0.25);
         }
         assert_eq!(dark, 0.0, "clear again");
+    }
+
+    /// A pack on the delver's back and `base` set down on the floor as a loose item, from `seed`:
+    /// the inventory, the pack, the set item and the carried form it came from.
+    fn lying(base: &str, seed: u32) -> (Inventory, ItemId, ItemId, fb_items::Item) {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let carried = fb_items::roll_item(base, seed).unwrap();
+        let id = inventory.add(carried.clone());
+        let set = fb_items::camp::set_up(&carried).unwrap();
+        assert!(inventory.replace_form(id, set));
+        (inventory, pack, id, carried)
+    }
+
+    #[test]
+    fn a_set_camp_packs_up_into_the_pack_as_the_same_item() {
+        for (base, seed) in [("Bedroll", 3), ("Tent", 4), ("Tent", 9)] {
+            let (mut inventory, bag, id, carried) = lying(base, seed);
+            let mut changes = FloorChanges::default();
+            let line = pack(&mut inventory, &mut changes, id).unwrap();
+            assert!(line.starts_with("You pack up the"), "{line}");
+            assert_eq!(inventory.item(id), Some(&carried), "{base} {seed}: the item it was, carried form and all");
+            assert!(inventory.is_carried(id) && inventory.holds(bag, id), "{base} {seed}: in the pack");
+            assert_eq!(changes.0, vec![FloorChange::Lifted(id)], "{base} {seed}: lifted off the floor");
+        }
+    }
+
+    #[test]
+    fn wear_and_history_are_kept_through_setting_down_and_packing_up() {
+        let mut worn = fb_items::roll_item("Tent", 5).unwrap();
+        worn.history.push("Made by Brenna Holt".into());
+        let armory::Item::Tent(s) = &mut worn.shape else { panic!("tent") };
+        s.cond.wear = 0.7;
+        s.cond.rot = 0.4;
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let id = inventory.add(worn.clone());
+        inventory.stow(id).unwrap();
+        let (mut changes, level) = (FloorChanges::default(), room());
+        lay_out(&mut inventory, &mut changes, id, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[]).unwrap();
+        assert!(inventory.item(id).unwrap().is_set_camp());
+        super::pack(&mut inventory, &mut changes, id).unwrap();
+        assert_eq!(inventory.item(id), Some(&worn), "wear, rot and the maker's line as they were");
+    }
+
+    #[test]
+    fn a_full_pack_refuses_and_the_camp_stays_set() {
+        let (mut inventory, pack, id, _) = lying("Tent", 4);
+        // Fill the pack until nothing more fits.
+        for n in 0..200 {
+            let rope = inventory.add(fb_items::roll_item("Rope", 40 + n).unwrap());
+            if inventory.stow(rope).is_err() {
+                inventory.forget(rope);
+                break;
+            }
+        }
+        let set = inventory.item(id).unwrap().clone();
+        let mut changes = FloorChanges::default();
+        assert_eq!(super::pack(&mut inventory, &mut changes, id), Err(PACK_FULL));
+        assert_eq!(inventory.item(id), Some(&set), "still the pitched tent");
+        assert_eq!(inventory.location(id), Some(crate::inventory::Location::Loose));
+        assert!(!inventory.holds(pack, id) && changes.0.is_empty(), "nothing taken up");
+    }
+
+    #[test]
+    fn only_a_set_camp_is_packed() {
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(fb_items::roll_item("Sword", 2).unwrap());
+        let mut changes = FloorChanges::default();
+        assert_eq!(super::pack(&mut inventory, &mut changes, sword), Err("That cannot be packed."));
+        let bedroll = inventory.add(fb_items::roll_item("Bedroll", 2).unwrap());
+        assert_eq!(super::pack(&mut inventory, &mut changes, bedroll), Err("That cannot be packed."), "not set down");
+        assert!(changes.0.is_empty());
+    }
+
+    #[test]
+    fn g_on_a_set_camp_in_reach_packs_it_up() {
+        let (mut app, _, bed) = sleeper("Bedroll");
+        let (inventory, pack, id, carried) = lying("Bedroll", 5);
+        *app.world_mut().resource_mut::<Inventory>() = inventory;
+        let spot = fb_level::ItemSpot { x: 0.0, y: 0.0, yaw: 0.0, family: armory::Family::Sundry, seed: 5 };
+        app.world_mut().entity_mut(bed).insert(crate::carry::FloorItem { id, spot, min: Vec3::ZERO, max: Vec3::ONE });
+        app.add_systems(Update, pack_aimed);
+        press(&mut app, KeyCode::KeyG);
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!(inventory.item(id), Some(&carried));
+        assert!(inventory.holds(pack, id));
+        assert_eq!(app.world().resource::<FloorChanges>().0, vec![FloorChange::Lifted(id)]);
+        assert!(app.world().resource::<Toast>().text.starts_with("You pack up the"));
     }
 
     #[test]

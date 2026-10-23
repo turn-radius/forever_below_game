@@ -229,14 +229,11 @@ fn a_set_bedroll_and_a_pitched_tent_are_still_set_after_leaving_and_returning() 
     }
 }
 
-/// Sleeping in a set bedroll with the whole game running: aimed at from where it was set, F lies
-/// the delver down, the clock runs at the sleeping pace, sleepiness falls and they wake rested.
-#[test]
-fn a_delver_sleeps_in_a_set_bedroll_until_rested() {
-    let mut app = delving();
-    let (_, feet, forward) = set_camp_where(&mut app, "Bedroll", 40_011);
-    let delver = player(&mut app);
-    // Back to where they stood, facing the way they faced, looking down at the bedroll.
+/// Puts the delver back where they stood to set a camp down, facing the way they faced and
+/// looking down at it, with nothing hostile near and `sleepiness` on the meter. The headless game
+/// has no mouse to turn the view, so the view is turned here.
+fn look_down_at_camp(app: &mut App, feet: Vec2, forward: Vec2, sleepiness: f64) {
+    let delver = player(app);
     {
         let mut world = app.world_mut().entity_mut(delver);
         world.get_mut::<Transform>().unwrap().translation = Vec3::new(feet.x, 0.0, feet.y);
@@ -246,30 +243,28 @@ fn a_delver_sleeps_in_a_set_bedroll_until_rested() {
         walk.yaw = yaw;
         walk.pitch = -60f32.to_radians();
         walk.velocity = Vec2::ZERO;
-        // Tired enough to sleep, and little enough to sleep it off in a few seconds.
-        world.get_mut::<forever_below::character::DelverNeeds>().unwrap().0.sleepiness.value = 0.3;
+        world.get_mut::<forever_below::character::DelverNeeds>().unwrap().0.sleepiness.value = sleepiness;
     }
-    // Nothing stirring near: the level's creatures are somewhere else for this.
     let world = app.world_mut();
     let creatures: Vec<Entity> = world.query_filtered::<Entity, With<Critter>>().iter(world).collect();
     for creature in creatures {
         world.despawn(creature);
     }
-    // (The headless game has no mouse to turn the view, so the view is turned here.)
     let mut eyes = world.query_filtered::<&mut Transform, With<forever_below::play::PlayerCamera>>();
     for mut eye in eyes.iter_mut(world) {
         eye.rotation = Quat::from_rotation_x(-60f32.to_radians());
     }
-    run(&mut app, 5);
+    run(app, 5);
     let aimed = app.world().resource::<forever_below::carry::Aimed>().0;
-    assert!(aimed.is_some_and(|e| app.world().get::<forever_below::camp::SetCamp>(e).is_some()), "the bedroll is under the crosshair: {aimed:?}");
-    let hours = |app: &App| app.world().resource::<forever_below::game_clock::GameClock>().time.hours();
-    let before = hours(&app);
-    // F, typed into the window.
+    assert!(aimed.is_some_and(|e| app.world().get::<forever_below::camp::SetCamp>(e).is_some()), "the camp is under the crosshair: {aimed:?}");
+}
+
+/// Types `key` into the window: pressed, then released.
+fn type_key(app: &mut App, key_code: KeyCode, text: &str) {
     for state in [bevy::input::ButtonState::Pressed, bevy::input::ButtonState::Released] {
         app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
-            key_code: KeyCode::KeyF,
-            logical_key: bevy::input::keyboard::Key::Character("f".into()),
+            key_code,
+            logical_key: bevy::input::keyboard::Key::Character(text.into()),
             state,
             text: None,
             repeat: false,
@@ -277,6 +272,20 @@ fn a_delver_sleeps_in_a_set_bedroll_until_rested() {
         });
         app.update();
     }
+}
+
+/// Sleeping in a set bedroll with the whole game running: aimed at from where it was set, F lies
+/// the delver down, the clock runs at the sleeping pace, sleepiness falls and they wake rested.
+#[test]
+fn a_delver_sleeps_in_a_set_bedroll_until_rested() {
+    let mut app = delving();
+    let (_, feet, forward) = set_camp_where(&mut app, "Bedroll", 40_011);
+    // Tired enough to sleep, and little enough to sleep it off in a few seconds.
+    look_down_at_camp(&mut app, feet, forward, 0.3);
+    let delver = player(&mut app);
+    let hours = |app: &App| app.world().resource::<forever_below::game_clock::GameClock>().time.hours();
+    let before = hours(&app);
+    type_key(&mut app, KeyCode::KeyF, "f");
     assert!(app.world().resource::<forever_below::camp::Asleep>().0.is_some(), "asleep: {}", app.world().resource::<forever_below::inventory::Toast>().text);
     // 0.3 of the meter is 2.4 game hours at eight to rest, a few seconds at 900 to one.
     run(&mut app, 900);
@@ -287,6 +296,51 @@ fn a_delver_sleeps_in_a_set_bedroll_until_rested() {
     let sleepiness = app.world().get::<forever_below::character::DelverNeeds>(delver).unwrap().0.sleepiness.value;
     assert!(sleepiness < 0.01, "rested (and a hair tired again by the frames since): {sleepiness}");
     assert!(app.world().resource::<forever_below::inventory::Toast>().text.starts_with("You wake rested."), "{}", app.world().resource::<forever_below::inventory::Toast>().text);
+}
+
+/// Packing a set camp up with the whole game running: G on it lifts it off the floor into the
+/// pack as the same item, and it stays gone when the delver leaves and returns. (The delver's own
+/// small pack has room for a bedroll's roll; a tent's is too big for it, and is refused.)
+#[test]
+fn a_set_bedroll_is_packed_up_as_the_same_item_and_stays_gone() {
+    let mut app = delving();
+    let carried = fb_items::roll_item("Bedroll", 40_012).unwrap();
+    let (id, feet, forward) = set_camp_where(&mut app, "Bedroll", 40_012);
+    look_down_at_camp(&mut app, feet, forward, 0.0);
+    type_key(&mut app, KeyCode::KeyG, "g");
+    run(&mut app, 5);
+    let inventory = app.world().resource::<Inventory>();
+    assert_eq!(inventory.item(id), Some(&carried), "the bedroll it was, rolled up: {}", app.world().resource::<forever_below::inventory::Toast>().text);
+    assert!(inventory.is_carried(id), "in the pack");
+    let gone = |app: &mut App| camps(app).is_empty() && lying(app).iter().all(|(_, i)| !(i.base == "Bedroll" && i.seed == 40_012));
+    assert!(gone(&mut app), "no longer lying in the level");
+    round_trip(&mut app);
+    assert!(gone(&mut app), "still gone on return");
+    assert_eq!(kept(&app, "Bedroll", 40_012), 1, "one bedroll, in the pack");
+}
+
+/// A pack with no room refuses a tent, which stays pitched where it is.
+#[test]
+fn a_set_tent_too_big_for_the_pack_stays_pitched() {
+    let mut app = delving();
+    let (id, feet, forward) = set_camp_where(&mut app, "Tent", 40_013);
+    // The pack filled with rope, until nothing more goes in.
+    {
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        for n in 0..200 {
+            let rope = inventory.add(fb_items::roll_item("Rope", 900 + n).unwrap());
+            if inventory.stow(rope).is_err() {
+                inventory.forget(rope);
+                break;
+            }
+        }
+    }
+    look_down_at_camp(&mut app, feet, forward, 0.0);
+    type_key(&mut app, KeyCode::KeyG, "g");
+    run(&mut app, 5);
+    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "There is no room in your pack for it.");
+    assert!(app.world().resource::<Inventory>().item(id).unwrap().is_set_camp(), "still pitched");
+    assert_eq!(camps(&mut app).len(), 1, "still standing in the level");
 }
 
 #[test]
