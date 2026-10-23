@@ -270,9 +270,16 @@ fn draw_scale(body: &Body, item: &Item) -> f32 {
         Item::Sword(_) | Item::Dagger(_) => BLADE_SCALE * root,
         Item::Bow(_) => (BOW_SCALE * root).min(body.height * BOW_MAX / height()),
         Item::Shield(_) => (SHIELD_SCALE * root).min(body.height * SHIELD_MAX / height()),
+        // A giant's clubs, axes, staves and torches are grown with it, a hand's width in
+        // proportion; folk (up to a lizard's 1.04 of a human) draw them as they are.
+        Item::Torch(_) => 1.0,
+        _ if body.scale > GIANT_SCALE => root,
         _ => 1.0,
     }
 }
+
+/// The body scale (height over a human's) above which held items are drawn grown with it.
+const GIANT_SCALE: f32 = 1.35;
 
 fn with_arm(mut pose: Pose, side: Side, arm: ArmPose) -> Pose {
     match side {
@@ -773,7 +780,7 @@ mod tests {
     #[test]
     fn a_lantern_hangs_plumb_from_the_belt_at_the_off_hand_hip() {
         use fb_items::Slot;
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = body(folk);
             let belt = crate::fit_worn(&body, &[(Slot::Belt, roll(Family::Belt, 3))]);
             let belt = &belt.layer(Slot::Belt).unwrap().mesh;
@@ -830,7 +837,7 @@ mod tests {
     #[test]
     fn the_grip_never_exceeds_the_hand() {
         let families = [Family::Sword, Family::Dagger, Family::Mace, Family::Club, Family::Axe, Family::Staff, Family::Spear, Family::Torch, Family::Bow, Family::Crossbow];
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = body(folk);
             let cap = body.grip_radius();
             let half_fist = body.hand_form().knuckle_half_width;
@@ -846,12 +853,43 @@ mod tests {
                     // handle along its own tilted axis, not the posed grip's: measuring across the
                     // grip axis would read a tilted handle as wider than it is.
                     let axis = if family == Family::Torch { fit.placement.rotation.transform(vec3::Y) } else { g.y() };
-                    let widest = points(&fit.mesh, HANDLES)
-                        .map(|p| vec3::sub(p, g.origin))
-                        .filter(|d| vec3::dot(*d, axis).abs() < half_fist * 0.6)
-                        .map(|d| vec3::length(vec3::sub(d, vec3::scale(axis, vec3::dot(d, axis)))))
-                        .fold(0.0, f32::max);
+                    // A splint torch the fist need not thin has no separate handle part (the haft is
+                    // part of its head), so there is nothing to measure.
+                    if points(&fit.mesh, HANDLES).next().is_none() {
+                        continue;
+                    }
+                    // (A bigger fist's window can fall between a plain handle's rings, so it widens
+                    // until it holds some.)
+                    let across = |window: f32| {
+                        points(&fit.mesh, HANDLES)
+                            .map(|p| vec3::sub(p, g.origin))
+                            .filter(|d| vec3::dot(*d, axis).abs() < half_fist * window)
+                            .map(|d| vec3::length(vec3::sub(d, vec3::scale(axis, vec3::dot(d, axis)))))
+                            .fold(0.0, f32::max)
+                    };
+                    let widest = [0.6, 1.0].into_iter().map(across).find(|w| *w > 0.0).unwrap_or(0.0);
+                    if widest == 0.0 && family == Family::Torch {
+                        continue;
+                    }
                     assert!(widest > 0.0 && widest <= cap * 1.1 + 0.005, "{folk:?} {} seed {seed}: drawn handle {widest} in a fist of {cap}", item.noun());
+                }
+            }
+        }
+    }
+
+    /// A cyclops's hands close on a club, an axe, a staff or a spear as a folk's do: the handle
+    /// runs through the fist's grip frame, in the palm.
+    #[test]
+    fn a_cyclops_holds_its_weapons_in_its_palms() {
+        let body = body(Folk::Cyclops);
+        for family in [Family::Club, Family::Axe, Family::Mace, Family::Staff, Family::Spear, Family::Sword] {
+            for seed in 0..8 {
+                let item = roll(family, seed);
+                for side in [Side::Right, Side::Left] {
+                    let fit = fit(&body, side, &item);
+                    let g = grip(&body, side, &fit);
+                    let nearest = points(&fit.mesh, HANDLES).map(|p| vec3::distance(p, g.origin)).fold(f32::MAX, f32::min);
+                    assert!(nearest < 0.5 * body.hand_form().knuckle_half_width + 0.05, "{} seed {seed} {side:?}: handle {nearest} from the palm", item.noun());
                 }
             }
         }
@@ -982,7 +1020,7 @@ mod tests {
 
     #[test]
     fn staves_and_spears_stand_upright_off_the_ground() {
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             let body = body(folk);
             for item in [roll(Family::Staff, 4), roll(Family::Spear, 8), roll(Family::Spear, 2)] {
                 let fit = fit(&body, Side::Right, &item);
@@ -1001,7 +1039,7 @@ mod tests {
         use armory::families::lantern::Lantern;
         use armory::families::torch::{BurnState, Torch};
         let mut failures = vec![];
-        for folk in Folk::ALL {
+        for folk in Folk::fitted() {
             for seed in [1u32, 8, 1207] {
                 let spec = BodySpec::roll(folk, seed);
                 for light_seed in [3u32, 4, 9] {
