@@ -11,7 +11,6 @@
 //! when the delver eats or drinks.
 
 use bevy::prelude::*;
-use fb_character::explain::Explained;
 use fb_character::rules::Rules;
 use fb_character::{Exhaustion as ExhaustionLevel, Mana, Meter, MeterKind, Needs, Stamina, modifier};
 
@@ -20,7 +19,7 @@ use super::items::Inventory;
 use crate::carry::ViewModelCamera;
 use crate::character::{Character, DelverMana, DelverNeeds, DelverStamina, Derived};
 use crate::exhaustion::Exhaustion;
-use crate::play::{Player, Screen, ScreenOpen, SheetTab};
+use crate::play::{Player, Screen, ScreenOpen};
 use crate::rules::GameRules;
 use crate::status::{ConditionIcons, ShownConditions, badge, severity_colour};
 use crate::ui::{ACCENT, BAD, BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, OK, UiFonts, node_rect};
@@ -292,7 +291,8 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
         let values = gear_values(character, &character.derive_with(rules, inventory));
         for (i, label) in GEAR_ROWS.into_iter().enumerate() {
             row(sheet, fonts, label, Some(i), |row| {
-                row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
+                let colour = if i == 0 { crate::ui::load_colour(character.derive_with(rules, inventory).load_band).unwrap_or(BRIGHT) } else { BRIGHT };
+                row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, colour)));
             });
         }
         heading(sheet, fonts, "status");
@@ -331,14 +331,7 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
 pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
     let loadout = character.loadout(inventory);
     match row {
-        0 => {
-            let mut load = Explained::new("Load", "lb");
-            for (slot, item) in inventory.equipped() {
-                let weight = item.profile.stats.weight + inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
-                load = if load.terms().is_empty() { load.base(&item.name, weight as f64) } else { load.add(&item.name, weight as f64) };
-            }
-            vec![load.line(), loadout.capacity_with(rules, character.strength()).line()]
-        }
+        0 => character.load_breakdown(rules, inventory),
         1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
         2 => vec![loadout.light().line()],
         3 => vec![loadout.darkvision().line()],
@@ -431,7 +424,6 @@ pub fn spawn_tip(mut commands: Commands, tips: Query<(), With<BreakdownTip>>, ca
 pub fn show_breakdown(
     mut commands: Commands,
     open: Res<ScreenOpen>,
-    tab: Res<SheetTab>,
     hovered: Res<HoveredNumber>,
     character: Res<Character>,
     inventory: Res<Inventory>,
@@ -442,7 +434,8 @@ pub fn show_breakdown(
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
     for (tip, mut node, mut visibility, computed, target) in &mut tips {
-        let over = hovered.0.filter(|_| open.is(Screen::Inventory) && *tab == SheetTab::Character);
+        // The sheet's rows exist only while its tab is shown, and the header's load on every tab.
+        let over = hovered.0.filter(|_| open.is(Screen::Inventory));
         let Some((row, rect)) = over else {
             visibility.set_if_neq(Visibility::Hidden);
             *shown = None;
@@ -475,7 +468,7 @@ pub fn update_gear(
     inventory: Res<Inventory>,
     rules: Option<Res<GameRules>>,
     mut attributes: Query<(&AttributeLine, &mut Text), Without<GearLine>>,
-    mut gear: Query<(&GearLine, &mut Text), Without<AttributeLine>>,
+    mut gear: Query<(&GearLine, &mut Text, &mut TextColor), Without<AttributeLine>>,
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
     if !character.is_changed() && !inventory.is_changed() && !rules_changed {
@@ -487,10 +480,14 @@ pub fn update_gear(
             text.0 = lines[*i].clone();
         }
     }
-    let values = gear_values(&character, &character.derive_with(GameRules::of(&rules), &inventory));
-    for (GearLine(i), mut text) in &mut gear {
+    let derived = character.derive_with(GameRules::of(&rules), &inventory);
+    let values = gear_values(&character, &derived);
+    for (GearLine(i), mut text, mut colour) in &mut gear {
         if text.0 != values[*i] {
             text.0 = values[*i].clone();
+        }
+        if *i == 0 {
+            colour.set_if_neq(TextColor(crate::ui::load_colour(derived.load_band).unwrap_or(BRIGHT)));
         }
     }
 }
@@ -626,6 +623,27 @@ pub fn update_vitals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cursor_over_a_load_target_hovers_row_0_in_ui_space() {
+        let mut app = App::new();
+        app.init_resource::<ScreenOpen>().init_resource::<HoveredNumber>().add_systems(Update, hover_numbers);
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(150.0, 140.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        // The header's load part: 120 by 16 around (150, 140).
+        app.world_mut().spawn((
+            GearRow(0),
+            ComputedNode { size: Vec2::new(120.0, 16.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(150.0, 140.0))),
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<HoveredNumber>().0.map(|(row, _)| row), Some(0));
+        app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(400.0, 140.0)));
+        app.update();
+        assert_eq!(app.world().resource::<HoveredNumber>().0, None, "off the target nothing is hovered");
+    }
 
     fn meter_at(kind: MeterKind, value: f64) -> Meter {
         Meter { value, ..Meter::new(kind) }

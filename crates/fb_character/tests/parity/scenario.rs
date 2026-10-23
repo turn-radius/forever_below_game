@@ -4,7 +4,7 @@
 // the rules moved into a file; `tests/parity.rs` holds it.
 
 use fb_character::combat::{Attack, Bite, Venom};
-use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, Gear, LoadBand, Mana, Needs, Stamina};
+use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, Burden, Gear, LoadBand, Mana, Needs, Stamina};
 use procgen_rng::Mulberry32;
 
 /// The rule functions the scenario calls.
@@ -19,9 +19,9 @@ pub trait Book {
     fn band_word(&self, needs: &Needs) -> [usize; 3];
     fn capacity(&self, strength: i32, carry: f64) -> f64;
     fn load_band(&self, load: f64, capacity: f64) -> LoadBand;
-    fn walk(&self, band: LoadBand) -> f32;
+    fn walk(&self, load: f64, capacity: f64) -> f32;
     fn speed(&self, exhaustion: Exhaustion) -> f32;
-    fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: LoadBand);
+    fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: Burden);
     fn stamina_spend(&self, stamina: &mut Stamina, cost: f64);
     fn mana_max(&self, casting: Casting, attributes: &Attributes) -> f64;
     fn mana_step(&self, mana: &mut Mana, hours: f64, activity: Activity);
@@ -48,6 +48,7 @@ impl Run {
 }
 
 const ACTIVITIES: [Activity; 4] = [Activity::Resting, Activity::Walking, Activity::Exerting, Activity::Sleeping];
+const BURDENS: [Burden; 4] = [Burden { load_lb: 0.0, capacity_lb: 100.0 }, Burden { load_lb: 40.0, capacity_lb: 100.0 }, Burden { load_lb: 80.0, capacity_lb: 100.0 }, Burden { load_lb: 120.0, capacity_lb: 100.0 }];
 const LOADS: [LoadBand; 4] = [LoadBand::Light, LoadBand::Burdened, LoadBand::Encumbered, LoadBand::Overloaded];
 
 pub fn run<B: Book>(book: &B) -> Run {
@@ -132,7 +133,7 @@ fn needs_and_exhaustion<B: Book>(book: &B, out: &mut Vec<f64>) {
 }
 
 fn stamina<B: Book>(book: &B, out: &mut Vec<f64>) {
-    for load in LOADS {
+    for load in BURDENS {
         let mut stamina = Stamina::default();
         for step in 0..400 {
             let activity = ACTIVITIES[(step / 7 + step / 31) % 4];
@@ -171,7 +172,7 @@ fn load_and_visibility<B: Book>(book: &B, out: &mut Vec<f64>) {
         out.push(capacity);
         for percent in [0.0, 0.2, 0.339, 0.34, 0.5, 0.669, 0.67, 0.99, 1.0, 1.01, 3.0] {
             let band = book.load_band(capacity * percent, capacity);
-            out.extend([LOADS.iter().position(|b| *b == band).unwrap() as f64, book.walk(band) as f64]);
+            out.extend([LOADS.iter().position(|b| *b == band).unwrap() as f64, book.walk(capacity * percent, capacity) as f64]);
         }
     }
     out.push(book.load_band(5.0, 0.0) as u8 as f64);

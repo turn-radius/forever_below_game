@@ -46,8 +46,8 @@ const HUNGRY_BAND: usize = 2;
 ///
 /// Sleeping is not reachable yet: when resting in bed arrives, it returns
 /// [`Activity::Sleeping`] here.
-pub fn delver_activity(velocity: Vec2, sprinting: bool, swinging: bool, load: Load) -> Activity {
-    activity_for(velocity.length() > STANDING, sprinting, swinging, load.0)
+pub fn delver_activity(rules: &fb_character::rules::Rules, velocity: Vec2, sprinting: bool, swinging: bool, load: Load) -> Activity {
+    activity_for(velocity.length() > STANDING, sprinting, swinging, load.0.band_with(rules))
 }
 
 /// Steps the delver's needs and exhaustion by the game time since the last step, and mends
@@ -105,7 +105,7 @@ fn step_the_delver(
         }
         // No sprint with a shield raised (`crate::player::walk`).
         let sprinting = input.pressed(Action::Sprint) && !guarding;
-        let activity = delver_activity(locomotion.velocity, sprinting, swinging, *load);
+        let activity = delver_activity(&rules, locomotion.velocity, sprinting, swinging, *load);
         let (mut n, mut e, mut t) = (needs.0, exhaustion.0, times.0);
         // Gear's rates and the effects' on them (the cold makes hunger rise faster), put on
         // afresh each step so an effect that ends takes its share with it.
@@ -431,9 +431,20 @@ mod tests {
         let mut app = app();
         sprinting(&mut app);
         let delver = walker(&mut app);
-        app.world_mut().entity_mut(delver).insert(Load(fb_character::LoadBand::Encumbered));
+        app.world_mut().entity_mut(delver).insert(Load::of(165.0, 165.0));
         run(&mut app, 10);
         assert!((stamina(&app, delver).value - (1.0 - 10.0 * 2.0 / 30.0)).abs() < 0.02);
+    }
+
+    #[test]
+    fn a_load_between_the_edges_drains_by_the_curve() {
+        let mut app = app();
+        sprinting(&mut app);
+        let delver = walker(&mut app);
+        // 110 lb of 165 is t = 0.5: 1.25 times as fast, with no step at the band's edge.
+        app.world_mut().entity_mut(delver).insert(Load::of(110.0, 165.0));
+        run(&mut app, 10);
+        assert!((stamina(&app, delver).value - (1.0 - 10.0 * 1.25 / 30.0)).abs() < 0.02);
     }
 
     #[test]
@@ -602,11 +613,12 @@ mod tests {
         let still = Vec2::ZERO;
         let going = Vec2::new(5.0, 0.0);
         let light = Load::default();
-        assert_eq!(delver_activity(still, true, true, light), Activity::Resting);
-        assert_eq!(delver_activity(going, false, false, light), Activity::Walking);
-        assert_eq!(delver_activity(going, true, false, light), Activity::Exerting);
-        assert_eq!(delver_activity(going, false, true, light), Activity::Exerting);
-        assert_eq!(delver_activity(going, false, false, Load(fb_character::LoadBand::Burdened)), Activity::Exerting);
+        let rules = fb_character::rules::defaults();
+        assert_eq!(delver_activity(rules, still, true, true, light), Activity::Resting);
+        assert_eq!(delver_activity(rules, going, false, false, light), Activity::Walking);
+        assert_eq!(delver_activity(rules, going, true, false, light), Activity::Exerting);
+        assert_eq!(delver_activity(rules, going, false, true, light), Activity::Exerting);
+        assert_eq!(delver_activity(rules, going, false, false, Load::sample(fb_character::LoadBand::Burdened)), Activity::Exerting);
     }
 
     #[test]

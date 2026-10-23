@@ -14,14 +14,15 @@ mod scenario;
 use fb_character::combat::{self, Attack, Bite, Venom};
 use fb_character::explain;
 use fb_character::rules::Rules;
-use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, LoadBand, Mana, Needs, Stamina, capacity_lb_with, visibility_with};
+use fb_character::{Activity, Attributes, Casting, Exhaustion, ExhaustionTimes, Burden, LoadBand, Mana, Needs, Stamina, capacity_lb_with, visibility_with};
 use procgen_rng::Mulberry32;
 use scenario::{Book, run};
 
 /// The digest of the scenario's 3028 numbers on the code before the move. Taken again from
 /// main's plain functions when main added the proficiency bonus to attacks (#359): the rules
-/// file must play as main does, not as the code did before that change.
-const GOLDEN: u64 = 0xaf7d_518a_2584_fa0f;
+/// file must play as main does, not as the code did before that change. Taken again when load pace
+/// and sprint drain became a curve of the load rather than steps by band, and again when walking stamina followed the load.
+const GOLDEN: u64 = 0xff34_485f_05d4_5411;
 const GOLDEN_LEN: usize = 3028;
 
 /// The scenario through the `_with` functions, under a rules table.
@@ -61,13 +62,13 @@ impl Book for With {
     fn load_band(&self, load: f64, capacity: f64) -> LoadBand {
         LoadBand::from_load_with(&self.0, load, capacity)
     }
-    fn walk(&self, band: LoadBand) -> f32 {
-        band.walk_multiplier_with(&self.0)
+    fn walk(&self, load: f64, capacity: f64) -> f32 {
+        Burden::new(load, capacity).walk_multiplier_with(&self.0)
     }
     fn speed(&self, exhaustion: Exhaustion) -> f32 {
         exhaustion.speed_multiplier_with(&self.0)
     }
-    fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: LoadBand) {
+    fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: Burden) {
         stamina.step_with(&self.0, seconds, activity, load);
     }
     fn stamina_spend(&self, stamina: &mut Stamina, cost: f64) {

@@ -2346,8 +2346,8 @@ mod tests {
         assert!(tip_text(&mut app).is_empty());
         hover_row(&mut app, Some(0));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.contains("Capacity 175 lb = STR 10 \u{d7} 15 (150) + ") && l.contains("Belt") && l.ends_with("(+25)")), "{tip:?}");
-        assert!(tip.iter().any(|l| l.starts_with("Load 1 lb =")), "{tip:?}");
+        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR 10 \u{d7} 15 + ") && l.contains("Belt") && l.ends_with("(+25.0) = 175 lb")), "{tip:?}");
+        assert!(tip.iter().any(|l| l == "Carried: 1 lb"), "{tip:?}");
         let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
         assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
         hover_row(&mut app, None);
@@ -2475,10 +2475,21 @@ mod tests {
 
     /// The header's line of numbers, as read from its spans.
     fn header_stats(app: &mut App) -> String {
+        header_spans(app).into_iter().map(|parts| parts.into_iter().map(|(text, _)| text).collect::<String>()).collect::<Vec<_>>().join("   ")
+    }
+
+    /// The header's stats as spans with their colours, one list for each part.
+    fn header_spans(app: &mut App) -> Vec<Vec<(String, Color)>> {
         let mut lines = app.world_mut().query_filtered::<&Children, With<header::HeaderStats>>();
-        let line = lines.single(app.world()).unwrap()[0];
-        let spans: Vec<Entity> = app.world().get::<Children>(line).map(|c| c.to_vec()).unwrap_or_default();
-        spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect()
+        let parts = lines.single(app.world()).unwrap().to_vec();
+        parts
+            .into_iter()
+            .map(|part| {
+                let text = app.world().get::<Children>(part).unwrap()[0];
+                let spans: Vec<Entity> = app.world().get::<Children>(text).map(|c| c.to_vec()).unwrap_or_default();
+                spans.iter().filter_map(|s| Some((app.world().get::<TextSpan>(*s)?.0.clone(), app.world().get::<TextColor>(*s)?.0))).collect()
+            })
+            .collect()
     }
 
     /// The header's purse line, as read from its text and spans.
@@ -2544,6 +2555,78 @@ mod tests {
         }
         app.update();
         assert_eq!(header_purse(&mut app), "Purse 2 gp 3 sp");
+    }
+
+    /// The colour of the header's span that reads `word`, and of the gear row 0 text.
+    fn load_colours(app: &mut App, word: &str) -> (Color, Color) {
+        let header = header_spans(app).into_iter().flatten().find(|(text, _)| text.trim() == word).unwrap_or_else(|| panic!("a span reading {word}")).1;
+        let mut rows = app.world_mut().query::<(&sheet::GearLine, &TextColor)>();
+        let row = rows.iter(app.world()).find(|(l, _)| l.0 == 0).map(|(_, c)| c.0).expect("the load row");
+        (header, row)
+    }
+
+    #[test]
+    fn a_delver_carrying_65_lb_shows_the_load_condition_on_the_sheet() {
+        use crate::character::{DelverNeeds, DelverStamina, Load};
+        use crate::exhaustion::Exhaustion;
+        use crate::play::Player;
+        let mut app = screen_app();
+        app.init_resource::<crate::status::ShownConditions>().init_resource::<crate::rules::GameRules>().add_systems(Update, (crate::status::read_conditions, sheet::update_conditions).chain().after(build_screen));
+        let delver = app.world_mut().spawn((Player, DelverNeeds::default(), Exhaustion::default(), DelverStamina::default(), Load::of(65.0, 165.0))).id();
+        press(&mut app, KeyCode::KeyK);
+        app.update();
+        let said = sheet_text(&mut app);
+        let line = "Burdened";
+        assert!(said.iter().any(|t| t == line), "{said:?}");
+        assert!(said.iter().any(|t| t == "65 lb, 39% of your capacity. Encumbered from 110 lb. Walking at 99.7% pace; sprinting tires you 1.01x as fast."), "{said:?}");
+        assert!(!said.iter().any(|t| t == "No conditions"));
+        // Setting it down clears the condition from the list.
+        *app.world_mut().get_mut::<Load>(delver).unwrap() = Load::of(40.0, 165.0);
+        app.update();
+        assert!(sheet_text(&mut app).iter().any(|t| t == "No conditions"));
+    }
+
+    #[test]
+    fn the_carried_load_is_coloured_by_its_band_in_the_header_and_on_the_sheet() {
+        use crate::ui::{AMBER, BRIGHT, ORANGE, RED};
+        let mut app = screen_app();
+        let attributes = fb_character::Attributes { strength: 11, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        press(&mut app, KeyCode::KeyK);
+        let mut pack = None;
+        // STR 11 carries 165 lb: Light to 55, Burdened to 110, Encumbered to 165.
+        for (lb, word, colour) in [(40.0, "40/165", BRIGHT), (65.0, "65/165", AMBER), (137.5, "138/165", ORANGE), (172.0, "172/165", RED)] {
+            {
+                let mut inventory = app.world_mut().resource_mut::<Inventory>();
+                if let Some(old) = pack {
+                    inventory.forget(old);
+                }
+                let new = inventory.add(weighed_with("Pack", 7, None, lb));
+                inventory.wear(new, Slot::Back).unwrap();
+                pack = Some(new);
+            }
+            app.update();
+            assert_eq!(load_colours(&mut app, word), (colour, colour), "{lb} lb");
+        }
+    }
+
+    #[test]
+    fn the_headers_load_is_a_hover_target_for_the_breakdown() {
+        let mut app = screen_app();
+        press(&mut app, KeyCode::KeyI);
+        let mut targets = app.world_mut().query::<(&sheet::GearRow, &Children)>();
+        let found: Vec<usize> = targets.iter(app.world()).map(|(row, _)| row.0).collect();
+        assert_eq!(found, vec![0], "only the load part of the header is a target, on the inventory tab");
+        let (_, children) = targets.single(app.world()).unwrap();
+        let text = children[0];
+        let spans: String = app.world().get::<Children>(text).unwrap().iter().filter_map(|s| app.world().get::<TextSpan>(s)).map(|t| t.0.clone()).collect();
+        assert!(spans.starts_with("Load "), "{spans:?}");
+        // Hovered from the header, on the inventory tab, the breakdown opens.
+        hover_row(&mut app, Some(0));
+        let tip = tip_text(&mut app);
+        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR ")), "{tip:?}");
+        let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
+        assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
     }
 
     #[test]

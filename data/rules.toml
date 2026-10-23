@@ -83,10 +83,6 @@ halted_from = 5
 [stamina]
 # Real seconds a full pool lasts sprinting while Light.
 sprint_seconds = 30.0
-# Sprinting drains this many times as fast Burdened ...
-burdened_drain = 1.5
-# ... and Encumbered or Overloaded.
-encumbered_drain = 2.0
 # Real seconds to refill from empty standing still.
 stand_refill_seconds = 8.0
 # Real seconds to refill from empty while walking.
@@ -119,18 +115,24 @@ sleep_per_hour = 0.375
 [load]
 # Pounds of capacity for each point of STR (SRD p. 79).
 capacity_per_strength = 15.0
-# Burdened from this share of the capacity (SRD p. 79).
-burdened_from = 0.34
-# Encumbered from this share of the capacity.
-encumbered_from = 0.67
-# Overloaded above this share of the capacity.
-overloaded_over = 1.0
-# Walking pace multiple while Burdened.
-burdened_walk = 0.85
-# Walking pace multiple while Encumbered.
-encumbered_walk = 0.65
-# Walking pace multiple while Overloaded; 0 roots the delver.
+# Burdened past this many times STR (SRD 5.1 Variant: Encumbrance, p. 79).
+burdened_multiple = 5.0
+# Encumbered past this many times STR.
+encumbered_multiple = 10.0
+# The curve between the Burdened edge and capacity: with t from 0 to 1 across it, sprint drain is
+# 1 + (capacity_drain - 1) * t^k and walking pace 1 - (1 - capacity_walk) * t^k. k = 1 is a
+# straight line; 2 barely tells through Burdened and bites through Encumbered.
+load_curve = 2.0
+# Walking pace multiple at capacity, where the curve ends.
+capacity_walk = 0.65
+# Sprint drain multiple at capacity, where the curve ends.
+capacity_drain = 2.0
+# Walking pace multiple while Overloaded, past capacity; 0 roots the delver.
 overloaded_walk = 0.0
+# Real seconds a full stamina pool lasts walking at capacity. Walking refills it as usual up to
+# the Burdened edge; past it the refill fades out on the same curve and this drain fades in, so
+# the pool only starts to fall deep into Encumbered (about 156 lb for STR 11).
+walk_drain_seconds = 60.0
 
 # How cold the abyss is and how much fire warms. Worn warmth is weighed against the folk's need
 # (6, or 8 for the cold-blooded lizardfolk) less the comfort, plus the chill of each level below

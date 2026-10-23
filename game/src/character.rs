@@ -419,6 +419,72 @@ impl Character {
         if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
     }
 
+    /// Where the load's numbers come from, one line each, for the sheet's tooltip on the Load
+    /// row: the strength and what raised it, the capacity, the two band edges, what is carried
+    /// ([`Character::load_explained`]) and the pace the load gives now. For STR 11 and 65 lb:
+    ///
+    /// ```text
+    /// Capacity: STR 11 x 15 = 165 lb
+    /// Burdened past STR 11 x 5 = 55 lb
+    /// Encumbered past STR 11 x 10 = 110 lb
+    /// Carried: Mail (25) + ... = 65 lb
+    /// Pace now: 99.7%
+    /// ```
+    ///
+    /// The edges are shares of the capacity ([`fb_character::rules::LoadRules`]), so a bag that
+    /// adds capacity moves them too, and then they read against the capacity, not the STR.
+    pub fn load_breakdown(&self, rules: &Rules, inventory: &Inventory) -> Vec<String> {
+        use fb_character::explain::number;
+        let mut lines = Vec::new();
+        let strength = self.strength();
+        // What raised the strength: each worn item, then lessons learned.
+        let mut raised: Vec<String> = inventory
+            .equipped()
+            .iter()
+            .filter(|(_, item)| item.profile.stats.strength.round() != 0.0)
+            .map(|(_, item)| format!("{} ({:+})", item.name, item.profile.stats.strength.round() as i32))
+            .collect();
+        if self.learned.strength != 0 {
+            raised.push(format!("lessons ({:+})", self.learned.strength));
+        }
+        if !raised.is_empty() {
+            lines.push(format!("STR {strength}: {} base + {}", self.attributes.strength, raised.join(" + ")));
+        }
+        let loadout = self.loadout(inventory);
+        let capacity = loadout.capacity_with(rules, strength).value();
+        let per = rules.load.capacity_per_strength;
+        // Weights are to one decimal and signed with a plus where they add, throughout.
+        let carries: Vec<(&String, f64)> = loadout.worn.iter().filter(|(_, w)| w.carry != 0.0).map(|(label, w)| (label, w.carry)).collect();
+        let added: String = carries.iter().map(|(label, carry)| format!(" + {label} ({carry:+.1})")).collect();
+        lines.push(format!("Capacity: STR {strength} \u{d7} {}{added} = {} lb", number(per), number(capacity)));
+        let moved_by = carries.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ");
+        for (word, multiple, edge) in [("Burdened", rules.load.burdened_multiple, rules.load.burdened_edge(capacity)), ("Encumbered", rules.load.encumbered_multiple, rules.load.encumbered_edge(capacity))] {
+            let edge = number((edge * 10.0).round() / 10.0);
+            lines.push(if carries.is_empty() {
+                format!("{word} past STR {strength} \u{d7} {} = {edge} lb", number(multiple))
+            } else {
+                // The edges are shares of the whole capacity, so what adds to it moves them.
+                format!("{word} past capacity {} lb \u{d7} {}/{} = {edge} lb (moved by {moved_by})", number(capacity), number(multiple), number(per))
+            });
+        }
+        let carried = self.load_explained(inventory);
+        lines.push(format!("Carried: {} lb", number((carried.value() * 10.0).round() / 10.0)));
+        for (slot, item) in inventory.equipped() {
+            lines.push(format!("  {}  {:.1} lb", item.name, item.profile.stats.weight));
+            let Some(container) = inventory.worn(slot) else { continue };
+            for entry in inventory.grid(container).map(|g| g.entries()).unwrap_or_default() {
+                let Some(inside) = inventory.item(entry.id) else { continue };
+                // What a bag inside the bag holds counts with it.
+                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight + inventory.contents_weight(entry.id)));
+            }
+        }
+        let band = LoadBand::from_load_with(rules, carried.value(), capacity);
+        lines.push(format!("{} now", band.word()));
+        let pace = fb_character::Burden::new(carried.value(), capacity).walk_multiplier_with(rules) as f64;
+        lines.push(format!("Pace now: {}", fb_character::conditions::pace_percent(pace)));
+        lines
+    }
+
     /// What everything equipped adds to the delver, as the plate's `derive` adds it up; the
     /// light is the farthest reaching of the lit things carried ([`carried_lights`]), where the
     /// plate took the brightest of all its items, so an unlit torch in the pack gives none.
@@ -499,12 +565,33 @@ pub fn character_for(seed: u32) -> Character {
     character
 }
 
-/// The delver's load band, kept on the [`Player`](crate::play::Player) so walking need not
-/// work out [`Character::derive`] every frame. `player::weigh_the_delver` refreshes it when
-/// the character or the inventory changes.
+/// What the delver carries against what they can carry, kept on the [`Player`](crate::play::Player)
+/// so walking need not work out [`Character::derive`] every frame. Their band, walking pace and
+/// sprint drain are worked out from it under the rules ([`fb_character::Burden`]).
+/// `player::weigh_the_delver` refreshes it when the character or the inventory changes.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component)]
-pub struct Load(#[reflect(remote = crate::inspect::remote::LoadBandDef)] pub LoadBand);
+pub struct Load(#[reflect(remote = crate::inspect::remote::BurdenDef)] pub fb_character::Burden);
+
+impl Load {
+    /// Carrying `load_lb` of a capacity of `capacity_lb`.
+    pub fn of(load_lb: f32, capacity_lb: f32) -> Load {
+        Load(fb_character::Burden::new(load_lb as f64, capacity_lb as f64))
+    }
+
+    /// A load in `band`, for captures and tests: a typical weight for a capacity of 165 lb.
+    pub fn sample(band: LoadBand) -> Load {
+        Load::of(
+            match band {
+                LoadBand::Light => 0.0,
+                LoadBand::Burdened => 82.5,
+                LoadBand::Encumbered => 137.5,
+                LoadBand::Overloaded => 200.0,
+            },
+            165.0,
+        )
+    }
+}
 
 /// What the delver's gear makes of their stamina: how fast it refills and what sprinting,
 /// swinging and blocking cost, as multiples of the usual. Kept up with [`Load`] by
@@ -610,6 +697,113 @@ pub fn activity_for(moving: bool, sprinting: bool, swinging: bool, load_band: Lo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A STR 11 delver wearing mail of `weight` lb (no carry of its own), and a ring of +2 STR
+    /// besides when `ring`.
+    fn laden_str_11(weight: f32, ring: bool) -> (Character, Inventory) {
+        let attributes = fb_character::Attributes { strength: 11, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
+        let delver = Character { attributes, ..Character::roll(4) };
+        let mut inventory = Inventory::default();
+        let mut mail = fb_items::roll_item("Mail", 1).unwrap();
+        mail.profile.stats.weight = weight;
+        mail.profile.stats.carry = 0.0;
+        mail.profile.stats.strength = 0.0;
+        let mail = inventory.add(mail);
+        inventory.wear(mail, fb_items::Slot::Body).unwrap();
+        if ring {
+            let mut ring = fb_items::roll_item("Ring", 1).unwrap();
+            ring.profile.stats.weight = 0.0;
+            ring.profile.stats.carry = 0.0;
+            ring.profile.stats.strength = 2.0;
+            let ring = inventory.add(ring);
+            inventory.wear(ring, fb_items::Slot::Ring1).unwrap();
+        }
+        (delver, inventory)
+    }
+
+    #[test]
+    fn the_load_breakdown_lists_the_capacity_the_edges_what_is_carried_and_the_pace() {
+        let (delver, inventory) = laden_str_11(65.0, false);
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        let mail = &inventory.equipped()[0].1.name;
+        assert_eq!(
+            lines,
+            vec![
+                "Capacity: STR 11 \u{d7} 15 = 165 lb".to_string(),
+                "Burdened past STR 11 \u{d7} 5 = 55 lb".to_string(),
+                "Encumbered past STR 11 \u{d7} 10 = 110 lb".to_string(),
+                "Carried: 65 lb".to_string(),
+                format!("  {mail}  65.0 lb"),
+                "Burdened now".to_string(),
+                "Pace now: 99.7%".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ring_of_strength_moves_every_edge_and_the_breakdown_names_it() {
+        let (mut delver, inventory) = laden_str_11(65.0, true);
+        // The game keeps what is worn on the character as `sync_worn` does (`wear_abilities`).
+        delver.worn = delver.gear(&inventory).abilities;
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        let ring = inventory.equipped().iter().find(|(slot, _)| *slot == fb_items::Slot::Ring1).unwrap().1.name.clone();
+        assert_eq!(lines[0], format!("STR 13: 11 base + {ring} (+2)"));
+        assert_eq!(&lines[1..4], ["Capacity: STR 13 \u{d7} 15 = 195 lb", "Burdened past STR 13 \u{d7} 5 = 65 lb", "Encumbered past STR 13 \u{d7} 10 = 130 lb"]);
+        assert_eq!(&lines[lines.len() - 2..], ["Light now", "Pace now: 100%"], "65 lb is the new Burdened edge, so full pace");
+        // The game's own derivation agrees with the breakdown.
+        let derived = delver.derive(&inventory);
+        assert_eq!((derived.capacity, derived.load_band), (195.0, fb_character::LoadBand::Light));
+    }
+
+    #[test]
+    fn the_breakdown_marks_the_band_the_load_is_in() {
+        let now = |lb: f32| {
+            let (delver, inventory) = laden_str_11(lb, false);
+            let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+            lines[lines.len() - 2].clone()
+        };
+        assert_eq!([40.0, 55.0, 65.0, 110.0, 137.5, 165.0, 172.0].map(now), ["Light now", "Light now", "Burdened now", "Burdened now", "Encumbered now", "Encumbered now", "Overloaded now"]);
+    }
+
+    #[test]
+    fn a_pack_lists_what_it_holds_under_it_and_a_belt_says_it_moved_the_edges() {
+        let (delver, mut inventory) = laden_str_11(10.0, false);
+        let mut pack = fb_items::roll_item("Pack", 3).unwrap();
+        pack.profile.stats.weight = 2.0;
+        pack.profile.stats.carry = 0.0;
+        let pack_name = pack.name.clone();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let mut dagger = fb_items::roll_item("Dagger", 1).unwrap();
+        dagger.profile.stats.weight = 3.25;
+        let dagger_name = dagger.name.clone();
+        let dagger = inventory.add(dagger);
+        inventory.put(dagger, pack, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert!(lines.contains(&"Carried: 15.3 lb".to_string()), "{lines:?}");
+        let at = lines.iter().position(|l| l == &format!("  {pack_name}  2.0 lb")).unwrap_or_else(|| panic!("{lines:?}"));
+        assert_eq!(lines[at + 1], format!("    {dagger_name}  3.2 lb"), "contents sit under their bag, one step in");
+        // A belt that adds capacity moves both edges and the lines say so.
+        let mut belt = fb_items::roll_item("Belt", 2).unwrap();
+        belt.profile.stats.weight = 0.0;
+        belt.profile.stats.carry = 30.0;
+        let belt_name = belt.name.clone();
+        let belt = inventory.add(belt);
+        inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert_eq!(lines[0], format!("Capacity: STR 11 \u{d7} 15 + {belt_name} (+30.0) = 195 lb"));
+        assert_eq!(lines[1], format!("Burdened past capacity 195 lb \u{d7} 5/15 = 65 lb (moved by {belt_name})"));
+        assert_eq!(lines[2], format!("Encumbered past capacity 195 lb \u{d7} 10/15 = 130 lb (moved by {belt_name})"));
+    }
+
+    #[test]
+    fn the_load_breakdown_pace_follows_the_load() {
+        let (delver, inventory) = laden_str_11(137.5, false);
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert_eq!(lines.last().unwrap(), "Pace now: 80%");
+        let (delver, inventory) = laden_str_11(172.0, false);
+        assert_eq!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).last().unwrap(), "Pace now: 0%");
+    }
 
     #[test]
     fn a_delver_is_a_pure_function_of_their_seed() {

@@ -18,7 +18,7 @@ use super::doll::PORTRAIT;
 use super::items::Inventory;
 use crate::character::{Character, Derived};
 use crate::play::{Screen, ScreenOpen, SheetTab};
-use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, coin_spans, node_rect, numbers_line, ui_cursor};
+use crate::ui::{ACCENT, FAINT, FRAME_GOLD, INK, MUTED, STYGIAN, STYGIAN_DEEP, STYGIAN_LIGHT, UiFonts, coin_spans, node_rect, numbers_line_tinted, ui_cursor};
 use bevy::window::PrimaryWindow;
 
 /// The line of numbers under the name.
@@ -62,6 +62,15 @@ pub fn identity_line(character: &Character) -> String {
 /// "AC 11   Load 34/165 lb   Light 25 ft": the light's reach, or with none the darkvision's,
 /// or "No light" (the plate's `renderIdent`).
 pub fn stats_line(derived: &Derived) -> String {
+    stats_parts(derived).join("   ")
+}
+
+/// Which of [`stats_parts`] is the load.
+pub const LOAD_PART: usize = 1;
+
+/// The three parts of [`stats_line`]: armour class, load and sight. The header lays them out
+/// side by side so the load can be hovered on its own.
+pub fn stats_parts(derived: &Derived) -> [String; 3] {
     let sight = if derived.light > 0.0 {
         format!("Light {:.0} ft", derived.light)
     } else if derived.darkvision > 0.0 {
@@ -69,7 +78,13 @@ pub fn stats_line(derived: &Derived) -> String {
     } else {
         "No light".to_string()
     };
-    format!("AC {}   Load {:.0}/{:.0} lb   {sight}", derived.armour_class, derived.load, derived.capacity)
+    [format!("AC {}", derived.armour_class), format!("Load {:.0}/{:.0} lb", derived.load, derived.capacity), sight]
+}
+
+/// The carried number as `stats_line` writes it ("65/165") with the colour its band gives it, or
+/// `None` while Light, which keeps the plain colour.
+pub fn load_tint(derived: &Derived) -> Option<(String, Color)> {
+    crate::ui::load_colour(derived.load_band).map(|colour| (format!("{:.0}/{:.0}", derived.load, derived.capacity), colour))
 }
 
 /// The portrait's backdrop: the plate's `radial-gradient(90% 80% at 50% 38%, #3a55a0,
@@ -112,8 +127,18 @@ pub fn header(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &fb_cha
         ident.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), ..default() }).with_children(|text| {
             text.spawn((Text::new(character.name.clone()), UiFonts::style(&fonts.display, 34.0, INK)));
             text.spawn((Text::new(identity_line(character)), UiFonts::style(&fonts.body, 14.0, MUTED)));
-            text.spawn((HeaderStats, Node { margin: UiRect::top(px(2)), ..default() })).with_children(|line| {
-                numbers_line(line, fonts, &stats_line(&character.derive_with(rules, inventory)), 13.0);
+            // Each part in its own box, three spaces apart as `stats_line` writes them; the load's is
+            // a hover target for the load breakdown, as the sheet's Load row is.
+            text.spawn((HeaderStats, Node { margin: UiRect::top(px(2)), column_gap: px(23), ..default() })).with_children(|line| {
+                let derived = character.derive_with(rules, inventory);
+                let tint = load_tint(&derived);
+                for (i, part) in stats_parts(&derived).iter().enumerate() {
+                    let mut at = line.spawn(Node::default());
+                    if i == LOAD_PART {
+                        at.insert(super::sheet::GearRow(0));
+                    }
+                    at.with_children(|at| numbers_line_tinted(at, fonts, part, 13.0, tint.as_ref().filter(|_| i == LOAD_PART).map(|(n, c)| (n.as_str(), *c))));
+                }
             });
             text.spawn((HeaderPurse, Text::new("Purse "), UiFonts::style(&fonts.mono, 13.0, MUTED))).with_children(|line| {
                 let coins = inventory.coins();

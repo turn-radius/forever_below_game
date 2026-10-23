@@ -113,7 +113,7 @@ fn watch_the_delver(
         let lit = lit_level(body, lights.iter().map(|(t, l)| (t.translation(), l)), exposure);
         // Effects that draw the eye (an itch that has them scratching) add to it.
         let noticed = effects.map_or(0.0, |e| e.0.noticed(&rules.effects));
-        let visible = (fb_character::visibility_with(rules, lit as f64, gait.map_or(0.0, |g| g.pace) as f64, load.0, stealth) + noticed).min(1.0);
+        let visible = (fb_character::visibility_with(rules, lit as f64, gait.map_or(0.0, |g| g.pace) as f64, load.0.band_with(rules), stealth) + noticed).min(1.0);
         seen.set_if_neq(DelverVisibility((visible * 100.0).round() as f32 / 100.0));
     }
 }
@@ -278,7 +278,7 @@ mod tests {
         run(&mut app, 30);
         let sprinting = seen(&app, player);
         assert!(sprinting > still + 0.1, "{still} then {sprinting}");
-        app.world_mut().get_mut::<Load>(player).unwrap().0 = fb_character::LoadBand::Encumbered;
+        *app.world_mut().get_mut::<Load>(player).unwrap() = Load::sample(fb_character::LoadBand::Encumbered);
         run(&mut app, 30);
         assert!(seen(&app, player) > sprinting + 0.05);
     }

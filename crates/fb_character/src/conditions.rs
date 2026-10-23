@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use crate::effect::{EffectDef, Effects, Influence};
-use crate::{Exhaustion, LoadBand, Meter, MeterKind, Needs, SECOND_WIND, Stamina};
+use crate::{Burden, Exhaustion, LoadBand, Meter, MeterKind, Needs, SECOND_WIND, Stamina};
 
 /// How much a condition matters, from a nudge to a danger to the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
@@ -60,7 +60,7 @@ pub struct Circumstances {
     pub needs: Needs,
     pub exhaustion: Exhaustion,
     pub stamina: Stamina,
-    pub load: LoadBand,
+    pub load: Burden,
     /// The character's Constitution modifier, which sets how long starving takes to tire them.
     pub con_modifier: i32,
     /// The share of their pace a held character moves at, while something holds them.
@@ -72,7 +72,7 @@ pub struct Circumstances {
 
 impl Default for Circumstances {
     fn default() -> Self {
-        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: LoadBand::Light, con_modifier: 0, held_pace: None, wounded_mending: None }
+        Circumstances { needs: Needs::default(), exhaustion: Exhaustion::default(), stamina: Stamina::default(), load: Burden { load_lb: 0.0, capacity_lb: 1.0 }, con_modifier: 0, held_pace: None, wounded_mending: None }
     }
 }
 
@@ -174,16 +174,48 @@ fn winded(stamina: Stamina) -> Option<Condition> {
     })
 }
 
-/// A load band above Light, and what it does to walking ([`LoadBand::walk_multiplier`]) and to
-/// stamina ([`Stamina::rate_per_second`]).
-fn load(band: LoadBand) -> Option<Condition> {
+/// A walking pace as a percent, rounded so it never reads as more than it is. A whole percent,
+/// except where that would round up to 100 for a pace short of full: those get one decimal
+/// (99.7%), and never show 100 (99.99% reads 99.9%).
+pub fn pace_percent(pace: f64) -> String {
+    let whole = (pace * 100.0).round();
+    if whole < 100.0 || pace >= 1.0 {
+        return format!("{whole}%");
+    }
+    let tenth = (pace * 1000.0).round() / 10.0;
+    if tenth < 100.0 { format!("{tenth}%") } else { "99.9%".to_string() }
+}
+
+/// A sprint drain multiple to two decimals, trailing zeros dropped: 1.5625 is "1.56", 2 is "2".
+fn drain_times(drain: f64) -> String {
+    let text = format!("{drain:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// A load above Light: how heavy it is and how much of the capacity, the edge it nears, and the
+/// pace and sprint drain it gives now ([`Burden::walk_multiplier`], [`Burden::sprint_drain`]).
+///
+/// Pounds and shares are rounded to whole numbers (137.5 lb is "138 lb"); the pace by
+/// [`pace_percent`]; the drain by [`drain_times`]. An Overloaded load says how many whole pounds
+/// to set down: the overshoot rounded up, since a fraction still roots them.
+fn load(burden: Burden) -> Option<Condition> {
+    let rules = crate::rules::defaults();
+    let band = burden.band_with(rules);
+    let lb = |pounds: f64| format!("{} lb", pounds.round());
     let (severity, effect) = match band {
         LoadBand::Light => return None,
-        LoadBand::Overloaded => (Severity::Grave, "Too heavy to move; set something down".to_string()),
+        LoadBand::Overloaded => {
+            let over = (burden.load_lb - burden.capacity_lb).max(0.0);
+            let share = if burden.capacity_lb > 0.0 { format!("{}%", (burden.load_lb / burden.capacity_lb * 100.0).round()) } else { "none".to_string() };
+            (Severity::Grave, format!("{}, {share} of your capacity. Set down {} to move.", lb(burden.load_lb), lb(over.ceil().max(1.0))))
+        }
         heavier => {
-            let drain = Stamina::rate_per_second(crate::Activity::Exerting, heavier) / Stamina::rate_per_second(crate::Activity::Exerting, LoadBand::Light);
+            let (next, edge) = if heavier == LoadBand::Burdened { (LoadBand::Encumbered, rules.load.encumbered_edge(burden.capacity_lb)) } else { (LoadBand::Overloaded, burden.capacity_lb) };
             let severity = if heavier == LoadBand::Burdened { Severity::Mild } else { Severity::Moderate };
-            (severity, format!("Walking at {} pace; sprinting tires you {drain}x as fast", percent(heavier.walk_multiplier() as f64)))
+            let share = (burden.load_lb / burden.capacity_lb * 100.0).round();
+            let pace = pace_percent(burden.walk_multiplier_with(rules) as f64);
+            let drain = drain_times(burden.sprint_drain_with(rules));
+            (severity, format!("{}, {share}% of your capacity. {} {} {}. Walking at {pace} pace; sprinting tires you {drain}x as fast.", lb(burden.load_lb), next.word(), if next == LoadBand::Overloaded { "past" } else { "from" }, lb(edge)))
         }
     };
     Some(Condition { kind: ConditionKind::Load, name: band.word().to_string(), severity, effect })
@@ -322,7 +354,7 @@ mod tests {
         let winded = conditions(&now);
         assert_eq!(winded.iter().map(|c| c.kind).collect::<Vec<_>>(), vec![ConditionKind::Winded]);
         assert_eq!(winded[0].effect, "Cannot sprint or swing hard until stamina is back to 20%");
-        now.stamina.step(SECOND_WIND * 8.0, crate::Activity::Resting, LoadBand::Light);
+        now.stamina.step(SECOND_WIND * 8.0, crate::Activity::Resting, Burden::default());
         assert_eq!(kinds(&now), vec![], "standing refills a full pool in 8 seconds");
     }
 
@@ -384,13 +416,30 @@ mod tests {
     }
 
     #[test]
-    fn a_load_above_light_shows_its_band_and_its_pace() {
-        let at = |load| conditions(&Circumstances { load, ..Circumstances::default() });
-        assert_eq!(at(LoadBand::Light), vec![]);
-        let burdened = &at(LoadBand::Burdened)[0];
-        assert_eq!((burdened.name.as_str(), burdened.effect.as_str()), ("Burdened", "Walking at 85% pace; sprinting tires you 1.5x as fast"));
-        assert_eq!(at(LoadBand::Encumbered)[0].effect, "Walking at 65% pace; sprinting tires you 2x as fast");
-        assert_eq!(at(LoadBand::Overloaded)[0].severity, Severity::Grave);
+    fn a_load_above_light_shows_its_band_and_where_it_sits() {
+        // STR 11: capacity 165 lb, edges at 55 and 110.
+        let at = |lb| conditions(&Circumstances { load: Burden::new(lb, 165.0), ..Circumstances::default() });
+        assert_eq!(at(40.0), vec![], "Light shows no load condition");
+        assert_eq!(at(55.0), vec![]);
+        let line = |lb| {
+            let all = at(lb);
+            format!("{}: {}", all[0].name, all[0].effect)
+        };
+        assert_eq!(line(65.0), "Burdened: 65 lb, 39% of your capacity. Encumbered from 110 lb. Walking at 99.7% pace; sprinting tires you 1.01x as fast.");
+        assert_eq!(line(137.5), "Encumbered: 138 lb, 83% of your capacity. Overloaded past 165 lb. Walking at 80% pace; sprinting tires you 1.56x as fast.");
+        assert_eq!(line(172.0), "Overloaded: 172 lb, 104% of your capacity. Set down 7 lb to move.");
+        assert_eq!(at(65.0)[0].severity, Severity::Mild);
+        assert_eq!(at(137.5)[0].severity, Severity::Moderate);
+        assert_eq!(at(172.0)[0].severity, Severity::Grave);
+    }
+
+    #[test]
+    fn the_pace_and_drain_round_so_they_never_read_as_better_than_they_are() {
+        assert_eq!([0.997107, 0.9999, 0.995, 0.803125, 0.65, 1.0].map(pace_percent), ["99.7%", "99.9%", "99.5%", "80%", "65%", "100%"]);
+        assert_eq!([1.0, 1.0082, 1.25, 1.5, 1.5625, 2.0].map(drain_times), ["1", "1.01", "1.25", "1.5", "1.56", "2"]);
+        // A fraction over capacity still roots them, so it rounds up to a whole pound to set down.
+        let line = |lb| load(Burden::new(lb, 165.0)).unwrap().effect;
+        assert_eq!(line(165.2), "165 lb, 100% of your capacity. Set down 1 lb to move.");
     }
 
     #[test]
@@ -426,7 +475,7 @@ mod tests {
 
     #[test]
     fn held_shows_the_pace_and_the_worst_comes_first() {
-        let now = Circumstances { held_pace: Some(0.25), load: LoadBand::Burdened, exhaustion: Exhaustion::new(5), ..Circumstances::default() };
+        let now = Circumstances { held_pace: Some(0.25), load: Burden::new(80.0, 165.0), exhaustion: Exhaustion::new(5), ..Circumstances::default() };
         assert_eq!(kinds(&now), vec![ConditionKind::Exhaustion, ConditionKind::Held, ConditionKind::Load]);
         assert_eq!(conditions(&now)[1].effect, "Moving at 25% pace until you strike what holds you");
     }
@@ -444,7 +493,7 @@ mod tests {
         assert_eq!(kinds(&thirsty), vec![ConditionKind::Thirst]);
         let poisoned = super::conditions(&wounded, &bitten(), &crate::effect::shipped());
         assert_eq!(poisoned.iter().map(|c| c.kind).collect::<Vec<_>>(), vec![ConditionKind::Poisoned], "poison stops the mending");
-        let burdened = Circumstances { load: LoadBand::Burdened, ..wounded };
+        let burdened = Circumstances { load: Burden::new(80.0, 165.0), ..wounded };
         assert_eq!(kinds(&burdened), vec![ConditionKind::Load, ConditionKind::Recovering], "good news comes last");
     }
 }

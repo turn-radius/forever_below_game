@@ -43,6 +43,10 @@ pub const STYGIAN_LIGHT: Color = hex(0x3a55a0);
 pub const FRAME_GOLD: Color = hex(0xe3b76a);
 /// A drop that fits, and one that does not (the plate's dark `--ok`, `--bad`).
 pub const OK: Color = hex(0x86ba80);
+/// A load past the Burdened edge, an Encumbered one and an Overloaded one ([`load_colour`]).
+pub const AMBER: Color = hex(0xe3b341);
+pub const ORANGE: Color = hex(0xe8863a);
+pub const RED: Color = hex(0xdc3c32);
 pub const BAD: Color = hex(0xea735b);
 
 /// Coins in their own metal, so a price reads at a glance: gold, silver and copper pieces.
@@ -223,12 +227,34 @@ pub fn value_runs(text: &str) -> Vec<(String, bool)> {
     runs
 }
 
+/// The colour the carried load shows in, by its band: Burdened amber, Encumbered orange,
+/// Overloaded red, and `None` for Light, which keeps the plain text colour.
+pub fn load_colour(band: fb_character::LoadBand) -> Option<Color> {
+    use fb_character::LoadBand;
+    match band {
+        LoadBand::Light => None,
+        LoadBand::Burdened => Some(AMBER),
+        LoadBand::Encumbered => Some(ORANGE),
+        LoadBand::Overloaded => Some(RED),
+    }
+}
+
 /// A line of numbers in Plex Mono at `size`: the values bright and bold, the words between
 /// them muted.
 pub fn numbers_line(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &str, size: f32) {
+    numbers_line_tinted(parent, fonts, text, size, None);
+}
+
+/// [`numbers_line`], with the value `tint` names (its text, such as "65/165") in the colour given.
+pub fn numbers_line_tinted(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &str, size: f32, tint: Option<(&str, Color)>) {
     parent.spawn((Text::default(), UiFonts::style(&fonts.mono, size, MUTED))).with_children(|line| {
         for (run, value) in value_runs(text) {
-            let (font, colour) = if value { (&fonts.mono_bold, BRIGHT) } else { (&fonts.mono, MUTED) };
+            let (font, mut colour) = if value { (&fonts.mono_bold, BRIGHT) } else { (&fonts.mono, MUTED) };
+            if let Some((word, tinted)) = tint {
+                if value && run.trim() == word {
+                    colour = tinted;
+                }
+            }
             line.spawn((TextSpan::new(run), UiFonts::style(font, size, colour)));
         }
     });
@@ -295,6 +321,17 @@ pub fn dashed_outline(parent: &mut ChildSpawnerCommands, size: Vec2, radius: f32
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_load_shows_in_its_band_s_colour_and_light_stays_plain() {
+        use fb_character::LoadBand;
+        assert_eq!(load_colour(LoadBand::Light), None);
+        assert_eq!(load_colour(LoadBand::Burdened), Some(AMBER));
+        assert_eq!(load_colour(LoadBand::Encumbered), Some(ORANGE));
+        assert_eq!(load_colour(LoadBand::Overloaded), Some(RED));
+        let hue = |c: Color| Hsla::from(c).hue;
+        assert!(hue(AMBER) > hue(ORANGE) && hue(ORANGE) > hue(RED), "amber, then orange, then red");
+    }
+
     use super::*;
     use crate::tuning::InterfaceTuning;
 

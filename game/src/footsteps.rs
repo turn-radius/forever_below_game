@@ -97,9 +97,9 @@ fn load_footstep_sounds(mut commands: Commands, assets: Res<AssetServer>) {
     });
 }
 
-/// Burden threshold as a fraction of capacity: Burdened at 34% or more.
-pub fn burden_threshold(load: f32, capacity: f32) -> bool {
-    capacity > 0.0 && load >= 0.34 * capacity
+/// Whether the load is past the Burdened edge (5 times STR, a third of the capacity).
+pub fn burden_threshold(rules: &fb_character::rules::Rules, load: f32, capacity: f32) -> bool {
+    capacity > 0.0 && load as f64 > rules.load.burdened_edge(capacity as f64)
 }
 
 /// Next step sample: one of 0–2, never the same as last.
@@ -158,7 +158,7 @@ fn play_delver_steps(
     let is_burdened = match (character, inventory) {
         (Some(character), Some(inventory)) => {
             let derived = character.derive_with(crate::rules::GameRules::of(&rules), &inventory);
-            burden_threshold(derived.load, derived.capacity)
+            burden_threshold(crate::rules::GameRules::of(&rules), derived.load, derived.capacity)
         }
         _ => false,
     };
@@ -286,12 +286,13 @@ mod tests {
     }
 
     #[test]
-    fn burden_threshold_is_34_percent() {
-        assert!(!burden_threshold(0.0, 100.0), "empty");
-        assert!(!burden_threshold(33.9, 100.0), "just under");
-        assert!(burden_threshold(34.0, 100.0), "at threshold");
-        assert!(burden_threshold(50.0, 100.0), "well over");
-        assert!(!burden_threshold(1.0, 0.0), "zero capacity");
+    fn burden_threshold_is_five_times_strength() {
+        let rules = fb_character::rules::defaults();
+        assert!(!burden_threshold(rules, 0.0, 150.0), "empty");
+        assert!(!burden_threshold(rules, 50.0, 150.0), "at the edge");
+        assert!(burden_threshold(rules, 50.5, 150.0), "just over");
+        assert!(burden_threshold(rules, 100.0, 150.0), "well over");
+        assert!(!burden_threshold(rules, 1.0, 0.0), "zero capacity");
     }
 
     #[test]
