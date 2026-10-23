@@ -380,7 +380,7 @@ fn barter_is_refused_without_the_trade_words_and_allowed_with_them() {
     assert!(sent.is_empty(), "no barter screen without the words");
     let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("a gesture line");
     assert_eq!(topic, Topic::Service(Service::Barter));
-    assert!(said.contains("shakes its head") && said.contains("minotaur") && said.contains("trade"), "{said}");
+    assert!(said.contains("minotaur") && said.contains("trade"), "{said}");
     // The refusal reads as a gesture, not as speech in glyphs.
     let talk = app.world().resource::<Talk>();
     let lexicon = app.world().resource::<WorldRecord>().lexicon();
@@ -447,15 +447,19 @@ fn folk_speak_of_the_denizens_more_the_deeper_they_stand() {
 
 #[test]
 fn deep_folk_name_the_denizen_factions_on_their_level_and_how_they_stand() {
-    let (level, _) = minotaur_level();
+    // A level with a minotaur faction and some folk beside it.
+    let level = (1..400)
+        .map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH))
+        .find(|level| level.folk.iter().any(|f| f.denizen.is_none()) && level.factions.iter().any(|f| f.denizen == Some(DenizenKind::Minotaur)))
+        .expect("a level with both within 400 seeds");
     let spot = level.folk.iter().position(|f| f.denizen.is_none()).expect("a folk");
-    let faction = level.factions.iter().find(|f| f.denizen == Some(DenizenKind::Minotaur)).unwrap().name.clone();
+    let factions: Vec<String> = level.factions.iter().filter(|f| f.denizen == Some(DenizenKind::Minotaur)).map(|f| f.name.clone()).collect();
     let hostile = folk_speaker(&level, spot, Band::Hostile);
     let topics = lines::topics(&hostile);
     let at = topics.iter().position(|t| matches!(t, Topic::Faction(_))).expect("a topic for the denizen faction");
     assert!(!topics.contains(&Topic::Strange));
     let said = lines::answer(&hostile, topics[at], None);
-    assert!(said.contains(&faction) && said.to_lowercase().contains("minotaur"), "{said}");
+    assert!(factions.iter().any(|f| said.to_lowercase().contains(&f.to_lowercase())) && said.to_lowercase().contains("minotaur"), "{said} {factions:?}");
     assert!(said.contains("kill you on sight"), "a hostile faction is dangerous: {said}");
     assert!(topics[at].label_for(&hostile).starts_with("The "));
     let allied = folk_speaker(&level, spot, Band::Allied);

@@ -345,7 +345,7 @@ mod tests {
         assert_eq!((quiver.side, quiver.x_percent, quiver.y_percent, quiver.size), (SlotSide::Right, neck.x_percent, neck.y_percent, neck.size));
         assert_eq!(base_groups().len(), 26);
         assert_eq!(food_descriptions().len(), 12);
-        assert_eq!((syllables().len(), places().len()), (8, 9));
+        assert_eq!((syllables().len(), places().len()), (11, 9));
         assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 73);
     }
 

@@ -148,9 +148,9 @@ impl Person {
         let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
         // A succubus is a woman whatever her faction rolled; the other denizens are men.
         let succubus = spot.denizen == Some(fb_denizens::DenizenBody::Succubus);
-        let spot = &FolkSpot { sex: if succubus { fb_body::Sex::Female } else { spot.sex }, ..*spot };
+        let sex = if succubus { fb_body::Sex::Female } else { spot.sex };
         let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
-        let name = fb_items::naming::folk_name(&mut rng, name_key, Some(spot.sex));
+        let name = fb_items::naming::folk_name(&mut rng, name_key, Some(sex));
         let outfit = *rng.pick(&faction.outfit_keys());
         // A denizen dresses from the row of its own kind, not a delver's class outfit.
         let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
@@ -176,7 +176,7 @@ impl Person {
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
         // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
-        let spec = if spot.denizen.is_some() && !succubus { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, spot.sex) };
+        let spec = if spot.denizen.is_some() && !succubus { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, sex) };
         Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
     }
 
@@ -806,7 +806,7 @@ mod tests {
             let person = person_1207(&spot);
             assert_eq!(person.spec.folk, folk);
             // A succubus is a woman, in body and in name; the other demons are men.
-            assert_eq!((person.spec.woman, person.spot.sex == fb_body::Sex::Female), (folk == Folk::Succubus, folk == Folk::Succubus), "{folk:?}");
+            assert_eq!(person.spec.woman, folk == Folk::Succubus, "{folk:?}");
             assert_eq!(person, person_1207(&spot));
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
             assert!(figure.pieces.len() >= 4 && figure.body.height > 15.0, "{folk:?}: {} tall", figure.body.height);
