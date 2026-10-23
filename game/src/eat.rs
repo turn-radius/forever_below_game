@@ -279,9 +279,10 @@ pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::
 /// keeps the draught.
 fn drink_nearest_healing(
     input: ActionInput,
-    slots: Option<Res<crate::quickslots::Quickslots>>,
+    mut slots: Option<ResMut<crate::quickslots::Quickslots>>,
     mut inventory: ResMut<Inventory>,
     mut eating: Eating,
+    mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
@@ -297,7 +298,12 @@ fn drink_nearest_healing(
         toast.say("You are unhurt.", now);
         return;
     }
-    if let Some(line) = eating.eat(&mut inventory, id) {
+    // From a quickslot, drink as the key does, so the slot moves on to the next draught.
+    let slot = slots.as_deref().and_then(|s| s.slot_of(id));
+    if let (Some(slots), Some(slot)) = (slots.as_mut(), slot) {
+        let line = crate::quickslots::use_slot(slot, slots, &mut inventory, &mut eating, &mut floor_changes);
+        toast.say(line, now);
+    } else if let Some(line) = eating.eat(&mut inventory, id) {
         toast.say(line, now);
     }
 }
@@ -1102,5 +1108,45 @@ mod tests {
         assert_eq!(keymap.inputs(Action::DrinkHealing), &[crate::keymap::Input::Key(KeyCode::KeyH)]);
         let clashes = keymap.bindings.iter().filter(|b| b.action != Action::DrinkHealing && b.inputs.contains(&crate::keymap::Input::Key(KeyCode::KeyH))).count();
         assert_eq!(clashes, 0);
+    }
+
+    #[test]
+    fn h_drinks_the_slotted_draught_and_the_slot_takes_the_next() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().init_resource::<crate::quickslots::Quickslots>();
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        let a = stow(&mut app, item(HEALING_DRAUGHT));
+        let c = stow(&mut app, item(HEALING_DRAUGHT));
+        let b = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let belt = inventory.add(item("Belt"));
+            inventory.wear(belt, fb_items::Slot::Belt).unwrap();
+            let draught = inventory.add(item(HEALING_DRAUGHT));
+            let at = inventory.grid(belt).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+            inventory.put(draught, belt, at).unwrap();
+            draught
+        };
+        app.world_mut().resource_mut::<crate::quickslots::Quickslots>().bind(2, a);
+        press_key(&mut app, KeyCode::KeyH);
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.item(a).is_none() && inventory.item(b).is_some() && inventory.item(c).is_some());
+        let held = app.world().resource::<crate::quickslots::Quickslots>().get(2);
+        assert!(held.is_some() && held != Some(a), "{held:?}");
+    }
+
+    #[test]
+    fn h_ignores_a_slotted_draught_set_down_underfoot() {
+        let (mut app, player) = app();
+        on_the_level(&mut app);
+        app.world_mut().init_resource::<crate::quickslots::Quickslots>();
+        app.world_mut().entity_mut(player).insert(hurt(3));
+        carry(&mut app, "Torch");
+        let lying = app.world_mut().resource_mut::<Inventory>().add(item(HEALING_DRAUGHT));
+        app.world_mut().resource_mut::<crate::quickslots::Quickslots>().bind(0, lying);
+        press_key(&mut app, KeyCode::KeyH);
+        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        assert!(app.world().resource::<Inventory>().item(lying).is_some());
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
     }
 }
