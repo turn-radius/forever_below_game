@@ -270,10 +270,10 @@ fn draw_scale(body: &Body, item: &Item) -> f32 {
         Item::Sword(_) | Item::Dagger(_) => BLADE_SCALE * root,
         Item::Bow(_) => (BOW_SCALE * root).min(body.height * BOW_MAX / height()),
         Item::Shield(_) => (SHIELD_SCALE * root).min(body.height * SHIELD_MAX / height()),
-        // A giant's clubs, axes, staves and torches are grown with it, a hand's width in
-        // proportion; folk (up to a lizard's 1.04 of a human) draw them as they are.
-        Item::Torch(_) => 1.0,
-        _ if body.scale > GIANT_SCALE => root,
+        // A giant's hafted weapons (maces, clubs, axes, staves and spears) are grown with it,
+        // as swords are; folk (up to a lizard's 1.04 of a human) draw them as they are.
+        // Torches, lanterns and crossbows are drawn as they are for everyone.
+        Item::Mace(_) | Item::Club(_) | Item::Axe(_) | Item::Staff(_) | Item::Spear(_) if body.scale > GIANT_SCALE => root,
         _ => 1.0,
     }
 }
@@ -842,6 +842,7 @@ mod tests {
             let cap = body.grip_radius();
             let half_fist = body.hand_form().knuckle_half_width;
             for family in families {
+                let mut read = 0;
                 for seed in 0..10 {
                     let item = roll(family, seed);
                     let fit = fit(&body, Side::Right, &item);
@@ -853,13 +854,13 @@ mod tests {
                     // handle along its own tilted axis, not the posed grip's: measuring across the
                     // grip axis would read a tilted handle as wider than it is.
                     let axis = if family == Family::Torch { fit.placement.rotation.transform(vec3::Y) } else { g.y() };
-                    // A splint torch the fist need not thin has no separate handle part (the haft is
-                    // part of its head), so there is nothing to measure.
-                    if points(&fit.mesh, HANDLES).next().is_none() {
-                        continue;
-                    }
-                    // (A bigger fist's window can fall between a plain handle's rings, so it widens
-                    // until it holds some.)
+                    // A giant's fist outgrows a splint torch: the grip cap (GRIP_MAX) is above the
+                    // torch's own handle, so nothing is thinned and the Armory builds no separate
+                    // handle part (the haft is part of the head), or the handle is shorter than
+                    // the fist's window, so a reading may be empty. Only a giant's torch may go
+                    // unread; the six folk's fists always thin it to a handle, and every family
+                    // is read for each of them.
+                    let giant = folk.is_denizen() || body.scale > GIANT_SCALE;
                     let across = |window: f32| {
                         points(&fit.mesh, HANDLES)
                             .map(|p| vec3::sub(p, g.origin))
@@ -867,12 +868,15 @@ mod tests {
                             .map(|d| vec3::length(vec3::sub(d, vec3::scale(axis, vec3::dot(d, axis)))))
                             .fold(0.0, f32::max)
                     };
-                    let widest = [0.6, 1.0].into_iter().map(across).find(|w| *w > 0.0).unwrap_or(0.0);
-                    if widest == 0.0 && family == Family::Torch {
+                    let widest = if giant { [0.6, 1.0].into_iter().map(across).find(|w| *w > 0.0).unwrap_or(0.0) } else { across(0.6) };
+                    if giant && family == Family::Torch && widest == 0.0 {
                         continue;
                     }
+                    read += 1;
                     assert!(widest > 0.0 && widest <= cap * 1.1 + 0.005, "{folk:?} {} seed {seed}: drawn handle {widest} in a fist of {cap}", item.noun());
                 }
+                // Every folk's every family is read at every seed; a giant's torch at least once.
+                assert!(if folk.is_denizen() || body.scale > GIANT_SCALE { read > 0 } else { read == 10 }, "{folk:?} {family:?}: {read} of 10 read");
             }
         }
     }

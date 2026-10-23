@@ -509,24 +509,24 @@
   "eyes": "one",
   "stats": [
    22,
-   11,
+   10,
    20,
-   8,
-   6
+   7,
+   8
   ],
   "dv": 60,
   "block": {
    "size": "Huge",
    "kind": "giant",
    "armour_class": 14,
-   "hit_points": 138,
+   "hit_points": 115,
    "hit_dice": [
+    10,
     12,
-    12,
-    60
+    50
    ],
    "speed": 30,
-   "charisma": 10,
+   "charisma": 8,
    "attacks": [
     {
      "name": "Greatclub",
@@ -543,15 +543,15 @@
      "name": "Rock",
      "bonus": 9,
      "dice": [
-      4,
+      3,
       10,
       6
      ],
      "damage": "bludgeoning",
-     "range": "range 30/120 ft."
+     "range": "range 60/240 ft."
     }
    ],
-   "source": "SRD 5.1 Cyclops stat block (Huge giant); STR 22 DEX 11 CON 20 INT 8 WIS 6 CHA 10 are `stats` plus `charisma`"
+   "source": "our own, after the SRD 5.1 Hill Giant (p. 313): Huge giant with its greatclub and rock, a little stronger and slower; the SRD has no cyclops"
   },
   "shoulders": 1.15,
   "brawn": 0.3,

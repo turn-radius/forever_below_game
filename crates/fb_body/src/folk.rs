@@ -101,7 +101,7 @@ impl Folk {
     /// Parses a key from `data/races.json`, or the folk's name ("lizardfolk", "pigfolk").
     pub fn parse(text: &str) -> Option<Folk> {
         let text = text.trim().to_ascii_lowercase();
-        Folk::ALL.into_iter().chain(Folk::DENIZENS.iter().copied()).find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
+        Folk::every().into_iter().find(|f| f.key() == text || f.race().label.to_ascii_lowercase() == text)
     }
 
     /// The folk's row in `data/races.json`.
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn the_cyclops_is_a_denizen_on_the_folk_body() {
         assert!(!Folk::ALL.contains(&Folk::Cyclops));
-        assert_eq!(Folk::DENIZENS, [Folk::Cyclops]);
+        assert!(Folk::DENIZENS.contains(&Folk::Cyclops) && Folk::Cyclops.is_denizen() && !Folk::Human.is_denizen());
         assert_eq!(Folk::parse("cyclops"), Some(Folk::Cyclops));
         assert_eq!(Folk::Cyclops.denizen_body(), Some(fb_denizens::DenizenBody::Cyclops));
         assert_eq!(Folk::of_denizen(fb_denizens::DenizenBody::Cyclops), Some(Folk::Cyclops));
@@ -499,11 +499,11 @@ mod tests {
         let r = Folk::Cyclops.race();
         assert_eq!(r.eyes, EyeKind::One);
         assert!(r.h / Folk::Human.race().h > 1.6 && r.h / Folk::Human.race().h < 1.8);
-        // SRD: STR 22 DEX 11 CON 20 INT 8 WIS 6 CHA 10, AC 14, 138 hp (12d12 + 60), 30 ft.
-        assert_eq!(r.stats, [22, 11, 20, 8, 6]);
+        // Our own, after the SRD 5.1 Hill Giant: STR 22 DEX 10 CON 20 INT 7 WIS 8 CHA 8, AC 14, 115 hp (10d12 + 50), 30 ft.
+        assert_eq!(r.stats, [22, 10, 20, 7, 8]);
         let b = r.block.as_ref().unwrap();
-        assert_eq!((b.armour_class, b.hit_points, b.hit_dice, b.speed, b.charisma), (14, 138, [12, 12, 60], 30, 10));
-        assert_eq!(b.attacks.iter().map(|a| a.dice).collect::<Vec<_>>(), [[3, 8, 6], [4, 10, 6]]);
+        assert_eq!((b.armour_class, b.hit_points, b.hit_dice, b.speed, b.charisma), (14, 115, [10, 12, 50], 30, 8));
+        assert_eq!(b.attacks.iter().map(|a| a.dice).collect::<Vec<_>>(), [[3, 8, 6], [3, 10, 6]]);
         assert!(Folk::ALL.into_iter().all(|f| f.race().block.is_none()));
     }
 }
