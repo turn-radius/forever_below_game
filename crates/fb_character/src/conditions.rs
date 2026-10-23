@@ -177,7 +177,7 @@ fn winded(stamina: Stamina) -> Option<Condition> {
 /// A walking pace as a percent, rounded so it never reads as more than it is. A whole percent,
 /// except where that would round up to 100 for a pace short of full: those get one decimal
 /// (99.7%), and never show 100 (99.99% reads 99.9%).
-fn pace_percent(pace: f64) -> String {
+pub fn pace_percent(pace: f64) -> String {
     let whole = (pace * 100.0).round();
     if whole < 100.0 || pace >= 1.0 {
         return format!("{whole}%");

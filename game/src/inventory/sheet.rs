@@ -11,7 +11,6 @@
 //! when the delver eats or drinks.
 
 use bevy::prelude::*;
-use fb_character::explain::Explained;
 use fb_character::rules::Rules;
 use fb_character::{Exhaustion as ExhaustionLevel, Mana, Meter, MeterKind, Needs, Stamina, modifier};
 
@@ -332,14 +331,7 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
 pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
     let loadout = character.loadout(inventory);
     match row {
-        0 => {
-            let mut load = Explained::new("Load", "lb");
-            for (slot, item) in inventory.equipped() {
-                let weight = item.profile.stats.weight + inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
-                load = if load.terms().is_empty() { load.base(&item.name, weight as f64) } else { load.add(&item.name, weight as f64) };
-            }
-            vec![load.line(), loadout.capacity_with(rules, character.strength()).line()]
-        }
+        0 => character.load_breakdown(rules, inventory),
         1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
         2 => vec![loadout.light().line()],
         3 => vec![loadout.darkvision().line()],

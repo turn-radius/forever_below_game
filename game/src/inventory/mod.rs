@@ -2346,8 +2346,8 @@ mod tests {
         assert!(tip_text(&mut app).is_empty());
         hover_row(&mut app, Some(0));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.contains("Capacity 175 lb = STR 10 \u{d7} 15 (150) + ") && l.contains("Belt") && l.ends_with("(+25)")), "{tip:?}");
-        assert!(tip.iter().any(|l| l.starts_with("Load 1 lb =")), "{tip:?}");
+        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR 10 \u{d7} 15 + ") && l.contains("Belt") && l.ends_with("(+25) = 175 lb")), "{tip:?}");
+        assert!(tip.iter().any(|l| l.starts_with("Carried: ") && l.ends_with("= 1 lb")), "{tip:?}");
         let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
         assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
         hover_row(&mut app, None);
