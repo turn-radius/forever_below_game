@@ -253,12 +253,13 @@ impl Plugin for TravelPlugin {
 }
 
 /// A new delve is a new abyss, from the seed of the level it opens on.
-pub(crate) fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<Res<crate::character::Character>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>, mut enchanting: ResMut<crate::enchanting::Enchanting>) {
+pub(crate) fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<Res<crate::character::Character>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>, mut enchanting: ResMut<crate::enchanting::Enchanting>, mut dev_used: Local<bool>) {
     // What was scrapped lasts one delve.
     *enchanting = default();
     // `FB_DEPTH` starts below the first level, whose seed is not the run's: the run keeps the
     // seed `main` made the level from, so the world the sheet and standings read is the level's.
-    let dev_run = crate::launch::env_set("FB_DEPTH") && abyss.run_seed != 0;
+    // Only the first run: a new delve after a death is a new world.
+    let dev_run = crate::launch::env_set("FB_DEPTH") && abyss.run_seed != 0 && !std::mem::replace(&mut *dev_used, true);
     *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(if dev_run { abyss.run_seed } else { level.0.seed }) });
     // The world record resets with the run for now (#285), and standing starts afresh in the
     // new world from the delver's alignment (#542).

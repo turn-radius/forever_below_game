@@ -105,7 +105,9 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
         Faction::Scale => Lean::Scale,
         Faction::Plate => Lean::Plate,
     };
-    fb_items::outfit::Livery::from_field(faction.field, lean)
+    let livery = fb_items::outfit::Livery::from_field(faction.field, lean);
+    // Denizens go sparsely dressed, so their legwear wears the colours; folk's is left alone.
+    if faction.is_denizen() { livery.with_legs() } else { livery }
 }
 
 /// The key of the outfit a denizen of `folk` dresses from, in `data/outfits.json`: the row of its
@@ -686,7 +688,9 @@ mod tests {
     /// A level at the denizen depth that holds a member of a built denizen body, and the first
     /// world's levels there.
     fn denizen_levels() -> Vec<Level> {
-        (1..=24).map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH)).filter(|l| l.folk.iter().any(|f| f.denizen.is_some())).collect()
+        let levels: Vec<Level> = (1..=24).map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH)).filter(|l| l.folk.iter().any(|f| f.denizen.is_some())).collect();
+        assert!(!levels.is_empty(), "no level at the denizen depth holds a denizen");
+        levels
     }
 
     #[test]
@@ -701,12 +705,13 @@ mod tests {
 
     #[test]
     fn denizen_spots_spawn_as_their_folk_in_their_faction_and_leave_indices_aligned() {
-        let (mut seen, mut hidden) = (0, 0);
+        let (mut seen, mut hidden, mut unbuilt) = (0, 0, 0);
         for level in denizen_levels() {
             let figures = FolkFigures::default().for_spots(&level.folk, &level.factions, level.depth);
             let shown: Vec<(usize, &FolkSpot)> = level.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).collect();
             assert_eq!(figures.len(), shown.len());
             hidden += level.folk.len() - shown.len();
+            unbuilt += level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b).is_none())).count();
             for ((index, spot), built) in shown.iter().zip(&figures) {
                 assert_eq!(built.0.spot, **spot, "figure for spot {index} is its own");
                 assert_eq!(built.0.faction.id, spot.faction);
@@ -719,13 +724,16 @@ mod tests {
             }
         }
         assert!(seen > 0, "no built denizen on the sweep");
-        // Unbuilt bodies stay hidden whatever is built: the sweep sees some while few bodies exist.
-        let _ = hidden;
+        // Exactly the spots of unbuilt bodies stay hidden, and the sweep meets some while any
+        // denizen body is unbuilt.
+        assert_eq!(hidden, unbuilt);
+        let any_unbuilt = fb_denizens::DenizenBody::ALL.iter().any(|b| Folk::of_denizen(*b).is_none());
+        assert!(!any_unbuilt || hidden > 0, "no unbuilt denizen met in the sweep");
     }
 
     #[test]
     fn denizen_members_dress_sparsely_in_the_faction_colours_and_guards_may_wear_more() {
-        let (mut bare, mut armoured_guards, mut members) = (0, 0, 0);
+        let (mut bare, mut members, mut in_colours) = (0, 0, 0);
         for level in denizen_levels() {
             for spot in level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b) == Some(Folk::Minotaur))) {
                 let person = Person::of(spot, level.faction(spot.faction), level.depth);
@@ -735,15 +743,17 @@ mod tests {
                 let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
                 if person.item(Slot::Body).is_none() {
                     bare += 1;
-                } else if guard {
-                    armoured_guards += 1;
                 } else {
-                    panic!("{} wears body armour without guarding", person.name);
+                    assert!(guard, "{} wears body armour without guarding", person.name);
+                }
+                let field = level.faction(spot.faction).field;
+                if let Some(armory::Item::Legs(legs)) = person.item(Slot::Legs).map(|i| &i.shape) {
+                    in_colours += usize::from([field.tincture.dye(), field.tincture2.dye()].contains(&legs.legwear.cloth.color));
                 }
             }
         }
         assert!(members > 0 && bare * 10 >= members * 7, "{bare} of {members} are bare chested");
-        let _ = armoured_guards;
+        assert!(in_colours * 10 >= members * 5, "{in_colours} of {members} kilts wear the faction's tinctures");
     }
 
     #[test]

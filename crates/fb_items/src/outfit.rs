@@ -63,12 +63,20 @@ pub struct Livery {
     /// Painted on every shield, exactly.
     pub field: Field,
     pub armour_lean: ArmourLean,
+    /// Legwear wears the colours too: a denizen's whole dress may be a kilt of them. Off for
+    /// folk, whose legwear is left as rolled (and who draw nothing for it).
+    pub legs: bool,
 }
 
 impl Livery {
     /// The livery of a faction with `field` and `armour_lean`: the field's two tinctures.
     pub fn from_field(field: Field, armour_lean: ArmourLean) -> Livery {
-        Livery { tincture: field.tincture, tincture2: field.tincture2, field, armour_lean }
+        Livery { tincture: field.tincture, tincture2: field.tincture2, field, armour_lean, legs: false }
+    }
+
+    /// This livery with legwear in the colours (denizens).
+    pub fn with_legs(self) -> Livery {
+        Livery { legs: true, ..self }
     }
 
     /// The tinctures as (main, trim): cloth takes a colour for its body and a metal for its
@@ -96,7 +104,7 @@ impl Livery {
                 s.hem.fabric.color2 = main.dye();
             }
             // Legwear wears the colours too: a denizen's whole dress may be a kilt of them.
-            armory::Item::Legs(s) => {
+            armory::Item::Legs(s) if self.legs => {
                 if !rng.chance(LIVERY_CLOTH) {
                     return;
                 }
@@ -408,6 +416,24 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Folk livery is as it was before denizens: legwear draws nothing from the livery stream
+    /// and keeps its rolled colour, so what follows it is unchanged.
+    #[test]
+    fn folk_legwear_is_left_as_rolled_and_costs_the_livery_stream_nothing() {
+        let livery = livery(ArmourLean::Mail);
+        for key in ["fighter", "ranger", "mage", "cleric", "scavenger", "fallen"] {
+            for seed in [1, 7, 1207] {
+                let plain = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), None);
+                let dressed = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery));
+                let legs = |set: &OutfitSet| set.worn.iter().find_map(|(_, i)| if let armory::Item::Legs(s) = &i.shape { Some(s.legwear.cloth.color) } else { None });
+                assert_eq!(legs(&plain), legs(&dressed), "{key} {seed}");
+                // The same livery with legs on, but folk never turn it on: it only differs where
+                // legwear exists, which is what the flag is for.
+                assert_eq!(dressed, outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery)), "{key} {seed}");
+            }
+        }
     }
 
     #[test]

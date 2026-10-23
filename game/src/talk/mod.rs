@@ -293,7 +293,7 @@ fn talk(
     // they gesture instead. That task replaces this branch with the panel when the delver
     // knows the denizen's tongue.
     if denizen.person.spot.denizen.is_some() {
-        toasts.say(lines::gesture(&speaker));
+        toasts.say(lines::gesture(&speaker, hostility.is_some_and(|h| h.is_hostile())));
         return;
     }
     match lines::reception(band, hostility.is_some_and(|h| h.is_hostile())) {
