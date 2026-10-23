@@ -224,6 +224,8 @@ impl Item {
         }
         match made_for {
             Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
+            // A robe is worn over body armour, in the cloak's place, as well as as a shirt.
+            Slot::Shirt if matches!(&self.shape, armory::Item::Garment(g) if g.cut.style == armory::sections::garment::GarmentStyle::Robe) => vec![Slot::Shirt, Slot::Cloak],
             Slot::Mainhand if self.profile.tags.contains(&Tag::Weapon) => vec![Slot::Mainhand, Slot::Offhand],
             _ => vec![made_for],
         }
