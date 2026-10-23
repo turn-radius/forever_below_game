@@ -79,14 +79,18 @@ impl Teaching {
         Teaching { kind, topics, words }
     }
 
-    /// The short line for the item card ("Minotaur phrases: greetings and trade").
-    pub fn description(&self) -> String {
+    /// The topics in a phrase ("greetings and trade", "greetings, trade and quests").
+    pub fn topic_list(&self) -> String {
         let labels: Vec<&str> = self.topics.iter().map(|t| t.label()).collect();
-        let list = match labels.as_slice() {
+        match labels.as_slice() {
             [] => String::new(),
             [only] => (*only).to_string(),
             [init @ .., last] => format!("{} and {last}", init.join(", ")),
-        };
-        format!("{} phrases: {list}", self.kind.label())
+        }
+    }
+
+    /// The short line for the item card ("Minotaur phrases: greetings and trade").
+    pub fn description(&self) -> String {
+        format!("{} phrases: {}", self.kind.label(), self.topic_list())
     }
 }

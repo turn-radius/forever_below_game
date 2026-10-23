@@ -47,7 +47,7 @@ impl Staging {
             .items
             .iter()
             .map(|spot| {
-                let item = fb_items::roll_loot(spot.family, spot.seed, odds)?.in_world(&lore);
+                let item = level.floor_item(spot, odds, &lore)?;
                 let mesh = item.shape.build();
                 Some((item, mesh))
             })
@@ -188,7 +188,7 @@ mod tests {
 
             assert_eq!(staging.items.len(), level.items.len());
             for (spot, staged) in level.items.iter().zip(&staging.items) {
-                let rolled = fb_items::roll_loot(spot.family, spot.seed, Odds::loot(depth)).map(|i| i.in_world(&level.lore()));
+                let rolled = level.floor_item(spot, Odds::loot(depth), &level.lore());
                 assert_eq!(rolled.as_ref(), staged.as_ref().map(|(item, _)| item), "depth {depth}: the loot");
                 if let (Some(item), Some((_, mesh))) = (&rolled, staged) {
                     assert_eq!(&item.shape.build(), mesh, "depth {depth}: its shape");

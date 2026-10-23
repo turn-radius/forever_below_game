@@ -9,6 +9,7 @@ use crate::profile::{Profile, profile};
 use crate::rarity::{Odds, roll_rarity_for};
 use crate::tables::Affix;
 use crate::{Kind, Rarity, Slot, Tag, game_rng};
+use fb_denizens::tongue::Teaching;
 use std::fmt;
 
 /// D&D coinage in a purse.
@@ -110,6 +111,8 @@ pub struct Item {
     pub history: Vec<String>,
     /// What is written on it: a note's words, written where it is found ([`Item::in_world`]).
     pub words: Option<String>,
+    /// The words it teaches the reader, if it is written in a denizen tongue ([`Item::teaching`]).
+    pub teaching: Option<Teaching>,
 }
 
 /// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
@@ -127,11 +130,12 @@ pub struct ItemParts {
     pub coins: Option<Coins>,
     pub odds: Odds,
     pub words: Option<String>,
+    pub teaching: Option<Teaching>,
 }
 
 impl From<Item> for ItemParts {
     fn from(i: Item) -> Self {
-        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words }
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching }
     }
 }
 
@@ -142,7 +146,7 @@ impl Item {
     /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
-        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words } = parts;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching } = parts;
         let mut profile = profile(&base, &shape);
         if let Some(c) = coins {
             profile.description = c.to_string();
@@ -150,7 +154,7 @@ impl Item {
         for a in &affixes {
             a.apply_to_stats(&mut profile.stats);
         }
-        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words })
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching })
     }
 }
 
@@ -164,11 +168,15 @@ impl Item {
     /// lore's factions rather than factions of the grammar's making: its title stays, and a legend
     /// made at an enchanter's bench (`Legend::made`) is left as it is, as it tells its making, not
     /// a found relic. A note with nothing written on it is written on, of the level
-    /// ([`crate::notes::write_note`]); one already written keeps its words wherever it goes. Pure
+    /// ([`crate::notes::write_note`]), or now and then with a rumour of the denizens
+    /// ([`crate::tongues::rumour`]); one already written keeps its words wherever it goes. Pure
     /// in the item's seed and the lore, and a no-op for anything else.
     pub fn in_world(mut self, lore: &Lore) -> Item {
         if self.words.is_none() && self.is_note() {
-            self.words = Some(crate::notes::write_note(self.seed, lore));
+            self.words = Some(match crate::tongues::rumour(self.seed, lore.depth) {
+                Some((_, rumour)) => rumour,
+                None => crate::notes::write_note(self.seed, lore),
+            });
         }
         let factions = &lore.factions;
         if factions.is_empty() {
@@ -286,7 +294,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -298,7 +306,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
@@ -504,10 +512,12 @@ mod tests {
     #[test]
     fn a_note_found_in_a_world_is_written_on_once() {
         let lore = Lore { depth: 4, creatures: vec![crate::notes::Thing::new("troll", "trolls")], ..Lore::default() };
-        let note = roll_item("Note", 7).unwrap();
+        // A seed that is no rumour of the denizens ([`crate::tongues::rumour`]).
+        let seed = (7..).find(|&s| crate::tongues::rumour(s, 4).is_none()).unwrap();
+        let note = roll_item("Note", seed).unwrap();
         assert_eq!(note.words, None, "rolled outside a world it is blank");
         let found = note.clone().in_world(&lore);
-        assert_eq!(found.words.as_deref(), Some(crate::notes::write_note(7, &lore).as_str()));
+        assert_eq!(found.words.as_deref(), Some(crate::notes::write_note(seed, &lore).as_str()));
         let elsewhere = found.clone().in_world(&Lore { depth: 9, ..Lore::default() });
         assert_eq!(elsewhere.words, found.words, "carried to another level, it keeps its words");
         for base in ["Scroll", "Book", "Sword"] {

@@ -64,9 +64,19 @@ pub struct WorldRecord {
     /// (#571).
     #[serde(default)]
     pub met_on: BTreeMap<fb_faction::Faction, std::collections::BTreeSet<u32>>,
+    /// The words of each denizen tongue the delver has learned from books and scrolls, for the
+    /// rest of the delve (#629). Talk reads it ([`WorldRecord::lexicon`]) to know which lines are
+    /// readable; a new delve starts with none.
+    #[serde(default)]
+    pub lexicon: fb_denizens::tongue::Lexicon,
 }
 
 impl WorldRecord {
+    /// The denizen words the delver has learned.
+    pub fn lexicon(&self) -> &fb_denizens::tongue::Lexicon {
+        &self.lexicon
+    }
+
     /// Whether `faction` is already noted as met on level `depth`.
     pub fn was_met_on(&self, faction: fb_faction::Faction, depth: u32) -> bool {
         self.met_on.get(&faction).is_some_and(|d| d.contains(&depth))
@@ -181,6 +191,9 @@ pub struct ItemRecord {
     /// What is written on it.
     #[serde(default)]
     pub words: Option<String>,
+    /// The words it teaches, if it is written in a denizen tongue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teaching: Option<fb_denizens::tongue::Teaching>,
 }
 
 /// An item in a container's grid.
@@ -224,13 +237,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
     }
 
     /// The record of the level at `depth`, if it has been visited.
@@ -271,6 +284,7 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         contents: vec![],
         odds: item.odds,
         words: item.words.clone(),
+        teaching: item.teaching.clone(),
     }
 }
 
@@ -320,6 +334,7 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         coins: record.coins.map(|[gp, sp, cp]| Coins { gp, sp, cp }),
         odds: record.odds,
         words: record.words.clone(),
+        teaching: record.teaching.clone(),
     });
     if item.is_none() {
         warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
@@ -468,6 +483,21 @@ mod tests {
         assert_eq!(again, changed);
         assert_eq!(again.affixes, vec![quick]);
         assert!(again.name.starts_with("Quick"));
+    }
+
+    #[test]
+    fn a_teaching_scroll_and_the_lexicon_keep_through_a_record() {
+        let scroll = crate::reading::teaching_for_capture("faun:book:9", 0).unwrap();
+        assert!(scroll.teaching().is_some());
+        let rebuilt = rebuild_item(&item_record(&scroll)).unwrap();
+        assert_eq!(rebuilt, scroll);
+        let mut record = WorldRecord::default();
+        record.lexicon.learn_teaching(scroll.teaching().unwrap());
+        let reloaded: WorldRecord = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        assert_eq!(reloaded.lexicon(), record.lexicon());
+        assert!(reloaded.lexicon().known_share(fb_denizens::DenizenKind::Faun) > 0.0);
+        let fresh = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 5);
+        assert_eq!(fresh.lexicon().known_share(fb_denizens::DenizenKind::Faun), 0.0, "a new delve starts with none");
     }
 
     #[test]

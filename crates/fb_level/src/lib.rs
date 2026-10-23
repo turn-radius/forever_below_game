@@ -260,6 +260,13 @@ impl Room {
         x >= self.x as i32 && y >= self.y as i32 && x < (self.x + self.w) as i32 && y < (self.y + self.h) as i32
     }
 
+    /// How far the point (`x`, `y`) lies from the room's floor, in cells: 0 inside it.
+    pub fn gap_to(&self, x: f32, y: f32) -> f32 {
+        let dx = (self.x as f32 - x).max(x - (self.x + self.w) as f32).max(0.0);
+        let dy = (self.y as f32 - y).max(y - (self.y + self.h) as f32).max(0.0);
+        dx.hypot(dy)
+    }
+
     /// The room's centre in grid coordinates (cells, fractional).
     pub fn centre(&self) -> (f32, f32) {
         (self.x as f32 + self.w as f32 / 2.0, self.y as f32 + self.h as f32 / 2.0)

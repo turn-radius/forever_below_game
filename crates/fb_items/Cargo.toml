@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 armory = { workspace = true }
+fb_denizens = { workspace = true }
 procgen_grammar = { workspace = true }
 procgen_rng = { workspace = true }
 serde = { workspace = true }

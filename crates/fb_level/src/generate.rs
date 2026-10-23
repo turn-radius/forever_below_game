@@ -240,6 +240,8 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
             cramped.clear();
         }
     };
+    let writing = tongue_writing(&level, &mut Mulberry32::new(layout_seed ^ TONGUE_SALT), p);
+    level.items.extend(writing);
     crate::trades::assign(&mut level, world_seed);
     Some((level, layout_seed))
 }
@@ -847,6 +849,41 @@ fn library_books(level: &Level, rng: &mut Mulberry32, p: &LevelParams) -> Vec<It
         }
     }
     books
+}
+
+/// Salt for the writing left by a denizen faction's ground, its own stream so no other item or
+/// light moves.
+const TONGUE_SALT: u32 = 0x57A1_C0DE;
+
+/// Books and scrolls left in the free rooms nearest each denizen faction's ground, two to three for
+/// each, from the depth the denizens live at: where a delver finds writing in the tongue of the
+/// people beside them ([`Level::floor_item`]). A faction's own rooms hold their loot in
+/// containers, so these lie just outside. Nothing above that depth, and no claim, no writing.
+fn tongue_writing(level: &Level, rng: &mut Mulberry32, p: &LevelParams) -> Vec<ItemSpot> {
+    use armory::families::Generator;
+    use armory::families::writing::{Writing, WritingKind};
+    if !fb_denizens::denizens_at(level.depth) {
+        return Vec::new();
+    }
+    let mut taken: Vec<(f32, f32)> = level.lights.iter().map(|l| (l.x, l.y)).chain(level.items.iter().map(|i| (i.x, i.y))).collect();
+    let mut writing = Vec::new();
+    for claim in level.claims.iter().filter(|c| level.faction(c.faction).is_denizen()) {
+        let gap = |r: usize| -> f32 {
+            let (cx, cy) = level.rooms[r].centre();
+            claim.rooms.iter().map(|&k| level.rooms[k].gap_to(cx, cy)).fold(f32::MAX, f32::min)
+        };
+        let mut free: Vec<usize> = (0..level.rooms.len()).filter(|&r| !level.is_claimed(r) && level.rooms[r].area() >= 4).collect();
+        free.sort_by(|&a, &b| gap(a).total_cmp(&gap(b)).then(a.cmp(&b)));
+        let wanted = rng.int(2, 3) as usize;
+        for &r in free.iter().take(wanted) {
+            let Some((x, y)) = inner_spot(level, &level.rooms[r], &taken, rng, p.spot_spacing) else { continue };
+            let seeds: Vec<u32> = (0..8).map(|_| item_seed(rng)).collect();
+            let seed = seeds.iter().copied().find(|&s| Writing::roll(s).piece.kind != WritingKind::Note).unwrap_or(seeds[0]);
+            taken.push((x, y));
+            writing.push(ItemSpot { x, y, yaw: rng.range_f32(0.0, std::f32::consts::TAU), family: Family::Writing, seed });
+        }
+    }
+    writing
 }
 
 /// A full-range u32 seed for an item.

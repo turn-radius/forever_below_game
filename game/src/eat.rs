@@ -160,6 +160,7 @@ pub struct Eating<'w, 's> {
     tuning: Res<'w, Tuning>,
     character: Option<ResMut<'w, Character>>,
     page: Option<ResMut<'w, crate::reading::OpenPage>>,
+    record: Option<ResMut<'w, crate::record::WorldRecord>>,
 }
 
 impl Eating<'_, '_> {
@@ -225,7 +226,8 @@ impl Eating<'_, '_> {
         Some(line)
     }
 
-    /// Reads `id`: a note's words open on a page ([`crate::reading`]), and a book teaches
+    /// Reads `id`: a note's words open on a page ([`crate::reading`]), a book or scroll in a
+    /// denizen tongue teaches its words ([`crate::reading::study`]), and a book teaches
     /// ([`Character::read`]), the score it teaches rising for good, once per delver. Returns what
     /// the toast says; `None` if there is nothing to read on it or no delver to read a book.
     pub fn read(&mut self, inventory: &Inventory, id: ItemId) -> Option<String> {
@@ -233,6 +235,9 @@ impl Eating<'_, '_> {
         if let (Some(words), Some(page)) = (&book.words, self.page.as_mut()) {
             page.open(book.title(), words.clone());
             return Some(format!("You read the {}", book.title().to_lowercase()));
+        }
+        if let (Some(teaching), Some(record)) = (book.teaching(), self.record.as_mut()) {
+            return Some(crate::reading::study(&mut record.lexicon, teaching));
         }
         let character = self.character.as_mut()?;
         book.lesson()?;
@@ -564,6 +569,28 @@ mod tests {
         press_u(&mut app);
         assert_eq!(score(&app), before + 1, "a book teaches a delver once");
         assert!(app.world().resource::<Toast>().text.ends_with("has nothing more to teach you"));
+    }
+
+    #[test]
+    fn f_over_a_scroll_in_a_tongue_teaches_its_words_to_the_record_once() {
+        use fb_denizens::DenizenKind;
+        let (mut app, _) = app();
+        app.init_resource::<crate::record::WorldRecord>();
+        let scroll = crate::reading::teaching_for_capture("minotaur:scroll:7", 0).unwrap();
+        let teaching = scroll.teaching().unwrap().clone();
+        assert_eq!(crate::interact::use_of(&scroll), Some(crate::interact::Verb::Read));
+        let id = stow(&mut app, scroll);
+        hover(&mut app, id);
+        press_u(&mut app);
+        let said = app.world().resource::<Toast>().text.clone();
+        assert!(said.starts_with(&format!("You learn {} words of Minotaur speech: ", teaching.words.len())), "{said}");
+        let lexicon = app.world().resource::<crate::record::WorldRecord>().lexicon().clone();
+        assert!(lexicon.known_share(DenizenKind::Minotaur) > 0.0 && lexicon.known_share(DenizenKind::Cyclops) == 0.0);
+        assert_eq!(lexicon.known_words(DenizenKind::Minotaur).len(), teaching.words.len());
+        assert!(app.world().resource::<Inventory>().item(id).is_some(), "the scroll is kept");
+        press_u(&mut app);
+        assert_eq!(app.world().resource::<Toast>().text, "You already know these words.");
+        assert_eq!(app.world().resource::<crate::record::WorldRecord>().lexicon(), &lexicon);
     }
 
     #[test]

@@ -113,6 +113,9 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
 /// `None` for anything that is not eaten, drunk or read, or eases nothing; the key that uses it
 /// is in the card's actions.
 pub fn consume_line(item: &Item) -> Option<String> {
+    if let Some(teaching) = item.teaching() {
+        return Some(format!("{}\nWritten in {}", teaching.description(), fb_denizens::tongue::tongue_name(teaching.kind)));
+    }
     if let Some(stat) = item.lesson() {
         return Some(format!("Teaches {:+} {}", fb_items::lesson::LESSON_POINTS, fb_items::lesson::short_name(stat)));
     }

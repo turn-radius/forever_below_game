@@ -160,7 +160,7 @@ impl Plugin for InventoryPlugin {
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
                         crate::character::wear_abilities,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_enchanting).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_enchanting, sheet::update_tongues).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
                         (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
@@ -430,6 +430,15 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
         match slot.or(item.profile.slot) {
             Some(slot) => equip_kit(&mut inventory, item, slot),
             None => warn!("FB_EQUIP: {base:?} is not worn"),
+        }
+    }
+    let taught = std::env::var("FB_TEACH").unwrap_or_default();
+    for (i, spec) in bases_in(&taught).enumerate() {
+        let Some(item) = crate::reading::teaching_for_capture(spec, i as u32) else { continue };
+        let id = inventory.add(item);
+        if inventory.stow(id).is_err() {
+            warn!("FB_TEACH: no room for {spec:?}");
+            inventory.forget(id);
         }
     }
     let stow = std::env::var("FB_STOW").unwrap_or_default();
