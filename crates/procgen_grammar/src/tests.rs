@@ -200,36 +200,65 @@ fn all_names() -> Vec<(String, Expansion)> {
     out
 }
 
+/// Every `[key:value]Word` rule of the shipped name data, as (lowercase word, key, value), so
+/// the tests follow the data rather than a list of their own.
+fn tagged_words() -> Vec<(String, String, String)> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
+        match v {
+            serde_json::Value::String(s) => {
+                if let Some((tag, word)) = s.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+                    if let Some((key, value)) = tag.split_once(':') {
+                        out.push((word.to_lowercase(), key.to_string(), value.to_string()));
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let data: serde_json::Value = serde_json::from_str(include_str!("../../../data/faction_names.json")).unwrap();
+    let mut out = Vec::new();
+    walk(&data, &mut out);
+    out
+}
+
 #[test]
 fn names_say_what_their_members_are() {
     let names = all_names();
-    let has = |e: &Expansion, w: &str| e.text.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    let tagged = tagged_words();
+    for key in ["sex", "class"] {
+        assert!(tagged.iter().any(|(_, k, _)| k == key), "the data tags no {key}");
+    }
     for (_, e) in &names {
-        for (word, key, value) in [
-            ("Daughters", "sex", "female"),
-            ("Sisters", "sex", "female"),
-            ("Brothers", "sex", "male"),
-            ("Sons", "sex", "male"),
-            ("Chapel", "class", "cleric"),
-            ("Choir", "class", "cleric"),
-            ("Synod", "class", "cleric"),
-        ] {
-            if has(e, word) {
-                assert_eq!(e.tag(key), Some(value), "{}", e.text);
+        let words: Vec<String> = e.text.split(|c: char| !c.is_alphanumeric()).map(str::to_lowercase).collect();
+        let said: Vec<&(String, String, String)> = tagged.iter().filter(|(w, _, _)| words.contains(w)).collect();
+        for (word, key, value) in &said {
+            if !e.conflicts.contains(key) {
+                assert_eq!(e.tag(key), Some(value.as_str()), "{} says {word}", e.text);
             }
         }
-        // Children, Wardens and Pilgrims say nothing of sex.
-        if ["Children", "Wardens", "Pilgrims"].iter().any(|w| has(e, w)) && !["Daughters", "Sisters", "Brothers", "Sons"].iter().any(|w| has(e, w)) {
-            assert_eq!(e.tag("sex"), None, "{}", e.text);
-        }
+        // A name with none of the tagged words sets nothing, and a name sets only what words say.
         for key in e.tags.keys() {
-            assert!(["sex", "class"].contains(&key.as_str()), "{}: {key}", e.text);
+            assert!(said.iter().any(|(_, k, _)| k == key), "{}: {key} is set by no word", e.text);
         }
     }
     let seen = |key: &str, value: &str| names.iter().any(|(_, e)| e.tag(key) == Some(value));
     assert!(seen("sex", "female") && seen("sex", "male") && seen("class", "cleric") && seen("class", "fighter_or_ranger"));
     assert!(names.iter().any(|(_, e)| e.tags.is_empty()), "every name says something");
     assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("female") && e.tag("class") == Some("cleric")), "no Daughters of a Chapel");
+    assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("male") && e.tag("class") == Some("cleric")), "no Brothers of a Chapel");
+}
+
+#[test]
+fn actions_are_rule_level_only() {
+    // Tracery's action inside a tag is not supported: the tag names no symbol.
+    let g = Grammar::from_pairs(&[("origin", &["#[hero:#name#]story#"]), ("name", &["Ash"]), ("story", &["tale"])]);
+    assert!(matches!(expand_tagged(&g, "#origin#", 1), Err(GrammarError::MissingSymbol(_))));
+    // A value ends at the first `]`, so actions do not nest.
+    let g = Grammar::from_pairs(&[("origin", &["[a:[b:c]]x"])]);
+    let e = expand_tagged(&g, "#origin#", 1).unwrap();
+    assert_eq!((e.tag("a"), e.tag("b"), e.text.as_str()), (Some("[b:c"), None, "]x"));
 }
 
 #[test]

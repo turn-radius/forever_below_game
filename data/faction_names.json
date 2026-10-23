@@ -1,5 +1,7 @@
 {
- "shared": {},
+ "shared": {
+  "sanctum": ["[class:cleric]Chapel", "[class:cleric]Chapel", "[class:cleric]Sanctum", "[class:cleric]Cloister", "[class:cleric]Abbey", "[class:cleric]Shrine"]
+ },
  "intention": {
   "way_out": {
    "origin": [
@@ -34,7 +36,11 @@
     "the #brothers# of the #adj# #place#",
     "the #brothers# of the #adj# #thing#",
     "the #thing# #court#",
-    "the #adj# #thing# #choir#"
+    "the #adj# #thing# #choir#",
+    "the #brothers# of the #adj# #sanctum#",
+    "the #brothers# of the #adj# #sanctum#",
+    "the #brothers# of the #sanctum#",
+    "the #thing# #sanctum#"
    ]
   },
   "plunder": {

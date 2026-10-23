@@ -360,7 +360,19 @@ const DIVISIONS: [(Division, u32); 11] = [
     (Division::Lozengy, 1),
 ];
 
+/// A faction rolled as it always was, with its name drawn last. A name that says a class
+/// ("the Daughters of the Burning Chapel" are all clerics) then asks for the roll again with that
+/// class given, the name kept: every draw before the outfits is the same, so what a name says
+/// changes only that faction's own outfits, hates and what is drawn after them, and a faction
+/// whose name says no class is rolled exactly as before.
 fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>) -> FactionSpec {
+    let first = roll_with(world, index, count, taken, None);
+    if first.classes.is_empty() { first } else { roll_with(world, index, count, taken, Some(&first)) }
+}
+
+/// One roll of a faction. With `named` (the first roll, whose name said a class) the members
+/// dress as that class and the name is kept; without it the name is drawn last.
+fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, named: Option<&FactionSpec>) -> FactionSpec {
     use Outfit::*;
     let mut rng = Mulberry32::new(mix(world, FACTION_SALT, index as u32));
     let id = Faction(index as u8);
@@ -368,29 +380,7 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let intention = *rng.pick(&Intention::ALL);
     let alignment = *rng.pick(&Alignment::ALL);
     let insular = rng.chance(INSULAR_ODDS);
-
-    // The name comes first, because its words say who the members are: the `class` it sets
-    // narrows the classes they dress as. A name with two class words ("the Reavers of the
-    // Chapel") says two things of its members, so it is never kept: like a clash with a name
-    // already in the pool, it is drawn again from another seed of the same stream.
-    let (folk_key, intention_key) = (folk_key(folk), intention.key());
-    let mut named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
-    for _ in 0..64 {
-        if !taken.contains(&named.text) && named.conflicts.is_empty() {
-            break;
-        }
-        named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
-    }
-    let classes = named_classes(named.tag("class"));
-    let sex = match named.tag("sex") {
-        Some("female") => Some(Sex::Female),
-        Some("male") => Some(Sex::Male),
-        _ => None,
-    };
-    let mut name = named.text;
-    if taken.contains(&name) {
-        name = format!("{name} of the {}th Hall", index + 1);
-    }
+    let dressed_as: &[ClassKind] = named.map_or(&[], |n| &n.classes);
 
     // Dress: one outfit from what its purpose wears, one from what its folk wear.
     let by_intention: &[(Outfit, u32)] = match intention {
@@ -411,9 +401,9 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let first = *rng.weighted(by_intention);
     let rest: Vec<(Outfit, u32)> = by_folk.iter().copied().filter(|(o, _)| *o != first).collect();
     let mut outfits = [first, *rng.weighted(&rest)];
-    // A name that says what they are dresses every member so: one class in both outfits, or two
+    // A name that says what they are (the second roll) dresses every member so: one class in both outfits, or two
     // classes in a drawn order.
-    match classes[..] {
+    match *dressed_as {
         [only] => outfits = [Outfit::of(only); 2],
         [a, b] => outfits = if rng.chance(0.5) { [Outfit::of(b), Outfit::of(a)] } else { [Outfit::of(a), Outfit::of(b)] },
         _ => {}
@@ -450,6 +440,35 @@ fn roll_faction(world: u32, index: usize, count: usize, taken: &HashSet<String>)
     let mut hates: Vec<Preference> = hated_folk.map(Preference::Folk).into_iter().collect();
     let more = hate_count.saturating_sub(hates.len());
     hates.extend(hate_pool.into_iter().filter(|p| !likes.contains(p)).take(more));
+
+    let (name, sex, classes) = match named {
+        Some(n) => (n.name.clone(), n.sex, n.classes.clone()),
+        None => {
+        // The name comes first, because its words say who the members are: the `class` it sets
+        // narrows the classes they dress as. A name with two class words ("the Reavers of the
+        // Chapel") says two things of its members, so it is never kept: like a clash with a name
+        // already in the pool, it is drawn again from another seed of the same stream.
+        let (folk_key, intention_key) = (folk_key(folk), intention.key());
+        let mut named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
+        for _ in 0..64 {
+            if !taken.contains(&named.text) && named.conflicts.is_empty() {
+                break;
+            }
+            named = faction_named(folk_key, intention_key, rng.int(0, u32::MAX));
+        }
+        let classes = named_classes(named.tag("class"));
+        let sex = match named.tag("sex") {
+            Some("female") => Some(Sex::Female),
+            Some("male") => Some(Sex::Male),
+            _ => None,
+        };
+        let mut name = named.text;
+        if taken.contains(&name) {
+            name = format!("{name} of the {}th Hall", index + 1);
+        }
+            (name, sex, classes)
+        }
+    };
 
     FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, insular }
 }
