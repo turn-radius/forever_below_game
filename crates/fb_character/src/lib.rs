@@ -18,6 +18,7 @@
 //!
 //! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
+pub mod check;
 pub mod combat;
 pub mod conditions;
 pub mod effect;
