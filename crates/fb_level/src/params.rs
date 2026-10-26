@@ -135,6 +135,9 @@ impl LevelParams {
                 brazier_min_area: 60,
                 past_chance: 0.1,
                 purpose_share: 0.3,
+                // Pale clean stone: no moss, no grottos.
+                moss_amount: 0.0,
+                grotto_chance: 0.0,
                 ..Self::default()
             },
             LevelStyle::StoneHalls => Self {

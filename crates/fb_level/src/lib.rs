@@ -377,7 +377,7 @@ pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use banners::{BannerSite, BannerSpot};
-pub use crystals::{CrystalSpot, CrystalSurface, crystal_state};
+pub use crystals::{CavernStone, CrystalSpot, CrystalSurface, crystal_state};
 pub use claims::{Claim, settle_claims};
 pub use folk::{DenizenBody, DenizenKind, Faction, FactionSpec, FolkSpot, Trade};
 pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};

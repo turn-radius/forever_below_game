@@ -6,7 +6,7 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|gem|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|wall|gem|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
@@ -59,7 +59,8 @@ impl Plugin for LevelPlugin {
             .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
             // After the render layers have propagated down, which `Update` does.
             .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
-            .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
+            .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems))
+            .add_systems(Update, lift_cavern_ambient.run_if(resource_exists_and_changed::<CurrentLevel>).after(apply_light_tuning).in_set(DelveSystems));
     }
 }
 
@@ -169,6 +170,12 @@ pub const STONE_WEAR: f32 = 0.5;
 /// facets or beds.
 const DECAY_ROCK: u32 = 14;
 const DECAY_STRATA: u32 = 15;
+const DECAY_MARBLE: u32 = 16;
+const DECAY_QUARTZ: u32 = 17;
+/// How much brighter a crystal cavern's own fill is than the abyss's: pale stone that takes the
+/// crystals' light wants a little more to be seen by, so the cavern reads as wonder after the
+/// dark below. Still a few lux; darkness stays between the lights.
+const CAVERN_AMBIENT: f32 = 2.2;
 const STONE_PATTERN_SCALE: f32 = 0.06;
 /// How much finer the decay pattern runs over a stone hall's ceiling than over its walls.
 const CEILING_PATTERN_FINER: f32 = 2.6;
@@ -191,6 +198,44 @@ fn abyss_fog(tuning: &LightTuning) -> DistanceFog {
     }
 }
 
+/// The factor a level's fill is lifted by: [`CAVERN_AMBIENT`] in a crystal cavern, 1 elsewhere.
+fn cavern_lift(level: Option<&Level>) -> f32 {
+    if level.is_some_and(|l| l.style == LevelStyle::CrystalCavern) { CAVERN_AMBIENT } else { 1.0 }
+}
+
+/// Sets the fill for a level as it comes up (the tuning's own change sets it too).
+fn lift_cavern_ambient(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut ambient: ResMut<GlobalAmbientLight>, debug: Query<&DebugCamera>) {
+    if debug.iter().all(|d| d.fog) {
+        ambient.brightness = tuning.light.ambient_lux * cavern_lift(Some(&level.0));
+    }
+}
+
+/// `FB_CAVERN_STONE=limestone|marble|quartz|travertine` swaps a cavern's stone, for captures.
+fn debug_stone(stone: fb_level::CavernStone) -> fb_level::CavernStone {
+    let want = std::env::var("FB_CAVERN_STONE").unwrap_or_default();
+    fb_level::CavernStone::ALL.into_iter().find(|s| s.name() == want).unwrap_or(stone)
+}
+
+/// The look a crystal cavern's stone takes: its own pale colour, kept clean (the wear that darkens
+/// a cave's rock mostly off), and for marble and quartz their own shaders, limestone beds on the
+/// walls. The floor and ceiling sit a shade off the walls' tone.
+fn cavern_stone_look(material: &mut ToonMaterial, stone: fb_level::CavernStone, part: &str) {
+    let rgb = stone.rgb();
+    let shade = match part {
+        "floor" => 0.9,
+        "ceiling" => 0.82,
+        _ => 1.0,
+    };
+    material.base.base_color = Color::srgb(rgb.0 * shade, rgb.1 * shade, rgb.2 * shade);
+    material.extension.decay.amount *= 0.25;
+    match (stone, part) {
+        (fb_level::CavernStone::Marble, _) => material.extension.decay.kind = DECAY_MARBLE,
+        (fb_level::CavernStone::Quartz, _) => material.extension.decay.kind = DECAY_QUARTZ,
+        (fb_level::CavernStone::Limestone, "walls") => material.extension.decay.kind = DECAY_STRATA,
+        _ => {}
+    }
+}
+
 /// Brings the ambient, the fog on every camera and the fixed lights up to the tuning.
 fn apply_light_tuning(
     tuning: Res<Tuning>,
@@ -199,11 +244,12 @@ fn apply_light_tuning(
     mut lights: Query<(&FixedLight, &mut PointLight)>,
     mut ranges: Query<&mut VisibilityRange>,
     debug: Query<&DebugCamera>,
+    level: Option<Res<CurrentLevel>>,
 ) {
     let light = &tuning.light;
     // The view from above has its own bright fill.
     if debug.iter().all(|d| d.fog) {
-        ambient.brightness = light.ambient_lux;
+        ambient.brightness = light.ambient_lux * cavern_lift(level.as_deref().map(|l| &l.0));
     }
     for mut fog in &mut fogs {
         fog.falloff = FogFalloff::Linear { start: light.fog_start, end: light.fog_end };
@@ -447,6 +493,9 @@ fn spawn_stone(
                             "hewn" => material.extension.decay.kind = DECAY_ROCK,
                             _ => {}
                         }
+                    }
+                    if let Some(stone) = level.cavern_stone().map(debug_stone) {
+                        cavern_stone_look(&mut material, stone, part.name);
                     }
                     let handle = toon_materials.add(material);
                     materials.push((part.name, handle.clone()));
@@ -1052,6 +1101,14 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
             Transform::from_translation(at).looking_to(dir, Vec3::Y)
         }
+        "wall" => {
+            // The biggest cluster growing from a wall, from three cells out looking at it.
+            let Some(spot) = level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Wall && c.growth == armory::families::crystal::Growth::Cluster).max_by(|a, b| a.size.total_cmp(&b.size)) else { return };
+            let at = v3(fb_level::Level::world(spot.x, spot.y)) + Vec3::Y * spot.up;
+            let out = Vec3::new(spot.yaw.sin(), 0.0, spot.yaw.cos());
+            let away = std::env::var("FB_DEBUG_WALL_DIST").ok().and_then(|d| d.parse::<f32>().ok()).unwrap_or(2.2);
+            Transform::from_translation(at + out * CELL * away + Vec3::Y * (EYE_HEIGHT - spot.up).max(-20.0)).looking_at(at, Vec3::Y)
+        }
         "gem" => {
             // The first rough gem lying on the floor, from a step away and above, looking down at it.
             let Some(gem) = level.items.iter().find(|i| i.family == armory::Family::Crystal) else { return };
@@ -1296,7 +1353,10 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         // `FB_DEBUG_LIGHT=lantern` for a steady, whiter lantern twice as bright and reaching
         // twice as far, to show a room whole.
         .with_child((
-            if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "cool") {
+            if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "none") {
+                // No light of its own at all, to see by the level's lights alone.
+                Torch::flickering(point_light(Color::BLACK, 0.0, 1.0, &EXPOSURE), 0.0)
+            } else if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "cool") {
                 Torch::flickering(point_light(Color::srgb(0.85, 0.95, 1.0), 1.0, 120.0, &EXPOSURE), 0.0)
             } else if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "lantern") {
                 Torch::flickering(point_light(Color::srgb(1.0, 0.9, 0.74), 2.0, 240.0, &EXPOSURE), 0.0)
@@ -1373,6 +1433,8 @@ mod tests {
         let shader = include_str!("render/decay.wesl");
         assert!(shader.contains(&format!("const DECAY_ROCK: u32 = {DECAY_ROCK}u;")));
         assert!(shader.contains(&format!("const DECAY_STRATA: u32 = {DECAY_STRATA}u;")));
+        assert!(shader.contains(&format!("const DECAY_MARBLE: u32 = {DECAY_MARBLE}u;")));
+        assert!(shader.contains(&format!("const DECAY_QUARTZ: u32 = {DECAY_QUARTZ}u;")));
     }
 
     fn door() -> EntranceDoor {

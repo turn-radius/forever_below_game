@@ -116,9 +116,9 @@ pub(crate) fn lit_crystals(crystals: &[CrystalSpot]) -> Vec<LightSpot> {
 }
 
 /// Most crystals that light a cavern, the smallest of them and how far apart, in cells.
-pub const MOST_LIT: usize = 8;
-pub const LIT_FROM_SIZE: f32 = 22.0;
-pub const LIT_APART: f32 = 5.0;
+pub const MOST_LIT: usize = 10;
+pub const LIT_FROM_SIZE: f32 = 16.0;
+pub const LIT_APART: f32 = 4.0;
 
 impl CrystalSpot {
     /// The way its axis points, a unit vector in world axes (x east, y up, z south).
@@ -130,6 +130,51 @@ impl CrystalSpot {
             CrystalSurface::Ceiling => [s * sl, -cl, c * sl],
             CrystalSurface::Wall => [s * cl, sl, c * cl],
         }
+    }
+}
+
+/// The pale stone a crystal cavern is cut in, one to a cavern from its seed, so each cavern is
+/// one coherent look. Our own palette: limestone in warm honey beds, marble white threaded with
+/// grey veins, quartz rock faintly glassy and glittering, and travertine, smooth water-worn
+/// flowstone in cream and honey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CavernStone {
+    Limestone,
+    Marble,
+    Quartz,
+    Travertine,
+}
+
+impl CavernStone {
+    pub const ALL: [CavernStone; 4] = [CavernStone::Limestone, CavernStone::Marble, CavernStone::Quartz, CavernStone::Travertine];
+
+    /// The stone's colour in light, sRGB: all pale and bright, none of the rough rock's dank brown.
+    pub const fn rgb(self) -> armory::Rgb {
+        match self {
+            CavernStone::Limestone => armory::Rgb::hex(0xe9dec4),
+            CavernStone::Marble => armory::Rgb::hex(0xeceae4),
+            CavernStone::Quartz => armory::Rgb::hex(0xeee8ee),
+            CavernStone::Travertine => armory::Rgb::hex(0xe6d3b0),
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            CavernStone::Limestone => "limestone",
+            CavernStone::Marble => "marble",
+            CavernStone::Quartz => "quartz",
+            CavernStone::Travertine => "travertine",
+        }
+    }
+}
+
+impl Level {
+    /// What a crystal cavern is cut in, from its seed; `None` for any other level.
+    pub fn cavern_stone(&self) -> Option<CavernStone> {
+        (self.style == LevelStyle::CrystalCavern).then(|| {
+            let mut rng = Mulberry32::new(self.seed ^ 0x57A7_E5C0);
+            *rng.weighted(&[(CavernStone::Limestone, 3), (CavernStone::Marble, 3), (CavernStone::Quartz, 2), (CavernStone::Travertine, 2)])
+        })
     }
 }
 
@@ -166,34 +211,57 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
         }
     }
 
-    // Walls: crystals high up and geodes at hand height.
+    // Walls: the bulk of a cavern's crystals, in drifts of clusters along the wall, and now and
+    // then a geode set in it at hand height.
     let mut walls = wall_faces(level, &keep_clear);
     crate::generate::shuffle(&mut walls, rng);
+    let by_face: std::collections::HashMap<(i32, i32, i32, i32), WallFace> = walls.iter().map(|f| ((f.cell.0, f.cell.1, f.rock.step().0, f.rock.step().1), *f)).collect();
+    let stone_at = |cell: (i32, i32)| level.room_at(cell.0, cell.1).map_or(stones[0], |r| stones[r % 2]);
     let geodes = rng.int(2, 5) as usize;
-    let crystals = (walls.len() / WALL_FACES_PER_CRYSTAL).min(MOST_ON_WALLS);
     let mut taken: Vec<(i32, i32)> = Vec::new();
-    for face in walls {
-        let wanted = taken.len();
-        if wanted >= geodes + crystals {
+    for face in &walls {
+        if taken.len() >= geodes {
             break;
         }
-        // Not beside another of its kind on the same wall.
-        if taken.iter().any(|&(tx, ty)| (tx - face.cell.0).abs() <= 2 && (ty - face.cell.1).abs() <= 2) {
+        if taken.iter().any(|&(tx, ty)| (tx - face.cell.0).abs() <= 3 && (ty - face.cell.1).abs() <= 3) {
             continue;
         }
-        let stone = level.room_at(face.cell.0, face.cell.1).map_or(stones[0], |r| stones[r % 2]);
-        let geode = wanted < geodes;
         let (x, y) = face.point(rng.range_f32(-0.2, 0.2));
-        let yaw = face.out_yaw();
-        let spot = if geode {
-            CrystalSpot { x, y, up: rng.range_f32(9.0, 16.0), yaw, lean: 0.0, surface: CrystalSurface::Wall, habit: *rng.pick(&GEODE_HABITS), growth: Growth::Geode, stone, seed: item_seed(rng), size: rng.range_f32(9.0, 14.0), radius: 0.0 }
-        } else {
-            let highest = (level.ceiling - 16.0).max(WALL_FROM + 1.0);
-            let growth = *rng.weighted(&[(Growth::Single, 3), (Growth::Cluster, 2)]);
-            CrystalSpot { x, y, up: rng.range_f32(WALL_FROM, highest), yaw, lean: rng.range_f32(0.2, 0.75), surface: CrystalSurface::Wall, habit: *rng.weighted(&HABITS), growth, stone, seed: item_seed(rng), size: rng.range_f32(12.0, 26.0), radius: 0.0 }
-        };
         taken.push(face.cell);
-        spots.push(spot);
+        spots.push(CrystalSpot { x, y, up: rng.range_f32(9.0, 16.0), yaw: face.out_yaw(), lean: 0.0, surface: CrystalSurface::Wall, habit: *rng.pick(&GEODE_HABITS), growth: Growth::Geode, stone: stone_at(face.cell), seed: item_seed(rng), size: rng.range_f32(9.0, 14.0), radius: 0.0 });
+    }
+    // Drifts: a run of faces along one wall, a big cluster at its heart and smaller ones thinning
+    // out to either side, each leaning up and out, the way a vein of crystal bursts from the rock.
+    let drifts = if walls.is_empty() { 0 } else { (walls.len() / FACES_PER_DRIFT).clamp(3, MOST_DRIFTS) };
+    let mut used: std::collections::HashMap<(i32, i32, i32, i32), u32> = std::collections::HashMap::new();
+    for d in 0..drifts {
+        let heart = walls[(d * 7919) % walls.len().max(1)];
+        let (dx, dy) = heart.rock.step();
+        let (lx, ly) = (-dy, dx);
+        let half = rng.int(2, 5) as i32;
+        let height = rng.range_f32(WALL_FROM, (level.ceiling - 18.0).max(WALL_FROM + 1.0));
+        let rise = rng.range_f32(-1.5, 1.5);
+        let habit_lean = *rng.weighted(&[(Habit::Prismatic, 5), (Habit::Columnar, 3), (Habit::Acicular, 3), (Habit::Bladed, 1)]);
+        for k in -half..=half {
+            let cell = (heart.cell.0 + lx * k, heart.cell.1 + ly * k);
+            let key = (cell.0, cell.1, dx, dy);
+            let Some(face) = by_face.get(&key) else { continue };
+            let fade = 1.0 - 0.5 * (k.abs() as f32 / (half as f32 + 1.0));
+            for slot in 0..2 {
+                if used.get(&key).copied().unwrap_or(0) >= 3 || !rng.chance(f64::from(0.8 * fade) * if slot == 0 { 1.0 } else { 0.6 }) {
+                    continue;
+                }
+                *used.entry(key).or_insert(0) += 1;
+                let big = k == 0 && slot == 0;
+                let size = if big { rng.range_f32(20.0, 32.0) } else { (rng.range_f32(6.0, 16.0) * fade).max(6.0) };
+                let (x, y) = face.point(rng.range_f32(-0.4, 0.4));
+                // Clear of a head however far a point of it leans down.
+                let low = WALL_FROM.max(20.0 + 0.6 * size);
+                let up = (height + rise * k as f32 + rng.range_f32(-5.0, 5.0)).clamp(low, (level.ceiling - 8.0).max(low));
+                let habit = if rng.chance(0.8) { habit_lean } else { *rng.weighted(&HABITS) };
+                spots.push(CrystalSpot { x, y, up, yaw: face.out_yaw(), lean: rng.range_f32(0.2, 0.75), surface: CrystalSurface::Wall, habit, growth: Growth::Cluster, stone: stone_at(face.cell), seed: item_seed(rng), size: size.max(6.0), radius: 0.0 });
+            }
+        }
     }
 
     // The ceiling: long points hanging well above head height.
@@ -353,11 +421,11 @@ pub fn footprint(spot: &CrystalSpot) -> f32 {
 /// Least gap, in world units, between a floor crystal's foot and anything it keeps clear of.
 const CLEAR_GAP: f32 = 2.0;
 /// Chamber cells for each floor crystal there, and the most in one chamber.
-const FLOOR_CELLS: u32 = 30;
-const MOST_ON_FLOOR: u32 = 8;
+const FLOOR_CELLS: u32 = 70;
+const MOST_ON_FLOOR: u32 = 3;
 /// Wall faces for each wall crystal, and the most on a level's walls.
-const WALL_FACES_PER_CRYSTAL: usize = 14;
-const MOST_ON_WALLS: usize = 14;
+const FACES_PER_DRIFT: usize = 10;
+const MOST_DRIFTS: usize = 14;
 /// Open interior cells for each hanging crystal, and the most on a level.
 const CEILING_CELLS: usize = 30;
 const MOST_ON_CEILING: usize = 16;
@@ -365,11 +433,11 @@ const MOST_ON_CEILING: usize = 16;
 const WALL_FROM: f32 = 22.0;
 
 /// The stones crystals grow in a cavern: the clear and coloured ones, never the opaque.
-const STONES: [Gemstone; 7] = [Gemstone::Garnet, Gemstone::Amethyst, Gemstone::Sapphire, Gemstone::Emerald, Gemstone::Citrine, Gemstone::Ruby, Gemstone::Diamond];
+const STONES: [Gemstone; 11] = [Gemstone::Amethyst, Gemstone::Amethyst, Gemstone::Sapphire, Gemstone::Sapphire, Gemstone::Emerald, Gemstone::Emerald, Gemstone::Diamond, Gemstone::Diamond, Gemstone::Citrine, Gemstone::Garnet, Gemstone::Ruby];
 /// What stands on a floor, besides the chamber's lean: long prisms, now and then a stubby form.
-const FLOOR_HABITS: [(Habit, u32); 4] = [(Habit::Prismatic, 5), (Habit::Columnar, 4), (Habit::Octahedral, 1), (Habit::Cubic, 1)];
-/// What grows from walls and ceilings.
-const HABITS: [(Habit, u32); 8] = [(Habit::Prismatic, 4), (Habit::Columnar, 4), (Habit::Acicular, 1), (Habit::Bladed, 2), (Habit::Tabular, 1), (Habit::Cubic, 1), (Habit::Octahedral, 1), (Habit::Dodecahedral, 1)];
+const FLOOR_HABITS: [(Habit, u32); 2] = [(Habit::Prismatic, 5), (Habit::Columnar, 4)];
+/// What grows from walls and ceilings: points, every one ending in a faceted tip.
+const HABITS: [(Habit, u32); 4] = [(Habit::Prismatic, 5), (Habit::Columnar, 3), (Habit::Acicular, 3), (Habit::Bladed, 1)];
 /// What lines a geode.
 const GEODE_HABITS: [Habit; 4] = [Habit::Prismatic, Habit::Columnar, Habit::Cubic, Habit::Dodecahedral];
 
@@ -725,5 +793,30 @@ mod tests {
                 assert_eq!(state.crystal.growth, c.growth);
             }
         }
+    }
+
+    #[test]
+    fn wall_clusters_are_the_bulk_in_drifts_and_clear_of_heads() {
+        let (mut wall, mut other, mut clustered, mut near) = (0, 0, 0, 0);
+        let mut stones = std::collections::HashSet::new();
+        for seed in 1..=8 {
+            for depth in [5, 9] {
+                let level = cavern(seed, depth);
+                stones.insert(level.cavern_stone().unwrap());
+                let walls: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Wall && c.growth == Growth::Cluster).collect();
+                wall += walls.len();
+                other += level.crystals.iter().filter(|c| !(c.surface == CrystalSurface::Wall && c.growth == Growth::Cluster)).count();
+                for c in &walls {
+                    assert!(c.up >= WALL_FROM.max(20.0 + 0.6 * c.size) - 0.01 || c.up >= level.ceiling - 8.1, "a cluster hangs too low");
+                    assert!(c.up >= WALL_FROM && c.lean >= 0.2, "clusters point out and up from over head height");
+                    clustered += 1;
+                    near += walls.iter().any(|o| !std::ptr::eq(*o, *c) && ((o.x - c.x).hypot(o.y - c.y)) < 1.2) as u32;
+                }
+            }
+        }
+        assert!(wall > other, "{wall} wall clusters against {other} others");
+        assert!(near * 10 >= clustered * 7, "{near} of {clustered} wall clusters have a neighbour: not drifts");
+        assert!(stones.len() >= 2, "{stones:?}");
+        assert_eq!(generate_in(3, 2, &LevelParams::for_style(LevelStyle::StoneHalls)).cavern_stone(), None);
     }
 }

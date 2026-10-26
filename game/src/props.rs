@@ -301,7 +301,11 @@ fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query
     }
     for (index, spot) in level.0.crystals.iter().enumerate() {
         let item = Item::Crystal(crystal_state(spot));
-        let (mesh, appearance) = (item.build(), appearance_of(&item));
+        let (mesh, mut appearance) = (item.build(), appearance_of(&item));
+        // The rock they grow from is the cavern's own pale stone.
+        if let Some(stone) = level.0.cavern_stone() {
+            appearance.palette.materials.stone = stone.rgb();
+        }
         let low = item_points(&mesh).iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
         let name = item.noun();
         let mut root = spawner.spawn(&mesh, &appearance);

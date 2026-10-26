@@ -13,6 +13,10 @@
 //! - **cubic**, **octahedral**, **dodecahedral** (rhombic): the isometric forms, which
 //!   `truncation` shaves at the corners into the combinations real fluorite and garnet show.
 //!
+//! A prism ends in a faceted point: its termination faces meet at a tip (steep or shallow by
+//! `point`, off centre where the faces alternate large and small, chisel-ended for a blade),
+//! pointed at both ends for a double termination; a flat or broken end is the rare exception.
+//!
 //! On top of the habit: a point at one end or both (`double_ended`), a twin (`twinned`: a
 //! second crystal grown through the first), a scepter head, cracks, inclusions and clouding.
 //! The stone is a [`Gemstone`], which fixes the colour, and `glow` lights the surface in it.
@@ -281,13 +285,13 @@ fn compose(rng: &mut Mulberry32, seed: u32, habit: Habit, growth: Growth) -> Cry
             c.sides = *rng.weighted(&[(5, 1), (6, 5), (8, 1)]);
             c.length = rng.range_f32(2.0, 3.6);
             c.taper = rng.range_f32(0.0, 0.14);
-            c.point = rng.range_f32(0.6, 1.3);
+            c.point = rng.range_f32(1.0, 2.0);
         }
         Habit::Columnar => {
             c.sides = *rng.weighted(&[(4, 1), (6, 5), (8, 1)]);
             c.length = rng.range_f32(4.5, 8.0);
             c.taper = rng.range_f32(0.0, 0.1);
-            c.point = rng.range_f32(0.4, 1.0);
+            c.point = rng.range_f32(0.9, 1.7);
         }
         Habit::Bladed => {
             c.sides = 4;
@@ -300,7 +304,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, habit: Habit, growth: Growth) -> Cry
             c.sides = rng.int(4, 6);
             c.length = rng.range_f32(10.0, 15.0);
             c.taper = rng.range_f32(0.05, 0.3);
-            c.point = rng.range_f32(1.2, 2.2);
+            c.point = rng.range_f32(1.8, 2.5);
         }
         Habit::Tabular => {
             c.sides = *rng.weighted(&[(4, 2), (6, 4), (8, 1)]);
@@ -317,6 +321,10 @@ fn compose(rng: &mut Mulberry32, seed: u32, habit: Habit, growth: Growth) -> Cry
         Growth::Cluster => (6.0, 15.0),
         Growth::Geode => (6.0, 11.0),
     };
+    // A broken stump, now and then: a prism with its point gone, ending nearly flat.
+    if matches!(habit, Habit::Prismatic | Habit::Columnar) && rng.chance(0.06) {
+        c.point = 0.12;
+    }
     c.size = rng.range_f32(lo, hi);
     c.count = match growth {
         Growth::Single => 1,
@@ -483,12 +491,12 @@ fn prism(sp: &Spec, rng: &mut Mulberry32) -> Solid {
     // Longer than wide stands `height` tall; a plate, wider than long, is `height` wide.
     let (h, radius) = if sp.aspect < 1.0 { (sp.height * sp.aspect, sp.height / 2.0) } else { (sp.height, sp.height / (2.0 * sp.aspect)) };
     let a = radius * (PI / n as f32).cos();
-    let pyr = (sp.point * a).min(0.45 * h);
+    let pyr = (sp.point * a).min(0.6 * h);
     let body = (h - pyr * if sp.double_ended { 2.0 } else { 1.0 }).max(0.2 * h);
     let a_top = a * (1.0 - sp.taper.clamp(0.0, 0.7));
     let slope = (a - a_top) / body;
     // Termination faces alternate large and small, as quartz's do.
-    let alt = rng.range_f32(0.0, 0.3);
+    let alt = rng.range_f32(0.0, 0.45);
     let phase = rng.range_f32(0.0, TAU);
     let mut planes: Vec<(V3, f32)> = Vec::new();
     let jitter = |rng: &mut Mulberry32| 1.0 + rng.range_f32(-0.05, 0.05);

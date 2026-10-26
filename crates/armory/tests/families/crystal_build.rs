@@ -186,3 +186,24 @@ fn the_crystal_family_is_an_armory_item() {
     assert_eq!(item.choice_options("crystal.habit").len(), 8);
     assert_eq!(item.choice_options("crystal.stone").len(), Gemstone::ALL.len());
 }
+
+#[test]
+fn most_prisms_end_in_a_faceted_point() {
+    let prisms: Vec<_> = (1..=300).map(|seed| Crystals::roll(seed).crystal).filter(|c| matches!(c.habit, Habit::Prismatic | Habit::Columnar | Habit::Acicular)).collect();
+    let pointed = prisms.iter().filter(|c| c.point >= 0.9).count();
+    assert!(pointed * 100 >= prisms.len() * 90, "{pointed} of {} pointed", prisms.len());
+    assert!(prisms.iter().any(|c| c.point < 0.2), "no broken stump ever rolls");
+    // A pointed single's top is a tip: its highest vertex is shared by at least three facets.
+    for seed in 1..=40 {
+        let mut s = Crystals::roll_as(seed, Habit::Prismatic, Growth::Single);
+        s.crystal.point = 1.4;
+        s.crystal.scepter = false;
+        s.crystal.twinned = false;
+        s.crystal.double_ended = false;
+        let mesh = Crystals::build(&s);
+        let body = mesh.parts.iter().find(|p| p.name == "crystal").unwrap();
+        let top = body.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        let facets: std::collections::HashSet<[i32; 3]> = body.positions.iter().zip(&body.normals).filter(|(p, _)| (p[1] - top).abs() < 0.02 * s.crystal.size).map(|(_, n)| [(n[0] * 100.0) as i32, (n[1] * 100.0) as i32, (n[2] * 100.0) as i32]).collect();
+        assert!(facets.len() >= 3, "seed {seed}: the top meets {} facets", facets.len());
+    }
+}

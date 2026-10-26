@@ -30,7 +30,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
+import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, marble_shade, quartz_shade, DECAY_ROCK, DECAY_STRATA, DECAY_MARBLE, DECAY_QUARTZ};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -423,10 +423,14 @@ fn fragment(
     // is level stone, drawn in world space with no transform of its own, so item space is world
     // space and a change of the normal there is a change of the world normal.
 @if(!SKINNED) {
-    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA {
+    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA || toon.decay_type == DECAY_MARBLE || toon.decay_type == DECAY_QUARTZ {
         var rock: RockShade;
         if toon.decay_type == DECAY_STRATA {
             rock = strata_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else if toon.decay_type == DECAY_MARBLE {
+            rock = marble_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else if toon.decay_type == DECAY_QUARTZ {
+            rock = quartz_shade(item_position, item_normal, pixel, toon.decay_seed);
         } else {
             rock = rock_shade(item_position, item_normal, pixel, toon.decay_seed);
         }
@@ -477,10 +481,15 @@ fn fragment(
     var crystal_glow = vec3<f32>(0.0);
     if is_crystal {
         let to_eye_c = view_bindings::view.world_position - pbr_input.world_position.xyz;
-        let rim = 1.0 - abs(dot(pbr_input.N, normalize(to_eye_c)));
-        let steps = floor(clamp(rim, 0.0, 0.999) * 3.0) / 2.0;
+        // The glow follows the crystal's own form: each facet has its own level from the way it
+        // faces (facets turned up to the sky hold more of the light inside, those turned down
+        // less), and the whole stone is deeper toward its base and fainter toward the tip, a
+        // smooth fall with height in the crystal's own space. Nothing of it is drawn in screen
+        // space or as a circle.
+        let facing = 0.55 + 0.45 * smoothstep(-0.6, 0.8, item_normal.y);
+        let base_ward = mix(0.55, 1.0, exp(-max(item_position.y, 0.0) / 30.0));
         let far = 1.0 - smoothstep(180.0, 290.0, length(to_eye_c));
-        crystal_glow = srgb_to_linear(tone) * (toon.glow - 2.0) * (0.45 + 0.9 * steps) * far;
+        crystal_glow = srgb_to_linear(tone) * (toon.glow - 2.0) * 1.1 * facing * base_ward * far;
     }
     let glow = select(srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0)), vec3<f32>(0.0), is_crystal);
 
