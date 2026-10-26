@@ -441,7 +441,7 @@ fn spawn_stone(
                     // Only hewn walls break into facets under the light, and layered ones into beds.
                     // Plain cave rock keeps plain stone's wear and shading, as it did before the
                     // levels' characters, and so do laid stones, which read apart from the rock.
-                    if level.style == LevelStyle::RoughRock {
+                    if level.style.is_rock() {
                         match part.name {
                             "strata" => material.extension.decay.kind = DECAY_STRATA,
                             "hewn" => material.extension.decay.kind = DECAY_ROCK,
@@ -679,7 +679,7 @@ impl FixtureShapes {
                 let seed = door_seed(level, &doorway);
                 let style = view.finishes().door_style(doorway.x, doorway.y).unwrap_or(fb_level::DoorStyle::Timber);
                 let mut frame = match level.style {
-                    LevelStyle::RoughRock => geometry::door_frame(level.ceiling, style, seed),
+                    LevelStyle::RoughRock | LevelStyle::CrystalCavern => geometry::door_frame(level.ceiling, style, seed),
                     LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), style, seed),
                 };
                 // The masonry round the frame grows moss as the wall beside it does; the timber does not.

@@ -82,7 +82,7 @@ impl SwitchKind {
 /// The weights (wood, steel, portcullis) a level's style gives the kinds.
 pub fn style_weights(style: LevelStyle) -> [u32; 3] {
     match style {
-        LevelStyle::RoughRock => [60, 10, 30],
+        LevelStyle::RoughRock | LevelStyle::CrystalCavern => [60, 10, 30],
         LevelStyle::StoneHalls => [20, 40, 40],
     }
 }

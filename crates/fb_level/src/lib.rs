@@ -138,13 +138,35 @@ pub enum LevelStyle {
     RoughRock,
     /// Wider, more regular rooms, colonnaded halls and straighter corridors.
     StoneHalls,
+    /// Deep caverns where crystals grow: a few large open chambers with uneven natural floors,
+    /// pillars of rock standing in them, joined by wide passages. Worked rock like rough rock,
+    /// only far bigger.
+    CrystalCavern,
 }
 
 impl LevelStyle {
+    /// The first depth a crystal cavern can lie at.
+    pub const FIRST_CAVERN_DEPTH: u32 = 5;
+
     /// The style of the level at `depth` (1 is the first level): rough rock at odd depths and
-    /// stone halls at even ones, so the two alternate on the way down.
+    /// stone halls at even ones, so the two alternate on the way down, and from depth 5 on every
+    /// second rough rock level (5, 9, 13...) is a crystal cavern instead. Shallower levels never
+    /// roll one.
     pub fn for_depth(depth: u32) -> Self {
-        if depth.max(1) % 2 == 1 { LevelStyle::RoughRock } else { LevelStyle::StoneHalls }
+        let depth = depth.max(1);
+        if depth % 2 == 0 {
+            LevelStyle::StoneHalls
+        } else if depth >= Self::FIRST_CAVERN_DEPTH && depth % 4 == 1 {
+            LevelStyle::CrystalCavern
+        } else {
+            LevelStyle::RoughRock
+        }
+    }
+
+    /// Whether the level is worked rock, not dressed stone: rough rock and the crystal caverns
+    /// share the rock's relief, finishes and doors.
+    pub fn is_rock(self) -> bool {
+        !matches!(self, LevelStyle::StoneHalls)
     }
 }
 
