@@ -322,7 +322,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     critters.sort_by_key(|c| c.1);
     let (dead, hurt) = (critters[0].0, critters[1].0);
     app.world_mut().get_mut::<Health>(hurt).unwrap().hp -= 1;
-    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false });
+    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false });
     run(&mut app, 60);
     let (entity, container) = {
         let world = app.world_mut();

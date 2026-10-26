@@ -435,10 +435,13 @@ fn land_blows(
                 if attack.hit {
                     let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
                     let damage = rolled + super::bane_damage(&swing.weapon.bane, strikeable.foe(target), &mut dice.0);
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
                     if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
                         burned.write(Burned { target });
                     }
+                } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
+                    info!("swing: grazes for {damage}");
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true });
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }

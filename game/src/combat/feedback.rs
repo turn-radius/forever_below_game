@@ -60,6 +60,9 @@ pub struct Struck {
     pub critical: bool,
     /// Whether an allied folk struck it, not the delver (`crate::folk_regard`).
     pub by_ally: bool,
+    /// Whether it is a missed swing that grazed ([`fb_character::combat::graze`]): its damage
+    /// is taken as it is, whatever the target is vulnerable to.
+    pub graze: bool,
 }
 
 /// A blow of the delver's that was fire (a lit torch's, [`super::swing::flaming_blow`]) landing on
@@ -199,9 +202,10 @@ pub struct CreatureSounds {
 }
 
 /// How far a blow's damage is changed by what struck a creature: a skeleton takes double from
-/// a bludgeoning blow (its stat block's vulnerability). `blow` is the damage as rolled.
+/// a bludgeoning blow (its stat block's vulnerability). `blow` is the damage as rolled. A graze
+/// is taken as it is.
 pub fn damage_to(critter: &Critter, blow: &Struck) -> u32 {
-    if critter.spot.species.is_skeleton() {
+    if critter.spot.species.is_skeleton() && !blow.graze {
         crate::creatures::skeletons::damage_taken(blow.damage, crate::creatures::skeletons::damage_type(blow.bludgeoning))
     } else {
         blow.damage
@@ -263,7 +267,7 @@ pub fn take_blows(
         }
         let damage = damage_to(critter, blow);
         let fell = health.hurt(damage);
-        callouts.write(Callout { target: blow.target, outcome: Outcome::Hit { damage, critical: blow.critical, fatal: fell } });
+        callouts.write(Callout { target: blow.target, outcome: Outcome::of(blow, damage, fell) });
         let away = (at.translation.xz() - blow.from).normalize_or_zero();
         let push = away * knockback(&critter.creature) * tuning.combat.knockback_scale;
         commands.entity(blow.target).insert(flinches.of(blow.target, push, &tuning.combat));
