@@ -39,10 +39,30 @@ pub struct ClaimRules {
     pub share_shallow: f64,
     /// Share of them at `levels_off` and below.
     pub share_deep: f64,
+    /// First depth with a holder: one faction that takes the larger part of the folk and rooms.
+    pub holder_from: u32,
+    /// Share of the level's folk the holder takes at `holder_from`.
+    pub holder_share_from: f64,
+    /// Share of the folk the holder takes at `levels_off` and below.
+    pub holder_share_deep: f64,
+    /// The fewest folk any other faction keeps; fewer factions claim than leave one less.
+    pub camp_min: usize,
+    /// Members a room of the holder's claim is sized for: it takes more rooms than a camp, so
+    /// many trades each have somewhere to work.
+    pub holder_folk_per_room: usize,
 }
 
 impl ClaimRules {
-    pub const DEFAULT: ClaimRules = ClaimRules { folk_shallow: (6, 10), folk_deep: (16, 24), levels_off: 12, share_shallow: 0.5, share_deep: 2.0 / 3.0 };
+    pub const DEFAULT: ClaimRules = ClaimRules {
+        folk_shallow: (6, 10), folk_deep: (16, 24), levels_off: 12,
+        share_shallow: 0.5,
+        share_deep: 2.0 / 3.0,
+        holder_from: 4,
+        holder_share_from: 0.43,
+        holder_share_deep: 2.0 / 3.0,
+        camp_min: 3,
+        holder_folk_per_room: 2,
+    };
 
     /// How far `depth` is along the growth from depth 1 (0.0) to `levels_off` (1.0).
     pub fn progress(&self, depth: u32) -> f64 {
@@ -59,6 +79,17 @@ impl ClaimRules {
     /// The share of its candidate rooms a level at `depth` lets the factions claim.
     pub fn claim_share(&self, depth: u32) -> f64 {
         self.share_shallow + (self.share_deep - self.share_shallow) * self.progress(depth)
+    }
+
+    /// The share of the level's folk the holder takes at `depth`: none below `holder_from`,
+    /// about half at depth 6 and two thirds at the depth growth levels off.
+    pub fn holder_share(&self, depth: u32) -> Option<f64> {
+        if depth < self.holder_from {
+            return None;
+        }
+        let span = self.levels_off.saturating_sub(self.holder_from).max(1) as f64;
+        let t = ((depth - self.holder_from) as f64 / span).min(1.0);
+        Some(self.holder_share_from + (self.holder_share_deep - self.holder_share_from) * t)
     }
 
     /// The most rooms the factions may claim of `candidates` rooms at `depth`.
@@ -114,11 +145,35 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
     // the factions, the denizens are the ones that keep theirs (the shuffle's order otherwise).
     order.sort_by_key(|&k| !level.factions[k].is_denizen());
     order.truncate(budget.min(n));
-    let m = order.len();
+    // From a few levels down one faction holds the level: it claims first, with the larger part
+    // of the folk, and the others keep a camp each or do not claim at all.
     let mut strength = vec![0; n];
-    for (j, &k) in order.iter().enumerate() {
-        strength[k] = total / m + (j < total % m) as usize;
+    let holder = rules.holder_share(level.depth).filter(|_| order.len() >= 2).map(|share| {
+        let pick = rng.int(0, order.len() as u32 - 1) as usize;
+        let k = order.remove(pick);
+        order.insert(0, k);
+        let held = ((total as f64 * share).round() as usize).clamp(1, total);
+        let camps = (order.len() - 1).min((total - held) / rules.camp_min.max(1));
+        order.truncate(1 + camps);
+        (k, if camps == 0 { total } else { held })
+    });
+    let m = order.len();
+    match holder {
+        Some((k, held)) if m > 1 => {
+            strength[k] = held;
+            let rest = total - held;
+            for (j, &o) in order.iter().skip(1).enumerate() {
+                strength[o] = rest / (m - 1) + (j < rest % (m - 1)) as usize;
+            }
+        }
+        Some((k, held)) => strength[k] = held,
+        None => {
+            for (j, &k) in order.iter().enumerate() {
+                strength[k] = total / m + (j < total % m) as usize;
+            }
+        }
     }
+    let holder = holder.map(|(k, _)| k);
     let halls = level.style == crate::LevelStyle::StoneHalls;
     let hall = |r: usize| halls && is_colonnaded(level, &level.rooms[r]);
     let graph = RoomGraph::new(level);
@@ -143,7 +198,8 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
         let extra = rng.int(0, 1) as usize;
         // One room stays back for each faction still to place.
         let spare = budget.saturating_sub(m - j - 1).max(1);
-        let want = (strength[k].div_ceil(MEMBERS_PER_ROOM) + extra).clamp(1, spare);
+        let per_room = if holder == Some(k) { rules.holder_folk_per_room } else { MEMBERS_PER_ROOM };
+        let want = (strength[k].div_ceil(per_room) + extra).clamp(1, spare);
         budget = budget.saturating_sub(want);
         let mut rooms = vec![seed];
         owner[seed] = Some(k);
@@ -314,6 +370,68 @@ mod tests {
         assert_eq!(rules.claim_share(1), 0.5);
         assert!((rules.claim_share(12) - 2.0 / 3.0).abs() < 1e-9);
         assert_eq!(rules.claim_share(30), rules.claim_share(12));
+    }
+
+    #[test]
+    fn the_holder_share_starts_at_the_holder_depth_and_grows() {
+        let rules = ClaimRules::DEFAULT;
+        assert_eq!(rules.holder_share(rules.holder_from - 1), None);
+        assert_eq!(rules.holder_share(1), None);
+        let at6 = rules.holder_share(6).unwrap();
+        assert!((0.45..=0.55).contains(&at6), "{at6}");
+        let deep = rules.holder_share(12).unwrap();
+        assert!((deep - 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(rules.holder_share(40), Some(deep));
+    }
+
+    /// The folk and rooms of each claim of `level`, in claim order.
+    fn camps(level: &Level) -> Vec<(usize, usize)> {
+        level.claims.iter().map(|c| (level.folk.iter().filter(|f| f.faction == c.faction).count(), c.rooms.len())).collect()
+    }
+
+    #[test]
+    fn above_the_holder_depth_camps_are_even_and_below_it_one_faction_leads() {
+        let rules = ClaimRules::DEFAULT;
+        let (mut led, mut multi) = (0, 0);
+        for (seed, depth) in (1..=40).flat_map(|seed| [(seed, 1), (seed, 3), (seed, 8)]) {
+            let level = generate(seed, depth);
+            let camps = camps(&level);
+            if camps.len() < 2 {
+                continue;
+            }
+            let most = camps.iter().map(|c| c.0).max().unwrap();
+            let least = camps.iter().map(|c| c.0).min().unwrap();
+            if depth < rules.holder_from {
+                // Strengths split evenly; placing can only drop folk the rooms cannot hold.
+                assert!(most <= least + 3, "seed {seed} depth {depth}: {camps:?}");
+            } else if depth == 8 {
+                multi += 1;
+                led += (camps.iter().filter(|c| c.0 == most).count() == 1) as u32;
+                // Whoever leads in folk is not out-roomed by a camp.
+                let leader = camps.iter().max_by_key(|c| c.0).unwrap();
+                assert!(camps.iter().all(|c| c.1 <= leader.1 + 1), "seed {seed} depth {depth}: {camps:?}");
+            }
+        }
+        assert!(multi >= 20, "{multi} levels with several factions");
+        assert!(led * 10 >= multi * 8, "{led} of {multi} levels have a clear holder");
+    }
+
+    #[test]
+    fn camps_beside_a_holder_are_never_left_empty() {
+        let rules = ClaimRules::DEFAULT;
+        for (seed, depth) in (1..=40).flat_map(|seed| [(seed, 6), (seed, 8), (seed, 12)]) {
+            let level = generate(seed, depth);
+            let camps = camps(&level);
+            if camps.len() < 2 {
+                continue;
+            }
+            let mut sorted = camps.clone();
+            sorted.sort_by_key(|c| std::cmp::Reverse(c.0));
+            for c in &sorted[1..] {
+                // A camp is planned with at least the camp minimum; placing drops only folk its rooms cannot hold.
+                assert!(c.0 >= rules.camp_min.min(2), "seed {seed} depth {depth}: {camps:?}");
+            }
+        }
     }
 
     #[test]
