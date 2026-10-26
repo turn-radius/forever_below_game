@@ -543,3 +543,55 @@ fn a_folk_whose_faction_is_hostile_cannot_be_persuaded() {
     assert!(app.world().resource::<Persuading>().0.is_none());
     assert!(app.world().resource::<Talk>().answer.is_some());
 }
+
+#[test]
+fn the_try_is_on_the_record_as_the_roll_starts() {
+    let (app, folk) = persuade_app();
+    let speaker = app.world().resource::<Talk>().speaker.clone().unwrap();
+    let who = (speaker.depth, speaker.seed);
+    assert_eq!(app.world().resource::<WorldRecord>().persuasion_tries(who), 1, "noted before the dice close");
+    let _ = folk;
+}
+
+#[test]
+fn a_folk_who_was_failed_refuses_until_the_delver_rests() {
+    let (mut app, folk) = persuade_app();
+    dice_close(&mut app, folk, 1);
+    let at = app.world().resource::<Talk>().topics.iter().position(|t| *t == Topic::Persuade).unwrap();
+    // Asked again at once: a refusal line, no roll, no further cost.
+    let faction = faction_of(&app, folk);
+    let standing = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    press(&mut app, DIGITS[at]);
+    assert!(!app.world().resource::<Talk>().waiting && app.world().resource::<Persuading>().0.is_none());
+    assert_eq!(app.world().resource::<WorldRecord>().standings.get(faction).value(), standing);
+    let said = app.world().resource::<Talk>().answer.clone().unwrap().1;
+    assert!(said.to_lowercase().contains("sleep") || said.to_lowercase().contains("rest"), "{said}");
+    // After a rest they hear the delver out again.
+    app.world_mut().resource_mut::<WorldRecord>().rests += 1;
+    press(&mut app, DIGITS[at]);
+    assert!(app.world().resource::<Talk>().waiting);
+}
+
+#[test]
+fn the_talk_cannot_be_left_while_the_dice_show() {
+    let (mut app, folk) = persuade_app();
+    press(&mut app, KeyCode::KeyF);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    assert!(app.world().resource::<Talk>().waiting);
+    dice_close(&mut app, folk, 20);
+    press(&mut app, KeyCode::KeyF);
+    assert!(!app.world().resource::<ScreenOpen>().is(Screen::Talk));
+}
+
+#[test]
+fn denizens_are_not_offered_persuasion_and_the_state_resets_with_the_delve() {
+    let (mut app, folk) = minotaur_app();
+    talk_to(&mut app, folk);
+    assert!(!app.world().resource::<Talk>().topics.contains(&Topic::Persuade));
+    let (mut app, _) = persuade_app();
+    assert!(app.world().resource::<Persuading>().0.is_some());
+    app.world_mut().resource_mut::<NextState<crate::launch::AppState>>().set(crate::launch::AppState::Title);
+    app.update();
+    app.update();
+    assert!(app.world().resource::<Persuading>().0.is_none());
+}

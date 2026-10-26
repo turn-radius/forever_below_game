@@ -307,6 +307,7 @@ pub fn switch_screens(
     journey: Option<Res<crate::travel::Journey>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
     inspector: Option<Res<crate::inspect::InspectorOpen>>,
+    dice: Option<Res<crate::dice::Dice>>,
 ) {
     // No screen opens between levels, nor while the debug inspector has the keyboard.
     if journey.is_some() || inspector.is_some_and(|i| i.0) {
@@ -316,7 +317,8 @@ pub fn switch_screens(
         inventory: input.just_pressed(Action::Inventory),
         character: input.just_pressed(Action::Character),
         map: input.just_pressed(Action::Map),
-        back: input.just_pressed(Action::Back),
+        // Not while a roll shows: Space skips it, and its outcome lands in the screen it was made in.
+        back: input.just_pressed(Action::Back) && !dice.is_some_and(|d| d.busy()),
         // Not while bartering: the trader's shelf stays up.
         step: if input.just_pressed(Action::NextTab) && !barter.is_some_and(|b| b.active()) {
             if raw.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { -1 } else { 1 }

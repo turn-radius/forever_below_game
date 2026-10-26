@@ -176,6 +176,10 @@
   "Nothing you say moves me. Get away from me.",
   "I will not be talked round by the likes of you."
  ],
+ "persuade_not_now": [
+  "I told you no. Come back when you have slept on it.",
+  "Not again. Ask me after you have had some rest, delver."
+ ],
  "persuade_done": [
   "I have done what I will for you. Do not ask twice.",
   "You have had your favour from me, delver."

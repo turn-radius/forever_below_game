@@ -74,9 +74,9 @@ use fb_denizens::DenizenKind;
 use fb_denizens::tongue::Lexicon;
 
 /// The width of the panel at the reference size, logical pixels.
-const PANEL_WIDTH: f32 = 600.0;
+pub const PANEL_WIDTH: f32 = 600.0;
 /// How far the panel stands from the right edge, logical pixels.
-const PANEL_MARGIN: f32 = 64.0;
+pub const PANEL_MARGIN: f32 = 64.0;
 
 pub struct TalkPlugin;
 
@@ -95,8 +95,9 @@ impl Plugin for TalkPlugin {
 }
 
 /// Drops the talk when the delve ends, so no folk outlives it.
-fn reset_talk(mut talk: ResMut<Talk>) {
+fn reset_talk(mut talk: ResMut<Talk>, mut persuading: ResMut<Persuading>) {
     *talk = Talk::default();
+    persuading.0 = None;
 }
 
 /// Whether a service's screen exists to open: the barter screen ([`crate::barter`]), the
@@ -343,7 +344,7 @@ fn talk(
             Input::Mouse(button) => request.topic.is_none() && mouse.as_ref().is_some_and(|m| m.just_pressed(*button)),
             _ => false,
         });
-        if leave {
+        if leave && !talk.waiting {
             show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c));
             return;
         }
@@ -422,7 +423,7 @@ fn start_persuasion(
     mut pending: ResMut<Persuading>,
     character: Option<Res<Character>>,
     inventory: Option<Res<Inventory>>,
-    record: Option<Res<WorldRecord>>,
+    mut record: Option<ResMut<WorldRecord>>,
     doors: Option<Res<Doors>>,
     folk: Query<(&Denizen, &Transform)>,
     mut rolls: MessageWriter<crate::dice::RollRequest>,
@@ -445,6 +446,9 @@ fn start_persuasion(
     }
     // The nearest door of their faction that is locked to the delver.
     let from = at.translation.xz();
+    if record.as_ref().is_some_and(|r| r.refuses(who)) {
+        return said(&mut talk, "persuade_not_now", 0x66);
+    }
     let door = doors.as_ref().and_then(|doors| {
         doors.0.iter().filter(|(_, d)| d.faction == faction && d.locked(band)).min_by(|a, b| a.1.centre.distance(from).total_cmp(&b.1.centre.distance(from))).map(|(cell, _)| *cell)
     });
@@ -457,6 +461,10 @@ fn start_persuasion(
     // Drawn from the folk's own seed and how often they have been tried, so each try rolls afresh
     // and the same try rolls the same.
     let tries = record.as_ref().map_or(0, |r| r.persuasion_tries(who));
+    // The try is on the record as it starts, so a reload mid-roll does not replay it.
+    if let Some(record) = record.as_deref_mut() {
+        record.note_persuasion(who);
+    }
     let mut rng = Mulberry32::new(speaker.seed.wrapping_mul(0x9E37_79B1) ^ 0x5052 ^ tries.wrapping_mul(0x85EB_CA6B) ^ speaker.depth << 20);
     let roll = check.roll(&mut rng);
     pending.0 = Some(Pending { folk: entity, ask, faction, door, who });
@@ -486,12 +494,12 @@ fn finish_persuasion(
                 talk.say(Topic::Persuade, line);
             }
         };
-        if let Some(record) = record.as_deref_mut() {
-            record.note_persuasion(this.who);
-        }
         if !finished.roll.succeeded {
             if let Some(record) = record.as_deref_mut() {
                 record.standings.shift(this.faction, -persuade::FAIL_COST);
+                // They will not be asked again until the delver has rested.
+                let rests = record.rests;
+                record.refused.insert(this.who, rests);
             }
             say(&mut talk, "persuade_fail", 0x63);
             toasts.say("They will not be moved, and think less of you for asking");
