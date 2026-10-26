@@ -119,7 +119,10 @@ impl Item {
             return coins.total_copper();
         }
         let base = f64::from(base_copper(&self.base).unwrap_or(1));
-        let worth = base * rarity_factor(self.rarity) * affix_product(&self.affixes) * condition_factor(&self.shape.condition());
+        // Until it is fully known an item is worth what a plain one is: no one pays for magic
+        // that has not been found out.
+        let (rarity, affixes): (_, &[&Affix]) = if self.is_known() { (self.rarity, &self.affixes) } else { (Rarity::Common, &[]) };
+        let worth = base * rarity_factor(rarity) * affix_product(affixes) * condition_factor(&self.shape.condition());
         (worth.round() as u64).max(1)
     }
 

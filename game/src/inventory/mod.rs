@@ -1076,7 +1076,7 @@ pub fn cell_tag(price: card::Price) -> Option<(String, Color, Color)> {
             let (text, metal) = crate::ui::coin_tag(price.total_copper());
             Some((text, metal, OK))
         }
-        card::Price::Worth(_) | card::Price::Holds(_) => None,
+        card::Price::Worth(_) | card::Price::Holds(_) | card::Price::Unsure => None,
     }
 }
 
@@ -1210,7 +1210,7 @@ impl ScreenLayout<'_> {
                                         border_radius: BorderRadius::MAX,
                                         ..default()
                                     },
-                                    BackgroundColor(rarity_color(item.rarity)),
+                                    BackgroundColor(rarity_color(item.shown_rarity())),
                                 ));
                             }
                             if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {

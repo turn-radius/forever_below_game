@@ -16,6 +16,7 @@ pub mod dress;
 pub mod enchant;
 pub mod foe;
 pub mod footprint;
+pub mod identify;
 pub mod item;
 pub mod jackalope;
 pub mod lesson;
@@ -38,6 +39,7 @@ pub mod undead;
 pub mod value;
 
 pub use foe::Foe;
+pub use identify::Known;
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot};
 pub use naming::Sex;

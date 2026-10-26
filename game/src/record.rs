@@ -69,12 +69,48 @@ pub struct WorldRecord {
     /// readable; a new delve starts with none.
     #[serde(default)]
     pub lexicon: fb_denizens::tongue::Lexicon,
+    /// How many times each folk, by (depth, seed), has been persuaded at, so each try rolls afresh.
+    #[serde(default)]
+    pub persuasions: BTreeMap<(u32, u32), u32>,
+    /// How many times the delver has woken from a sleep in a camp. Failed identifying and
+    /// persuading wait for the next one.
+    #[serde(default)]
+    pub rests: u32,
+    /// Potions of insight the delver has drunk. Like a rest, one lets items that fell short be
+    /// identified again; unlike a rest it does not lift a folk's refusal to be persuaded.
+    #[serde(default)]
+    pub insights: u32,
+    /// The folk who refused to be persuaded, by (depth, seed), with the rests then: they refuse
+    /// again until the delver has rested.
+    #[serde(default)]
+    pub refused: BTreeMap<(u32, u32), u32>,
 }
 
 impl WorldRecord {
     /// The denizen words the delver has learned.
     pub fn lexicon(&self) -> &fb_denizens::tongue::Lexicon {
         &self.lexicon
+    }
+
+    /// How many times the folk `who` (depth, seed) has been persuaded at.
+    pub fn persuasion_tries(&self, who: (u32, u32)) -> u32 {
+        self.persuasions.get(&who).copied().unwrap_or(0)
+    }
+
+    /// What identify tries are counted against: rests and potions of insight together. An item
+    /// that fell short waits for this to pass the count it was tried at.
+    pub fn identify_epoch(&self) -> u32 {
+        self.rests + self.insights
+    }
+
+    /// Whether `who` still refuses to be persuaded: they refused and the delver has not rested since.
+    pub fn refuses(&self, who: (u32, u32)) -> bool {
+        self.refused.get(&who).is_some_and(|&at| self.rests <= at)
+    }
+
+    /// Notes one more try at persuading `who`.
+    pub fn note_persuasion(&mut self, who: (u32, u32)) {
+        *self.persuasions.entry(who).or_default() += 1;
     }
 
     /// Whether `faction` is already noted as met on level `depth`.
@@ -194,6 +230,13 @@ pub struct ItemRecord {
     /// The words it teaches, if it is written in a denizen tongue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teaching: Option<fb_denizens::tongue::Teaching>,
+    /// How much of its magic is known. Absent in a record from before items were unknown, which
+    /// reads as fully known.
+    #[serde(default, skip_serializing_if = "fb_items::Known::is_full")]
+    pub known: fb_items::Known,
+    /// The rests the delver had had when an attempt to identify it fell short.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_tried: Option<u32>,
 }
 
 /// An item in a container's grid.
@@ -237,13 +280,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default() }
     }
 
     /// The record of the level at `depth`, if it has been visited.
@@ -285,6 +328,8 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         odds: item.odds,
         words: item.words.clone(),
         teaching: item.teaching.clone(),
+        known: item.known,
+        rest_tried: item.rest_tried,
     }
 }
 
@@ -335,6 +380,8 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         odds: record.odds,
         words: record.words.clone(),
         teaching: record.teaching.clone(),
+        known: record.known,
+        rest_tried: record.rest_tried,
     });
     if item.is_none() {
         warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
@@ -594,6 +641,27 @@ mod tests {
                 assert_eq!(s.field, field);
             }
         }
+    }
+
+    #[test]
+    fn an_items_known_state_survives_a_record_and_an_old_record_reads_as_known() {
+        use fb_items::Known;
+        let ring = (1..20_000).filter_map(|s| fb_items::roll_item_with("Ring", s, fb_items::Odds::loot(10))).find(|i| i.rarity >= fb_items::Rarity::Rare && i.affixes.len() >= 2).unwrap();
+        let mut unknown = ring.clone().unidentified();
+        assert_eq!(unknown.known, Known::Unknown);
+        let back = |item: &fb_items::Item| rebuild_item(&serde_json::from_str(&serde_json::to_string(&record_of(item)).unwrap()).unwrap()).unwrap();
+        assert_eq!(back(&unknown).known, Known::Unknown);
+        unknown.reveal(unknown.identify_dc() - 3);
+        let partly = unknown.known;
+        assert!(matches!(partly, Known::Partly(_)));
+        assert_eq!(back(&unknown).known, partly);
+        unknown.reveal(unknown.identify_dc());
+        assert_eq!(back(&unknown).known, Known::Full);
+        // A record from before items could be unknown has no such field, and reads as known.
+        let mut json: serde_json::Value = serde_json::to_value(record_of(&ring.unidentified())).unwrap();
+        json.as_object_mut().unwrap().remove("known");
+        let old: ItemRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(rebuild_item(&old).unwrap().known, Known::Full);
     }
 
     #[test]
