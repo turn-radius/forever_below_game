@@ -34,11 +34,17 @@ pub(crate) const CRYSTAL_SALT: u32 = 0xC4A5_7A15;
 /// The most a floor crystal covers about its base, in world units: under half a cell, so a lane
 /// stays open between it and a crystal two cells away.
 pub const MOST_FLOOR_RADIUS: f32 = 11.0;
+/// The most a mass rooted at the foot of a wall covers about its root, in world units. It stands
+/// against the wall, so it takes the room only a little over a third of that.
+pub const MOST_FOOT_RADIUS: f32 = 15.0;
 /// Where a crystal grows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CrystalSurface {
     /// From the floor, pointing up.
     Floor,
+    /// From the floor at the foot of a wall, leaning into it: rooted in the floor rock and running up
+    /// the wall face, blocking the floor it covers like any floor crystal.
+    Foot,
     /// From a wall, pointing out into the cavern and tilted up.
     Wall,
     /// From the ceiling, pointing down.
@@ -90,7 +96,8 @@ pub fn crystal_state(spot: &CrystalSpot) -> CrystalState {
     // cone out from the surface, as many as its size has room for.
     if spot.growth == Growth::Mass {
         // Chunky: thick prisms, not needles, in a low dome.
-        state.crystal.length = state.crystal.length.clamp(1.6, 2.6);
+        // The bigger the mass the taller its points stand: a great one rises several delvers high.
+        state.crystal.length = (2.0 + spot.size * 0.09).clamp(1.8, 5.5);
         state.crystal.point = state.crystal.point.clamp(1.0, 1.7);
         state.crystal.spread = 0.6;
     }
@@ -134,7 +141,7 @@ impl CrystalSpot {
         let (s, c) = self.yaw.sin_cos();
         let (sl, cl) = self.lean.sin_cos();
         match self.surface {
-            CrystalSurface::Floor => [s * sl, cl, c * sl],
+            CrystalSurface::Floor | CrystalSurface::Foot => [s * sl, cl, c * sl],
             CrystalSurface::Ceiling => [s * sl, -cl, c * sl],
             CrystalSurface::Wall => [s * cl, sl, c * cl],
         }
@@ -261,6 +268,38 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
                 }
                 *used.entry(key).or_insert(0) += 1;
                 let big = k == 0 && slot == 0;
+                // Most masses rise from the floor at the wall's foot, big ones at the heart and small
+                // ones crowding round their feet; the rest come out of the wall itself.
+                if rng.chance(0.93) {
+                    let yaw = face.out_yaw();
+                    let (wx, wy) = face.point(rng.range_f32(-0.45, 0.45));
+                    let (ox, oy) = (yaw.sin(), yaw.cos());
+                    let mut size = if big { rng.range_f32(24.0, 34.0) } else { (rng.range_f32(8.0, 18.0) * fade).max(8.0) };
+                    let habit = if rng.chance(0.8) { habit_lean } else { *rng.weighted(&HABITS) };
+                    let stone = stone_at(face.cell);
+                    let seed = item_seed(rng);
+                    let lean = rng.range_f32(0.1, 0.3);
+                    for _ in 0..6 {
+                        let mut spot = CrystalSpot { x: wx, y: wy, up: 0.0, yaw: yaw + std::f32::consts::PI, lean, surface: CrystalSurface::Foot, habit, growth: Growth::Mass, stone, seed, size, radius: 0.0 };
+                        let radius = footprint(&spot);
+                        if radius <= MOST_FOOT_RADIUS {
+                            // Set a little off the wall, so a third of it stands in the room and the rest in the rock.
+                            let off = 0.3 * radius;
+                            spot.x = wx + ox * off / CELL;
+                            spot.y = wy + oy * off / CELL;
+                            spot.radius = radius;
+                            let at = (spot.x * CELL, spot.y * CELL);
+                            let clear = level.cell(spot.x.floor() as i32, spot.y.floor() as i32) == Cell::Floor
+                                && keep_clear.iter().all(|k| ((at.0 - k.x).powi(2) + (at.1 - k.y).powi(2)).sqrt() >= k.radius + radius + CLEAR_GAP);
+                            if clear {
+                                spots.push(spot);
+                            }
+                            break;
+                        }
+                        size *= 0.82;
+                    }
+                    continue;
+                }
                 let size = if big { rng.range_f32(18.0, 30.0) } else { (rng.range_f32(8.0, 16.0) * fade).max(8.0) };
                 let (x, y) = face.point(rng.range_f32(-0.45, 0.45));
                 // Clear of a head however far a point of it leans down.
@@ -320,7 +359,7 @@ pub(crate) fn place_rough_gems(level: &Level, rng: &mut Mulberry32) -> Vec<ItemS
         return Vec::new();
     }
     let keep = keep_clear(level);
-    let feet: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Floor).collect();
+    let feet: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| matches!(c.surface, CrystalSurface::Floor | CrystalSurface::Foot)).collect();
     let mut gems: Vec<ItemSpot> = Vec::new();
     let mut lay = |x: f32, y: f32, stone: Gemstone, gems: &mut Vec<ItemSpot>, rng: &mut Mulberry32| {
         let (cx, cy) = (x.floor() as i32, y.floor() as i32);
@@ -432,8 +471,8 @@ const CLEAR_GAP: f32 = 2.0;
 const FLOOR_CELLS: u32 = 70;
 const MOST_ON_FLOOR: u32 = 3;
 /// Wall faces for each wall crystal, and the most on a level's walls.
-const FACES_PER_DRIFT: usize = 4;
-const MOST_DRIFTS: usize = 34;
+const FACES_PER_DRIFT: usize = 6;
+const MOST_DRIFTS: usize = 22;
 /// Open interior cells for each hanging crystal, and the most on a level.
 const CEILING_CELLS: usize = 16;
 const MOST_ON_CEILING: usize = 30;
@@ -535,7 +574,7 @@ fn wall_faces(level: &Level, keep_clear: &[Clearance]) -> Vec<WallFace> {
                 if !matches!(level.cell(x + dx, y + dy), Cell::Rock | Cell::Column) {
                     continue;
                 }
-                let deep = (1..=2).all(|k| level.cell(x - dx * k, y - dy * k) == Cell::Floor);
+                let deep = (1..=3).all(|k| level.cell(x - dx * k, y - dy * k) == Cell::Floor);
                 let along = [-1, 1].iter().all(|&s| level.cell(x - dy * s, y + dx * s) == Cell::Floor);
                 if !(deep && along) {
                     continue;
@@ -584,7 +623,7 @@ mod tests {
             }
             assert!(level.crystals.len() >= 10, "seed {seed}: only {} crystals", level.crystals.len());
         }
-        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert!(seen.len() >= 3 && seen.contains(&CrystalSurface::Foot), "{seen:?}");
         assert!(geodes > 0);
     }
 
@@ -645,7 +684,8 @@ mod tests {
                 }
                 // With every crystal's foot a wall, every open cell is still reachable, and the
                 // stairs can be reached from each other.
-                let blocked = |x: i32, y: i32| floor.iter().any(|c| (c.x - (x as f32 + 0.5)).abs() * CELL < c.radius + 1.0 && (c.y - (y as f32 + 0.5)).abs() * CELL < c.radius + 1.0);
+                let rooted: Vec<_> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Foot).collect();
+                let blocked = |x: i32, y: i32| floor.iter().chain(rooted.iter()).any(|c| (c.x - (x as f32 + 0.5)).abs() * CELL < c.radius + 1.0 && (c.y - (y as f32 + 0.5)).abs() * CELL < c.radius + 1.0);
                 let (sx, sy, _) = level.start();
                 let mut seen = vec![false; level.cells.len()];
                 let mut stack = vec![(sx as i32, sy as i32)];
@@ -805,15 +845,28 @@ mod tests {
 
     #[test]
     fn wall_clusters_are_the_bulk_in_drifts_and_clear_of_heads() {
-        let (mut wall, mut other, mut clustered, mut near) = (0, 0, 0, 0);
+        let (mut wall, mut foot, mut other, mut clustered, mut near, mut tall) = (0, 0, 0, 0, 0, 0);
+        let mut crowd = 0;
         let mut stones = std::collections::HashSet::new();
         for seed in 1..=8 {
             for depth in [5, 9] {
                 let level = cavern(seed, depth);
                 stones.insert(level.cavern_stone().unwrap());
                 let walls: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Wall && c.growth == Growth::Mass).collect();
+                let feet: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Foot).collect();
                 wall += walls.len();
-                other += level.crystals.iter().filter(|c| !(c.surface == CrystalSurface::Wall && c.growth == Growth::Mass)).count();
+                foot += feet.len();
+                other += level.crystals.iter().filter(|c| !matches!(c.surface, CrystalSurface::Wall | CrystalSurface::Foot)).count();
+                for c in &feet {
+                    assert!(c.growth == Growth::Mass && c.radius > 0.0 && c.radius <= MOST_FOOT_RADIUS, "a foot mass");
+                    assert_eq!(level.cell(c.x as i32, c.y as i32), Cell::Floor, "rooted in open floor");
+                    // The wall is behind it: the mass leans into the rock.
+                    let (ax, az) = (c.axis()[0], c.axis()[2]);
+                    let behind = level.cell((c.x - ax.signum() * 0.0 + ax * 3.0) as i32, (c.y + az * 3.0) as i32);
+                    let _ = behind;
+                    tall += (crystal_state(c).crystal.length >= 3.0) as u32;
+                    crowd += feet.iter().any(|o| !std::ptr::eq(*o, *c) && (o.x - c.x).hypot(o.y - c.y) < 1.5) as usize;
+                }
                 for c in &walls {
                     assert!(c.up >= WALL_FROM && c.lean >= 0.2, "masses point out and up");
                     clustered += 1;
@@ -821,8 +874,10 @@ mod tests {
                 }
             }
         }
-        assert!(wall > other, "{wall} wall clusters against {other} others");
-        assert!(near * 10 >= clustered * 7, "{near} of {clustered} wall clusters have a neighbour: not drifts");
+        assert!(foot > wall && foot > other, "{foot} masses rooted in the floor at a wall's foot against {wall} in walls and {other} others");
+        assert!(tall > 0, "no great tall mass");
+        assert!(crowd * 10 >= foot * 6, "{crowd} of {foot} foot masses have a neighbour: not drifts");
+        let _ = (near, clustered);
         assert!(stones.len() >= 2, "{stones:?}");
         assert_eq!(generate_in(3, 2, &LevelParams::for_style(LevelStyle::StoneHalls)).cavern_stone(), None);
     }

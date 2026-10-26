@@ -280,7 +280,7 @@ pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemM
     let twist = Quat::from_rotation_y((spot.seed % 6283) as f32 * 0.001);
     let rotation = Quat::from_rotation_arc(Vec3::Y, axis) * twist;
     match spot.surface {
-        CrystalSurface::Floor => {
+        CrystalSurface::Floor | CrystalSurface::Foot => {
             let relief = Relief::new(level);
             let reach = spot.radius.max(1.0);
             let floor = std::iter::once(Vec2::ZERO)
@@ -314,7 +314,7 @@ fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query
         let name = item.noun();
         let mut root = spawner.spawn(&mesh, &appearance);
         root.insert((LevelPiece, Name::new(name), crystal_transform(&level.0, spot, &mesh, low), CrystalPiece { index }));
-        if spot.surface == CrystalSurface::Floor {
+        if matches!(spot.surface, CrystalSurface::Floor | CrystalSurface::Foot) {
             root.insert(BlocksTheWay(fb_level::FloorShape::Round(spot.radius)));
         }
     }

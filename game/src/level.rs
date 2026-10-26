@@ -177,9 +177,9 @@ const DECAY_LIMESTONE: u32 = 18;
 /// How much brighter a crystal cavern's own fill is than the abyss's: pale stone that takes the
 /// crystals' light wants a little more to be seen by, so the cavern reads as wonder after the
 /// dark below. Still a few lux; darkness stays between the lights.
-const CAVERN_AMBIENT: f32 = 8.0;
+const CAVERN_AMBIENT: f32 = 18.0;
 /// The cavern's fill is a cool, pale blue, so pale stone reads pale and not the torch's orange.
-const CAVERN_AMBIENT_COLOR: Color = Color::srgb(0.6, 0.72, 0.95);
+const CAVERN_AMBIENT_COLOR: Color = Color::srgb(0.88, 0.92, 1.0);
 const STONE_PATTERN_SCALE: f32 = 0.06;
 /// How much finer the decay pattern runs over a stone hall's ceiling than over its walls.
 const CEILING_PATTERN_FINER: f32 = 2.6;
@@ -1119,8 +1119,9 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         }
         "wall" => {
             // The biggest cluster growing from a wall, from three cells out looking at it.
-            let Some(spot) = level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Wall && c.growth == armory::families::crystal::Growth::Mass).max_by(|a, b| a.size.total_cmp(&b.size)) else { return };
-            let at = v3(fb_level::Level::world(spot.x, spot.y)) + Vec3::Y * spot.up;
+            let Some(spot) = level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Foot && c.growth == armory::families::crystal::Growth::Mass).max_by(|a, b| a.size.total_cmp(&b.size)) else { return };
+            let aim = if spot.surface == fb_level::CrystalSurface::Foot { spot.size.min(40.0) * 0.4 } else { spot.up };
+            let at = v3(fb_level::Level::world(spot.x, spot.y)) + Vec3::Y * aim;
             let out = Vec3::new(spot.yaw.sin(), 0.0, spot.yaw.cos());
             // `FB_DEBUG_WALL_DIST=far` backs off as far as the floor stays open in front of it, up to
             // twelve cells; a number sets the distance in cells.
@@ -1131,7 +1132,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             } else {
                 want.parse::<f32>().unwrap_or(2.2)
             };
-            Transform::from_translation(at + out * CELL * away + Vec3::Y * (EYE_HEIGHT - spot.up).max(-20.0)).looking_at(at, Vec3::Y)
+            Transform::from_translation(at + out * CELL * away + Vec3::Y * (EYE_HEIGHT - aim).max(-20.0)).looking_at(at, Vec3::Y)
         }
         "gem" => {
             // The first rough gem lying on the floor, from a step away and above, looking down at it.
@@ -1143,7 +1144,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             // `FB_DEBUG_CRYSTAL=<n>` (default: the tallest crystal on a floor): from five cells
             // off, in the chamber's open, looking at its middle.
             let wanted = std::env::var("FB_DEBUG_CRYSTAL").ok().and_then(|n| n.parse::<usize>().ok());
-            let spot = wanted.and_then(|n| level.crystals.get(n)).or_else(|| level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Floor).max_by(|a, b| a.size.total_cmp(&b.size)));
+            let spot = wanted.and_then(|n| level.crystals.get(n)).or_else(|| level.crystals.iter().filter(|c| matches!(c.surface, fb_level::CrystalSurface::Floor | fb_level::CrystalSurface::Foot)).max_by(|a, b| a.size.total_cmp(&b.size)));
             let Some(spot) = spot else { return };
             let at = v3(fb_level::Level::world(spot.x, spot.y));
             let from = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]
