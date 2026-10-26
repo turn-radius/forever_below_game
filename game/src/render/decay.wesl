@@ -25,6 +25,7 @@ const DECAY_ROCK: u32 = 14u;
 const DECAY_STRATA: u32 = 15u;
 const DECAY_MARBLE: u32 = 16u;
 const DECAY_QUARTZ: u32 = 17u;
+const DECAY_LIMESTONE: u32 = 18u;
 
 fn hash3(p_in: vec3<f32>) -> f32 {
     var p = fract(p_in * 0.3183099 + 0.1);
@@ -204,7 +205,7 @@ fn apply_decay(
         c = mix(c, vec3(0.42, 0.3, 0.18), stain * 0.8);
         let crack = 1.0 - smoothstep(0.0, 0.012 * a + 0.001, abs(n2 - 0.5));
         c = c * (1.0 - 0.6 * crack * step(0.25, a));
-    } else if decay_type == DECAY_STONE || decay_type == DECAY_ROCK || decay_type == DECAY_STRATA || decay_type == DECAY_MARBLE || decay_type == DECAY_QUARTZ {
+    } else if decay_type == DECAY_STONE || decay_type == DECAY_ROCK || decay_type == DECAY_STRATA || decay_type == DECAY_MARBLE || decay_type == DECAY_QUARTZ || decay_type == DECAY_LIMESTONE {
         // Weathering, lichen.
         c = mix(c, c * 0.78, a * 0.4);
         let lichen = smoothstep(0.8 - a * 0.18, 0.84 - a * 0.18, n2) * min(1.0, a * 1.5);
@@ -382,20 +383,32 @@ fn marble_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -
     return RockShade(normal, tone);
 }
 
+// Limestone (ours): the layered cave rock's beds and ledges, but toned in creams, honey and soft
+// greys only, gently banded, with no warm and cool stripes.
+fn limestone_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -> RockShade {
+    let layered = strata_shade(position, normal, pixel, seed);
+    let wobble = value_noise(vec3(position.x * 0.05, position.y * 0.09, position.z * 0.05) + vec3(seed)) - 0.5;
+    let band = 0.5 + 0.5 * sin(position.y * 0.55 + wobble * 5.0);
+    let tone = mix(vec3(0.97, 0.95, 0.9), vec3(1.0, 0.96, 0.86), band) * (0.93 + 0.1 * value_noise(position * 0.05 + vec3(seed + 4.0)));
+    return RockShade(layered.normal, tone * mix(1.0, 0.9, 1.0 - smoothstep(0.0, 1.0, layered.tone.x)));
+}
+
 // Quartz rock (ours): pale, faintly glassy stone whose surface is a mass of tiny facets, each
 // catching the light its own way: the normal is jittered per fine cell, and a few cells glint.
 // Fades to plain with distance so it never shimmers as noise.
 fn quartz_shade(position: vec3<f32>, normal: vec3<f32>, pixel: f32, seed: f32) -> RockShade {
     let near = 1.0 - smoothstep(0.08, 0.4, pixel);
-    let q = position * 3.0;
+    // Fine and sparse: a faint grain in the shading, and now and then a pin-prick of light a
+    // couple of centimetres across, rounded and never square, gone from a distance.
+    let q = position * 7.0;
     let cell = floor(q);
     let j = vec3(hash3(cell + vec3(seed)), hash3(cell + vec3(seed + 3.7)), hash3(cell + vec3(seed + 8.1))) - vec3(0.5);
-    let n = normalize(normal + j * 0.16 * near);
-    // A few round pin-pricks of light, never squares.
-    let round = 1.0 - smoothstep(0.12, 0.32, length(fract(q) - vec3(0.5)));
-    let glint = step(0.975, hash3(cell + vec3(seed + 1.3))) * round * near;
-    let cloud = 0.94 + 0.1 * value_noise(position * 0.06 + vec3(seed));
-    return RockShade(n, vec3(cloud + 0.3 * glint));
+    let n = normalize(normal + j * 0.05 * near);
+    let spot = length(fract(q) - vec3(0.5 + 0.3 * (hash3(cell + vec3(seed + 6.0)) - 0.5)));
+    let round = 1.0 - smoothstep(0.04, 0.16, spot);
+    let glint = step(0.992, hash3(cell + vec3(seed + 1.3))) * round * near;
+    let cloud = 0.95 + 0.08 * value_noise(position * 0.06 + vec3(seed));
+    return RockShade(n, vec3(cloud + 0.45 * glint));
 }
 
 // Lichen on stone (ours) where `damp` (0..1, carried per vertex) is above a few percent: small,

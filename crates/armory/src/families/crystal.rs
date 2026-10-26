@@ -106,6 +106,9 @@ pub struct Crystal {
     pub point: f32,
     /// How far corners and edges of an isometric form are shaved off.
     pub truncation: f32,
+    /// The lump of rock a cluster grows from, as a share of its usual size: 1 a boulder, 0 none (the
+    /// points grow straight from the wall they are set in).
+    pub rock: f32,
     /// Pointed at both ends, not rooted at one.
     pub double_ended: bool,
     /// A second crystal grown through the first.
@@ -135,6 +138,7 @@ sliders! {
         taper: 0.0, 0.6, 0.01;
         point: 0.1, 2.5, 0.01;
         truncation: 0.0, 0.6, 0.01;
+        rock: 0.0, 1.2, 0.01;
         count: 1.0, 80.0, 1.0;
         spread: 0.0, 1.0, 0.01;
         cracks: 0.0, 1.0, 0.01;
@@ -157,6 +161,7 @@ impl Default for Crystal {
             taper: 0.05,
             point: 0.9,
             truncation: 0.0,
+            rock: 1.0,
             double_ended: false,
             twinned: false,
             scepter: false,
@@ -674,7 +679,7 @@ fn cluster(c: &Crystal, rng: &mut Mulberry32) -> (Vec<Solid>, MeshBuilder) {
             (c.spread * frac * 0.6, len, [reach * az.cos(), mr * 0.1, -reach * az.sin()])
         } else {
             let lean = (c.spread * frac * 1.25).min(1.3);
-            let len = if central { h } else { h * rng.range_f32(0.4, 0.85) * (1.0 - 0.3 * frac) };
+            let len = if central { h } else { h * rng.range_f32(0.2, 0.85) * (1.0 - 0.3 * frac) };
             (lean, len, [lean.sin() * az.cos() * mr * 0.5, mr * 0.1, -lean.sin() * az.sin() * mr * 0.5])
         };
         let sp = Spec { height: len, aspect: c.length * rng.range_f32(0.85, 1.2), double_ended: false, twinned: central && c.twinned, scepter: central && c.scepter, ..Spec::of(c, len) };
@@ -692,9 +697,9 @@ fn cluster(c: &Crystal, rng: &mut Mulberry32) -> (Vec<Solid>, MeshBuilder) {
     let noise_seed = rng.int(0, 1 << 20);
     for p in &mut lump.positions {
         let k = 0.75 + 0.5 * value_noise3(vec3::scale(*p, 1.6), noise_seed);
-        *p = vec3::mul(vec3::scale(*p, mr * k), [1.0, 0.55, 1.0]);
+        *p = vec3::mul(vec3::scale(*p, mr * k * c.rock), [1.0, 0.55, 1.0]);
     }
-    (solids, lump.flat_shaded())
+    (solids, if c.rock < 0.05 { MeshBuilder::new() } else { lump.flat_shaded() })
 }
 
 /// A nodule split open, its cavity facing +Y: a rind of rock, a pale lining, and crystals
@@ -763,7 +768,7 @@ fn geode(c: &Crystal, seed: u32, rng: &mut Mulberry32) -> (MeshBuilder, MeshBuil
 // ───────────────────────── Surface ─────────────────────────
 
 fn add_rock(parts: &mut Parts, name: &'static str, mesh: MeshBuilder, s: &CrystalState) {
-    parts.add_look(name, mesh, Look::of(Stone).tinted(mix(s.palette.stone, Rgb(0.1, 0.1, 0.12), 0.35)));
+    parts.add_look(name, mesh, Look::of(Stone).tinted(mix(s.palette.stone, Rgb(0.1, 0.1, 0.12), 0.12)));
 }
 
 /// The crystal solids as parts: the body in the stone's colour (washed pale by cloud), its

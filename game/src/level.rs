@@ -60,7 +60,8 @@ impl Plugin for LevelPlugin {
             // After the render layers have propagated down, which `Update` does.
             .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems))
-            .add_systems(Update, lift_cavern_ambient.run_if(resource_exists_and_changed::<CurrentLevel>).after(apply_light_tuning).in_set(DelveSystems));
+            .add_systems(Update, lift_cavern_ambient.run_if(resource_exists_and_changed::<CurrentLevel>).after(apply_light_tuning).in_set(DelveSystems))
+            .add_systems(PostUpdate, put_out_carried_lights.run_if(|| std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "none")));
     }
 }
 
@@ -172,10 +173,13 @@ const DECAY_ROCK: u32 = 14;
 const DECAY_STRATA: u32 = 15;
 const DECAY_MARBLE: u32 = 16;
 const DECAY_QUARTZ: u32 = 17;
+const DECAY_LIMESTONE: u32 = 18;
 /// How much brighter a crystal cavern's own fill is than the abyss's: pale stone that takes the
 /// crystals' light wants a little more to be seen by, so the cavern reads as wonder after the
 /// dark below. Still a few lux; darkness stays between the lights.
-const CAVERN_AMBIENT: f32 = 2.2;
+const CAVERN_AMBIENT: f32 = 3.6;
+/// The cavern's fill is a cool, pale blue, so pale stone reads pale and not the torch's orange.
+const CAVERN_AMBIENT_COLOR: Color = Color::srgb(0.6, 0.72, 0.95);
 const STONE_PATTERN_SCALE: f32 = 0.06;
 /// How much finer the decay pattern runs over a stone hall's ceiling than over its walls.
 const CEILING_PATTERN_FINER: f32 = 2.6;
@@ -207,6 +211,17 @@ fn cavern_lift(level: Option<&Level>) -> f32 {
 fn lift_cavern_ambient(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut ambient: ResMut<GlobalAmbientLight>, debug: Query<&DebugCamera>) {
     if debug.iter().all(|d| d.fog) {
         ambient.brightness = tuning.light.ambient_lux * cavern_lift(Some(&level.0));
+        ambient.color = if cavern_lift(Some(&level.0)) > 1.0 { CAVERN_AMBIENT_COLOR } else { AMBIENT_COLOR };
+    }
+}
+
+/// For captures (`FB_DEBUG_LIGHT=none`): the delver's own carried lights are put out too, so a view
+/// shows only what the level lights.
+fn put_out_carried_lights(mut lights: Query<&mut PointLight, With<crate::carry::GivenLight>>) {
+    for mut light in &mut lights {
+        if light.intensity != 0.0 {
+            light.intensity = 0.0;
+        }
     }
 }
 
@@ -231,7 +246,7 @@ fn cavern_stone_look(material: &mut ToonMaterial, stone: fb_level::CavernStone, 
     match (stone, part) {
         (fb_level::CavernStone::Marble, _) => material.extension.decay.kind = DECAY_MARBLE,
         (fb_level::CavernStone::Quartz, _) => material.extension.decay.kind = DECAY_QUARTZ,
-        (fb_level::CavernStone::Limestone, "walls") => material.extension.decay.kind = DECAY_STRATA,
+        (fb_level::CavernStone::Limestone, "walls") => material.extension.decay.kind = DECAY_LIMESTONE,
         _ => {}
     }
 }
@@ -250,6 +265,7 @@ fn apply_light_tuning(
     // The view from above has its own bright fill.
     if debug.iter().all(|d| d.fog) {
         ambient.brightness = light.ambient_lux * cavern_lift(level.as_deref().map(|l| &l.0));
+        ambient.color = if cavern_lift(level.as_deref().map(|l| &l.0)) > 1.0 { CAVERN_AMBIENT_COLOR } else { AMBIENT_COLOR };
     }
     for mut fog in &mut fogs {
         fog.falloff = FogFalloff::Linear { start: light.fog_start, end: light.fog_end };
@@ -934,7 +950,7 @@ pub fn crystal_light(crystal: &fb_level::CrystalSpot, tuning: &LightTuning) -> P
     let rgb = crystal.stone.rgb();
     let top = rgb.0.max(rgb.1).max(rgb.2).max(0.05);
     // Washed toward white a third of the way, so a stone's light is its hue and not a flood of it.
-    let soft = |c: f32| c / top * 0.65 + 0.35;
+    let soft = |c: f32| c / top * 0.5 + 0.5;
     let color = Color::srgb(soft(rgb.0), soft(rgb.1), soft(rgb.2));
     point_light(color, tuning.crystal_peak, tuning.crystal_reach * (crystal.size / 30.0).clamp(0.7, 1.5), &EXPOSURE)
 }
@@ -1106,7 +1122,15 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let Some(spot) = level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Wall && c.growth == armory::families::crystal::Growth::Cluster).max_by(|a, b| a.size.total_cmp(&b.size)) else { return };
             let at = v3(fb_level::Level::world(spot.x, spot.y)) + Vec3::Y * spot.up;
             let out = Vec3::new(spot.yaw.sin(), 0.0, spot.yaw.cos());
-            let away = std::env::var("FB_DEBUG_WALL_DIST").ok().and_then(|d| d.parse::<f32>().ok()).unwrap_or(2.2);
+            // `FB_DEBUG_WALL_DIST=far` backs off as far as the floor stays open in front of it, up to
+            // twelve cells; a number sets the distance in cells.
+            let want = std::env::var("FB_DEBUG_WALL_DIST").unwrap_or_default();
+            let away = if want == "far" {
+                let (cx, cy) = (spot.x + out.x * 0.5, spot.y + out.z * 0.5);
+                (1..=24).map(|k| k as f32 * 0.5).take_while(|k| level.is_open((cx + out.x * k).floor() as i32, (cy + out.z * k).floor() as i32)).last().unwrap_or(2.2).min(12.0)
+            } else {
+                want.parse::<f32>().unwrap_or(2.2)
+            };
             Transform::from_translation(at + out * CELL * away + Vec3::Y * (EYE_HEIGHT - spot.up).max(-20.0)).looking_at(at, Vec3::Y)
         }
         "gem" => {
@@ -1127,8 +1151,8 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 .map(|(dx, dz)| Vec3::new(dx, 0.0, dz))
                 .max_by_key(|dir| (1..=6).take_while(|&k| level.is_open(((at.x + dir.x * k as f32 * CELL * 0.5) / CELL) as i32, ((at.z + dir.z * k as f32 * CELL * 0.5) / CELL) as i32)).count())
                 .unwrap_or(Vec3::X);
-            let eye_at = at + from * spot.size.max(20.0).min(60.0) + eye;
-            Transform::from_translation(eye_at).looking_at(at + Vec3::Y * spot.size.min(30.0) * 0.5, Vec3::Y)
+            let eye_at = at + from * (spot.size * 1.15).clamp(30.0, 90.0) + eye;
+            Transform::from_translation(eye_at).looking_at(at + Vec3::Y * spot.size.min(50.0) * 0.5, Vec3::Y)
         }
         "wide" => {
             // The longest straight stretch of corridor at least two cells wide, from its end
@@ -1435,6 +1459,7 @@ mod tests {
         assert!(shader.contains(&format!("const DECAY_STRATA: u32 = {DECAY_STRATA}u;")));
         assert!(shader.contains(&format!("const DECAY_MARBLE: u32 = {DECAY_MARBLE}u;")));
         assert!(shader.contains(&format!("const DECAY_QUARTZ: u32 = {DECAY_QUARTZ}u;")));
+        assert!(shader.contains(&format!("const DECAY_LIMESTONE: u32 = {DECAY_LIMESTONE}u;")));
     }
 
     fn door() -> EntranceDoor {

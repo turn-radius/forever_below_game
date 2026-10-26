@@ -86,6 +86,13 @@ pub fn crystal_state(spot: &CrystalSpot) -> CrystalState {
     state.crystal.stone = spot.stone;
     state.crystal.size = spot.size;
     state.crystal.glow = CRYSTAL_GLOW;
+    // A cluster set in a wall or ceiling grows from it: next to no lump of rock, its points in a
+    // cone out from the surface, as many as its size has room for.
+    if spot.surface != CrystalSurface::Floor && spot.growth == Growth::Cluster {
+        state.crystal.rock = 0.22;
+        state.crystal.spread = 0.3;
+        state.crystal.count = ((spot.size / 1.8) as u32).clamp(4, 14);
+    }
     // Cavern crystals are chunky: a column is at most 3.6 times as long as it is wide.
     if matches!(spot.habit, Habit::Prismatic | Habit::Columnar) {
         state.crystal.length = state.crystal.length.clamp(2.2, 3.6);
@@ -238,7 +245,7 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
         let heart = walls[(d * 7919) % walls.len().max(1)];
         let (dx, dy) = heart.rock.step();
         let (lx, ly) = (-dy, dx);
-        let half = rng.int(2, 5) as i32;
+        let half = rng.int(2, 6) as i32;
         let height = rng.range_f32(WALL_FROM, (level.ceiling - 18.0).max(WALL_FROM + 1.0));
         let rise = rng.range_f32(-1.5, 1.5);
         let habit_lean = *rng.weighted(&[(Habit::Prismatic, 5), (Habit::Columnar, 3), (Habit::Acicular, 3), (Habit::Bladed, 1)]);
@@ -247,19 +254,19 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
             let key = (cell.0, cell.1, dx, dy);
             let Some(face) = by_face.get(&key) else { continue };
             let fade = 1.0 - 0.5 * (k.abs() as f32 / (half as f32 + 1.0));
-            for slot in 0..2 {
-                if used.get(&key).copied().unwrap_or(0) >= 3 || !rng.chance(f64::from(0.8 * fade) * if slot == 0 { 1.0 } else { 0.6 }) {
+            for slot in 0..4 {
+                if used.get(&key).copied().unwrap_or(0) >= 5 || !rng.chance(f64::from(0.9 * fade) * if slot == 0 { 1.0 } else { 0.75 }) {
                     continue;
                 }
                 *used.entry(key).or_insert(0) += 1;
                 let big = k == 0 && slot == 0;
-                let size = if big { rng.range_f32(20.0, 32.0) } else { (rng.range_f32(6.0, 16.0) * fade).max(6.0) };
-                let (x, y) = face.point(rng.range_f32(-0.4, 0.4));
+                let size = if big { rng.range_f32(20.0, 32.0) } else { (rng.range_f32(4.0, 14.0) * fade).max(4.0) };
+                let (x, y) = face.point(rng.range_f32(-0.45, 0.45));
                 // Clear of a head however far a point of it leans down.
                 let low = WALL_FROM.max(20.0 + 0.6 * size);
                 let up = (height + rise * k as f32 + rng.range_f32(-5.0, 5.0)).clamp(low, (level.ceiling - 8.0).max(low));
                 let habit = if rng.chance(0.8) { habit_lean } else { *rng.weighted(&HABITS) };
-                spots.push(CrystalSpot { x, y, up, yaw: face.out_yaw(), lean: rng.range_f32(0.2, 0.75), surface: CrystalSurface::Wall, habit, growth: Growth::Cluster, stone: stone_at(face.cell), seed: item_seed(rng), size: size.max(6.0), radius: 0.0 });
+                spots.push(CrystalSpot { x, y, up, yaw: face.out_yaw(), lean: rng.range_f32(0.2, 0.75), surface: CrystalSurface::Wall, habit, growth: Growth::Cluster, stone: stone_at(face.cell), seed: item_seed(rng), size: size.max(4.0), radius: 0.0 });
             }
         }
     }
@@ -424,11 +431,11 @@ const CLEAR_GAP: f32 = 2.0;
 const FLOOR_CELLS: u32 = 70;
 const MOST_ON_FLOOR: u32 = 3;
 /// Wall faces for each wall crystal, and the most on a level's walls.
-const FACES_PER_DRIFT: usize = 10;
-const MOST_DRIFTS: usize = 14;
+const FACES_PER_DRIFT: usize = 4;
+const MOST_DRIFTS: usize = 34;
 /// Open interior cells for each hanging crystal, and the most on a level.
-const CEILING_CELLS: usize = 30;
-const MOST_ON_CEILING: usize = 16;
+const CEILING_CELLS: usize = 16;
+const MOST_ON_CEILING: usize = 30;
 /// The lowest a wall crystal's base is set, in world units: over a delver's head.
 const WALL_FROM: f32 = 22.0;
 

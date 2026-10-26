@@ -30,7 +30,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, marble_shade, quartz_shade, DECAY_ROCK, DECAY_STRATA, DECAY_MARBLE, DECAY_QUARTZ};
+import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, marble_shade, quartz_shade, limestone_shade, DECAY_ROCK, DECAY_STRATA, DECAY_MARBLE, DECAY_QUARTZ, DECAY_LIMESTONE};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -423,10 +423,12 @@ fn fragment(
     // is level stone, drawn in world space with no transform of its own, so item space is world
     // space and a change of the normal there is a change of the world normal.
 @if(!SKINNED) {
-    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA || toon.decay_type == DECAY_MARBLE || toon.decay_type == DECAY_QUARTZ {
+    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA || toon.decay_type == DECAY_MARBLE || toon.decay_type == DECAY_QUARTZ || toon.decay_type == DECAY_LIMESTONE {
         var rock: RockShade;
         if toon.decay_type == DECAY_STRATA {
             rock = strata_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else if toon.decay_type == DECAY_LIMESTONE {
+            rock = limestone_shade(item_position, item_normal, pixel, toon.decay_seed);
         } else if toon.decay_type == DECAY_MARBLE {
             rock = marble_shade(item_position, item_normal, pixel, toon.decay_seed);
         } else if toon.decay_type == DECAY_QUARTZ {
@@ -489,7 +491,9 @@ fn fragment(
         let facing = 0.55 + 0.45 * smoothstep(-0.6, 0.8, item_normal.y);
         let base_ward = mix(0.55, 1.0, exp(-max(item_position.y, 0.0) / 30.0));
         let far = 1.0 - smoothstep(180.0, 290.0, length(to_eye_c));
-        crystal_glow = srgb_to_linear(tone) * (toon.glow - 2.0) * 1.1 * facing * base_ward * far;
+        // Toward the point the stone is thinner and lit: a lighter, brighter tip.
+        let tip = 0.35 * smoothstep(8.0, 40.0, item_position.y);
+        crystal_glow = srgb_to_linear(mix(tone, vec3<f32>(1.0), tip)) * (toon.glow - 2.0) * 2.6 * facing * mix(base_ward, 1.0, 0.5) * far;
     }
     let glow = select(srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0)), vec3<f32>(0.0), is_crystal);
 
