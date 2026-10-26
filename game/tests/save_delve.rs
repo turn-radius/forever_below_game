@@ -322,7 +322,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     critters.sort_by_key(|c| c.1);
     let (dead, hurt) = (critters[0].0, critters[1].0);
     app.world_mut().get_mut::<Health>(hurt).unwrap().hp -= 1;
-    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false });
+    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false });
     run(&mut app, 60);
     let (entity, container) = {
         let world = app.world_mut();
@@ -554,6 +554,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("inventory::doll::DollAssets", "icons and figures drawn"),
         ("inventory::doll::DollStage", "the paper doll's figure"),
         ("fitting::FitCache", "fits made again as needed"),
+        ("sparkle::StarMesh", "the star mesh, made at startup"),
         ("barter::Barter", "no barter while lying down; the shelves are in the record"),
         ("barter::BarterRequest", "a request"),
         ("carry::Aimed", "what is under the crosshair"),

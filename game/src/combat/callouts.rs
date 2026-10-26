@@ -46,6 +46,16 @@ pub enum Outcome {
     /// It landed for `damage`, as taken (a skeleton's double from a bludgeon included); a
     /// `critical` is a natural 20, and a `fatal` one brought the target to 0.
     Hit { damage: u32, critical: bool, fatal: bool },
+    /// It missed but grazed for `damage` ([`fb_character::combat::graze`]); a `fatal` one brought
+    /// the target to 0.
+    Graze { damage: u32, fatal: bool },
+}
+
+impl Outcome {
+    /// What `blow` did, having taken `damage` and brought its target to 0 if `fatal`.
+    pub fn of(blow: &super::feedback::Struck, damage: u32, fatal: bool) -> Outcome {
+        if blow.graze { Outcome::Graze { damage, fatal } } else { Outcome::Hit { damage, critical: blow.critical, fatal } }
+    }
 }
 
 /// Which of the HUD's faces a run of a callout is written in.
@@ -83,6 +93,7 @@ pub fn look(outcome: Outcome) -> Look {
     match outcome {
         Outcome::Miss => Look { runs: vec![run("Miss", Face::Italic, 24.0, MUTED)], life: 0.9, pop: 1.0 },
         Outcome::Blocked => Look { runs: vec![run("Blocked", Face::Word, 26.0, STEEL)], life: 1.0, pop: 1.2 },
+        Outcome::Graze { damage, fatal } => Look { runs: vec![run("Graze ", Face::Italic, 22.0, MUTED), run(&damage.to_string(), Face::Number, 26.0, if fatal { BAD } else { INK })], life: 1.0, pop: 1.1 },
         Outcome::Hit { damage, critical, fatal } => {
             let number = |colour| run(&damage.to_string(), Face::Number, if critical { 42.0 } else { 32.0 }, if fatal { BAD } else { colour });
             if critical {
@@ -269,6 +280,7 @@ mod tests {
     fn each_outcome_reads_as_the_log_says_it() {
         assert_eq!(text(Outcome::Miss), "Miss");
         assert_eq!(text(Outcome::Blocked), "Blocked");
+        assert_eq!(text(Outcome::Graze { damage: 1, fatal: false }), "Graze 1");
         assert_eq!(text(Outcome::Hit { damage: 5, critical: false, fatal: false }), "Hit 5");
         assert_eq!(text(Outcome::Hit { damage: 14, critical: true, fatal: false }), "Critical 14");
     }

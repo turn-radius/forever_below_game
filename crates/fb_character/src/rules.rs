@@ -219,6 +219,13 @@ pub struct CombatRules {
     /// What a delver's or a folk's attack roll adds for proficiency with the weapon, a 1st-level
     /// character's +2 (SRD 5.1 p. 12, "Proficiency Bonus").
     pub proficiency_bonus: i32,
+    /// The chance that a missed melee swing of the delver's still grazes what it was swung at
+    /// ([`crate::combat::graze`]). Our own, after the Graze weapon mastery (SRD 5.2, "Mastery
+    /// Properties"), so a miss is not a swing at the air.
+    pub graze_chance: f64,
+    /// The hit points a graze takes, whatever the weapon and whatever the target is vulnerable
+    /// to. Our own.
+    pub graze_damage: u32,
 }
 
 impl Default for CombatRules {
@@ -230,6 +237,8 @@ impl Default for CombatRules {
             venom_save_dc: 10,
             hit_dice: HitDice::default(),
             proficiency_bonus: crate::combat::PROFICIENCY_BONUS,
+            graze_chance: 0.5,
+            graze_damage: 1,
         }
     }
 }
