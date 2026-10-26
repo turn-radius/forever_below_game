@@ -32,10 +32,10 @@
 //!   each denizen faction on their level; shallower, a folk sometimes has a rumour of them,
 //!   more often the deeper they stand ([`lines::strange_tale`]).
 //!
-//! - Persuade asks the folk to let the delver through a door of their faction that is locked to
-//!   them, or for a little coin, on a d20 check shown as dice ([`crate::dice`]; the rules are in
-//!   [`persuade`]). A success opens the door (it stays unlocked) or hands over coin, once per folk;
-//!   a failure costs a little standing; a folk of a Hostile faction cannot be persuaded.
+//! - Persuade is a d20 check, shown as dice ([`crate::dice`]; the rules are in [`persuade`]), to
+//!   raise the folk's faction's standing with the delver. A success raises it by an amount scaled
+//!   by the roll, a failure costs a little, and a folk gets one try per rest; a folk of a Hostile
+//!   faction cannot be persuaded.
 //!
 //! `FB_LEARN=<kind>:<topic>[+<topic>...]` (`minotaur:greeting+trade`) teaches those words at
 //! once, for captures. `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
@@ -59,7 +59,6 @@ use procgen_rng::Mulberry32;
 use crate::carry::ViewModelCamera;
 use crate::combat::feedback::Corpse;
 use crate::character::Character;
-use crate::doors::Doors;
 use crate::folk::{AimedFolk, Denizen};
 use crate::inventory::Inventory;
 use crate::folk_routine::Routine;
@@ -406,17 +405,14 @@ struct Persuading(Option<Pending>);
 #[derive(Debug, Clone, Copy)]
 struct Pending {
     folk: Entity,
-    ask: persuade::Ask,
     faction: fb_faction::Faction,
-    /// The door that opens on a success, for [`persuade::Ask::Pass`].
-    door: Option<(i32, i32)>,
-    /// The folk, by depth and seed, for the record of who has been persuaded.
+    /// The folk, by depth and seed, for the record of who has been tried.
     who: (u32, u32),
 }
 
-/// Works out what the delver asks of the folk and rolls it: to be let through the locked door of
-/// the folk's faction nearest them, else a favour of coin. A folk already persuaded, or of a
-/// Hostile faction, says so and no dice roll.
+/// Rolls to win the folk's faction over: a d20 check ([`persuade::check`]) to raise its standing
+/// with the delver. A folk already tried since the delver last rested, or of a Hostile faction,
+/// says so and no dice roll.
 #[allow(clippy::too_many_arguments)]
 fn start_persuasion(
     mut talk: ResMut<Talk>,
@@ -424,15 +420,14 @@ fn start_persuasion(
     character: Option<Res<Character>>,
     inventory: Option<Res<Inventory>>,
     mut record: Option<ResMut<WorldRecord>>,
-    doors: Option<Res<Doors>>,
-    folk: Query<(&Denizen, &Transform)>,
+    folk: Query<&Denizen>,
     mut rolls: MessageWriter<crate::dice::RollRequest>,
 ) {
     if !std::mem::take(&mut talk.persuade_asked) {
         return;
     }
     let (Some(entity), Some(speaker)) = (talk.folk, talk.speaker.clone()) else { return };
-    let Ok((denizen, at)) = folk.get(entity) else { return };
+    let Ok(denizen) = folk.get(entity) else { return };
     let faction = denizen.person.faction.id;
     let who = (speaker.depth, speaker.seed);
     let said = |talk: &mut Talk, symbol: &str, salt: u32| {
@@ -441,21 +436,12 @@ fn start_persuasion(
     };
     let standing = record.as_ref().map_or(0, |r| r.standings.get(faction).value());
     let band = record.as_ref().map_or(speaker.band, |r| r.standings.band(faction));
-    if record.as_ref().is_some_and(|r| r.persuaded.contains(&who)) {
-        return said(&mut talk, "persuade_done", 0x61);
-    }
-    // The nearest door of their faction that is locked to the delver.
-    let from = at.translation.xz();
     if record.as_ref().is_some_and(|r| r.refuses(who)) {
         return said(&mut talk, "persuade_not_now", 0x66);
     }
-    let door = doors.as_ref().and_then(|doors| {
-        doors.0.iter().filter(|(_, d)| d.faction == faction && d.locked(band)).min_by(|a, b| a.1.centre.distance(from).total_cmp(&b.1.centre.distance(from))).map(|(cell, _)| *cell)
-    });
-    let ask = if door.is_some() { persuade::Ask::Pass } else { persuade::Ask::Favour };
     let (wisdom, class) = character.as_ref().map_or((0, fb_faction::ClassKind::Fighter), |c| (crate::character::modifier(c.scores().wisdom), c.class.faction_class()));
     let charm = inventory.as_ref().map_or(0, |i| i.equipped().iter().map(|(_, item)| item.profile.stats.charisma).sum::<f32>().round() as i32);
-    let Some(check) = persuade::check(&format!("Persuade {}", speaker.name), ask, band, standing, wisdom, class, charm) else {
+    let Some(check) = persuade::check(&format!("Win over {}", speaker.name), band, standing, wisdom, class, charm) else {
         return said(&mut talk, "persuade_refused", 0x62);
     };
     // Drawn from the folk's own seed and how often they have been tried, so each try rolls afresh
@@ -467,22 +453,17 @@ fn start_persuasion(
     }
     let mut rng = Mulberry32::new(speaker.seed.wrapping_mul(0x9E37_79B1) ^ 0x5052 ^ tries.wrapping_mul(0x85EB_CA6B) ^ speaker.depth << 20);
     let roll = check.roll(&mut rng);
-    pending.0 = Some(Pending { folk: entity, ask, faction, door, who });
+    let result = if roll.succeeded { format!("+{} standing with {}", persuade::gain(&roll), speaker.faction) } else { format!("\u{2212}{} standing with {}", persuade::FAIL_COST, speaker.faction) };
+    pending.0 = Some(Pending { folk: entity, faction, who });
+    said(&mut talk, "persuade_hear", 0x60);
     talk.waiting = true;
-    rolls.write(crate::dice::RollRequest { roll, purpose: crate::dice::RollPurpose::Persuade(entity) });
+    rolls.write(crate::dice::RollRequest { roll, purpose: crate::dice::RollPurpose::Persuade(entity), result: Some(result) });
 }
 
-/// Applies a persuasion's outcome once its dice have closed.
-#[allow(clippy::too_many_arguments)]
-fn finish_persuasion(
-    mut done: MessageReader<crate::dice::RollDone>,
-    mut talk: ResMut<Talk>,
-    mut pending: ResMut<Persuading>,
-    mut record: Option<ResMut<WorldRecord>>,
-    mut inventory: Option<ResMut<Inventory>>,
-    mut doors: Option<ResMut<Doors>>,
-    mut toasts: Toasts,
-) {
+/// Applies a persuasion's outcome once its dice have closed: standing with the folk's faction
+/// rises by [`persuade::gain`] or falls by [`persuade::FAIL_COST`], and the folk will not be
+/// tried again until the delver has rested.
+fn finish_persuasion(mut done: MessageReader<crate::dice::RollDone>, mut talk: ResMut<Talk>, mut pending: ResMut<Persuading>, mut record: Option<ResMut<WorldRecord>>, mut toasts: Toasts) {
     for finished in done.read() {
         let crate::dice::RollPurpose::Persuade(entity) = finished.purpose else { continue };
         let Some(this) = pending.0.take_if(|p| p.folk == entity) else { continue };
@@ -494,39 +475,27 @@ fn finish_persuasion(
                 talk.say(Topic::Persuade, line);
             }
         };
-        if !finished.roll.succeeded {
-            if let Some(record) = record.as_deref_mut() {
-                record.standings.shift(this.faction, -persuade::FAIL_COST);
-                // They will not be asked again until the delver has rested.
-                let rests = record.rests;
-                record.refused.insert(this.who, rests);
-            }
-            say(&mut talk, "persuade_fail", 0x63);
-            toasts.say("They will not be moved, and think less of you for asking");
-            continue;
-        }
+        let faction = speaker.as_ref().map_or_else(|| "They".to_string(), |s| s.faction.clone());
         if let Some(record) = record.as_deref_mut() {
-            record.persuaded.insert(this.who);
+            let rests = record.rests;
+            record.refused.insert(this.who, rests);
+            let change = if finished.roll.succeeded { persuade::gain(&finished.roll) } else { -persuade::FAIL_COST };
+            record.standings.shift(this.faction, change);
         }
-        match this.ask {
-            persuade::Ask::Pass => {
-                if let Some(door) = this.door.and_then(|cell| doors.as_deref_mut().and_then(|d| d.0.get_mut(&cell))) {
-                    door.unlocked = true;
-                }
-                say(&mut talk, "persuade_pass", 0x64);
-                toasts.say("They let you through");
-            }
-            persuade::Ask::Favour => {
-                let coins = fb_items::Coins::from_copper(persuade::favour_copper(this.who.0));
-                if let Some(inventory) = inventory.as_deref_mut() {
-                    let held = inventory.coins();
-                    inventory.set_coins(held + coins);
-                }
-                say(&mut talk, "persuade_favour", 0x65);
-                toasts.say(format!("They give you {}", coins.short()));
-            }
+        if finished.roll.succeeded {
+            say(&mut talk, "persuade_pass", 0x64);
+            toasts.say(format!("{} thinks better of you", capital_first(&faction)));
+        } else {
+            say(&mut talk, "persuade_fail", 0x63);
+            toasts.say(format!("{} thinks less of you for asking", capital_first(&faction)));
         }
     }
+}
+
+/// `text` with its first letter capitalised: "the Chime" is "The Chime".
+fn capital_first(text: &str) -> String {
+    let mut letters = text.chars();
+    letters.next().map(|c| c.to_uppercase().chain(letters).collect()).unwrap_or_default()
 }
 
 /// However the screen closes, lets the folk go on, and ends a talk whose folk fell or turned on

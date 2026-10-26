@@ -1,41 +1,44 @@
 //! Persuading folk: the rules of the Persuade topic, as plain data in and out. Nothing here knows
 //! Bevy; [`super`] rolls the check on screen ([`crate::dice`]) and applies the outcome.
 //!
-//! A folk is asked for one of two things. If their faction holds a locked door on the level the
-//! delver asks to be let through ([`Ask::Pass`]); if not, they are asked for a little something
-//! ([`Ask::Favour`]). Either is a d20 check against a difficulty with modifiers from the delver's
-//! Wisdom, their class, the charm of what they wear and how the folk's faction stands with them
-//! ([`standing_bonus`]). A success gives what was asked, once per folk. A failure costs
-//! [`FAIL_COST`] standing with the faction. A folk whose faction is Hostile cannot be persuaded:
-//! no roll is made ([`check`] is `None`).
+//! The delver talks to a folk to win their faction over: a d20 check to raise the faction's
+//! standing with them, with modifiers from the delver's Wisdom, their class, the charm of what
+//! they wear and how the faction already stands with them ([`standing_bonus`]). The difficulty is
+//! [`BASE_DC`], rising one for every [`DC_STANDING_STEP`] points of standing above neutral
+//! ([`dc`]): a faction that already likes the delver is harder to move further. A success raises
+//! standing by [`gain`], [`MIN_GAIN`] and up to [`MAX_GAIN`] by how far the roll beat the
+//! difficulty, so a few successes can carry a faction over a band; a failure costs
+//! [`FAIL_COST`]. A folk gets one try per rest. A Hostile faction cannot be persuaded: no roll is
+//! made ([`check`] is `None`).
 
-use fb_character::check::Check;
+use fb_character::check::{Check, CheckRoll};
 use fb_faction::{Band, ClassKind};
 
-/// What the delver asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ask {
-    /// To be let through a door of the folk's faction that is locked to them.
-    Pass,
-    /// For a few coins.
-    Favour,
-}
-
-/// The roll to be let through.
-pub const DC_PASS: i32 = 14;
-/// The roll for a favour: folk part with coin less readily than with a latch.
-pub const DC_FAVOUR: i32 = 16;
+/// The roll that wins over a faction standing at neutral.
+pub const BASE_DC: i32 = 12;
+/// Standing points above neutral for each point the difficulty rises.
+pub const DC_STANDING_STEP: i32 = 20;
 /// What a failed persuasion costs the folk's faction's standing.
 pub const FAIL_COST: i32 = 2;
+/// Standing a success gains at the least, and at the most.
+pub const MIN_GAIN: i32 = 3;
+pub const MAX_GAIN: i32 = 8;
 /// Standing points to each point of modifier, so the range of -100 to 100 is -4 to +4.
 pub const STANDING_PER_POINT: i32 = 25;
 
-/// The difficulty of `ask`.
-pub fn dc(ask: Ask) -> i32 {
-    match ask {
-        Ask::Pass => DC_PASS,
-        Ask::Favour => DC_FAVOUR,
+/// The difficulty against a faction at `standing`: [`BASE_DC`], and one more for each
+/// [`DC_STANDING_STEP`] above neutral.
+pub fn dc(standing: i32) -> i32 {
+    BASE_DC + standing.max(0) / DC_STANDING_STEP
+}
+
+/// The standing a successful `roll` gains: [`MIN_GAIN`], and one more for every two points it
+/// beat the difficulty by, up to [`MAX_GAIN`]. A failed roll gains nothing.
+pub fn gain(roll: &CheckRoll) -> i32 {
+    if !roll.succeeded {
+        return 0;
     }
+    (MIN_GAIN + roll.margin() / 2).clamp(MIN_GAIN, MAX_GAIN)
 }
 
 /// The modifier standing with the folk's faction gives: one per [`STANDING_PER_POINT`], toward zero.
@@ -54,20 +57,15 @@ pub fn class_bonus(class: ClassKind) -> (&'static str, i32) {
     }
 }
 
-/// The check for `ask` of a folk whose faction stands `standing` (-100 to 100) in `band` with
-/// the delver. `wisdom` is the delver's Wisdom modifier and `charm` the points of charisma their
-/// worn gear gives. `None` when the folk's faction is Hostile: they cannot be persuaded.
-pub fn check(name: &str, ask: Ask, band: Band, standing: i32, wisdom: i32, class: ClassKind, charm: i32) -> Option<Check> {
+/// The check to win over a faction that stands `standing` (-100 to 100) in `band` with the
+/// delver. `wisdom` is the delver's Wisdom modifier and `charm` the points of charisma their
+/// worn gear gives. `None` when the faction is Hostile: it cannot be persuaded.
+pub fn check(name: &str, band: Band, standing: i32, wisdom: i32, class: ClassKind, charm: i32) -> Option<Check> {
     if band == Band::Hostile {
         return None;
     }
     let (class_name, class) = class_bonus(class);
-    Some(Check::d20(name, dc(ask)).stat("WIS", wisdom).class(class_name, class).affix("Charm", charm).standing(standing_bonus(standing)))
-}
-
-/// The coin a favour is worth, in copper: a little more the deeper the folk stand.
-pub fn favour_copper(depth: u32) -> u64 {
-    20 + 10 * depth as u64
+    Some(Check::d20(name, dc(standing)).stat("WIS", wisdom).class(class_name, class).affix("Charm", charm).standing(standing_bonus(standing)))
 }
 
 #[cfg(test)]
@@ -77,32 +75,31 @@ mod tests {
 
     #[test]
     fn a_hostile_faction_cannot_be_persuaded() {
-        assert!(check("Persuade", Ask::Pass, Band::Hostile, -80, 3, ClassKind::Cleric, 2).is_none());
-        assert!(check("Persuade", Ask::Pass, Band::Wary, -30, 0, ClassKind::Fighter, 0).is_some());
+        assert!(check("Win over", Band::Hostile, -80, 3, ClassKind::Cleric, 2).is_none());
+        assert!(check("Win over", Band::Wary, -30, 0, ClassKind::Fighter, 0).is_some());
     }
 
     #[test]
     fn standing_class_wisdom_and_charm_are_modifiers() {
-        let roll = check("Persuade", Ask::Pass, Band::Friendly, 60, 2, ClassKind::Cleric, 1).unwrap().with_natural(10);
+        let roll = check("Win over", Band::Friendly, 60, 2, ClassKind::Cleric, 1).unwrap().with_natural(10);
         let of = |s: Source| roll.modifiers.iter().filter(|m| m.source == s).map(|m| m.amount).sum::<i32>();
         assert_eq!((of(Source::Stat), of(Source::Class), of(Source::Affix), of(Source::Standing)), (2, 2, 1, 2));
         assert_eq!(roll.total, 17);
-        assert!(roll.succeeded);
+        assert_eq!(roll.target, dc(60));
     }
 
     #[test]
-    fn standing_moves_the_roll_both_ways() {
-        assert_eq!(standing_bonus(100), 4);
-        assert_eq!(standing_bonus(24), 0);
-        assert_eq!(standing_bonus(-30), -1);
-        let liked = check("p", Ask::Pass, Band::Allied, 80, 0, ClassKind::Ranger, 0).unwrap().with_natural(11);
-        let disliked = check("p", Ask::Pass, Band::Wary, -40, 0, ClassKind::Ranger, 0).unwrap().with_natural(11);
-        assert!(liked.succeeded && !disliked.succeeded);
+    fn a_faction_that_likes_the_delver_is_harder_to_move() {
+        assert_eq!((dc(-50), dc(0), dc(19), dc(20), dc(100)), (12, 12, 12, 13, 17));
     }
 
     #[test]
-    fn a_favour_asks_more_than_a_pass() {
-        assert!(dc(Ask::Favour) > dc(Ask::Pass));
-        assert!(favour_copper(5) > favour_copper(1));
+    fn the_gain_scales_with_the_margin_and_a_failure_gains_nothing() {
+        let at = |face: i32| check("p", Band::Neutral, 0, 0, ClassKind::Fighter, 0).unwrap().with_natural(face);
+        assert_eq!(gain(&at(11)), 0);
+        assert_eq!((gain(&at(12)), gain(&at(13)), gain(&at(14)), gain(&at(18))), (3, 3, 4, 6));
+        assert_eq!(gain(&at(20)), 7);
+        let strong = check("p", Band::Neutral, 0, 5, ClassKind::Cleric, 4).unwrap().with_natural(20);
+        assert_eq!(gain(&strong), MAX_GAIN);
     }
 }

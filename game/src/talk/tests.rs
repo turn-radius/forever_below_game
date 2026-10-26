@@ -497,25 +497,33 @@ fn choosing_persuade_rolls_the_dice_and_holds_the_other_topics_until_they_close(
     assert!(app.world().resource::<Talk>().waiting);
     assert!(app.world().resource::<Persuading>().0.is_some());
     // The number of the first topic does nothing while the dice show.
+    let hearing = app.world().resource::<Talk>().answer.clone();
     press(&mut app, DIGITS[0]);
-    assert!(app.world().resource::<Talk>().answer.is_none());
+    assert_eq!(app.world().resource::<Talk>().answer, hearing);
     dice_close(&mut app, folk, 20);
     assert!(!app.world().resource::<Talk>().waiting);
 }
 
 #[test]
-fn a_persuaded_folk_gives_coin_once() {
+fn a_successful_persuasion_raises_standing_by_the_scaled_amount_and_one_try_a_rest() {
     let (mut app, folk) = persuade_app();
-    let before = app.world().resource::<crate::inventory::Inventory>().coins();
+    let faction = faction_of(&app, folk);
+    let before = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    // A natural 20 against a target of 10 beats it by 10: 3 + 5, the most.
     dice_close(&mut app, folk, 20);
-    let inventory = app.world().resource::<crate::inventory::Inventory>();
-    assert!(inventory.coins().total_copper() > before.total_copper());
-    assert_eq!(app.world().resource::<WorldRecord>().persuaded.len(), 1);
-    // Asked again, they say they have done what they will, and no dice roll.
+    let after = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    assert_eq!(after - before, persuade::MAX_GAIN);
+    // A bare success gains the least.
+    let (mut app, folk) = persuade_app();
+    let before = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    dice_close(&mut app, folk, 10);
+    assert_eq!(app.world().resource::<WorldRecord>().standings.get(faction).value() - before, persuade::MIN_GAIN);
+    // Asked again before resting: a refusal line, no roll, no change.
     let at = app.world().resource::<Talk>().topics.iter().position(|t| *t == Topic::Persuade).unwrap();
+    let now = app.world().resource::<WorldRecord>().standings.get(faction).value();
     press(&mut app, DIGITS[at]);
     assert!(!app.world().resource::<Talk>().waiting);
-    assert!(app.world().resource::<Talk>().answer.is_some());
+    assert_eq!(app.world().resource::<WorldRecord>().standings.get(faction).value(), now);
 }
 
 #[test]
@@ -526,7 +534,6 @@ fn a_failed_persuasion_costs_a_little_standing() {
     dice_close(&mut app, folk, 1);
     let after = app.world().resource::<WorldRecord>().standings.get(faction).value();
     assert_eq!(before - after, persuade::FAIL_COST);
-    assert!(app.world().resource::<WorldRecord>().persuaded.is_empty());
 }
 
 #[test]

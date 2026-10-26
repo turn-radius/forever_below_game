@@ -155,38 +155,34 @@
   "There is #master_calling.a# in the service of #master_faction#, #master_levels# below. I only know it as a rumour.",
   "I have heard of #master_calling.a#, #master_levels# down, among #master_faction#. Whether you will live to see their work, I cannot say."
  ],
- "persuade_pass": [
-  "Fine. Go through, and do not make me regret it.",
-  "You talk well. The door is yours; I never saw you.",
-  "Against my better sense, delver. Quickly, before someone asks.",
-  "#faction.capitalize# will hear of this, but not from me. Go on."
+ "persuade_hear": [
+  "Hear me out, then. I will not promise to be moved.",
+  "Go on, then. Say your piece.",
+  "You have a moment. Make it count."
  ],
- "persuade_favour": [
-  "You have a way with words. Take this, and let that be the end of it.",
-  "Hm. Here, a little something for the road. Do not tell the others.",
-  "Persuasive. Take it; I would rather give than be talked at."
+ "persuade_pass": [
+  "Hm. You put it better than most. #faction.capitalize# could do worse than your friendship.",
+  "Perhaps I have been hard on you, delver. We will speak well of you.",
+  "Well said. I will tell the others you are not what I took you for.",
+  "You have a way with you. Ask for me by name, next time."
  ],
  "persuade_fail": [
-  "No. And I like you less for asking.",
+  "No. And I like you less for the effort.",
   "You waste your breath, delver.",
   "Try that on someone who has not heard it before.",
-  "Enough. I have said no."
+  "Enough. Flattery is cheap down here."
  ],
  "persuade_refused": [
   "Nothing you say moves me. Get away from me.",
   "I will not be talked round by the likes of you."
  ],
  "persuade_not_now": [
-  "I told you no. Come back when you have slept on it.",
+  "I have heard you out already. Come back when you have slept on it.",
   "Not again. Ask me after you have had some rest, delver."
  ],
- "persuade_done": [
-  "I have done what I will for you. Do not ask twice.",
-  "You have had your favour from me, delver."
- ],
  "persuade_nothing": [
-  "There is nothing I could give you, and no door I hold. Ask me something else.",
-  "I have nothing to spare you, and nothing to open."
+  "Say what you mean, and I will hear it.",
+  "If you want to be heard, speak plainly."
  ],
  "not_yet": [
   "Not yet."

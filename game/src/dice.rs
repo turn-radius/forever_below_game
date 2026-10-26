@@ -69,6 +69,8 @@ pub enum RollPurpose {
 pub struct RollRequest {
     pub roll: CheckRoll,
     pub purpose: RollPurpose,
+    /// What the verdict adds under Success or Failure: "+5 standing with the Ash Choir".
+    pub result: Option<String>,
 }
 
 /// The panel for this roll has closed.
@@ -197,7 +199,7 @@ fn sample_for_capture(mut frames: Local<u32>, mut requests: MessageWriter<RollRe
     let spec = std::env::var("FB_DEBUG_CHECK").unwrap_or_default();
     let face = spec.split(',').next().and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(14).clamp(1, 20);
     let check = Check::d20("Persuade the guard", 15).stat("WIS", 1).class("Cleric", 2).standing(1);
-    requests.write(RollRequest { roll: check.with_natural(face), purpose: RollPurpose::Sample });
+    requests.write(RollRequest { roll: check.with_natural(face), purpose: RollPurpose::Sample, result: Some("+5 standing with the Ash Choir".into()) });
 }
 
 fn take_requests(mut requests: MessageReader<RollRequest>, mut dice: ResMut<Dice>) {
@@ -270,7 +272,7 @@ fn run_dice(
             RollPurpose::Persuade(_) => crate::talk::PANEL_WIDTH + crate::talk::PANEL_MARGIN + 24.0,
             _ => 0.0,
         };
-        spawn_panel(&mut commands, &fonts, camera, &stage, &active.request.roll, state, &skip, clear);
+        spawn_panel(&mut commands, &fonts, camera, &stage, &active.request.roll, active.request.result.as_deref(), state, &skip, clear);
     }
 }
 
@@ -291,7 +293,7 @@ fn rule(col: &mut ChildSpawnerCommands) {
     col.spawn((Node { height: px(1), margin: UiRect::vertical(px(4)), ..default() }, BackgroundColor(FAINT)));
 }
 
-fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: &DiceStage, roll: &CheckRoll, (phase, shown): (Stage, usize), skip: &str, clear_right: f32) {
+fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: &DiceStage, roll: &CheckRoll, result: Option<&str>, (phase, shown): (Stage, usize), skip: &str, clear_right: f32) {
     let landed = phase != Stage::Tumbling;
     let running: i32 = roll.natural + roll.modifiers.iter().take(shown).map(|m| m.amount).sum::<i32>();
     let verdict = phase == Stage::Verdict;
@@ -371,6 +373,9 @@ fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: 
                             .with_children(|b| {
                                 b.spawn((Text::new(word), UiFonts::style(&fonts.display_bold, 34.0, colour)));
                             });
+                        }
+                        if let (true, Some(result)) = (verdict, result) {
+                            col.spawn((Text::new(result.to_string()), UiFonts::style(&fonts.body_medium, 18.0, if roll.succeeded { OK } else { BAD })));
                         }
                         let foot = if verdict { format!("{skip} continue") } else { format!("{skip} skip") };
                         col.spawn((Node { margin: UiRect::top(px(8)), ..default() }, Text::new(foot), UiFonts::style(&fonts.mono, 13.0, MUTED)));
@@ -638,7 +643,7 @@ mod tests {
     #[test]
     fn the_roll_stages_follow_the_clock() {
         let check = Check::d20("x", 10).stat("WIS", 1).standing(1);
-        let mut active = Active { request: RollRequest { roll: check.with_natural(5), purpose: RollPurpose::Sample }, t: 0.0, hold: None, drawn: None, scene: Vec::new() };
+        let mut active = Active { request: RollRequest { roll: check.with_natural(5), purpose: RollPurpose::Sample, result: None }, t: 0.0, hold: None, drawn: None, scene: Vec::new() };
         assert_eq!(active.stage(), (Stage::Tumbling, 0));
         active.t = TUMBLE_SECONDS + STEP_SECONDS * 1.5;
         assert_eq!(active.stage(), (Stage::Counting, 1));

@@ -110,7 +110,7 @@ fn start_identifying(
         None => check.roll(&mut Mulberry32::new(item.seed)),
     };
     identifying.0 = Some(id);
-    rolls.write(RollRequest { roll, purpose: RollPurpose::Identify(id) });
+    rolls.write(RollRequest { roll, purpose: RollPurpose::Identify(id), result: None });
 }
 
 /// Applies the roll once its dice have closed.
