@@ -608,7 +608,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                         if item.profile.kind == Kind::Gear {
                             slot.spawn((
                                 Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
-                                BackgroundColor(rarity_color(item.rarity)),
+                                BackgroundColor(rarity_color(item.shown_rarity())),
                             ));
                         }
                     }

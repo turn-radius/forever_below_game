@@ -11,7 +11,7 @@
 //! identified through saves, and a record from before reads as fully known.
 //!
 //! `FB_DEBUG_UNKNOWN=1` puts an unknown ring in the pack at the start, for captures; `=2` adds a
-//! partly known sword and `=3` makes the ring identified.
+//! partly known sword, `=3` makes the ring identified and `=4` has a try on it that fell short.
 
 use bevy::prelude::*;
 use fb_character::check::Check;
@@ -20,12 +20,14 @@ use fb_items::Item;
 use procgen_rng::Mulberry32;
 
 use crate::character::{Character, modifier};
+use crate::camp::Asleep;
 use crate::combat::RunDice;
 use crate::dice::{RollDone, RollPurpose, RollRequest};
 use crate::inventory::{Hovered, Inventory, ItemId, Toasts};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::play::{DelveSystems, inventory_open};
+use crate::record::WorldRecord;
 
 pub struct IdentifyPlugin;
 
@@ -36,7 +38,7 @@ impl Plugin for IdentifyPlugin {
             app.add_systems(Update, give_unknown_for_capture.in_set(DelveSystems));
         }
         app.add_systems(OnExit(AppState::Delving), |mut identifying: ResMut<Identifying>| identifying.0 = None);
-        app.add_systems(Update, (start_identifying.run_if(inventory_open), finish_identifying).chain().in_set(DelveSystems));
+        app.add_systems(Update, (count_rests, start_identifying.run_if(inventory_open), finish_identifying).chain().in_set(DelveSystems));
     }
 }
 
@@ -65,11 +67,23 @@ pub fn found_unknown(item: Item) -> Item {
     item.unidentified()
 }
 
+/// Counts each waking from a sleep in [`WorldRecord::rests`], which a failed identify or
+/// persuasion waits for.
+fn count_rests(asleep: Option<Res<Asleep>>, record: Option<ResMut<WorldRecord>>, mut was_asleep: Local<bool>) {
+    let (Some(asleep), Some(mut record)) = (asleep, record) else { return };
+    let now = asleep.0.is_some();
+    if *was_asleep && !now {
+        record.rests += 1;
+    }
+    *was_asleep = now;
+}
+
 /// The Identify key over an unknown item rolls to identify it. One roll at a time.
 fn start_identifying(
     input: ActionInput,
     hovered: Res<Hovered>,
     inventory: Res<Inventory>,
+    record: Option<Res<WorldRecord>>,
     character: Option<Res<Character>>,
     dice: Option<ResMut<RunDice>>,
     mut identifying: ResMut<Identifying>,
@@ -85,6 +99,10 @@ fn start_identifying(
         toasts.say("There is nothing more to learn of it");
         return;
     }
+    if !item.can_identify(record.as_deref().map_or(0, |r| r.rests)) {
+        toasts.say("Try again after resting");
+        return;
+    }
     let (intelligence, class) = character.as_deref().map_or((10, ClassKind::Fighter), |c| (c.scores().intelligence, c.class.faction_class()));
     let check = check_for(item, modifier(intelligence), class);
     let roll = match dice {
@@ -96,13 +114,13 @@ fn start_identifying(
 }
 
 /// Applies the roll once its dice have closed.
-fn finish_identifying(mut done: MessageReader<RollDone>, mut identifying: ResMut<Identifying>, mut inventory: ResMut<Inventory>, mut toasts: Toasts) {
+fn finish_identifying(mut done: MessageReader<RollDone>, mut identifying: ResMut<Identifying>, mut inventory: ResMut<Inventory>, record: Option<Res<WorldRecord>>, mut toasts: Toasts) {
     for finished in done.read() {
         let RollPurpose::Identify(id) = finished.purpose else { continue };
         identifying.0 = None;
         let Some(mut item) = inventory.item(id).cloned() else { continue };
         let hidden = item.hidden_affixes();
-        item.reveal(finished.roll.total);
+        item.reveal_at(finished.roll.total, record.as_deref().map_or(0, |r| r.rests));
         let learned = hidden - item.hidden_affixes();
         let line = if item.is_known() {
             format!("You identify the {}", item.title().to_lowercase())
@@ -126,10 +144,14 @@ fn give_unknown_for_capture(mut inventory: ResMut<Inventory>, mut frames: Local<
     }
     let both = std::env::var("FB_DEBUG_UNKNOWN").is_ok_and(|v| v.trim() == "2");
     let identified = std::env::var("FB_DEBUG_UNKNOWN").is_ok_and(|v| v.trim() == "3");
+    let tried = std::env::var("FB_DEBUG_UNKNOWN").is_ok_and(|v| v.trim() == "4");
     let found = |base: &str, min_affixes: usize| (1..20_000).filter_map(|s| fb_items::roll_item_with(base, s, fb_items::Odds::loot(10))).find(|i| i.rarity >= fb_items::Rarity::Rare && i.affixes.len() >= min_affixes);
     let mut items = vec![found("Ring", 2).map(found_unknown).map(|mut ring| {
         if identified {
             ring.reveal(ring.identify_dc());
+        }
+        if tried {
+            ring.reveal_at(ring.identify_dc() - 3, 0);
         }
         ring
     })];
@@ -186,6 +208,26 @@ mod tests {
         assert_eq!(app.world().resource::<Inventory>().item(id).unwrap().known, Known::Unknown);
         close(&mut app, id, dc - 2);
         assert!(matches!(app.world().resource::<Inventory>().item(id).unwrap().known, Known::Partly(_)));
+    }
+
+    #[test]
+    fn a_failed_identify_waits_for_the_next_rest() {
+        let (mut app, id) = app_with(unknown_ring());
+        app.insert_resource(WorldRecord::default()).insert_resource(Asleep::default());
+        app.add_systems(Update, count_rests.before(finish_identifying));
+        let dc = app.world().resource::<Inventory>().item(id).unwrap().identify_dc();
+        close(&mut app, id, dc - 3);
+        let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
+        assert!(!item.is_known() && !item.can_identify(app.world().resource::<WorldRecord>().rests));
+        // Sleeping and waking is one rest.
+        app.world_mut().resource_mut::<Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: Entity::PLACEHOLDER, hit_points: 1, since: 0.0, began: 0.0 });
+        app.update();
+        assert_eq!(app.world().resource::<WorldRecord>().rests, 0);
+        app.world_mut().resource_mut::<Asleep>().0 = None;
+        app.update();
+        let rests = app.world().resource::<WorldRecord>().rests;
+        assert_eq!(rests, 1);
+        assert!(item.can_identify(rests));
     }
 
     #[test]

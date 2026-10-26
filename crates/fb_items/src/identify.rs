@@ -109,6 +109,24 @@ impl Item {
         self.affixes.len() - self.shown_affixes().len()
     }
 
+    /// The rarity the card shows: common until fully known, so the colour gives nothing away.
+    pub fn shown_rarity(&self) -> Rarity {
+        if self.is_known() { self.rarity } else { Rarity::Common }
+    }
+
+    /// Whether the delver may try to identify it now: it is not fully known, and either it has
+    /// not been tried or they have rested (`rests` counts their rests) since it fell short.
+    pub fn can_identify(&self, rests: u32) -> bool {
+        !self.is_known() && self.rest_tried.is_none_or(|at| rests > at)
+    }
+
+    /// [`Item::reveal`] for a roll made when the delver had rested `rests` times: an item still
+    /// not fully known waits for the next rest.
+    pub fn reveal_at(&mut self, total: i32, rests: u32) {
+        self.reveal(total);
+        self.rest_tried = if self.is_known() { None } else { Some(rests) };
+    }
+
     /// The roll that identifies it: [`dc`] of its rarity.
     pub fn identify_dc(&self) -> i32 {
         dc(self.rarity)
@@ -140,6 +158,23 @@ mod tests {
         assert_eq!(found.hidden_affixes(), ring.affixes.len());
         // What it does is unchanged.
         assert_eq!(found.profile.stats, ring.profile.stats);
+    }
+
+    #[test]
+    fn a_failed_identify_waits_for_a_rest_and_an_unknown_item_is_worth_a_common_ones() {
+        let mut ring = magic_ring().unidentified();
+        assert!(ring.can_identify(0));
+        let common = Item { rarity: Rarity::Common, affixes: vec![], ..ring.clone() };
+        assert_eq!(ring.value_copper(), common.value_copper());
+        assert_eq!(ring.shown_rarity(), Rarity::Common);
+        ring.reveal_at(ring.identify_dc() - 3, 4);
+        assert!(!ring.can_identify(4), "no retry before resting");
+        assert!(ring.can_identify(5));
+        assert_eq!(ring.value_copper(), common.value_copper(), "partly known is still worth a common one");
+        ring.reveal_at(ring.identify_dc(), 5);
+        assert!(ring.is_known() && !ring.can_identify(99) && ring.rest_tried.is_none());
+        assert_eq!(ring.shown_rarity(), ring.rarity);
+        assert!(ring.value_copper() > common.value_copper());
     }
 
     #[test]

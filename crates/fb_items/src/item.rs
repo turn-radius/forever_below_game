@@ -117,6 +117,9 @@ pub struct Item {
     /// How much of its magic the delver has found out ([`Known`]). Everything rolled is fully known
     /// until the game sets a found one unknown ([`Item::unidentified`]); the stats count either way.
     pub known: Known,
+    /// The count of rests when an attempt to identify it last fell short: it cannot be tried
+    /// again until the delver has rested since ([`Item::can_identify`]).
+    pub rest_tried: Option<u32>,
 }
 
 /// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
@@ -136,11 +139,12 @@ pub struct ItemParts {
     pub words: Option<String>,
     pub teaching: Option<Teaching>,
     pub known: Known,
+    pub rest_tried: Option<u32>,
 }
 
 impl From<Item> for ItemParts {
     fn from(i: Item) -> Self {
-        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known }
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known, rest_tried: i.rest_tried }
     }
 }
 
@@ -151,7 +155,7 @@ impl Item {
     /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
-        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known } = parts;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried } = parts;
         let mut profile = profile(&base, &shape);
         if let Some(c) = coins {
             profile.description = c.to_string();
@@ -159,7 +163,7 @@ impl Item {
         for a in &affixes {
             a.apply_to_stats(&mut profile.stats);
         }
-        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known })
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried })
     }
 }
 
@@ -302,7 +306,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -314,7 +318,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
