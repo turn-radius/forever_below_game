@@ -37,23 +37,26 @@ use fb_character::GameTime;
 use fb_faction::{Profession, Style, Tier, Trade};
 use fb_items::{
     armory_base::roll_shape,
-    commission::{FieldClass, classify, material_options, section_label, shaped_copper, size_factor, visible_fields},
+    commission::{
+        FieldClass, classify, material_options, section_label, shaped_copper, size_factor,
+        visible_fields,
+    },
     item::Coins,
 };
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
+use crate::character::Character;
+use crate::enchanting::{pay, wallet};
 use crate::game_clock::GameClock;
+use crate::inventory::{FloorChange, FloorChanges, Icons, Inventory, Toasts};
 use crate::launch::AppState;
 use crate::light::StudioLight;
 use crate::play::{DelveSystems, Screen, ScreenOpen, show_screen};
-use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, item_bounds};
-use crate::character::Character;
-use crate::enchanting::{pay, wallet};
-use crate::inventory::{FloorChange, FloorChanges, Icons, Inventory, Toasts};
 use crate::record::WorldRecord;
-use crate::tweak_panel::{Tweak, TweakPanelPlugin, TweakPanelSystems, chip, panel_body};
+use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, item_bounds};
 use crate::turntable::{PLATE, PLATE_INK, SPIN_SPEED};
+use crate::tweak_panel::{Tweak, TweakPanelPlugin, TweakPanelSystems, chip, panel_body};
 use crate::ui::{BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, UiFonts, node_rect, ui_cursor};
 
 /// Width of the panel on the right, in the interface's logical pixels.
@@ -98,8 +101,24 @@ pub fn tier_up(tier: Tier) -> Tier {
 /// Empty for a trade that makes nothing to order.
 pub fn bases_of(profession: Profession) -> &'static [&'static str] {
     match profession {
-        Profession::Armorer => &["Gambeson", "Brigandine", "Mail", "Scale coat", "Cuirass", "Helm", "Hood", "Mail coif", "Gloves", "Gauntlets", "Shoes", "Boots", "Shield"],
-        Profession::Weaponsmith => &["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff"],
+        Profession::Armorer => &[
+            "Gambeson",
+            "Brigandine",
+            "Mail",
+            "Scale coat",
+            "Cuirass",
+            "Helm",
+            "Hood",
+            "Mail coif",
+            "Gloves",
+            "Gauntlets",
+            "Shoes",
+            "Boots",
+            "Shield",
+        ],
+        Profession::Weaponsmith => &[
+            "Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff",
+        ],
         Profession::Bowyer => &["Bow", "Crossbow", "Arrow", "Bolt", "Quiver", "Bolt case"],
         Profession::Tentmaker => &["Tent", "Campfire kit"],
         _ => &[],
@@ -160,7 +179,9 @@ pub fn open_controls(shape: &Shape, tier: Tier) -> Vec<Field> {
             let class = classify(&field)?;
             let open = match (tier, class) {
                 (Tier::Novice, _) => false,
-                (Tier::Apprentice | Tier::Expert, FieldClass::Material | FieldClass::Colour) => true,
+                (Tier::Apprentice | Tier::Expert, FieldClass::Material | FieldClass::Colour) => {
+                    true
+                }
                 (Tier::Apprentice, _) => false,
                 (Tier::Expert, FieldClass::Shape) => matches!(field.kind, FieldKind::Slider { .. }),
                 (Tier::Expert, FieldClass::Ornament) => false,
@@ -169,7 +190,11 @@ pub fn open_controls(shape: &Shape, tier: Tier) -> Vec<Field> {
             if !open {
                 return None;
             }
-            let offered = if class == FieldClass::Material { Some(material_options(shape, &field)) } else { None };
+            let offered = if class == FieldClass::Material {
+                Some(material_options(shape, &field))
+            } else {
+                None
+            };
             match &mut field.kind {
                 FieldKind::Slider { range, .. } if tier == Tier::Expert => *range = middle(*range),
                 FieldKind::Choice { options, .. } => {
@@ -186,7 +211,9 @@ pub fn open_controls(shape: &Shape, tier: Tier) -> Vec<Field> {
             field.name = match field.name.as_str() {
                 "color" => "colour".to_string(),
                 "color2" => "pattern colour".to_string(),
-                "wood" | "leather" | "cord" | "fletching" if field.path.starts_with("palette.") => format!("{} dye", field.name),
+                "wood" | "leather" | "cord" | "fletching" if field.path.starts_with("palette.") => {
+                    format!("{} dye", field.name)
+                }
                 name => name.replace("_color", " colour"),
             };
             Some(field)
@@ -300,7 +327,9 @@ fn material_word(option: &str) -> &str {
 
 /// A stable seed from a name (FNV-1a).
 fn name_seed(name: &str) -> u32 {
-    name.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193))
+    name.bytes().fold(0x811c_9dc5u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
 }
 
 /// A new item of `base` rolled from `seed`: no wear.
@@ -380,17 +409,23 @@ impl CommissionScreen {
 
     /// The tier the controls are open at for the family showing.
     pub fn tier(&self) -> Tier {
-        self.trade.map_or(Tier::Novice, |t| controls_tier(&t, self.base))
+        self.trade
+            .map_or(Tier::Novice, |t| controls_tier(&t, self.base))
     }
 
     /// Whether the family showing is in the maker's own style.
     pub fn own_style(&self) -> bool {
-        self.trade.is_some_and(|t| t.style.is_some_and(|s| in_style(s, self.base)))
+        self.trade
+            .is_some_and(|t| t.style.is_some_and(|s| in_style(s, self.base)))
     }
 
     /// The seed of the maker's `index`th roll of `base`: the same each time they are asked.
     pub fn roll_seed(&self, base: &str, index: usize) -> u32 {
-        let mut rng = Mulberry32::new(self.maker_seed ^ name_seed(base).rotate_left(11) ^ (index as u32 + 1).wrapping_mul(0x9e37_79b9));
+        let mut rng = Mulberry32::new(
+            self.maker_seed
+                ^ name_seed(base).rotate_left(11)
+                ^ (index as u32 + 1).wrapping_mul(0x9e37_79b9),
+        );
         (rng.next_f64() * 4_294_967_296.0) as u32
     }
 
@@ -409,25 +444,40 @@ impl CommissionScreen {
                 Some((seed, shape, mesh))
             })
             .collect();
-        self.reference = made.iter().map(|(_, _, mesh)| volume_of(mesh)).sum::<f32>() / made.len().max(1) as f32;
+        self.reference =
+            made.iter().map(|(_, _, mesh)| volume_of(mesh)).sum::<f32>() / made.len().max(1) as f32;
         let tier = self.tier();
         self.rolls = made
             .into_iter()
             .filter_map(|(seed, shape, mesh)| {
-                let price = shaped_copper(base, &shape, size_factor(volume_of(&mesh), self.reference));
-                let materials: Vec<Field> = visible_fields(&shape).into_iter().filter(|f| classify(f) == Some(FieldClass::Material)).collect();
+                let price =
+                    shaped_copper(base, &shape, size_factor(volume_of(&mesh), self.reference));
+                let materials: Vec<Field> = visible_fields(&shape)
+                    .into_iter()
+                    .filter(|f| classify(f) == Some(FieldClass::Material))
+                    .collect();
                 // What the thing is chiefly made of: its blade, head or body before its fittings.
-                let main = ["blade", "head", "cut", "limbs", "tent", "shaft"].iter().find_map(|s| materials.iter().find(|f| f.section == *s)).or(materials.first()).and_then(|f| match &f.kind {
-                    FieldKind::Choice { value, .. } => Some(material_word(value).to_string()),
-                    _ => None,
-                });
-                let length = item_bounds(&mesh).map_or(0.0, |b| Vec3::from(b.max - b.min).max_element());
+                let main = ["blade", "head", "cut", "limbs", "tent", "shaft"]
+                    .iter()
+                    .find_map(|s| materials.iter().find(|f| f.section == *s))
+                    .or(materials.first())
+                    .and_then(|f| match &f.kind {
+                        FieldKind::Choice { value, .. } => Some(material_word(value).to_string()),
+                        _ => None,
+                    });
+                let length =
+                    item_bounds(&mesh).map_or(0.0, |b| Vec3::from(b.max - b.min).max_element());
                 // A world unit is 10 cm.
                 let blurb = match main {
                     Some(main) => format!("{main}, {:.0} cm long", length * 10.0),
                     None => format!("{:.0} cm long", length * 10.0),
                 };
-                Some(RollRow { seed, price_copper: ((price as f64 * tier_charge(tier)).round() as u64).max(1), blurb, icon: icon_item(base, seed, shape)? })
+                Some(RollRow {
+                    seed,
+                    price_copper: ((price as f64 * tier_charge(tier)).round() as u64).max(1),
+                    blurb,
+                    icon: icon_item(base, seed, shape)?,
+                })
             })
             .collect();
         self.set_roll(0);
@@ -447,8 +497,14 @@ impl CommissionScreen {
     /// made of in this trade becomes the first of its options, and an expert's sliders (which reach
     /// only the middle of their ranges) come inside them.
     fn normalise(&mut self) {
-        let Some(shape) = self.shape.as_mut() else { return };
-        for field in open_controls(shape, self.trade.map_or(Tier::Novice, |t| controls_tier(&t, self.base))) {
+        let Some(shape) = self.shape.as_mut() else {
+            return;
+        };
+        for field in open_controls(
+            shape,
+            self.trade
+                .map_or(Tier::Novice, |t| controls_tier(&t, self.base)),
+        ) {
             match field.kind {
                 FieldKind::Choice { value, options } if !options.contains(&value) => {
                     if let Some(first) = options.first() {
@@ -470,7 +526,10 @@ impl CommissionScreen {
 
     /// The fields the delver may use now.
     pub fn controls(&self) -> Vec<Field> {
-        self.shape.as_ref().map(|s| open_controls(s, self.tier())).unwrap_or_default()
+        self.shape
+            .as_ref()
+            .map(|s| open_controls(s, self.tier()))
+            .unwrap_or_default()
     }
 
     /// What the shaped item costs in copper: the base price times material, size and ornament,
@@ -507,9 +566,19 @@ impl CommissionScreen {
     /// Sets the field at `path` to `value`, as a hand would: a number for a slider, an option's
     /// name for a choice, `true` or `false` for a toggle. Only an open control takes it.
     pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), String> {
-        let field = self.controls().into_iter().find(|f| f.path == path).ok_or_else(|| format!("{path} is not open to a {}", self.tier().label()))?;
+        let field = self
+            .controls()
+            .into_iter()
+            .find(|f| f.path == path)
+            .ok_or_else(|| format!("{path} is not open to a {}", self.tier().label()))?;
         match field.kind {
-            FieldKind::Slider { range, .. } => self.set_slider(path, value.parse::<f32>().map_err(|e| e.to_string())? .clamp(range.min, range.max)),
+            FieldKind::Slider { range, .. } => self.set_slider(
+                path,
+                value
+                    .parse::<f32>()
+                    .map_err(|e| e.to_string())?
+                    .clamp(range.min, range.max),
+            ),
             FieldKind::Choice { options, .. } => {
                 if !options.iter().any(|o| o == value) {
                     return Err(format!("{value} is not one of {options:?}"));
@@ -526,7 +595,8 @@ impl CommissionScreen {
                 self.remesh();
             }
             FieldKind::Colour { .. } => {
-                let hex = u32::from_str_radix(value.trim_start_matches('#'), 16).map_err(|e| e.to_string())?;
+                let hex = u32::from_str_radix(value.trim_start_matches('#'), 16)
+                    .map_err(|e| e.to_string())?;
                 let rgb = armory::material::Rgb::hex(hex);
                 self.set_colour(path, [rgb.0, rgb.1, rgb.2]);
             }
@@ -541,14 +611,23 @@ impl CommissionScreen {
 
 impl Tweak for CommissionScreen {
     fn fields(&self) -> Vec<Field> {
-        if self.open { self.controls() } else { Vec::new() }
+        if self.open {
+            self.controls()
+        } else {
+            Vec::new()
+        }
     }
 
     fn set_slider(&mut self, path: &str, value: f32) {
-        let Some(range) = self.controls().into_iter().find(|f| f.path == path).and_then(|f| match f.kind {
-            FieldKind::Slider { range, .. } => Some(range),
-            _ => None,
-        }) else {
+        let Some(range) = self
+            .controls()
+            .into_iter()
+            .find(|f| f.path == path)
+            .and_then(|f| match f.kind {
+                FieldKind::Slider { range, .. } => Some(range),
+                _ => None,
+            })
+        else {
             return;
         };
         if let Some(shape) = &mut self.shape {
@@ -558,10 +637,15 @@ impl Tweak for CommissionScreen {
     }
 
     fn cycle(&mut self, path: &str, by: isize) {
-        let Some((options, current)) = self.controls().into_iter().find(|f| f.path == path).and_then(|f| match f.kind {
-            FieldKind::Choice { options, value } => Some((options, value)),
-            _ => None,
-        }) else {
+        let Some((options, current)) = self
+            .controls()
+            .into_iter()
+            .find(|f| f.path == path)
+            .and_then(|f| match f.kind {
+                FieldKind::Choice { options, value } => Some((options, value)),
+                _ => None,
+            })
+        else {
             return;
         };
         if options.is_empty() {
@@ -581,7 +665,11 @@ impl Tweak for CommissionScreen {
     }
 
     fn set_colour(&mut self, path: &str, rgb: [f32; 3]) {
-        if !self.controls().iter().any(|f| f.path == path && matches!(f.kind, FieldKind::Colour { .. })) {
+        if !self
+            .controls()
+            .iter()
+            .any(|f| f.path == path && matches!(f.kind, FieldKind::Colour { .. }))
+        {
             return;
         }
         if let Some(shape) = &mut self.shape {
@@ -613,8 +701,17 @@ impl Tweak for CommissionScreen {
 /// Opens the screen for `trade`'s `maker` of `faction`, freeing the mouse. Returns whether it
 /// opened: a trade that makes nothing to order (a guard, an alchemist) leaves things as they
 /// were.
-pub fn open(screen: &mut CommissionScreen, open: &mut ScreenOpen, cursor: Option<&mut CursorOptions>, trade: Trade, maker: &str, faction: &str) -> bool {
-    let Some(mut begun) = CommissionScreen::begin(trade, maker, faction) else { return false };
+pub fn open(
+    screen: &mut CommissionScreen,
+    open: &mut ScreenOpen,
+    cursor: Option<&mut CursorOptions>,
+    trade: Trade,
+    maker: &str,
+    faction: &str,
+) -> bool {
+    let Some(mut begun) = CommissionScreen::begin(trade, maker, faction) else {
+        return false;
+    };
     // The panel is built afresh each time the screen opens.
     begun.structure = screen.structure + begun.structure + 1;
     *screen = begun;
@@ -625,18 +722,37 @@ pub fn open(screen: &mut CommissionScreen, open: &mut ScreenOpen, cursor: Option
 /// Reads `FB_COMMISSION=<profession>:<tier>[:<style>]`: "weaponsmith:master:blades",
 /// "armorer:apprentice", "weaponsmith:expert:axes_and_clubs" (spaces or underscores).
 pub fn parse_trade(text: &str) -> Result<Trade, String> {
-    let mut parts = text.split(':').map(|p| p.trim().to_lowercase().replace(['_', '-'], " "));
+    let mut parts = text
+        .split(':')
+        .map(|p| p.trim().to_lowercase().replace(['_', '-'], " "));
     let profession = parts.next().unwrap_or_default();
-    let profession = Profession::TRADES.iter().copied().find(|p| p.label() == profession).ok_or_else(|| format!("no profession {profession:?}"))?;
+    let profession = Profession::TRADES
+        .iter()
+        .copied()
+        .find(|p| p.label() == profession)
+        .ok_or_else(|| format!("no profession {profession:?}"))?;
     let tier = parts.next().unwrap_or_else(|| "novice".to_string());
-    let tier = Tier::ALL.iter().copied().find(|t| t.label() == tier).ok_or_else(|| format!("no tier {tier:?}"))?;
+    let tier = Tier::ALL
+        .iter()
+        .copied()
+        .find(|t| t.label() == tier)
+        .ok_or_else(|| format!("no tier {tier:?}"))?;
     let style = match parts.next() {
-        Some(text) if !text.is_empty() => {
-            Some(Style::ARMOUR.iter().chain(&Style::WEAPONS).copied().find(|s| s.label() == text).ok_or_else(|| format!("no style {text:?}"))?)
-        }
+        Some(text) if !text.is_empty() => Some(
+            Style::ARMOUR
+                .iter()
+                .chain(&Style::WEAPONS)
+                .copied()
+                .find(|s| s.label() == text)
+                .ok_or_else(|| format!("no style {text:?}"))?,
+        ),
         _ => None,
     };
-    Ok(Trade { profession, tier, style })
+    Ok(Trade {
+        profession,
+        tier,
+        style,
+    })
 }
 
 pub struct CommissionPlugin;
@@ -644,7 +760,9 @@ pub struct CommissionPlugin;
 impl Plugin for CommissionPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<bevy::app::HierarchyPropagatePlugin<RenderLayers>>() {
-            app.add_plugins(bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(Update));
+            app.add_plugins(bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(
+                Update,
+            ));
         }
         app.init_resource::<CommissionScreen>()
             .init_resource::<CommissionStage>()
@@ -653,15 +771,38 @@ impl Plugin for CommissionPlugin {
             .add_plugins(TweakPanelPlugin::<CommissionScreen>::default())
             .add_systems(
                 PostStartup,
-                open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| std::env::var("FB_COMMISSION").is_ok_and(|v| !v.is_empty())),
+                open_for_capture
+                    .run_if(in_state(AppState::Delving))
+                    .run_if(|| std::env::var("FB_COMMISSION").is_ok_and(|v| !v.is_empty())),
             )
             .add_systems(
                 Update,
                 (
-                    (from_talk, open_requests, keep_in_step, press_controls, collect_from_talk).chain().before(TweakPanelSystems),
-                    order_for_capture.run_if(|| std::env::var("FB_COMMISSION_ORDER").is_ok_and(|v| !v.is_empty())),
-                    (build_screen, fill_rolls, show_item, refresh_header, size_stage, turn_item).chain().after(TweakPanelSystems),
-                    scroll_for_capture.run_if(|| std::env::var("FB_COMMISSION_SCROLL").is_ok()).after(TweakPanelSystems),
+                    (
+                        from_talk,
+                        open_requests,
+                        keep_in_step,
+                        press_controls,
+                        collect_from_talk,
+                    )
+                        .chain()
+                        .before(TweakPanelSystems),
+                    order_for_capture.run_if(|| {
+                        std::env::var("FB_COMMISSION_ORDER").is_ok_and(|v| !v.is_empty())
+                    }),
+                    (
+                        build_screen,
+                        fill_rolls,
+                        show_item,
+                        refresh_header,
+                        size_stage,
+                        turn_item,
+                    )
+                        .chain()
+                        .after(TweakPanelSystems),
+                    scroll_for_capture
+                        .run_if(|| std::env::var("FB_COMMISSION_SCROLL").is_ok())
+                        .after(TweakPanelSystems),
                 )
                     .in_set(DelveSystems),
             );
@@ -677,9 +818,18 @@ struct CommissionStage {
 
 impl FromWorld for CommissionStage {
     fn from_world(world: &mut World) -> Self {
-        let mut image = Image::new_target_texture(STAGE_PIXELS, STAGE_PIXELS, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
-        image.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD;
-        CommissionStage { image: world.resource_mut::<Assets<Image>>().add(image), camera: None }
+        let mut image = Image::new_target_texture(
+            STAGE_PIXELS,
+            STAGE_PIXELS,
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            None,
+        );
+        image.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD
+            | bevy::asset::RenderAssetUsages::MAIN_WORLD;
+        CommissionStage {
+            image: world.resource_mut::<Assets<Image>>().add(image),
+            camera: None,
+        }
     }
 }
 
@@ -731,14 +881,26 @@ enum Readout {
 }
 
 /// The talk chose Commission: ask for the screen with the speaker as the maker.
-fn from_talk(mut chosen: MessageReader<crate::talk::ServiceChosen>, talk: Res<crate::talk::Talk>, mut requests: MessageWriter<OpenCommission>) {
+fn from_talk(
+    mut chosen: MessageReader<crate::talk::ServiceChosen>,
+    talk: Res<crate::talk::Talk>,
+    mut requests: MessageWriter<OpenCommission>,
+) {
     for chosen in chosen.read() {
         if chosen.service != crate::talk::Service::Commission {
             continue;
         }
-        let Some(speaker) = talk.speaker.as_ref() else { continue };
+        let Some(speaker) = talk.speaker.as_ref() else {
+            continue;
+        };
         let Some(trade) = speaker.trade else { continue };
-        requests.write(OpenCommission { trade, maker: speaker.name.clone(), faction: speaker.faction.clone(), maker_seed: speaker.seed, depth: speaker.depth });
+        requests.write(OpenCommission {
+            trade,
+            maker: speaker.name.clone(),
+            faction: speaker.faction.clone(),
+            maker_seed: speaker.seed,
+            depth: speaker.depth,
+        });
     }
 }
 
@@ -749,7 +911,14 @@ fn open_requests(
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
     for request in requests.read() {
-        if open(&mut screen, &mut open_screen, cursor.as_deref_mut().map(|c| &mut **c), request.trade, &request.maker, &request.faction) {
+        if open(
+            &mut screen,
+            &mut open_screen,
+            cursor.as_deref_mut().map(|c| &mut **c),
+            request.trade,
+            &request.maker,
+            &request.faction,
+        ) {
             screen.maker_spot = request.maker_seed;
             screen.depth = request.depth;
         }
@@ -757,7 +926,12 @@ fn open_requests(
 }
 
 /// `FB_COMMISSION`: opens the screen at the start; `FB_COMMISSION_SET` then shapes it.
-fn open_for_capture(mut screen: ResMut<CommissionScreen>, mut turn: ResMut<Turn>, mut open_screen: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+fn open_for_capture(
+    mut screen: ResMut<CommissionScreen>,
+    mut turn: ResMut<Turn>,
+    mut open_screen: ResMut<ScreenOpen>,
+    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+) {
     let text = std::env::var("FB_COMMISSION").unwrap_or_default();
     let trade = match parse_trade(&text) {
         Ok(trade) => trade,
@@ -766,23 +940,43 @@ fn open_for_capture(mut screen: ResMut<CommissionScreen>, mut turn: ResMut<Turn>
             return;
         }
     };
-    if !open(&mut screen, &mut open_screen, cursor.as_deref_mut().map(|c| &mut **c), trade, "Orla Venn", "the Cinder Hold") {
-        warn!("FB_COMMISSION: {} makes nothing to order", trade.profession.label());
+    if !open(
+        &mut screen,
+        &mut open_screen,
+        cursor.as_deref_mut().map(|c| &mut **c),
+        trade,
+        "Orla Venn",
+        "the Cinder Hold",
+    ) {
+        warn!(
+            "FB_COMMISSION: {} makes nothing to order",
+            trade.profession.label()
+        );
         return;
     }
-    if let Some(angle) = std::env::var("FB_COMMISSION_TURN").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+    if let Some(angle) = std::env::var("FB_COMMISSION_TURN")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+    {
         turn.hold = Some(angle);
         turn.angle = angle;
     }
     if let Ok(base) = std::env::var("FB_COMMISSION_BASE") {
-        if let Some(&base) = bases_of(trade.profession).iter().find(|b| b.eq_ignore_ascii_case(base.trim())) {
+        if let Some(&base) = bases_of(trade.profession)
+            .iter()
+            .find(|b| b.eq_ignore_ascii_case(base.trim()))
+        {
             screen.set_base(base);
         }
     }
     if let Ok(roll) = std::env::var("FB_COMMISSION_ROLL") {
         screen.set_roll(roll.trim().parse().unwrap_or(0));
     }
-    for pair in std::env::var("FB_COMMISSION_SET").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+    for pair in std::env::var("FB_COMMISSION_SET")
+        .unwrap_or_default()
+        .split(',')
+        .filter(|p| !p.is_empty())
+    {
         match pair.split_once('=') {
             Some((path, value)) => {
                 if let Err(error) = screen.set_field(path.trim(), value.trim()) {
@@ -814,36 +1008,65 @@ fn order_for_capture(
     if *frames != 10 {
         return;
     }
-    let Some(at) = player.iter().next().map(|t| t.translation) else { return };
+    let Some(at) = player.iter().next().map(|t| t.translation) else {
+        return;
+    };
     let Some((_, maker)) = folk
         .iter()
-        .filter(|(_, d)| d.person.spot.trade.is_some_and(|t| !bases_of(t.profession).is_empty()))
-        .min_by(|a, b| a.0.translation.distance(at).total_cmp(&b.0.translation.distance(at)))
+        .filter(|(_, d)| {
+            d.person
+                .spot
+                .trade
+                .is_some_and(|t| !bases_of(t.profession).is_empty())
+        })
+        .min_by(|a, b| {
+            a.0.translation
+                .distance(at)
+                .total_cmp(&b.0.translation.distance(at))
+        })
     else {
         warn!("FB_COMMISSION_ORDER: no maker on the level");
         return;
     };
-    let Some(trade) = maker.person.spot.trade else { return };
-    let Some(mut screen) = CommissionScreen::begin(trade, &maker.person.name, &maker.person.faction.name) else { return };
+    let Some(trade) = maker.person.spot.trade else {
+        return;
+    };
+    let Some(mut screen) =
+        CommissionScreen::begin(trade, &maker.person.name, &maker.person.faction.name)
+    else {
+        return;
+    };
     screen.maker_spot = maker.person.spot.seed;
     screen.depth = level.0.depth;
     if let Ok(base) = std::env::var("FB_COMMISSION_BASE")
-        && let Some(&base) = bases_of(trade.profession).iter().find(|b| b.eq_ignore_ascii_case(base.trim()))
+        && let Some(&base) = bases_of(trade.profession)
+            .iter()
+            .find(|b| b.eq_ignore_ascii_case(base.trim()))
     {
         screen.set_base(base);
     }
     if let Ok(roll) = std::env::var("FB_COMMISSION_ROLL") {
         screen.set_roll(roll.trim().parse().unwrap_or(0));
     }
-    for (path, value) in std::env::var("FB_COMMISSION_SET").unwrap_or_default().split(',').filter_map(|p| p.split_once('=')) {
+    for (path, value) in std::env::var("FB_COMMISSION_SET")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|p| p.split_once('='))
+    {
         if let Err(error) = screen.set_field(path.trim(), value.trim()) {
             warn!("FB_COMMISSION_SET: {error}");
         }
     }
     let now = clock_now(clock.as_deref());
-    let delver = character.as_deref().map_or("the delver", |c| c.name.as_str());
-    let Some(mut order) = screen.order(now, delver) else { return };
-    let wait = std::env::var("FB_COMMISSION_ORDER").ok().and_then(|v| v.trim().parse::<f64>().ok());
+    let delver = character
+        .as_deref()
+        .map_or("the delver", |c| c.name.as_str());
+    let Some(mut order) = screen.order(now, delver) else {
+        return;
+    };
+    let wait = std::env::var("FB_COMMISSION_ORDER")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok());
     order.ready_at = GameTime::from_seconds(now + wait.map_or(0.0, |h| h * 3600.0));
     // `collect`: the maker has handed it over already, to capture the item's card.
     if std::env::var("FB_COMMISSION_ORDER").is_ok_and(|v| v.trim() == "collect") {
@@ -873,11 +1096,23 @@ fn clock_now(clock: Option<&GameClock>) -> f64 {
 /// ([`crate::enchanting::pay`], all or nothing; no deposit) and the order is recorded for the
 /// delve in `record`. Refused, with a line that says what is short, nothing is taken and
 /// nothing recorded.
-pub fn place_order(screen: &CommissionScreen, inventory: &mut Inventory, record: &mut WorldRecord, now: f64, delver: &str) -> Result<Commission, String> {
-    let order = screen.order(now, delver).ok_or_else(|| "Nothing to order.".to_string())?;
+pub fn place_order(
+    screen: &CommissionScreen,
+    inventory: &mut Inventory,
+    record: &mut WorldRecord,
+    now: f64,
+    delver: &str,
+) -> Result<Commission, String> {
+    let order = screen
+        .order(now, delver)
+        .ok_or_else(|| "Nothing to order.".to_string())?;
     let held = wallet(inventory);
     if held.total_copper() < order.price_copper {
-        return Err(format!("Needs {}, have {}.", order.price().short(), held.short()));
+        return Err(format!(
+            "Needs {}, have {}.",
+            order.price().short(),
+            held.short()
+        ));
     }
     if !pay(inventory, order.price_copper) {
         return Err("Cannot pay.".to_string());
@@ -891,7 +1126,14 @@ pub fn place_order(screen: &CommissionScreen, inventory: &mut Inventory, record:
 /// order. `None` for a trade that sells nothing.
 pub fn finished_item(order: &Commission) -> Option<fb_items::Item> {
     let shop = order.trade.shop(&order.maker, &order.faction)?;
-    fb_items::commission::finish(&shop, &order.base, &order.shape, order.seed, order.depth, &order.delver)
+    fb_items::commission::finish(
+        &shop,
+        &order.base,
+        &order.shape,
+        order.seed,
+        order.depth,
+        &order.delver,
+    )
 }
 
 /// A wait in words: "under an hour", "5 hours", "2 days".
@@ -909,7 +1151,12 @@ pub fn wait_words(hours: f64) -> String {
 /// that are ready (taken out of `orders`) and the hours the others still need. Orders with no
 /// maker alive to ask (the folk fell: nobody asks) stay where they are; see "Commissions" in
 /// `docs/items.md`.
-pub fn collect(orders: &mut Vec<Commission>, maker_seed: u32, depth: u32, now: f64) -> (Vec<Commission>, Vec<f64>) {
+pub fn collect(
+    orders: &mut Vec<Commission>,
+    maker_seed: u32,
+    depth: u32,
+    now: f64,
+) -> (Vec<Commission>, Vec<f64>) {
     let mut ready = Vec::new();
     let mut waiting = Vec::new();
     let mut kept = Vec::new();
@@ -943,12 +1190,17 @@ fn collect_from_talk(
         if chosen.service != crate::talk::Service::Order {
             continue;
         }
-        let Some(speaker) = talk.speaker.as_ref() else { continue };
+        let Some(speaker) = talk.speaker.as_ref() else {
+            continue;
+        };
         let (seed, depth, name) = (speaker.seed, speaker.depth, speaker.name.clone());
-        let (ready, waiting) = collect(&mut record.orders, seed, depth, clock_now(clock.as_deref()));
+        let (ready, waiting) =
+            collect(&mut record.orders, seed, depth, clock_now(clock.as_deref()));
         let mut said = Vec::new();
         for order in ready {
-            let Some(item) = finished_item(&order) else { continue };
+            let Some(item) = finished_item(&order) else {
+                continue;
+            };
             let title = item.title().to_string();
             let id = inventory.add(item);
             if inventory.pick_up(id).is_ok() {
@@ -957,16 +1209,24 @@ fn collect_from_talk(
             } else {
                 changes.0.push(FloorChange::SetDown(id, 0.0));
                 toasts.say(format!("{name} sets {title} down at your feet."));
-                said.push(format!("Your pack is full. I have set {title} down at your feet."));
+                said.push(format!(
+                    "Your pack is full. I have set {title} down at your feet."
+                ));
             }
         }
         if let Some(soonest) = waiting.iter().copied().reduce(f64::min) {
-            said.push(format!("It is not done yet. Come back in about {}.", wait_words(soonest)));
+            said.push(format!(
+                "It is not done yet. Come back in about {}.",
+                wait_words(soonest)
+            ));
         }
         if said.is_empty() {
             said.push("There is nothing of yours here.".to_string());
         }
-        talk.say(crate::talk::Topic::Service(crate::talk::Service::Order), said.join(" "));
+        talk.say(
+            crate::talk::Topic::Service(crate::talk::Service::Order),
+            said.join(" "),
+        );
     }
 }
 
@@ -989,8 +1249,15 @@ fn press_controls(
     if !screen.open || !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
-    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else {
+        return;
+    };
+    let Some((control, ..)) = controls
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    else {
+        return;
+    };
     match control.clone() {
         Control::Base(base) => {
             screen.refusal = None;
@@ -1001,10 +1268,22 @@ fn press_controls(
             screen.set_roll(index);
         }
         Control::Confirm => {
-            let delver = character.as_deref().map_or("the delver", |c| c.name.as_str());
-            match place_order(&screen, &mut inventory, &mut record, clock_now(clock.as_deref()), delver) {
+            let delver = character
+                .as_deref()
+                .map_or("the delver", |c| c.name.as_str());
+            match place_order(
+                &screen,
+                &mut inventory,
+                &mut record,
+                clock_now(clock.as_deref()),
+                delver,
+            ) {
                 Ok(order) => {
-                    toasts.say(format!("{} will have it ready in about {}.", order.maker, wait_words(ready_hours(order.price_copper))));
+                    toasts.say(format!(
+                        "{} will have it ready in about {}.",
+                        order.maker,
+                        wait_words(ready_hours(order.price_copper))
+                    ));
                     screen.close();
                     show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c));
                 }
@@ -1049,7 +1328,9 @@ fn build_screen(
         }
         (true, None) => {
             // The interface's own camera, so the screen covers the held item.
-            let Some(ui_camera) = ui_cameras.iter().next() else { return };
+            let Some(ui_camera) = ui_cameras.iter().next() else {
+                return;
+            };
             spawn_ui(&mut commands, &fonts, &screen, &stage, ui_camera);
             // The panel and the readouts fill in from the screen on its next change.
             screen.set_changed();
@@ -1071,19 +1352,32 @@ fn spawn_stage(commands: &mut Commands, stage: &CommissionStage) -> Entity {
             crate::render::ScreenInkExempt,
             DespawnOnExit(AppState::Delving),
             Camera3d::default(),
-            Camera { order: -5, clear_color: ClearColorConfig::Custom(PLATE), is_active: true, ..default() },
+            Camera {
+                order: -5,
+                clear_color: ClearColorConfig::Custom(PLATE),
+                is_active: true,
+                ..default()
+            },
             RenderTarget::Image(stage.image.clone().into()),
             Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::Fixed { width: 40.0, height: 40.0 },
+                scaling_mode: ScalingMode::Fixed {
+                    width: 40.0,
+                    height: 40.0,
+                },
                 near: 0.1,
                 far: 4000.0,
                 ..OrthographicProjection::default_3d()
             }),
             exposure,
             Tonemapping::Linear,
-            AmbientLight { color: ambient.ambient_color, brightness: ambient.ambient / exposure.exposure(), ..default() },
+            AmbientLight {
+                color: ambient.ambient_color,
+                brightness: ambient.ambient / exposure.exposure(),
+                ..default()
+            },
             layer.clone(),
-            Transform::from_translation(STAGE + Vec3::new(0.0, 0.0, 400.0)).looking_at(STAGE, Vec3::Y),
+            Transform::from_translation(STAGE + Vec3::new(0.0, 0.0, 400.0))
+                .looking_at(STAGE, Vec3::Y),
         ))
         .with_children(|camera| {
             let (light, at) = ambient.key_light(&exposure);
@@ -1092,7 +1386,13 @@ fn spawn_stage(commands: &mut Commands, stage: &CommissionStage) -> Entity {
         .id()
 }
 
-fn spawn_ui(commands: &mut Commands, fonts: &UiFonts, screen: &CommissionScreen, stage: &CommissionStage, ui_camera: Entity) {
+fn spawn_ui(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    screen: &CommissionScreen,
+    stage: &CommissionStage,
+    ui_camera: Entity,
+) {
     let bases = screen.trade.map_or(&[][..], |t| bases_of(t.profession));
     commands
         .spawn((
@@ -1100,7 +1400,14 @@ fn spawn_ui(commands: &mut Commands, fonts: &UiFonts, screen: &CommissionScreen,
             UiTargetCamera(ui_camera),
             DespawnOnExit(AppState::Delving),
             GlobalZIndex(22),
-            Node { position_type: PositionType::Absolute, left: px(0), top: px(0), width: percent(100), height: percent(100), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
             BackgroundColor(PLATE),
         ))
         .with_children(|root| {
@@ -1121,15 +1428,39 @@ fn spawn_ui(commands: &mut Commands, fonts: &UiFonts, screen: &CommissionScreen,
                 BorderColor::all(LINE),
             ));
             // The stage: the item on its turntable, drawn into a square as large as fits.
-            root.spawn((StageFrame, Node { flex_grow: 1.0, min_width: px(0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, overflow: Overflow::clip(), ..default() }))
-                .with_children(|frame| {
-                    frame.spawn((StageImage, ImageNode::new(stage.image.clone()), Node { width: px(400), height: px(400), flex_shrink: 0.0, ..default() }));
-                    frame.spawn((
-                        Text::new("Drag to turn the item"),
-                        UiFonts::style(&fonts.body_medium, 17.0, PLATE_INK),
-                        Node { position_type: PositionType::Absolute, left: px(20), bottom: px(16), ..default() },
-                    ));
-                });
+            root.spawn((
+                StageFrame,
+                Node {
+                    flex_grow: 1.0,
+                    min_width: px(0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ))
+            .with_children(|frame| {
+                frame.spawn((
+                    StageImage,
+                    ImageNode::new(stage.image.clone()),
+                    Node {
+                        width: px(400),
+                        height: px(400),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                ));
+                frame.spawn((
+                    Text::new("Drag to turn the item"),
+                    UiFonts::style(&fonts.body_medium, 17.0, PLATE_INK),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(20),
+                        bottom: px(16),
+                        ..default()
+                    },
+                ));
+            });
             root.spawn((
                 Node {
                     width: px(PANEL_WIDTH),
@@ -1143,31 +1474,97 @@ fn spawn_ui(commands: &mut Commands, fonts: &UiFonts, screen: &CommissionScreen,
             ))
             .with_children(|panel| {
                 panel
-                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(9), padding: UiRect::all(px(14)), border: UiRect::bottom(px(1)), ..default() }, BorderColor::all(FAINT)))
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(9),
+                            padding: UiRect::all(px(14)),
+                            border: UiRect::bottom(px(1)),
+                            ..default()
+                        },
+                        BorderColor::all(FAINT),
+                    ))
                     .with_children(|header| {
-                        header.spawn((Text::new("Commission"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                        header.spawn((Readout::Maker, Text::new(""), UiFonts::style(&fonts.display, 20.0, BRIGHT)));
-                        header.spawn((Readout::Trade, Text::new(""), UiFonts::style(&fonts.body, 17.0, MUTED)));
-                        header.spawn((Readout::Open, Text::new(""), UiFonts::style(&fonts.body, 17.0, MUTED)));
-                        header.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(5), row_gap: px(5), ..default() }).with_children(|row| {
-                            for &base in bases {
-                                chip(row, fonts, base, Control::Base(base));
-                            }
-                        });
+                        header.spawn((
+                            Text::new("Commission"),
+                            UiFonts::style(&fonts.display_bold, 28.0, INK),
+                        ));
+                        header.spawn((
+                            Readout::Maker,
+                            Text::new(""),
+                            UiFonts::style(&fonts.display, 20.0, BRIGHT),
+                        ));
+                        header.spawn((
+                            Readout::Trade,
+                            Text::new(""),
+                            UiFonts::style(&fonts.body, 17.0, MUTED),
+                        ));
+                        header.spawn((
+                            Readout::Open,
+                            Text::new(""),
+                            UiFonts::style(&fonts.body, 17.0, MUTED),
+                        ));
+                        header
+                            .spawn(Node {
+                                flex_wrap: FlexWrap::Wrap,
+                                column_gap: px(5),
+                                row_gap: px(5),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                for &base in bases {
+                                    chip(row, fonts, base, Control::Base(base));
+                                }
+                            });
                     });
                 panel_body(panel);
                 panel
-                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(10), padding: UiRect::all(px(14)), border: UiRect::top(px(1)), ..default() }, BorderColor::all(FAINT)))
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(10),
+                            padding: UiRect::all(px(14)),
+                            border: UiRect::top(px(1)),
+                            ..default()
+                        },
+                        BorderColor::all(FAINT),
+                    ))
                     .with_children(|footer| {
-                        footer.spawn(Node { align_items: AlignItems::Baseline, column_gap: px(10), ..default() }).with_children(|row| {
-                            row.spawn((Text::new("Price"), UiFonts::style(&fonts.body, 17.0, MUTED)));
-                            row.spawn((Readout::Price, Text::new(""), UiFonts::style(&fonts.mono_bold, 22.0, BRIGHT)));
-                            row.spawn((Readout::Ready, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED), Node { margin: UiRect::left(px(8)), ..default() }));
-                        });
-                        footer.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
-                            chip(row, fonts, "Confirm", Control::Confirm);
-                            chip(row, fonts, "Cancel", Control::Cancel);
-                        });
+                        footer
+                            .spawn(Node {
+                                align_items: AlignItems::Baseline,
+                                column_gap: px(10),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                row.spawn((
+                                    Text::new("Price"),
+                                    UiFonts::style(&fonts.body, 17.0, MUTED),
+                                ));
+                                row.spawn((
+                                    Readout::Price,
+                                    Text::new(""),
+                                    UiFonts::style(&fonts.mono_bold, 22.0, BRIGHT),
+                                ));
+                                row.spawn((
+                                    Readout::Ready,
+                                    Text::new(""),
+                                    UiFonts::style(&fonts.body, 16.0, MUTED),
+                                    Node {
+                                        margin: UiRect::left(px(8)),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                        footer
+                            .spawn(Node {
+                                column_gap: px(8),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                chip(row, fonts, "Confirm", Control::Confirm);
+                                chip(row, fonts, "Cancel", Control::Cancel);
+                            });
                     });
             });
         });
@@ -1175,30 +1572,74 @@ fn spawn_ui(commands: &mut Commands, fonts: &UiFonts, screen: &CommissionScreen,
 
 /// Fills the column with the maker's rolls of the family showing, each a row with its icon, a
 /// line about it and its price, when the family changes.
-fn fill_rolls(mut commands: Commands, screen: Res<CommissionScreen>, fonts: Res<UiFonts>, mut lists: Query<(Entity, &mut RollList)>, mut icons: Icons) {
-    let Ok((list, mut filled)) = lists.single_mut() else { return };
+fn fill_rolls(
+    mut commands: Commands,
+    screen: Res<CommissionScreen>,
+    fonts: Res<UiFonts>,
+    mut lists: Query<(Entity, &mut RollList)>,
+    mut icons: Icons,
+) {
+    let Ok((list, mut filled)) = lists.single_mut() else {
+        return;
+    };
     if !screen.open || filled.0 == screen.base {
         return;
     }
     filled.0 = screen.base;
     commands.entity(list).despawn_children();
     commands.entity(list).with_children(|list| {
-        list.spawn((Text::new(format!("{}: the maker's rolls", screen.base)), UiFonts::style(&fonts.display, 20.0, INK)));
+        list.spawn((
+            Text::new(format!("{}: the maker's rolls", screen.base)),
+            UiFonts::style(&fonts.display, 20.0, INK),
+        ));
         for (index, roll) in screen.rolls.iter().enumerate() {
             list.spawn((
                 Control::Roll(index),
-                Node { align_items: AlignItems::Center, column_gap: px(10), padding: UiRect::all(px(8)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), flex_shrink: 0.0, ..default() },
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(10),
+                    padding: UiRect::all(px(8)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(6)),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 BackgroundColor(CELL),
                 BorderColor::all(LINE),
             ))
             .with_children(|row| {
                 let size = crate::inventory::icon::icon_size(&roll.icon, false).as_vec2();
                 let fit = (ICON_BOX / size.x).min(ICON_BOX / size.y);
-                icons.spawn(row, &roll.icon, false, Node { width: px(size.x * fit), height: px(size.y * fit), flex_shrink: 0.0, ..default() }, 24.0);
-                row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|text| {
-                    text.spawn((Text::new(format!("Roll {}", index + 1)), UiFonts::style(&fonts.display, 18.0, BRIGHT)));
-                    text.spawn((Text::new(roll.blurb.clone()), UiFonts::style(&fonts.body, 15.0, MUTED)));
-                    text.spawn((Text::new(Coins::from_copper(roll.price_copper).short()), UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT)));
+                icons.spawn(
+                    row,
+                    &roll.icon,
+                    false,
+                    Node {
+                        width: px(size.x * fit),
+                        height: px(size.y * fit),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    24.0,
+                );
+                row.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(2),
+                    ..default()
+                })
+                .with_children(|text| {
+                    text.spawn((
+                        Text::new(format!("Roll {}", index + 1)),
+                        UiFonts::style(&fonts.display, 18.0, BRIGHT),
+                    ));
+                    text.spawn((
+                        Text::new(roll.blurb.clone()),
+                        UiFonts::style(&fonts.body, 15.0, MUTED),
+                    ));
+                    text.spawn((
+                        Text::new(Coins::from_copper(roll.price_copper).short()),
+                        UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                    ));
                 });
             });
         }
@@ -1206,9 +1647,15 @@ fn fill_rolls(mut commands: Commands, screen: Res<CommissionScreen>, fonts: Res<
 }
 
 /// Keeps the stage image the largest square that fits what the panel leaves.
-fn size_stage(frames: Query<&ComputedNode, With<StageFrame>>, mut images: Query<&mut Node, With<StageImage>>) {
+fn size_stage(
+    frames: Query<&ComputedNode, With<StageFrame>>,
+    mut images: Query<&mut Node, With<StageImage>>,
+) {
     let Ok(frame) = frames.single() else { return };
-    let side = (frame.size * frame.inverse_scale_factor).min_element().floor().max(1.0);
+    let side = (frame.size * frame.inverse_scale_factor)
+        .min_element()
+        .floor()
+        .max(1.0);
     for mut node in &mut images {
         if node.width != px(side) {
             node.width = px(side);
@@ -1232,8 +1679,12 @@ fn show_item(
         *shown = None;
         return;
     }
-    let Some(shape) = screen.shape.as_ref() else { return };
-    let Some(mesh) = screen.mesh.as_ref() else { return };
+    let Some(shape) = screen.shape.as_ref() else {
+        return;
+    };
+    let Some(mesh) = screen.mesh.as_ref() else {
+        return;
+    };
     // Rebuild only when the shape changed since the last time: the volume changes with every edit
     // that moves the bounds, the structure with a new roll.
     if !screen.is_changed() && !old.is_empty() {
@@ -1254,7 +1705,10 @@ fn show_item(
             // The longest side, with the turn's diagonal room, fills the view.
             let side = turn.size.max_element().max(turn.size.length() * 0.5) / FILL;
             *projection = Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::Fixed { width: side, height: side },
+                scaling_mode: ScalingMode::Fixed {
+                    width: side,
+                    height: side,
+                },
                 near: 0.1,
                 far: 4000.0,
                 ..OrthographicProjection::default_3d()
@@ -1264,7 +1718,10 @@ fn show_item(
     *shown = Some((screen.structure, screen.volume));
     let layer = RenderLayers::layer(COMMISSION_LAYER);
     let appearance = ItemAppearance {
-        palette: ItemPalette { materials: shape.palette(), ..ItemPalette::ARMORY },
+        palette: ItemPalette {
+            materials: shape.palette(),
+            ..ItemPalette::ARMORY
+        },
         condition: shape.condition(),
         seed: shape.seed(),
         etching: shape.etching(),
@@ -1281,7 +1738,9 @@ fn show_item(
         ))
         .id();
     let centre = turn.centre;
-    spawner.spawn(mesh, &appearance).insert((Transform::from_translation(-centre), ChildOf(pivot)));
+    spawner
+        .spawn(mesh, &appearance)
+        .insert((Transform::from_translation(-centre), ChildOf(pivot)));
 }
 
 /// Keeps the header's names, lit buttons and price showing the current state.
@@ -1300,12 +1759,19 @@ fn refresh_header(
         let line = match readout {
             Readout::Maker => format!("{} · {}", screen.maker, screen.faction),
             Readout::Trade => {
-                let own = if screen.own_style() { " · their own style, a tier better" } else { "" };
+                let own = if screen.own_style() {
+                    " · their own style, a tier better"
+                } else {
+                    ""
+                };
                 format!("{}{own}", trade.label())
             }
             Readout::Open => controls_summary(screen.tier()).to_string(),
             Readout::Price => Coins::from_copper(price).short(),
-            Readout::Ready => screen.refusal.clone().unwrap_or_else(|| format!("ready in {:.0} h", ready_hours(price))),
+            Readout::Ready => screen
+                .refusal
+                .clone()
+                .unwrap_or_else(|| format!("ready in {:.0} h", ready_hours(price))),
         };
         if text.0 != line {
             text.0 = line;
@@ -1323,10 +1789,15 @@ fn refresh_header(
 
 /// `FB_COMMISSION_SCROLL=<pixels>`: scrolls the panel down that far a moment after it opens, for
 /// captures of the lower sections.
-fn scroll_for_capture(mut body: Query<&mut ScrollPosition, With<crate::tweak_panel::PanelBody>>, mut frames: Local<u32>) {
+fn scroll_for_capture(
+    mut body: Query<&mut ScrollPosition, With<crate::tweak_panel::PanelBody>>,
+    mut frames: Local<u32>,
+) {
     *frames += 1;
     if *frames == 20
-        && let Some(y) = std::env::var("FB_COMMISSION_SCROLL").ok().and_then(|v| v.trim().parse::<f32>().ok())
+        && let Some(y) = std::env::var("FB_COMMISSION_SCROLL")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
     {
         for mut position in &mut body {
             position.y = y;
@@ -1376,7 +1847,11 @@ mod tests {
     use super::*;
 
     fn trade(profession: Profession, tier: Tier, style: Option<Style>) -> Trade {
-        Trade { profession, tier, style }
+        Trade {
+            profession,
+            tier,
+            style,
+        }
     }
 
     fn sword() -> Shape {
@@ -1396,7 +1871,12 @@ mod tests {
     }
 
     fn master_screen() -> CommissionScreen {
-        let mut screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades)), "Oda", "the Brothers of the Last Door").unwrap();
+        let mut screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades)),
+            "Oda",
+            "the Brothers of the Last Door",
+        )
+        .unwrap();
         screen.maker_spot = 4242;
         screen.depth = 6;
         screen.set_field("etch.on", "true").unwrap();
@@ -1412,7 +1892,10 @@ mod tests {
         let order = place_order(&screen, &mut inventory, &mut record, 100.0, "Wren").unwrap();
         assert_eq!(wallet(&inventory).total_copper(), 500);
         assert_eq!(record.orders, vec![order.clone()]);
-        assert_eq!((order.maker_seed, order.depth, order.delver.as_str()), (4242, 6, "Wren"));
+        assert_eq!(
+            (order.maker_seed, order.depth, order.delver.as_str()),
+            (4242, 6, "Wren")
+        );
     }
 
     #[test]
@@ -1422,7 +1905,10 @@ mod tests {
         let before = wallet(&inventory);
         let mut record = WorldRecord::default();
         let said = place_order(&screen, &mut inventory, &mut record, 100.0, "Wren").unwrap_err();
-        assert!(said.starts_with("Needs ") && said.contains("have"), "{said}");
+        assert!(
+            said.starts_with("Needs ") && said.contains("have"),
+            "{said}"
+        );
         assert_eq!(wallet(&inventory), before);
         assert!(record.orders.is_empty());
     }
@@ -1444,7 +1930,10 @@ mod tests {
         let (ready, waiting) = collect(&mut record.orders, 4242, 6, order.ready_at.seconds());
         assert!(waiting.is_empty() && record.orders.is_empty());
         let item = finished_item(&ready[0]).unwrap();
-        assert_eq!(item.history.last().unwrap(), "Made by Oda, master bladesmith of the Brothers of the Last Door, for Wren.");
+        assert_eq!(
+            item.history.last().unwrap(),
+            "Made by Oda, master bladesmith of the Brothers of the Last Door, for Wren."
+        );
         assert_eq!(item.base, "Sword");
         assert!(item.rarity <= fb_items::Rarity::Rare);
         // Made from the shape as edited, not rolled again.
@@ -1456,12 +1945,20 @@ mod tests {
 
     #[test]
     fn a_novices_work_is_common() {
-        let mut screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, None), "Pim", "the Cinder Hold").unwrap();
+        let mut screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Novice, None),
+            "Pim",
+            "the Cinder Hold",
+        )
+        .unwrap();
         for index in 0..ROLLS {
             screen.set_roll(index);
             let mut order = screen.order(0.0, "Wren").unwrap();
             order.depth = 20;
-            assert_eq!(finished_item(&order).unwrap().rarity, fb_items::Rarity::Common);
+            assert_eq!(
+                finished_item(&order).unwrap().rarity,
+                fb_items::Rarity::Common
+            );
         }
     }
 
@@ -1472,11 +1969,15 @@ mod tests {
         let mut record = WorldRecord::default();
         let order = place_order(&screen, &mut inventory, &mut record, 0.0, "Wren").unwrap();
         // The order in the record reloads as it was.
-        let reloaded: WorldRecord = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        let reloaded: WorldRecord =
+            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
         assert_eq!(reloaded, record);
         // The finished item, recorded and rebuilt: shape, rarity, affixes and history as they were.
         let item = finished_item(&order).unwrap();
-        let back: crate::record::ItemRecord = serde_json::from_str(&serde_json::to_string(&crate::record::item_record(&item)).unwrap()).unwrap();
+        let back: crate::record::ItemRecord = serde_json::from_str(
+            &serde_json::to_string(&crate::record::item_record(&item)).unwrap(),
+        )
+        .unwrap();
         assert_eq!(crate::record::rebuild_item(&back), Some(item));
     }
 
@@ -1496,13 +1997,29 @@ mod tests {
             assert!(inventory.stow(sword).is_err(), "no room left");
             inventory.forget(sword);
         }
-        app.world_mut().resource_mut::<GameClock>().advance(80.0 * 3600.0);
-        app.world_mut().write_message(crate::talk::ServiceChosen { folk, service: crate::talk::Service::Order });
+        app.world_mut()
+            .resource_mut::<GameClock>()
+            .advance(80.0 * 3600.0);
+        app.world_mut().write_message(crate::talk::ServiceChosen {
+            folk,
+            service: crate::talk::Service::Order,
+        });
         app.update();
         assert!(app.world().resource::<WorldRecord>().orders.is_empty());
         let changes = &app.world().resource::<FloorChanges>().0;
-        assert!(matches!(changes.as_slice(), [FloorChange::SetDown(..)]), "{changes:?}");
-        assert!(app.world().resource::<crate::talk::Talk>().answer.clone().unwrap().1.contains("at your feet"));
+        assert!(
+            matches!(changes.as_slice(), [FloorChange::SetDown(..)]),
+            "{changes:?}"
+        );
+        assert!(
+            app.world()
+                .resource::<crate::talk::Talk>()
+                .answer
+                .clone()
+                .unwrap()
+                .1
+                .contains("at your feet")
+        );
     }
 
     /// A talk with Oda, who holds a master's sword ordered for Wren, `pack` or no pack on the
@@ -1549,25 +2066,49 @@ mod tests {
     fn choosing_your_order_in_the_talk_hands_the_item_into_the_pack_with_a_line() {
         let (mut app, folk) = talk_app(true);
         let choose = |app: &mut App| {
-            app.world_mut().write_message(crate::talk::ServiceChosen { folk, service: crate::talk::Service::Order });
+            app.world_mut().write_message(crate::talk::ServiceChosen {
+                folk,
+                service: crate::talk::Service::Order,
+            });
             app.update();
         };
         // Before it is ready: how long, and nothing handed over.
         choose(&mut app);
-        let said = app.world().resource::<crate::talk::Talk>().answer.clone().unwrap().1;
+        let said = app
+            .world()
+            .resource::<crate::talk::Talk>()
+            .answer
+            .clone()
+            .unwrap()
+            .1;
         assert!(said.contains("not done yet. Come back in about"), "{said}");
         assert_eq!(app.world().resource::<WorldRecord>().orders.len(), 1);
         // After: it is in the pack, once.
-        app.world_mut().resource_mut::<GameClock>().advance(80.0 * 3600.0);
+        app.world_mut()
+            .resource_mut::<GameClock>()
+            .advance(80.0 * 3600.0);
         choose(&mut app);
         assert!(app.world().resource::<WorldRecord>().orders.is_empty());
         let inventory = app.world().resource::<Inventory>();
-        let made: Vec<_> = inventory.ids().filter(|&id| inventory.is_carried(id)).filter_map(|id| inventory.item(id)).filter(|i| i.base == "Sword").collect();
+        let made: Vec<_> = inventory
+            .ids()
+            .filter(|&id| inventory.is_carried(id))
+            .filter_map(|id| inventory.item(id))
+            .filter(|i| i.base == "Sword")
+            .collect();
         assert_eq!(made.len(), 1);
         assert!(made[0].history.last().unwrap().ends_with("for Wren."));
         assert!(app.world().resource::<FloorChanges>().0.is_empty());
         choose(&mut app);
-        assert!(app.world().resource::<crate::talk::Talk>().answer.clone().unwrap().1.contains("nothing of yours"));
+        assert!(
+            app.world()
+                .resource::<crate::talk::Talk>()
+                .answer
+                .clone()
+                .unwrap()
+                .1
+                .contains("nothing of yours")
+        );
     }
 
     fn paths(fields: &[Field]) -> Vec<&str> {
@@ -1584,18 +2125,51 @@ mod tests {
         let fields = open_controls(&sword(), Tier::Apprentice);
         assert!(paths(&fields).contains(&"blade.material"));
         assert!(paths(&fields).contains(&"grip.material"));
-        assert!(fields.iter().all(|f| matches!(f.kind, FieldKind::Choice { .. } | FieldKind::Colour { .. })), "{:?}", paths(&fields));
-        assert!(fields.iter().any(|f| matches!(f.kind, FieldKind::Colour { .. })), "what is wooden or leather can be dyed");
+        assert!(
+            fields
+                .iter()
+                .all(|f| matches!(f.kind, FieldKind::Choice { .. } | FieldKind::Colour { .. })),
+            "{:?}",
+            paths(&fields)
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|f| matches!(f.kind, FieldKind::Colour { .. })),
+            "what is wooden or leather can be dyed"
+        );
         assert!(!paths(&fields).contains(&"blade.length"));
         assert!(!paths(&fields).contains(&"etch.pattern"));
         // Only what the maker works in is offered.
-        let FieldKind::Choice { options, .. } = &fields.iter().find(|f| f.path == "blade.material").unwrap().kind else { panic!() };
+        let FieldKind::Choice { options, .. } = &fields
+            .iter()
+            .find(|f| f.path == "blade.material")
+            .unwrap()
+            .kind
+        else {
+            panic!()
+        };
         // A blade is made of metal.
-        assert!(options.iter().all(|o| ["metal", "accent", "silver", "gold"].contains(&o.as_str())), "{options:?}");
+        assert!(
+            options
+                .iter()
+                .all(|o| ["metal", "accent", "silver", "gold"].contains(&o.as_str())),
+            "{options:?}"
+        );
         assert!(options.len() >= 3);
         // A grip is not.
-        let FieldKind::Choice { options, .. } = &fields.iter().find(|f| f.path == "grip.material").unwrap().kind else { panic!() };
-        assert!(options.contains(&"leather".to_string()) && !options.contains(&"gold".to_string()), "{options:?}");
+        let FieldKind::Choice { options, .. } = &fields
+            .iter()
+            .find(|f| f.path == "grip.material")
+            .unwrap()
+            .kind
+        else {
+            panic!()
+        };
+        assert!(
+            options.contains(&"leather".to_string()) && !options.contains(&"gold".to_string()),
+            "{options:?}"
+        );
     }
 
     #[test]
@@ -1603,37 +2177,71 @@ mod tests {
         let item = roll_shape("Gambeson", 3).unwrap();
         let fields = open_controls(&item, Tier::Apprentice);
         assert!(!paths(&fields).contains(&"cut.material"));
-        let dye = fields.iter().find(|f| f.path == "cut.cloth.color").expect("the cloth's dye");
+        let dye = fields
+            .iter()
+            .find(|f| f.path == "cut.cloth.color")
+            .expect("the cloth's dye");
         assert!(matches!(dye.kind, FieldKind::Colour { .. }));
-        assert_eq!((dye.section.as_str(), dye.name.as_str()), ("Body cloth", "colour"));
+        assert_eq!(
+            (dye.section.as_str(), dye.name.as_str()),
+            ("Body cloth", "colour")
+        );
         // Parts switched off show nothing.
         let mut bare = item.clone();
         bare.set_toggle("belt.on", false).unwrap();
-        assert!(!paths(&open_controls(&bare, Tier::Master)).iter().any(|p| p.starts_with("belt.") && *p != "belt.on"));
+        assert!(
+            !paths(&open_controls(&bare, Tier::Master))
+                .iter()
+                .any(|p| p.starts_with("belt.") && *p != "belt.on")
+        );
     }
 
     #[test]
     fn a_dye_is_set_from_the_panel() {
-        let mut screen = CommissionScreen::begin(trade(Profession::Armorer, Tier::Apprentice, None), "Orla", "Hold").unwrap();
+        let mut screen = CommissionScreen::begin(
+            trade(Profession::Armorer, Tier::Apprentice, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
         let before = screen.shape().unwrap().colour("cut.cloth.color").unwrap();
         let wanted = [0.55, 0.16, 0.18];
         assert_ne!(before, wanted);
         screen.set_colour("cut.cloth.color", wanted);
-        assert_eq!(screen.shape().unwrap().colour("cut.cloth.color"), Some(wanted));
+        assert_eq!(
+            screen.shape().unwrap().colour("cut.cloth.color"),
+            Some(wanted)
+        );
         // A shape the tier does not open takes no dye either.
-        let novice = CommissionScreen::begin(trade(Profession::Armorer, Tier::Novice, None), "Orla", "Hold").unwrap();
+        let novice = CommissionScreen::begin(
+            trade(Profession::Armorer, Tier::Novice, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
         let mut novice = novice;
         novice.set_colour("cut.cloth.color", wanted);
-        assert_ne!(novice.shape().unwrap().colour("cut.cloth.color"), Some(wanted));
+        assert_ne!(
+            novice.shape().unwrap().colour("cut.cloth.color"),
+            Some(wanted)
+        );
     }
 
     #[test]
     fn six_rolls_are_listed_with_prices_and_a_line_each() {
-        let screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, None), "Orla Venn", "Hold").unwrap();
+        let screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Novice, None),
+            "Orla Venn",
+            "Hold",
+        )
+        .unwrap();
         assert_eq!(screen.rolls().len(), ROLLS);
         for (i, roll) in screen.rolls().iter().enumerate() {
             assert_eq!(roll.seed, screen.roll_seed("Sword", i));
-            assert!(roll.price_copper > 0 && roll.blurb.contains("cm long"), "{roll:?}");
+            assert!(
+                roll.price_copper > 0 && roll.blurb.contains("cm long"),
+                "{roll:?}"
+            );
         }
         let mut prices: Vec<u64> = screen.rolls().iter().map(|r| r.price_copper).collect();
         prices.sort_unstable();
@@ -1644,11 +2252,24 @@ mod tests {
     #[test]
     fn an_expert_roll_starts_inside_what_the_expert_reaches() {
         for seed_name in ["Orla", "Hob", "Tam", "Ysolde"] {
-            let screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Expert, None), seed_name, "Hold").unwrap();
+            let screen = CommissionScreen::begin(
+                trade(Profession::Weaponsmith, Tier::Expert, None),
+                seed_name,
+                "Hold",
+            )
+            .unwrap();
             for field in screen.controls() {
                 match field.kind {
-                    FieldKind::Slider { value, range } => assert!(range.contains(value), "{} {value} outside {range:?}", field.path),
-                    FieldKind::Choice { value, options } => assert!(options.contains(&value), "{} {value} not in {options:?}", field.path),
+                    FieldKind::Slider { value, range } => assert!(
+                        range.contains(value),
+                        "{} {value} outside {range:?}",
+                        field.path
+                    ),
+                    FieldKind::Choice { value, options } => assert!(
+                        options.contains(&value),
+                        "{} {value} not in {options:?}",
+                        field.path
+                    ),
                     _ => {}
                 }
             }
@@ -1665,7 +2286,9 @@ mod tests {
         assert!(paths(&fields).contains(&"blade.length"));
         assert!(!paths(&fields).contains(&"guard.style"), "no shape choices");
         assert!(!paths(&fields).contains(&"guard.on"), "no parts on or off");
-        assert!(!paths(&fields).contains(&"etch.on") && !paths(&fields).contains(&"pommel.gem_stone"));
+        assert!(
+            !paths(&fields).contains(&"etch.on") && !paths(&fields).contains(&"pommel.gem_stone")
+        );
         let narrow = |path: &str| match fields.iter().find(|f| f.path == path).unwrap().kind {
             FieldKind::Slider { range, .. } => range,
             _ => panic!(),
@@ -1675,8 +2298,14 @@ mod tests {
             _ => panic!(),
         };
         let (n, w) = (narrow("blade.length"), wide("blade.length"));
-        assert!((n.max - n.min - (w.max - w.min) / 2.0).abs() <= 2.0 * w.step, "{n:?} of {w:?}");
-        assert!((n.min + n.max - w.min - w.max).abs() <= 2.0 * w.step, "centred");
+        assert!(
+            (n.max - n.min - (w.max - w.min) / 2.0).abs() <= 2.0 * w.step,
+            "{n:?} of {w:?}"
+        );
+        assert!(
+            (n.min + n.max - w.min - w.max).abs() <= 2.0 * w.step,
+            "centred"
+        );
         assert_eq!(n.step, w.step);
     }
 
@@ -1684,15 +2313,33 @@ mod tests {
     fn a_master_opens_the_full_ranges_and_the_ornament() {
         let item = sword();
         let fields = open_controls(&item, Tier::Master);
-        for path in ["blade.length", "guard.span", "pommel.radius", "guard.style", "guard.on", "etch.on", "etch.pattern", "pommel.gem_stone", "guard.gem", "blade.material"] {
+        for path in [
+            "blade.length",
+            "guard.span",
+            "pommel.radius",
+            "guard.style",
+            "guard.on",
+            "etch.on",
+            "etch.pattern",
+            "pommel.gem_stone",
+            "guard.gem",
+            "blade.material",
+        ] {
             assert!(paths(&fields).contains(&path), "{path}");
         }
         assert!(!paths(&fields).iter().any(|p| p.starts_with("cond.")));
-        let full: Vec<_> = visible_fields(&item).into_iter().filter(|f| classify(f).is_some()).collect();
+        let full: Vec<_> = visible_fields(&item)
+            .into_iter()
+            .filter(|f| classify(f).is_some())
+            .collect();
         assert_eq!(fields.len(), full.len());
         for field in &fields {
             if let FieldKind::Slider { range, .. } = field.kind {
-                let FieldKind::Slider { range: whole, .. } = full.iter().find(|f| f.path == field.path).unwrap().kind else { panic!() };
+                let FieldKind::Slider { range: whole, .. } =
+                    full.iter().find(|f| f.path == field.path).unwrap().kind
+                else {
+                    panic!()
+                };
                 assert_eq!(range, whole, "{}", field.path);
             }
         }
@@ -1701,13 +2348,20 @@ mod tests {
     #[test]
     fn each_tier_opens_at_least_what_the_one_below_does() {
         let item = sword();
-        let counts: Vec<usize> = Tier::ALL.iter().map(|&t| open_controls(&item, t).len()).collect();
+        let counts: Vec<usize> = Tier::ALL
+            .iter()
+            .map(|&t| open_controls(&item, t).len())
+            .collect();
         assert!(counts.windows(2).all(|w| w[0] < w[1]), "{counts:?}");
     }
 
     #[test]
     fn the_smiths_own_style_is_a_tier_better() {
-        let smith = trade(Profession::Weaponsmith, Tier::Apprentice, Some(Style::Blades));
+        let smith = trade(
+            Profession::Weaponsmith,
+            Tier::Apprentice,
+            Some(Style::Blades),
+        );
         assert_eq!(controls_tier(&smith, "Sword"), Tier::Expert);
         assert_eq!(controls_tier(&smith, "Mace"), Tier::Apprentice);
         let master = trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades));
@@ -1716,19 +2370,37 @@ mod tests {
         assert_eq!(controls_tier(&armorer, "Cuirass"), Tier::Apprentice);
         assert_eq!(controls_tier(&armorer, "Gambeson"), Tier::Novice);
         // A bowyer has no style.
-        assert_eq!(controls_tier(&trade(Profession::Bowyer, Tier::Expert, None), "Bow"), Tier::Expert);
+        assert_eq!(
+            controls_tier(&trade(Profession::Bowyer, Tier::Expert, None), "Bow"),
+            Tier::Expert
+        );
         // On the screen: a novice bladesmith's sword is an apprentice's panel.
-        let screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, Some(Style::Blades)), "Orla", "Hold").unwrap();
+        let screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Novice, Some(Style::Blades)),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
         assert_eq!(screen.base(), "Sword");
         assert!(screen.own_style());
         assert!(paths(&screen.controls()).contains(&"blade.material"));
-        let plain = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, None), "Orla", "Hold").unwrap();
+        let plain = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Novice, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
         assert!(plain.controls().is_empty());
     }
 
     #[test]
     fn the_trades_offer_their_families() {
-        for profession in [Profession::Armorer, Profession::Weaponsmith, Profession::Bowyer, Profession::Tentmaker] {
+        for profession in [
+            Profession::Armorer,
+            Profession::Weaponsmith,
+            Profession::Bowyer,
+            Profession::Tentmaker,
+        ] {
             for base in bases_of(profession) {
                 assert!(roll_shape(base, 1).is_some(), "{base}");
             }
@@ -1740,10 +2412,22 @@ mod tests {
 
     #[test]
     fn novice_rolls_are_the_same_every_time_and_differ_between_rolls() {
-        let make = || CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, None), "Orla Venn", "the Cinder Hold").unwrap();
+        let make = || {
+            CommissionScreen::begin(
+                trade(Profession::Weaponsmith, Tier::Novice, None),
+                "Orla Venn",
+                "the Cinder Hold",
+            )
+            .unwrap()
+        };
         let (a, b) = (make(), make());
         let seeds: Vec<u32> = (0..ROLLS).map(|i| a.roll_seed("Sword", i)).collect();
-        assert_eq!(seeds, (0..ROLLS).map(|i| b.roll_seed("Sword", i)).collect::<Vec<_>>());
+        assert_eq!(
+            seeds,
+            (0..ROLLS)
+                .map(|i| b.roll_seed("Sword", i))
+                .collect::<Vec<_>>()
+        );
         let mut distinct = seeds.clone();
         distinct.sort_unstable();
         distinct.dedup();
@@ -1756,13 +2440,23 @@ mod tests {
         a.set_roll(4);
         assert_ne!(a.shape, b.shape);
         // Another maker offers other rolls.
-        let other = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, None), "Hob Crane", "the Cinder Hold").unwrap();
+        let other = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Novice, None),
+            "Hob Crane",
+            "the Cinder Hold",
+        )
+        .unwrap();
         assert_ne!(other.roll_seed("Sword", 0), a.roll_seed("Sword", 0));
     }
 
     #[test]
     fn the_price_follows_the_material_and_the_size_and_the_tier() {
-        let mut screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Apprentice, None), "Orla", "Hold").unwrap();
+        let mut screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Apprentice, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
         let before = screen.price_copper();
         assert!(before > 0);
         screen.set_field("blade.material", "gold").unwrap();
@@ -1773,22 +2467,62 @@ mod tests {
         // An apprentice cannot shape, so the field is refused.
         assert!(screen.set_field("blade.length", "1.2").is_err());
         // A master's longer blade costs more than a shorter one.
-        let mut master = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Master, None), "Orla", "Hold").unwrap();
-        let FieldKind::Slider { range, .. } = master.controls().into_iter().find(|f| f.path == "blade.length").unwrap().kind else { panic!() };
-        master.set_field("blade.length", &range.min.to_string()).unwrap();
+        let mut master = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Master, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
+        let FieldKind::Slider { range, .. } = master
+            .controls()
+            .into_iter()
+            .find(|f| f.path == "blade.length")
+            .unwrap()
+            .kind
+        else {
+            panic!()
+        };
+        master
+            .set_field("blade.length", &range.min.to_string())
+            .unwrap();
         let short = master.price_copper();
-        master.set_field("blade.length", &range.max.to_string()).unwrap();
+        master
+            .set_field("blade.length", &range.max.to_string())
+            .unwrap();
         assert!(master.price_copper() > short);
         // The same shape from a dearer tier costs more.
-        let novice = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Novice, None), "Orla", "Hold").unwrap();
-        let expert = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Expert, None), "Orla", "Hold").unwrap();
+        let novice = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Novice, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
+        let expert = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Expert, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
         assert!(expert.price_copper() > novice.price_copper());
     }
 
     #[test]
     fn dragging_stays_inside_what_the_tier_opens() {
-        let mut screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Expert, None), "Orla", "Hold").unwrap();
-        let FieldKind::Slider { range, .. } = screen.controls().into_iter().find(|f| f.path == "blade.length").unwrap().kind else { panic!() };
+        let mut screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Expert, None),
+            "Orla",
+            "Hold",
+        )
+        .unwrap();
+        let FieldKind::Slider { range, .. } = screen
+            .controls()
+            .into_iter()
+            .find(|f| f.path == "blade.length")
+            .unwrap()
+            .kind
+        else {
+            panic!()
+        };
         screen.set_slider("blade.length", range.max + 10.0);
         assert_eq!(screen.slider("blade.length"), Some(range.max));
         screen.set_slider("blade.length", range.min - 10.0);
@@ -1802,10 +2536,22 @@ mod tests {
 
     #[test]
     fn confirming_makes_an_order_that_keeps_the_shaped_item() {
-        let mut screen = CommissionScreen::begin(trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades)), "Orla Venn", "the Cinder Hold").unwrap();
+        let mut screen = CommissionScreen::begin(
+            trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades)),
+            "Orla Venn",
+            "the Cinder Hold",
+        )
+        .unwrap();
         screen.set_field("etch.on", "true").unwrap();
         let order = screen.order(1000.0, "Wren").unwrap();
-        assert_eq!((order.maker.as_str(), order.faction.as_str(), order.base.as_str()), ("Orla Venn", "the Cinder Hold", "Sword"));
+        assert_eq!(
+            (
+                order.maker.as_str(),
+                order.faction.as_str(),
+                order.base.as_str()
+            ),
+            ("Orla Venn", "the Cinder Hold", "Sword")
+        );
         assert_eq!(order.shape, *screen.shape().unwrap());
         assert_eq!(order.price_copper, screen.price_copper());
         assert!(order.ready_at.seconds() > 1000.0 + 4.0 * 3600.0);
@@ -1817,7 +2563,12 @@ mod tests {
     fn a_makers_gambesons_price_alike() {
         // Cloth coats of one size and make cost about the same, whatever their buckles.
         for maker in ["Orla Venn", "Hob Crane", "Tam"] {
-            let screen = CommissionScreen::begin(trade(Profession::Armorer, Tier::Apprentice, None), maker, "Hold").unwrap();
+            let screen = CommissionScreen::begin(
+                trade(Profession::Armorer, Tier::Apprentice, None),
+                maker,
+                "Hold",
+            )
+            .unwrap();
             let prices: Vec<u64> = screen.rolls().iter().map(|r| r.price_copper).collect();
             let (low, high) = (*prices.iter().min().unwrap(), *prices.iter().max().unwrap());
             assert!(high < low * 3, "{maker}: {prices:?}");
@@ -1826,9 +2577,20 @@ mod tests {
 
     #[test]
     fn the_hook_reads_a_trade() {
-        assert_eq!(parse_trade("weaponsmith:master:blades").unwrap(), trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades)));
-        assert_eq!(parse_trade("armorer:apprentice").unwrap(), trade(Profession::Armorer, Tier::Apprentice, None));
-        assert_eq!(parse_trade("Weaponsmith:expert:axes_and_clubs").unwrap().style, Some(Style::AxesAndClubs));
+        assert_eq!(
+            parse_trade("weaponsmith:master:blades").unwrap(),
+            trade(Profession::Weaponsmith, Tier::Master, Some(Style::Blades))
+        );
+        assert_eq!(
+            parse_trade("armorer:apprentice").unwrap(),
+            trade(Profession::Armorer, Tier::Apprentice, None)
+        );
+        assert_eq!(
+            parse_trade("Weaponsmith:expert:axes_and_clubs")
+                .unwrap()
+                .style,
+            Some(Style::AxesAndClubs)
+        );
         assert_eq!(parse_trade("bowyer").unwrap().tier, Tier::Novice);
         assert!(parse_trade("baker:novice").is_err());
         assert!(parse_trade("armorer:grand").is_err());
@@ -1839,9 +2601,23 @@ mod tests {
     fn opening_a_trade_that_makes_nothing_changes_nothing() {
         let mut screen = CommissionScreen::default();
         let mut open_screen = ScreenOpen::default();
-        assert!(!open(&mut screen, &mut open_screen, None, Trade::guard(), "Gruk", "Mudfoot"));
+        assert!(!open(
+            &mut screen,
+            &mut open_screen,
+            None,
+            Trade::guard(),
+            "Gruk",
+            "Mudfoot"
+        ));
         assert_eq!(open_screen.0, None);
-        assert!(open(&mut screen, &mut open_screen, None, trade(Profession::Bowyer, Tier::Novice, None), "Tam", "Hold"));
+        assert!(open(
+            &mut screen,
+            &mut open_screen,
+            None,
+            trade(Profession::Bowyer, Tier::Novice, None),
+            "Tam",
+            "Hold"
+        ));
         assert!(open_screen.is(Screen::Commission) && screen.is_open());
     }
 }

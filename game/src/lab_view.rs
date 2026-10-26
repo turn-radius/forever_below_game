@@ -32,16 +32,19 @@ use procgen_rng::Mulberry32;
 
 use crate::character::{Character, Class};
 use crate::inventory::Inventory;
+use crate::lab_chart::Chart;
+use crate::lab_fight::{FightRecord, FightSummary, THOUSAND};
 use crate::lab_figure::LabFigure;
 use crate::lab_rules::{DicePart, FieldKind, RuleSet, Strengths, default_strength, strengthened};
 use crate::lab_sheet::{self, GearCard, SheetView, signed};
-use crate::lab_chart::Chart;
-use crate::lab_fight::{FightRecord, FightSummary, THOUSAND};
 use crate::lab_strike::Attacker;
 use crate::lab_time::{ACTIVITIES, TimeLab, activity_word, clock_text};
 use crate::lab_timeline::{Goal, Step, Timeline};
 use crate::rules::GameRules;
-use crate::ui::{ACCENT, BAD, OK, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, UiFonts, node_rect, rarity_color};
+use crate::ui::{
+    ACCENT, BAD, BG, BRIGHT, CELL, FAINT, FRAME_GOLD, INK, LINE, MUTED, OK, UiFonts, node_rect,
+    rarity_color,
+};
 
 /// Width of the sheet on the left and of the rules on the right, in logical pixels.
 pub const SHEET_WIDTH: f32 = 380.0;
@@ -79,13 +82,22 @@ pub const SLOTS: [Slot; 15] = [
     Slot::Charm,
 ];
 /// The tabs in the middle and whether each can be opened yet.
-pub const TABS: [(&str, bool); 4] = [("Fight", true), ("Time and needs", true), ("Eat, drink, equip", true), ("Effects", true)];
+pub const TABS: [(&str, bool); 4] = [
+    ("Fight", true),
+    ("Time and needs", true),
+    ("Eat, drink, equip", true),
+    ("Effects", true),
+];
 
 /// The window the lab opens in, no smaller than [`MIN_WINDOW`].
 pub fn window() -> Window {
     Window {
         title: "Forever Below".into(),
-        resize_constraints: WindowResizeConstraints { min_width: MIN_WINDOW.x, min_height: MIN_WINDOW.y, ..default() },
+        resize_constraints: WindowResizeConstraints {
+            min_width: MIN_WINDOW.x,
+            min_height: MIN_WINDOW.y,
+            ..default()
+        },
         ..default()
     }
 }
@@ -114,7 +126,16 @@ impl Plugin for LabViewPlugin {
             .init_resource::<SaveNote>()
             .add_message::<ControlPressed>()
             .insert_resource(ClearColor(BG))
-            .add_systems(Startup, (setup, demo, make_chart_images, make_time_image, make_effects_image))
+            .add_systems(
+                Startup,
+                (
+                    setup,
+                    demo,
+                    make_chart_images,
+                    make_time_image,
+                    make_effects_image,
+                ),
+            )
             .add_systems(
                 Update,
                 (
@@ -123,7 +144,9 @@ impl Plugin for LabViewPlugin {
                     apply_pressed,
                     show_save_note,
                     rebuild_sheet.run_if(sheet_changed),
-                    rebuild_rules.run_if(|state: Res<LabState>, rules: Res<LabRules>| state.is_changed() || rules.is_changed()),
+                    rebuild_rules.run_if(|state: Res<LabState>, rules: Res<LabRules>| {
+                        state.is_changed() || rules.is_changed()
+                    }),
                     run_fights,
                     refresh_fight.run_if(resource_changed::<FightLab>),
                     rebuild_equip.run_if(resource_changed::<SheetBuilds>),
@@ -163,7 +186,13 @@ pub struct Rolled {
 
 impl LabSlot {
     fn empty(slot: Slot) -> LabSlot {
-        LabSlot { slot, base: None, seed: 1, off: BTreeSet::new(), lit: true }
+        LabSlot {
+            slot,
+            base: None,
+            seed: 1,
+            off: BTreeSet::new(),
+            lit: true,
+        }
     }
 
     /// The item this slot holds: rolled from its base and seed, then its stats and name
@@ -180,14 +209,23 @@ impl LabSlot {
         let base = self.base.as_deref()?;
         let mut item = roll_item(base, self.seed)?;
         let affixes = item.affixes.clone();
-        let stronger = affixes.iter().any(|a| strengths.get(&a.name).is_some_and(|s| *s != default_strength(a)));
+        let stronger = affixes.iter().any(|a| {
+            strengths
+                .get(&a.name)
+                .is_some_and(|s| *s != default_strength(a))
+        });
         if !self.off.is_empty() || stronger {
             let mut stats = profile(base, &roll_shape(base, self.seed)?).stats;
             item.affixes.retain(|a| !self.off.contains(&a.name));
-            item.affixes.iter().for_each(|a| strengthened(a, strengths).apply_to_stats(&mut stats));
+            item.affixes
+                .iter()
+                .for_each(|a| strengthened(a, strengths).apply_to_stats(&mut stats));
             item.shape.scale_fuel(stats.burn_time);
             item.profile.stats = stats;
-            item.name = fb_items::naming::item_name(&fb_items::naming::noun(base, &item.shape), &item.affixes);
+            item.name = fb_items::naming::item_name(
+                &fb_items::naming::noun(base, &item.shape),
+                &item.affixes,
+            );
         }
         let _ = item.shape.set_lit(self.lit);
         Some(Rolled { item, affixes })
@@ -226,10 +264,44 @@ impl Default for LabState {
     /// A human Fighter with every score 10, holding a messer and wearing a sallet and a mail
     /// hauberk, none of which rolled an affix, so the first view has something to read.
     fn default() -> Self {
-        let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        let character = Character { folk: Folk::Human, body_seed: DEFAULT_SEED, shape: None, sex: None, name: "Lab delver".into(), class: Class::Fighter, attributes, dirt: 0.0, worn: fb_character::AbilityBonus::default(), learned: fb_character::AbilityBonus::default(), books_read: Vec::new() };
-        let mut state = LabState { character, seed: DEFAULT_SEED, slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(), activity: Activity::Walking, attacker: Attacker::Creature(Species::GiantRat), strike_seed: 1, swapped: false, ruleset: RuleSet::default(), depth: None, by_fire: false, apply_at: 0.5 };
-        for (slot, base, seed) in [(Slot::Mainhand, "Sword", 4), (Slot::Head, "Helm", 9), (Slot::Body, "Mail", 9)] {
+        let attributes = Attributes {
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        let character = Character {
+            folk: Folk::Human,
+            body_seed: DEFAULT_SEED,
+            shape: None,
+            sex: None,
+            name: "Lab delver".into(),
+            class: Class::Fighter,
+            attributes,
+            dirt: 0.0,
+            worn: fb_character::AbilityBonus::default(),
+            learned: fb_character::AbilityBonus::default(),
+            books_read: Vec::new(),
+        };
+        let mut state = LabState {
+            character,
+            seed: DEFAULT_SEED,
+            slots: SLOTS.iter().map(|&s| LabSlot::empty(s)).collect(),
+            activity: Activity::Walking,
+            attacker: Attacker::Creature(Species::GiantRat),
+            strike_seed: 1,
+            swapped: false,
+            ruleset: RuleSet::default(),
+            depth: None,
+            by_fire: false,
+            apply_at: 0.5,
+        };
+        for (slot, base, seed) in [
+            (Slot::Mainhand, "Sword", 4),
+            (Slot::Head, "Helm", 9),
+            (Slot::Body, "Mail", 9),
+        ] {
             state.equip(slot, base, seed);
         }
         state
@@ -257,8 +329,13 @@ impl LabState {
             match flag.as_str() {
                 "--lab" => {}
                 "--seed" => {
-                    let text = inline.or_else(|| args.next()).ok_or("--seed needs a value")?;
-                    state.set_seed(text.parse().map_err(|_| format!("--seed: {text:?} is not a u32"))?);
+                    let text = inline
+                        .or_else(|| args.next())
+                        .ok_or("--seed needs a value")?;
+                    state.set_seed(
+                        text.parse()
+                            .map_err(|_| format!("--seed: {text:?} is not a u32"))?,
+                    );
                 }
                 other => return Err(format!("unknown argument {other:?}")),
             }
@@ -278,16 +355,26 @@ impl LabState {
     }
 
     pub fn slot(&self, slot: Slot) -> &LabSlot {
-        self.slots.iter().find(|s| s.slot == slot).expect("every lab slot is listed")
+        self.slots
+            .iter()
+            .find(|s| s.slot == slot)
+            .expect("every lab slot is listed")
     }
 
     fn slot_mut(&mut self, slot: Slot) -> &mut LabSlot {
-        self.slots.iter_mut().find(|s| s.slot == slot).expect("every lab slot is listed")
+        self.slots
+            .iter_mut()
+            .find(|s| s.slot == slot)
+            .expect("every lab slot is listed")
     }
 
     /// Puts `base` (rolled from `seed`) in `slot`, with every affix on.
     pub fn equip(&mut self, slot: Slot, base: &str, seed: u32) {
-        *self.slot_mut(slot) = LabSlot { base: Some(base.to_string()), seed, ..LabSlot::empty(slot) };
+        *self.slot_mut(slot) = LabSlot {
+            base: Some(base.to_string()),
+            seed,
+            ..LabSlot::empty(slot)
+        };
     }
 
     /// Takes whatever is in `slot` off.
@@ -328,25 +415,43 @@ impl LabState {
     /// Raises (or with a negative `by`, lowers) the `which`th score.
     pub fn step_score(&mut self, which: usize, by: i32) {
         let a = &self.character.attributes;
-        let now = [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom].get(which).copied().unwrap_or(10);
+        let now = [
+            a.strength,
+            a.dexterity,
+            a.constitution,
+            a.intelligence,
+            a.wisdom,
+        ]
+        .get(which)
+        .copied()
+        .unwrap_or(10);
         self.set_score(which, now + by);
     }
 
     /// Steps `by` folk through [`Folk::ALL`], wrapping.
     pub fn cycle_folk(&mut self, by: isize) {
-        let at = Folk::ALL.iter().position(|&f| f == self.character.folk).unwrap_or(0);
+        let at = Folk::ALL
+            .iter()
+            .position(|&f| f == self.character.folk)
+            .unwrap_or(0);
         self.character.folk = Folk::ALL[step(Folk::ALL.len(), at, by)];
     }
 
     /// Steps `by` classes through [`Class::ALL`], wrapping.
     pub fn cycle_class(&mut self, by: isize) {
-        let at = Class::ALL.iter().position(|&c| c == self.character.class).unwrap_or(0);
+        let at = Class::ALL
+            .iter()
+            .position(|&c| c == self.character.class)
+            .unwrap_or(0);
         self.character.class = Class::ALL[step(Class::ALL.len(), at, by)];
     }
 
     /// Steps `by` activities through [`ACTIVITIES`], wrapping.
     pub fn cycle_activity(&mut self, by: isize) {
-        let at = ACTIVITIES.iter().position(|&a| a == self.activity).unwrap_or(0);
+        let at = ACTIVITIES
+            .iter()
+            .position(|&a| a == self.activity)
+            .unwrap_or(0);
         self.activity = ACTIVITIES[step(ACTIVITIES.len(), at, by)];
     }
 
@@ -361,7 +466,10 @@ impl LabState {
 
     /// Steps `by` through the intensities an effect is put on at.
     pub fn cycle_apply_at(&mut self, by: isize) {
-        let at = APPLY_AT.iter().position(|&a| a == self.apply_at).unwrap_or(0);
+        let at = APPLY_AT
+            .iter()
+            .position(|&a| a == self.apply_at)
+            .unwrap_or(0);
         self.apply_at = APPLY_AT[step(APPLY_AT.len(), at, by)];
     }
 
@@ -374,7 +482,10 @@ impl LabState {
 
     /// Everything worn, rolled.
     pub fn items(&self) -> Vec<(Slot, Rolled)> {
-        self.slots.iter().filter_map(|s| Some((s.slot, s.roll_with(&self.ruleset.strengths)?))).collect()
+        self.slots
+            .iter()
+            .filter_map(|s| Some((s.slot, s.roll_with(&self.ruleset.strengths)?)))
+            .collect()
     }
 
     /// What the worn items make an [`Inventory`]: each in its slot, so the game's own rules
@@ -400,10 +511,29 @@ pub fn bases_for(slot: Slot) -> Vec<String> {
     static TABLE: LazyLock<Vec<(Slot, Vec<String>)>> = LazyLock::new(|| {
         let mut names: BTreeSet<&str> = ARMORY_BASES.iter().map(|(n, _)| *n).collect();
         names.extend(bases().keys().map(String::as_str));
-        let rolled: Vec<(&str, Item)> = names.into_iter().filter_map(|n| Some((n, roll_item(n, 1)?))).collect();
-        SLOTS.iter().map(|&slot| (slot, rolled.iter().filter(|(_, i)| i.fits(slot)).map(|(n, _)| n.to_string()).collect())).collect()
+        let rolled: Vec<(&str, Item)> = names
+            .into_iter()
+            .filter_map(|n| Some((n, roll_item(n, 1)?)))
+            .collect();
+        SLOTS
+            .iter()
+            .map(|&slot| {
+                (
+                    slot,
+                    rolled
+                        .iter()
+                        .filter(|(_, i)| i.fits(slot))
+                        .map(|(n, _)| n.to_string())
+                        .collect(),
+                )
+            })
+            .collect()
     });
-    TABLE.iter().find(|(s, _)| *s == slot).map(|(_, b)| b.clone()).unwrap_or_default()
+    TABLE
+        .iter()
+        .find(|(s, _)| *s == slot)
+        .map(|(_, b)| b.clone())
+        .unwrap_or_default()
 }
 
 /// The tab open in the middle, by its place in [`TABS`].
@@ -446,7 +576,15 @@ pub fn searches_run() -> u32 {
 
 impl Default for Picker {
     fn default() -> Self {
-        Picker { open: false, slot: 0, base: 0, seed: 1, rarity: None, search: RARITY_SEARCH, found: None }
+        Picker {
+            open: false,
+            slot: 0,
+            base: 0,
+            seed: 1,
+            rarity: None,
+            search: RARITY_SEARCH,
+            found: None,
+        }
     }
 }
 
@@ -486,13 +624,19 @@ impl Picker {
         SEARCHES.with(|n| n.set(n.get() + 1));
         match self.rarity {
             None => Some(self.seed),
-            Some(rarity) => (0..self.search).map(|i| self.seed.wrapping_add(i)).find(|&s| roll_item(&base, s).is_some_and(|item| item.rarity == rarity)),
+            Some(rarity) => (0..self.search)
+                .map(|i| self.seed.wrapping_add(i))
+                .find(|&s| roll_item(&base, s).is_some_and(|item| item.rarity == rarity)),
         }
     }
 
     /// Searches for the choice's seed if it has not been searched for yet, and keeps what it found.
     pub fn refresh(&mut self) {
-        if self.found.as_ref().is_none_or(|(key, _)| *key != self.key()) {
+        if self
+            .found
+            .as_ref()
+            .is_none_or(|(key, _)| *key != self.key())
+        {
             self.found = Some((self.key(), self.search()));
         }
     }
@@ -597,7 +741,13 @@ pub enum Control {
 
 impl Control {
     /// Does what the control says to the lab, changing only what it needs to.
-    pub fn apply(&self, state: &mut LabState, picker: &mut Picker, tab: &mut LabTab, saved: &mut RuleSet) {
+    pub fn apply(
+        &self,
+        state: &mut LabState,
+        picker: &mut Picker,
+        tab: &mut LabTab,
+        saved: &mut RuleSet,
+    ) {
         match self {
             Control::Folk(by) => state.cycle_folk(*by),
             Control::Class(by) => state.cycle_class(*by),
@@ -620,7 +770,9 @@ impl Control {
             Control::Tab(i) if TABS.get(*i).is_some_and(|t| t.1) => tab.0 = *i,
             Control::Tab(_) => {}
             Control::Attacker(by) => state.cycle_attacker(*by),
-            Control::StrikeSeed(by) => state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32,
+            Control::StrikeSeed(by) => {
+                state.strike_seed = (state.strike_seed as i64 + by).clamp(0, u32::MAX as i64) as u32
+            }
             Control::Activity(by) => state.cycle_activity(*by),
             Control::Swap => state.swapped = !state.swapped,
             Control::Depth(by) => state.cycle_depth(*by),
@@ -628,7 +780,9 @@ impl Control {
             Control::ApplyAt(by) => state.cycle_apply_at(*by),
             Control::OneFight | Control::Thousand | Control::Time(_) => {}
             Control::Rule(path, dir) => crate::lab_rules::step(&mut state.ruleset, path, *dir),
-            Control::Dice(path, part, dir) => crate::lab_rules::step_dice(&mut state.ruleset, path, *part, *dir),
+            Control::Dice(path, part, dir) => {
+                crate::lab_rules::step_dice(&mut state.ruleset, path, *part, *dir)
+            }
             Control::Save => *saved = state.ruleset.clone(),
             Control::Undo => state.ruleset = saved.clone(),
         }
@@ -728,7 +882,11 @@ struct LogLine(usize);
 
 fn blank_chart((w, h): (u32, u32)) -> Image {
     let mut image = Image::new(
-        bevy::render::render_resource::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        bevy::render::render_resource::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         bevy::render::render_resource::TextureDimension::D2,
         vec![0; (w * h * 4) as usize],
         bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
@@ -747,18 +905,33 @@ fn make_chart_images(mut images: ResMut<FightImages>, assets: Option<ResMut<Asse
 
 /// Runs the fights that were asked for, and again after a change when a thousand has been run.
 /// The thousand runs under the edited rules and under the saved ones from the same seed.
-fn run_fights(state: Res<LabState>, saved: Res<LabRules>, mut lab: ResMut<FightLab>, images: Res<FightImages>, assets: Option<ResMut<Assets<Image>>>) {
+fn run_fights(
+    state: Res<LabState>,
+    saved: Res<LabRules>,
+    mut lab: ResMut<FightLab>,
+    images: Res<FightImages>,
+    assets: Option<ResMut<Assets<Image>>>,
+) {
     let changed = lab.auto && (state.is_changed() || saved.is_changed());
-    let (many, one) = (lab.want_many || changed, lab.want_one || (changed && lab.one.is_some()));
+    let (many, one) = (
+        lab.want_many || changed,
+        lab.want_one || (changed && lab.one.is_some()),
+    );
     if !many && !one {
         return;
     }
     let seed = state.strike_seed;
     if many {
-        let before = LabState { ruleset: saved.saved.clone(), ..state.clone() };
+        let before = LabState {
+            ruleset: saved.saved.clone(),
+            ..state.clone()
+        };
         let now = crate::lab_fight::fights(&state, &state.ruleset.rules, seed, THOUSAND);
         let was = crate::lab_fight::fights(&before, &saved.saved.rules, seed, THOUSAND);
-        let (life, histogram) = (crate::lab_chart::life_chart(&now, Some(&was)), crate::lab_chart::histogram_chart(&now, Some(&was)));
+        let (life, histogram) = (
+            crate::lab_chart::life_chart(&now, Some(&was)),
+            crate::lab_chart::histogram_chart(&now, Some(&was)),
+        );
         if let Some(mut assets) = assets {
             for (handle, chart) in [(&images.life, &life), (&images.histogram, &histogram)] {
                 if let Some(mut image) = handle.as_ref().and_then(|h| assets.get_mut(h)) {
@@ -772,7 +945,11 @@ fn run_fights(state: Res<LabState>, saved: Res<LabRules>, mut lab: ResMut<FightL
     }
     if one {
         let mut rng = Mulberry32::new(seed.wrapping_add(lab.ones));
-        lab.one = Some(crate::lab_fight::fight(&state, &state.ruleset.rules, &mut rng));
+        lab.one = Some(crate::lab_fight::fight(
+            &state,
+            &state.ruleset.rules,
+            &mut rng,
+        ));
     }
     lab.want_many = false;
     lab.want_one = false;
@@ -856,15 +1033,32 @@ fn make_effects_image(mut image: ResMut<EffectsImage>, assets: Option<ResMut<Ass
 /// Plays the run again, under the edited rules and the saved ones, when a step is added or the
 /// state or the rules change; the sheet's needs follow the end of it.
 #[allow(clippy::too_many_arguments)]
-fn run_time(state: Res<LabState>, saved: Res<LabRules>, mut run: ResMut<TimeRun>, mut time: ResMut<TimeLab>, image: Res<TimeImage>, effects_image: Res<EffectsImage>, mut assets: Option<ResMut<Assets<Image>>>) {
+fn run_time(
+    state: Res<LabState>,
+    saved: Res<LabRules>,
+    mut run: ResMut<TimeRun>,
+    mut time: ResMut<TimeLab>,
+    image: Res<TimeImage>,
+    effects_image: Res<EffectsImage>,
+    mut assets: Option<ResMut<Assets<Image>>>,
+) {
     if !(run.dirty || (!run.steps.is_empty() && (state.is_changed() || saved.is_changed()))) {
         return;
     }
-    let before = LabState { ruleset: saved.saved.clone(), ..state.clone() };
+    let before = LabState {
+        ruleset: saved.saved.clone(),
+        ..state.clone()
+    };
     let now = crate::lab_timeline::run(&state, &run.steps);
     let was = crate::lab_timeline::run(&before, &run.steps);
-    let chart = crate::lab_chart::time_chart(&now, Some(&was), &state.ruleset.rules.needs.band_edges);
-    let effects_chart = crate::lab_chart::effects_chart(&now, Some(&was), &crate::lab_timeline::effects_seen(&now), &state.ruleset.rules);
+    let chart =
+        crate::lab_chart::time_chart(&now, Some(&was), &state.ruleset.rules.needs.band_edges);
+    let effects_chart = crate::lab_chart::effects_chart(
+        &now,
+        Some(&was),
+        &crate::lab_timeline::effects_seen(&now),
+        &state.ruleset.rules,
+    );
     for (handle, drawn) in [(&image.0, &chart), (&effects_image.0, &effects_chart)] {
         if let (Some(assets), Some(handle)) = (assets.as_mut(), handle)
             && let Some(mut texture) = assets.get_mut(handle)
@@ -882,7 +1076,13 @@ fn run_time(state: Res<LabState>, saved: Res<LabRules>, mut run: ResMut<TimeRun>
 
 /// The time chart with its words: the axes, and the words of each band at the right, one line
 /// per need in its colour.
-fn time_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, chart: &Chart, image: &Option<Handle<Image>>, rules: &fb_character::rules::Rules) {
+fn time_figure(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    chart: &Chart,
+    image: &Option<Handle<Image>>,
+    rules: &fb_character::rules::Rules,
+) {
     let ink = |c: [u8; 4]| Color::srgb_u8(c[0], c[1], c[2]);
     parent
         .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
@@ -926,34 +1126,109 @@ fn time_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, chart: &Chart
 }
 
 /// The Time tab's answers and chart, built again when the run changes.
-fn refresh_time_view(mut commands: Commands, run: Res<TimeRun>, image: Res<TimeImage>, state: Res<LabState>, saved: Res<LabRules>, fonts: Res<UiFonts>, column: Query<Entity, With<TimeColumn>>) {
+fn refresh_time_view(
+    mut commands: Commands,
+    run: Res<TimeRun>,
+    image: Res<TimeImage>,
+    state: Res<LabState>,
+    saved: Res<LabRules>,
+    fonts: Res<UiFonts>,
+    column: Query<Entity, With<TimeColumn>>,
+) {
     let Ok(column) = column.single() else { return };
-    commands.entity(column).despawn_children().with_children(|c| match (&run.now, &run.was, &run.chart) {
-        (Some(now), Some(was), Some(chart)) if !run.steps.is_empty() => {
-            let (here, before) = (crate::lab_timeline::answers(now, &state.ruleset.rules), crate::lab_timeline::answers(was, &saved.saved.rules));
-            c.spawn(Node { column_gap: px(12), ..default() }).with_children(|row| {
-                for (a, b) in here.iter().zip(&before).filter(|(a, b)| !(a.danger && a.value == b.value && a.value == "not reached")) {
-                    row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(if a.danger && a.value != "not reached" { BAD } else { FAINT })))
+    commands
+        .entity(column)
+        .despawn_children()
+        .with_children(|c| match (&run.now, &run.was, &run.chart) {
+            (Some(now), Some(was), Some(chart)) if !run.steps.is_empty() => {
+                let (here, before) = (
+                    crate::lab_timeline::answers(now, &state.ruleset.rules),
+                    crate::lab_timeline::answers(was, &saved.saved.rules),
+                );
+                c.spawn(Node {
+                    column_gap: px(12),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for (a, b) in here.iter().zip(&before).filter(|(a, b)| {
+                        !(a.danger && a.value == b.value && a.value == "not reached")
+                    }) {
+                        row.spawn((
+                            Node {
+                                flex_grow: 1.0,
+                                flex_basis: px(0),
+                                min_width: px(0),
+                                flex_direction: FlexDirection::Column,
+                                padding: UiRect::all(px(12)),
+                                border: UiRect::all(px(1)),
+                                border_radius: BorderRadius::all(px(8)),
+                                ..default()
+                            },
+                            BackgroundColor(CELL),
+                            BorderColor::all(if a.danger && a.value != "not reached" {
+                                BAD
+                            } else {
+                                FAINT
+                            }),
+                        ))
                         .with_children(|tile| {
                             words(tile, &fonts.body, 13.0, MUTED, a.label.clone());
-                            words(tile, &fonts.mono_bold, if a.value == "not reached" || a.value.len() > 8 { 18.0 } else { 30.0 }, if a.danger && a.value != "not reached" { BAD } else { BRIGHT }, a.value.clone());
+                            words(
+                                tile,
+                                &fonts.mono_bold,
+                                if a.value == "not reached" || a.value.len() > 8 {
+                                    18.0
+                                } else {
+                                    30.0
+                                },
+                                if a.danger && a.value != "not reached" {
+                                    BAD
+                                } else {
+                                    BRIGHT
+                                },
+                                a.value.clone(),
+                            );
                             match crate::lab_rules::was_text(&a.value, &b.value) {
                                 Some(was) => words(tile, &fonts.body, 13.0, FRAME_GOLD, was),
                                 None => words(tile, &fonts.body, 13.0, MUTED, " "),
                             }
                         });
-                }
-            });
-            time_figure(c, &fonts, chart, &image.0, &state.ruleset.rules);
-            words(c, &fonts.body, 14.0, MUTED, format!("{} so far, {} steps. Each button adds to the run; Reset starts it over.", clock_text(now.end()), run.steps.len()));
-        }
-        _ => words(c, &fonts.body, 16.0, MUTED, "Press a span to pass time and see when each need and exhaustion arrive."),
-    });
+                    }
+                });
+                time_figure(c, &fonts, chart, &image.0, &state.ruleset.rules);
+                words(
+                    c,
+                    &fonts.body,
+                    14.0,
+                    MUTED,
+                    format!(
+                        "{} so far, {} steps. Each button adds to the run; Reset starts it over.",
+                        clock_text(now.end()),
+                        run.steps.len()
+                    ),
+                );
+            }
+            _ => words(
+                c,
+                &fonts.body,
+                16.0,
+                MUTED,
+                "Press a span to pass time and see when each need and exhaustion arrive.",
+            ),
+        });
 }
 
 /// The Effects tab's answers and chart, built again when the run changes: when each effect's
 /// stages showed and when it ended, against the saved rules, and its intensity over time.
-fn refresh_effects_view(mut commands: Commands, run: Res<TimeRun>, image: Res<EffectsImage>, state: Res<LabState>, saved: Res<LabRules>, fonts: Res<UiFonts>, column: Query<Entity, With<EffectsColumn>>) {
+fn refresh_effects_view(
+    mut commands: Commands,
+    run: Res<TimeRun>,
+    image: Res<EffectsImage>,
+    state: Res<LabState>,
+    saved: Res<LabRules>,
+    fonts: Res<UiFonts>,
+    column: Query<Entity, With<EffectsColumn>>,
+) {
     let Ok(column) = column.single() else { return };
     let ink = |c: [u8; 4]| Color::srgb_u8(c[0], c[1], c[2]);
     commands.entity(column).despawn_children().with_children(|c| match (&run.now, &run.was, &run.effects_chart) {
@@ -1017,101 +1292,262 @@ pub struct EquipBuilds(pub u32);
 
 /// A heading in the equip tab.
 fn heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &str) {
-    parent.spawn(Node { margin: UiRect::top(px(6)), border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(3)), ..default() }).insert(BorderColor::all(FAINT)).with_child((Text::new(text), UiFonts::style(&fonts.display_bold, 22.0, INK)));
+    parent
+        .spawn(Node {
+            margin: UiRect::top(px(6)),
+            border: UiRect::bottom(px(1)),
+            padding: UiRect::bottom(px(3)),
+            ..default()
+        })
+        .insert(BorderColor::all(FAINT))
+        .with_child((
+            Text::new(text),
+            UiFonts::style(&fonts.display_bold, 22.0, INK),
+        ));
 }
 
 /// A choice among others: the button of `label`, marked when it is the one chosen.
-fn choice(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, control: Control, chosen: bool) {
+fn choice(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    control: Control,
+    chosen: bool,
+) {
     let id = button(parent, fonts, label, control);
     if chosen {
-        parent.commands().entity(id).insert((BorderColor::all(FRAME_GOLD), BackgroundColor(OPEN_TAB)));
+        parent
+            .commands()
+            .entity(id)
+            .insert((BorderColor::all(FRAME_GOLD), BackgroundColor(OPEN_TAB)));
     }
 }
 
 /// A row of a label and then what `fill` puts after it, wrapping.
-fn labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, fill: impl FnOnce(&mut ChildSpawnerCommands)) {
-    parent.spawn(Node { column_gap: px(8), align_items: AlignItems::FlexStart, ..default() }).with_children(|row| {
-        row.spawn(Node { width: px(56), flex_shrink: 0.0, padding: UiRect::top(px(6)), ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 16.0, MUTED)));
-        row.spawn(Node { flex_grow: 1.0, flex_basis: px(0), column_gap: px(6), row_gap: px(6), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(fill);
-    });
+fn labelled(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    fill: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    parent
+        .spawn(Node {
+            column_gap: px(8),
+            align_items: AlignItems::FlexStart,
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(Node {
+                width: px(56),
+                flex_shrink: 0.0,
+                padding: UiRect::top(px(6)),
+                ..default()
+            })
+            .with_child((Text::new(label), UiFonts::style(&fonts.body, 16.0, MUTED)));
+            row.spawn(Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
+                column_gap: px(6),
+                row_gap: px(6),
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(fill);
+        });
 }
 
 /// Builds the Eat, drink, equip tab: every provision with what it does and a button, a picker of
 /// slot, base, seed and rarity with the card of what it rolls, and each thing worn with Take off.
-fn rebuild_equip(mut commands: Commands, mut builds: ResMut<EquipBuilds>, picker: Res<Picker>, current: Res<CurrentSheet>, fonts: Res<UiFonts>, column: Query<Entity, With<EquipColumn>>) {
+fn rebuild_equip(
+    mut commands: Commands,
+    mut builds: ResMut<EquipBuilds>,
+    picker: Res<Picker>,
+    current: Res<CurrentSheet>,
+    fonts: Res<UiFonts>,
+    column: Query<Entity, With<EquipColumn>>,
+) {
     let Ok(column) = column.single() else { return };
     builds.0 += 1;
     let fonts = &*fonts;
-    commands.entity(column).despawn_children().with_children(|c| {
-        heading(c, fonts, "Provisions");
-        c.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(16), row_gap: px(2), ..default() }).with_children(|list| {
-            for (base, p) in fb_items::provision::PROVISIONS {
-                let drinks = roll_item(base, 1).and_then(|i| i.consume()) == Some(fb_items::Consume::Drink);
-                list.spawn(Node { width: percent(48.5), justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(2)), ..default() }).with_children(|row| {
-                    row.spawn(Node { column_gap: px(14), align_items: AlignItems::Baseline, ..default() }).with_children(|what| {
-                        words(what, &fonts.body_medium, 16.0, BRIGHT, *base);
-                        words(what, &fonts.body, 14.0, MUTED, format!("nutrition {}% \u{b7} water {}%", number(p.nutrition * 100.0), number(p.water * 100.0)));
+    commands
+        .entity(column)
+        .despawn_children()
+        .with_children(|c| {
+            heading(c, fonts, "Provisions");
+            c.spawn(Node {
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(16),
+                row_gap: px(2),
+                ..default()
+            })
+            .with_children(|list| {
+                for (base, p) in fb_items::provision::PROVISIONS {
+                    let drinks = roll_item(base, 1).and_then(|i| i.consume())
+                        == Some(fb_items::Consume::Drink);
+                    list.spawn(Node {
+                        width: percent(48.5),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(10), px(2)),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn(Node {
+                            column_gap: px(14),
+                            align_items: AlignItems::Baseline,
+                            ..default()
+                        })
+                        .with_children(|what| {
+                            words(what, &fonts.body_medium, 16.0, BRIGHT, *base);
+                            words(
+                                what,
+                                &fonts.body,
+                                14.0,
+                                MUTED,
+                                format!(
+                                    "nutrition {}% \u{b7} water {}%",
+                                    number(p.nutrition * 100.0),
+                                    number(p.water * 100.0)
+                                ),
+                            );
+                        });
+                        let action = if drinks {
+                            TimeAction::Drink(base)
+                        } else {
+                            TimeAction::Eat(base)
+                        };
+                        button(
+                            row,
+                            fonts,
+                            if drinks { "Drink" } else { "Eat" },
+                            Control::Time(action),
+                        );
                     });
-                    let action = if drinks { TimeAction::Drink(base) } else { TimeAction::Eat(base) };
-                    button(row, fonts, if drinks { "Drink" } else { "Eat" }, Control::Time(action));
-                });
-            }
-        });
-        heading(c, fonts, "Put on or hold something");
-        c.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(8), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT))).with_children(|card| {
-            labelled(card, fonts, "Slot", |row| {
-                for (i, slot) in SLOTS.iter().enumerate() {
-                    let label = match slot {
-                        Slot::Ring1 => "Ring 1".to_string(),
-                        Slot::Ring2 => "Ring 2".to_string(),
-                        slot => lab_sheet::slot_word(*slot),
-                    };
-                    choice(row, fonts, &label, Control::PickSlotAt(i), i == picker.slot);
                 }
             });
-            labelled(card, fonts, "Base", |row| {
-                for (i, base) in bases_for(picker.slot()).iter().enumerate() {
-                    choice(row, fonts, base, Control::PickBaseAt(i), i == picker.base);
-                }
-            });
-            labelled(card, fonts, "Seed", |row| {
-                for (label, by) in [("\u{2212}100", -100), ("\u{2212}10", -10), ("\u{2212}1", -1)] {
-                    button(row, fonts, label, Control::PickSeed(by));
-                }
-                row.spawn(Node { min_width: px(56), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(picker.seed.to_string()), UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT)));
-                for (label, by) in [("+1", 1), ("+10", 10), ("+100", 100)] {
-                    button(row, fonts, label, Control::PickSeed(by));
-                }
-            });
-            labelled(card, fonts, "Rarity", |row| {
-                choice(row, fonts, "Any", Control::PickRarity(None), picker.rarity.is_none());
-                for (label, rarity) in [("Normal", Rarity::Common), ("Magic", Rarity::Magic), ("Rare", Rarity::Rare), ("Legendary", Rarity::Legendary)] {
-                    choice(row, fonts, label, Control::PickRarity(Some(rarity)), picker.rarity == Some(rarity));
-                }
-            });
-            match (picker.resolved_seed(), picker.preview()) {
-                (Some(seed), Some(item)) => {
-                    if seed != picker.seed {
-                        words(card, &fonts.body, 14.0, MUTED, format!("The first seed from {} that rolls {} is {seed}.", picker.seed, picker.rarity.map_or("any", rarity_word)));
+            heading(c, fonts, "Put on or hold something");
+            c.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(8),
+                    padding: UiRect::all(px(12)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(8)),
+                    ..default()
+                },
+                BackgroundColor(CELL),
+                BorderColor::all(FAINT),
+            ))
+            .with_children(|card| {
+                labelled(card, fonts, "Slot", |row| {
+                    for (i, slot) in SLOTS.iter().enumerate() {
+                        let label = match slot {
+                            Slot::Ring1 => "Ring 1".to_string(),
+                            Slot::Ring2 => "Ring 2".to_string(),
+                            slot => lab_sheet::slot_word(*slot),
+                        };
+                        choice(row, fonts, &label, Control::PickSlotAt(i), i == picker.slot);
                     }
-                    gear_card(card, fonts, &lab_sheet::preview_card(picker.slot(), &item), CardMode::Preview);
+                });
+                labelled(card, fonts, "Base", |row| {
+                    for (i, base) in bases_for(picker.slot()).iter().enumerate() {
+                        choice(row, fonts, base, Control::PickBaseAt(i), i == picker.base);
+                    }
+                });
+                labelled(card, fonts, "Seed", |row| {
+                    for (label, by) in [
+                        ("\u{2212}100", -100),
+                        ("\u{2212}10", -10),
+                        ("\u{2212}1", -1),
+                    ] {
+                        button(row, fonts, label, Control::PickSeed(by));
+                    }
+                    row.spawn(Node {
+                        min_width: px(56),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child((
+                        Text::new(picker.seed.to_string()),
+                        UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                    ));
+                    for (label, by) in [("+1", 1), ("+10", 10), ("+100", 100)] {
+                        button(row, fonts, label, Control::PickSeed(by));
+                    }
+                });
+                labelled(card, fonts, "Rarity", |row| {
+                    choice(
+                        row,
+                        fonts,
+                        "Any",
+                        Control::PickRarity(None),
+                        picker.rarity.is_none(),
+                    );
+                    for (label, rarity) in [
+                        ("Normal", Rarity::Common),
+                        ("Magic", Rarity::Magic),
+                        ("Rare", Rarity::Rare),
+                        ("Legendary", Rarity::Legendary),
+                    ] {
+                        choice(
+                            row,
+                            fonts,
+                            label,
+                            Control::PickRarity(Some(rarity)),
+                            picker.rarity == Some(rarity),
+                        );
+                    }
+                });
+                match (picker.resolved_seed(), picker.preview()) {
+                    (Some(seed), Some(item)) => {
+                        if seed != picker.seed {
+                            words(
+                                card,
+                                &fonts.body,
+                                14.0,
+                                MUTED,
+                                format!(
+                                    "The first seed from {} that rolls {} is {seed}.",
+                                    picker.seed,
+                                    picker.rarity.map_or("any", rarity_word)
+                                ),
+                            );
+                        }
+                        gear_card(
+                            card,
+                            fonts,
+                            &lab_sheet::preview_card(picker.slot(), &item),
+                            CardMode::Preview,
+                        );
+                    }
+                    _ => words(
+                        card,
+                        &fonts.body,
+                        14.0,
+                        BAD,
+                        format!(
+                            "No {} rolls from seed {} within {} seeds.",
+                            picker.rarity.map_or("item", rarity_word),
+                            picker.seed,
+                            picker.search
+                        ),
+                    ),
                 }
-                _ => words(card, &fonts.body, 14.0, BAD, format!("No {} rolls from seed {} within {} seeds.", picker.rarity.map_or("item", rarity_word), picker.seed, picker.search)),
-            }
-            card.spawn(Node::default()).with_children(|row| {
-                button(row, fonts, "Put on", Control::PutOn);
+                card.spawn(Node::default()).with_children(|row| {
+                    button(row, fonts, "Put on", Control::PutOn);
+                });
             });
-        });
-        heading(c, fonts, "Worn and held");
-        match &current.0 {
-            Some(view) if !view.cards.is_empty() => {
-                for card in &view.cards {
-                    gear_card(c, fonts, card, CardMode::TakeOff);
+            heading(c, fonts, "Worn and held");
+            match &current.0 {
+                Some(view) if !view.cards.is_empty() => {
+                    for card in &view.cards {
+                        gear_card(c, fonts, card, CardMode::TakeOff);
+                    }
                 }
+                _ => words(c, &fonts.body, 15.0, MUTED, "Nothing is worn or held."),
             }
-            _ => words(c, &fonts.body, 15.0, MUTED, "Nothing is worn or held."),
-        }
-    });
+        });
 }
 
 /// A rarity as the picker says it.
@@ -1125,7 +1561,12 @@ fn rarity_word(rarity: Rarity) -> &'static str {
 }
 
 /// A button in the ledger's look, with `control` on it.
-fn button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, control: Control) -> Entity {
+fn button(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    control: Control,
+) -> Entity {
     let mut button = parent.spawn((
         control,
         Node {
@@ -1140,14 +1581,26 @@ fn button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, contr
         BackgroundColor(CELL),
         BorderColor::all(LINE),
     ));
-    button.with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 16.0, INK)));
+    button.with_child((
+        Text::new(label),
+        UiFonts::style(&fonts.body_medium, 16.0, INK),
+    ));
     button.id()
 }
 
 /// A button whose words follow the lab state ([`refresh_controls`]).
-fn state_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, control: Control, words: ControlText) {
+fn state_button(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    control: Control,
+    words: ControlText,
+) {
     let id = button(parent, fonts, "", control);
-    parent.commands().entity(id).despawn_children().with_child((words, Text::new(""), UiFonts::style(&fonts.body_medium, 16.0, INK)));
+    parent.commands().entity(id).despawn_children().with_child((
+        words,
+        Text::new(""),
+        UiFonts::style(&fonts.body_medium, 16.0, INK),
+    ));
 }
 
 fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) {
@@ -1327,137 +1780,360 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut hover: ResMut<Hover>) 
 
 /// Whether anything the sheet shows has changed.
 #[allow(clippy::too_many_arguments)]
-fn sheet_changed(state: Res<LabState>, time: Res<TimeLab>, picker: Res<Picker>, figure: Res<LabFigure>, saved: Res<LabRules>) -> bool {
-    state.is_changed() || time.is_changed() || picker.is_changed() || figure.is_changed() || saved.is_changed()
+fn sheet_changed(
+    state: Res<LabState>,
+    time: Res<TimeLab>,
+    picker: Res<Picker>,
+    figure: Res<LabFigure>,
+    saved: Res<LabRules>,
+) -> bool {
+    state.is_changed()
+        || time.is_changed()
+        || picker.is_changed()
+        || figure.is_changed()
+        || saved.is_changed()
 }
 
 /// A line of text in the sheet.
-fn words(parent: &mut ChildSpawnerCommands, font: &Handle<Font>, size: f32, colour: Color, text: impl Into<String>) {
+fn words(
+    parent: &mut ChildSpawnerCommands,
+    font: &Handle<Font>,
+    size: f32,
+    colour: Color,
+    text: impl Into<String>,
+) {
     parent.spawn((Text::new(text), UiFonts::style(font, size, colour)));
 }
 
 /// A bar of `fill` in `colour`, `height` tall, with a rounded end.
 fn bar_track(parent: &mut ChildSpawnerCommands, fill: f32, colour: Color, height: f32) {
     parent
-        .spawn((Node { flex_grow: 1.0, height: px(height), border_radius: BorderRadius::all(px(height / 2.0)), ..default() }, BackgroundColor(Color::srgb(0.165, 0.141, 0.106))))
-        .with_child((Node { width: percent(fill * 100.0), height: px(height), border_radius: BorderRadius::all(px(height / 2.0)), ..default() }, BackgroundColor(colour)));
+        .spawn((
+            Node {
+                flex_grow: 1.0,
+                height: px(height),
+                border_radius: BorderRadius::all(px(height / 2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.165, 0.141, 0.106)),
+        ))
+        .with_child((
+            Node {
+                width: percent(fill * 100.0),
+                height: px(height),
+                border_radius: BorderRadius::all(px(height / 2.0)),
+                ..default()
+            },
+            BackgroundColor(colour),
+        ));
 }
 
 /// A row of a bar: its label, the bar and the words beside it.
-fn bar_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, bar: &lab_sheet::Bar, height: f32, word_colour: Color) {
-    parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|row| {
-        row.spawn(Node { width: px(84), flex_shrink: 0.0, ..default() }).with_child((Text::new(bar.label), UiFonts::style(&fonts.body, 16.0, BRIGHT)));
-        bar_track(row, bar.fill, bar.colour, height);
-        row.spawn(Node { width: px(76), flex_shrink: 0.0, flex_direction: FlexDirection::Column, align_items: AlignItems::End, ..default() }).with_children(|words_column| {
-            words_column.spawn((Text::new(bar.text.clone()), UiFonts::style(&fonts.body, 16.0, word_colour)));
-            if let Some(was) = &bar.was {
-                words_column.spawn((Text::new(was.clone()), UiFonts::style(&fonts.body, 12.0, FRAME_GOLD)));
-            }
+fn bar_row(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    bar: &lab_sheet::Bar,
+    height: f32,
+    word_colour: Color,
+) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: px(10),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(Node {
+                width: px(84),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_child((
+                Text::new(bar.label),
+                UiFonts::style(&fonts.body, 16.0, BRIGHT),
+            ));
+            bar_track(row, bar.fill, bar.colour, height);
+            row.spawn(Node {
+                width: px(76),
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::End,
+                ..default()
+            })
+            .with_children(|words_column| {
+                words_column.spawn((
+                    Text::new(bar.text.clone()),
+                    UiFonts::style(&fonts.body, 16.0, word_colour),
+                ));
+                if let Some(was) = &bar.was {
+                    words_column.spawn((
+                        Text::new(was.clone()),
+                        UiFonts::style(&fonts.body, 12.0, FRAME_GOLD),
+                    ));
+                }
+            });
         });
-    });
 }
 
 /// A small square button with `label`.
 fn small_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, control: Control) {
     parent
-        .spawn((control, Node { width: px(17), height: px(17), flex_shrink: 0.0, justify_content: JustifyContent::Center, align_items: AlignItems::Center, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() }, BorderColor::all(LINE)))
-        .with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 15.0, MUTED)));
+        .spawn((
+            control,
+            Node {
+                width: px(17),
+                height: px(17),
+                flex_shrink: 0.0,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
+            BorderColor::all(LINE),
+        ))
+        .with_child((
+            Text::new(label),
+            UiFonts::style(&fonts.body_medium, 15.0, MUTED),
+        ));
 }
 
 /// The sheet's whole body.
-fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetView, picker: &Picker, figure: &LabFigure) {
+fn build_sheet(
+    sheet: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    view: &SheetView,
+    picker: &Picker,
+    figure: &LabFigure,
+) {
     // Who they are.
-    sheet.spawn(Node { column_gap: px(16), align_items: AlignItems::Center, ..default() }).with_children(|head| {
-        let mut frame = head.spawn((
-            Node { width: px(crate::lab_figure::FRAME.x), height: px(crate::lab_figure::FRAME.y), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
-            BackgroundColor(CELL),
-            BorderColor::all(LINE),
-        ));
-        if let Some(image) = &figure.image {
-            frame.with_child((ImageNode::new(image.clone()), Node { width: percent(100), height: percent(100), ..default() }));
-        }
-        head.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), min_width: px(0), ..default() }).with_children(|who| {
-            words(who, &fonts.display_bold, 26.0, INK, view.title.clone());
-            words(who, &fonts.body, 16.0, MUTED, view.caption.clone());
-            who.spawn(Node { column_gap: px(6), row_gap: px(6), flex_wrap: FlexWrap::Wrap, margin: UiRect::top(px(6)), ..default() }).with_children(|chips| {
-                button(chips, fonts, "Next folk", Control::Folk(1));
-                button(chips, fonts, "Next class", Control::Class(1));
-                button(chips, fonts, "Reroll", Control::Reroll);
-            });
-        });
-    });
-    // Attributes.
-    sheet.spawn(Node { column_gap: px(4), ..default() }).with_children(|row| {
-        for (which, a) in view.attributes.iter().enumerate() {
-            row.spawn((
-                Node { flex_grow: 1.0, flex_basis: px(0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, padding: UiRect::axes(px(0), px(7)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
+    sheet
+        .spawn(Node {
+            column_gap: px(16),
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|head| {
+            let mut frame = head.spawn((
+                Node {
+                    width: px(crate::lab_figure::FRAME.x),
+                    height: px(crate::lab_figure::FRAME.y),
+                    flex_shrink: 0.0,
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(6)),
+                    ..default()
+                },
                 BackgroundColor(CELL),
-                BorderColor::all(FAINT),
-            ))
-            .with_children(|tile| {
-                words(tile, &fonts.body, 14.0, MUTED, a.name);
-                words(tile, &fonts.mono_bold, 22.0, BRIGHT, a.score.to_string());
-                tile.spawn(Node { align_items: AlignItems::Center, column_gap: px(2), ..default() }).with_children(|line| {
-                    small_button(line, fonts, "\u{2212}", Control::Score(which, -1));
-                    let colour = match a.modifier {
-                        m if m > 0 => FRAME_GOLD,
-                        m if m < 0 => ACCENT,
-                        _ => MUTED,
-                    };
-                    line.spawn(Node { width: px(22), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(signed(a.modifier as f64)), UiFonts::style(&fonts.body_medium, 15.0, colour)));
-                    small_button(line, fonts, "+", Control::Score(which, 1));
+                BorderColor::all(LINE),
+            ));
+            if let Some(image) = &figure.image {
+                frame.with_child((
+                    ImageNode::new(image.clone()),
+                    Node {
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                ));
+            }
+            head.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                min_width: px(0),
+                ..default()
+            })
+            .with_children(|who| {
+                words(who, &fonts.display_bold, 26.0, INK, view.title.clone());
+                words(who, &fonts.body, 16.0, MUTED, view.caption.clone());
+                who.spawn(Node {
+                    column_gap: px(6),
+                    row_gap: px(6),
+                    flex_wrap: FlexWrap::Wrap,
+                    margin: UiRect::top(px(6)),
+                    ..default()
+                })
+                .with_children(|chips| {
+                    button(chips, fonts, "Next folk", Control::Folk(1));
+                    button(chips, fonts, "Next class", Control::Class(1));
+                    button(chips, fonts, "Reroll", Control::Reroll);
                 });
             });
-        }
-    });
-    // Life, stamina and mana, then the needs.
-    sheet.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(9), ..default() }).with_children(|bars| {
-        for b in [&view.life, &view.stamina, &view.mana] {
-            bar_row(bars, fonts, b, 12.0, BRIGHT);
-        }
-        bars.spawn(Node { height: px(2), ..default() });
-        for b in &view.needs {
-            bar_row(bars, fonts, b, 8.0, MUTED);
-        }
-        bars.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|row| {
-            row.spawn(Node { width: px(84), flex_shrink: 0.0, ..default() }).with_child((Text::new("Exhaustion"), UiFonts::style(&fonts.body, 16.0, BRIGHT)));
-            row.spawn(Node { flex_grow: 1.0, column_gap: px(4), ..default() }).with_children(|ladder| {
-                for step in 1..=lab_sheet::EXHAUSTION_STEPS {
-                    let (fill, edge) = match (step <= view.exhaustion.0, step == lab_sheet::EXHAUSTION_STEPS) {
-                        (true, true) => (BAD, BAD),
-                        (true, false) => (ACCENT, ACCENT),
-                        (false, true) => (Color::NONE, Color::srgb(0.48, 0.23, 0.20)),
-                        (false, false) => (Color::NONE, LINE),
-                    };
-                    ladder.spawn((Node { flex_grow: 1.0, flex_basis: px(0), height: px(8), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(2)), ..default() }, BackgroundColor(fill), BorderColor::all(edge)));
-                }
-            });
-            row.spawn(Node { width: px(70), flex_shrink: 0.0, justify_content: JustifyContent::End, ..default() }).with_child((Text::new(view.exhaustion.1.clone()), UiFonts::style(&fonts.body, 16.0, if view.exhaustion.0 >= lab_sheet::EXHAUSTION_STEPS { BAD } else { MUTED })));
         });
-    });
-    // Armour, damage and load.
-    sheet.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
-        for (i, tile) in view.tiles.iter().enumerate() {
-            row.spawn((
-                TileNode(i),
-                Node { flex_grow: 1.0, flex_basis: px(0), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, padding: UiRect::axes(px(4), px(10)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() },
-                BackgroundColor(CELL),
-                BorderColor::all(if i == 0 { FRAME_GOLD } else { FAINT }),
-            ))
-            .with_children(|t| {
-                words(t, &fonts.body, 14.0, MUTED, tile.label);
-                t.spawn(Node { align_items: AlignItems::Baseline, ..default() }).with_children(|value| {
-                    words(value, &fonts.mono_bold, 28.0, BRIGHT, tile.value.clone());
-                    if let Some(small) = &tile.small {
-                        words(value, &fonts.mono, 15.0, MUTED, small.clone());
+    // Attributes.
+    sheet
+        .spawn(Node {
+            column_gap: px(4),
+            ..default()
+        })
+        .with_children(|row| {
+            for (which, a) in view.attributes.iter().enumerate() {
+                row.spawn((
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(0), px(7)),
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::all(px(6)),
+                        ..default()
+                    },
+                    BackgroundColor(CELL),
+                    BorderColor::all(FAINT),
+                ))
+                .with_children(|tile| {
+                    words(tile, &fonts.body, 14.0, MUTED, a.name);
+                    words(tile, &fonts.mono_bold, 22.0, BRIGHT, a.score.to_string());
+                    tile.spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: px(2),
+                        ..default()
+                    })
+                    .with_children(|line| {
+                        small_button(line, fonts, "\u{2212}", Control::Score(which, -1));
+                        let colour = match a.modifier {
+                            m if m > 0 => FRAME_GOLD,
+                            m if m < 0 => ACCENT,
+                            _ => MUTED,
+                        };
+                        line.spawn(Node {
+                            width: px(22),
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        })
+                        .with_child((
+                            Text::new(signed(a.modifier as f64)),
+                            UiFonts::style(&fonts.body_medium, 15.0, colour),
+                        ));
+                        small_button(line, fonts, "+", Control::Score(which, 1));
+                    });
+                });
+            }
+        });
+    // Life, stamina and mana, then the needs.
+    sheet
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(9),
+            ..default()
+        })
+        .with_children(|bars| {
+            for b in [&view.life, &view.stamina, &view.mana] {
+                bar_row(bars, fonts, b, 12.0, BRIGHT);
+            }
+            bars.spawn(Node {
+                height: px(2),
+                ..default()
+            });
+            for b in &view.needs {
+                bar_row(bars, fonts, b, 8.0, MUTED);
+            }
+            bars.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: px(10),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn(Node {
+                    width: px(84),
+                    flex_shrink: 0.0,
+                    ..default()
+                })
+                .with_child((
+                    Text::new("Exhaustion"),
+                    UiFonts::style(&fonts.body, 16.0, BRIGHT),
+                ));
+                row.spawn(Node {
+                    flex_grow: 1.0,
+                    column_gap: px(4),
+                    ..default()
+                })
+                .with_children(|ladder| {
+                    for step in 1..=lab_sheet::EXHAUSTION_STEPS {
+                        let (fill, edge) = match (
+                            step <= view.exhaustion.0,
+                            step == lab_sheet::EXHAUSTION_STEPS,
+                        ) {
+                            (true, true) => (BAD, BAD),
+                            (true, false) => (ACCENT, ACCENT),
+                            (false, true) => (Color::NONE, Color::srgb(0.48, 0.23, 0.20)),
+                            (false, false) => (Color::NONE, LINE),
+                        };
+                        ladder.spawn((
+                            Node {
+                                flex_grow: 1.0,
+                                flex_basis: px(0),
+                                height: px(8),
+                                border: UiRect::all(px(1)),
+                                border_radius: BorderRadius::all(px(2)),
+                                ..default()
+                            },
+                            BackgroundColor(fill),
+                            BorderColor::all(edge),
+                        ));
                     }
                 });
-                if let Some(was) = &tile.was {
-                    words(t, &fonts.body, 13.0, FRAME_GOLD, was.clone());
-                }
+                row.spawn(Node {
+                    width: px(70),
+                    flex_shrink: 0.0,
+                    justify_content: JustifyContent::End,
+                    ..default()
+                })
+                .with_child((
+                    Text::new(view.exhaustion.1.clone()),
+                    UiFonts::style(
+                        &fonts.body,
+                        16.0,
+                        if view.exhaustion.0 >= lab_sheet::EXHAUSTION_STEPS {
+                            BAD
+                        } else {
+                            MUTED
+                        },
+                    ),
+                ));
             });
-        }
-    });
+        });
+    // Armour, damage and load.
+    sheet
+        .spawn(Node {
+            column_gap: px(8),
+            ..default()
+        })
+        .with_children(|row| {
+            for (i, tile) in view.tiles.iter().enumerate() {
+                row.spawn((
+                    TileNode(i),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(4), px(10)),
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::all(px(6)),
+                        ..default()
+                    },
+                    BackgroundColor(CELL),
+                    BorderColor::all(if i == 0 { FRAME_GOLD } else { FAINT }),
+                ))
+                .with_children(|t| {
+                    words(t, &fonts.body, 14.0, MUTED, tile.label);
+                    t.spawn(Node {
+                        align_items: AlignItems::Baseline,
+                        ..default()
+                    })
+                    .with_children(|value| {
+                        words(value, &fonts.mono_bold, 28.0, BRIGHT, tile.value.clone());
+                        if let Some(small) = &tile.small {
+                            words(value, &fonts.mono, 15.0, MUTED, small.clone());
+                        }
+                    });
+                    if let Some(was) = &tile.was {
+                        words(t, &fonts.body, 13.0, FRAME_GOLD, was.clone());
+                    }
+                });
+            }
+        });
     // Gear.
     words(sheet, &fonts.display_bold, 19.0, INK, "Worn and held");
     for card in &view.cards {
@@ -1467,8 +2143,22 @@ fn build_sheet(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, view: &SheetVi
         picker_card(sheet, fonts, picker);
     } else {
         sheet
-            .spawn((Control::OpenPicker, Node { justify_content: JustifyContent::Center, padding: UiRect::all(px(9)), min_height: px(40), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BorderColor::all(LINE)))
-            .with_child((Text::new("+ Put on or hold an item"), UiFonts::style(&fonts.body_medium, 16.0, FRAME_GOLD)));
+            .spawn((
+                Control::OpenPicker,
+                Node {
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::all(px(9)),
+                    min_height: px(40),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(6)),
+                    ..default()
+                },
+                BorderColor::all(LINE),
+            ))
+            .with_child((
+                Text::new("+ Put on or hold an item"),
+                UiFonts::style(&fonts.body_medium, 16.0, FRAME_GOLD),
+            ));
     }
 }
 
@@ -1485,12 +2175,41 @@ enum CardMode {
 
 fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard, mode: CardMode) {
     parent
-        .spawn((Node { justify_content: JustifyContent::SpaceBetween, column_gap: px(8), padding: UiRect::axes(px(10), px(8)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+        .spawn((
+            Node {
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: px(8),
+                padding: UiRect::axes(px(10), px(8)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(6)),
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(FAINT),
+        ))
         .with_children(|c| {
-            c.spawn(Node { flex_direction: FlexDirection::Column, flex_shrink: 1.0, min_width: px(0), ..default() }).with_children(|left| {
-                words(left, &fonts.body_medium, 17.0, rarity_color(card.rarity), card.title.clone());
+            c.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                flex_shrink: 1.0,
+                min_width: px(0),
+                ..default()
+            })
+            .with_children(|left| {
+                words(
+                    left,
+                    &fonts.body_medium,
+                    17.0,
+                    rarity_color(card.rarity),
+                    card.title.clone(),
+                );
                 if card.affixes.is_empty() {
-                    words(left, &fonts.body, 14.0, MUTED, format!("{} \u{b7} plain", card.slot_word));
+                    words(
+                        left,
+                        &fonts.body,
+                        14.0,
+                        MUTED,
+                        format!("{} \u{b7} plain", card.slot_word),
+                    );
                 } else {
                     words(left, &fonts.body, 14.0, MUTED, card.slot_word.clone());
                     for affix in &card.affixes {
@@ -1499,27 +2218,65 @@ fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard
                             (true, true) => MUTED,
                             (true, false) => BAD,
                         };
-                        let text = format!("{}: {}{}", affix.name, affix.text, if affix.on { "" } else { " (off)" });
+                        let text = format!(
+                            "{}: {}{}",
+                            affix.name,
+                            affix.text,
+                            if affix.on { "" } else { " (off)" }
+                        );
                         let line = left.spawn(Node::default()).id();
                         if mode != CardMode::Preview {
-                            left.commands().entity(line).insert(Control::Affix(card.slot, affix.name.clone()));
+                            left.commands()
+                                .entity(line)
+                                .insert(Control::Affix(card.slot, affix.name.clone()));
                         }
-                        left.commands().entity(line).with_child((Text::new(text), UiFonts::style(&fonts.body, 14.0, colour)));
+                        left.commands().entity(line).with_child((
+                            Text::new(text),
+                            UiFonts::style(&fonts.body, 14.0, colour),
+                        ));
                     }
                 }
             });
-            c.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::End, flex_shrink: 0.0, ..default() }).with_children(|right| {
+            c.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::End,
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(|right| {
                 for (i, add) in card.adds.iter().enumerate() {
-                    words(right, &fonts.body, 14.0, if i + 1 == card.adds.len() { MUTED } else { BRIGHT }, add.clone());
+                    words(
+                        right,
+                        &fonts.body,
+                        14.0,
+                        if i + 1 == card.adds.len() {
+                            MUTED
+                        } else {
+                            BRIGHT
+                        },
+                        add.clone(),
+                    );
                 }
                 match mode {
                     CardMode::Sheet => {
-                        right.spawn(Node { margin: UiRect::top(px(4)), ..default() }).with_children(|x| small_button(x, fonts, "\u{d7}", Control::Remove(card.slot)));
+                        right
+                            .spawn(Node {
+                                margin: UiRect::top(px(4)),
+                                ..default()
+                            })
+                            .with_children(|x| {
+                                small_button(x, fonts, "\u{d7}", Control::Remove(card.slot))
+                            });
                     }
                     CardMode::TakeOff => {
-                        right.spawn(Node { margin: UiRect::top(px(4)), ..default() }).with_children(|x| {
-                            button(x, fonts, "Take off", Control::Remove(card.slot));
-                        });
+                        right
+                            .spawn(Node {
+                                margin: UiRect::top(px(4)),
+                                ..default()
+                            })
+                            .with_children(|x| {
+                                button(x, fonts, "Take off", Control::Remove(card.slot));
+                            });
                     }
                     CardMode::Preview => {}
                 }
@@ -1531,35 +2288,121 @@ fn gear_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, card: &GearCard
 /// item they roll, and Put on and Cancel.
 fn picker_card(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, picker: &Picker) {
     let slot = lab_sheet::slot_word(picker.slot());
-    let base = picker.base_name().unwrap_or_else(|| "nothing fits".to_string());
+    let base = picker
+        .base_name()
+        .unwrap_or_else(|| "nothing fits".to_string());
     parent
-        .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(8), padding: UiRect::all(px(10)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(CELL), BorderColor::all(FRAME_GOLD)))
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                padding: UiRect::all(px(10)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(6)),
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(FRAME_GOLD),
+        ))
         .with_children(|card| {
             for (label, value, down, up) in [
                 ("Slot", slot, Control::PickSlot(-1), Control::PickSlot(1)),
                 ("Base", base, Control::PickBase(-1), Control::PickBase(1)),
-                ("Seed", picker.seed.to_string(), Control::PickSeed(-1), Control::PickSeed(1)),
+                (
+                    "Seed",
+                    picker.seed.to_string(),
+                    Control::PickSeed(-1),
+                    Control::PickSeed(1),
+                ),
             ] {
-                card.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
-                    row.spawn(Node { width: px(48), ..default() }).with_child((Text::new(label), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                card.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn(Node {
+                        width: px(48),
+                        ..default()
+                    })
+                    .with_child((Text::new(label), UiFonts::style(&fonts.body, 16.0, MUTED)));
                     button(row, fonts, "\u{2039}", down);
-                    row.spawn(Node { flex_grow: 1.0, justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(value), UiFonts::style(&fonts.body_medium, 16.0, BRIGHT)));
+                    row.spawn(Node {
+                        flex_grow: 1.0,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child((
+                        Text::new(value),
+                        UiFonts::style(&fonts.body_medium, 16.0, BRIGHT),
+                    ));
                     button(row, fonts, "\u{203a}", up);
                 });
             }
-            card.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), flex_wrap: FlexWrap::Wrap, row_gap: px(6), ..default() }).with_children(|row| {
-                row.spawn(Node { width: px(48), ..default() }).with_child((Text::new("Rarity"), UiFonts::style(&fonts.body, 16.0, MUTED)));
-                choice(row, fonts, "Any", Control::PickRarity(None), picker.rarity.is_none());
-                for (label, rarity) in [("Normal", Rarity::Common), ("Magic", Rarity::Magic), ("Rare", Rarity::Rare), ("Legendary", Rarity::Legendary)] {
-                    choice(row, fonts, label, Control::PickRarity(Some(rarity)), picker.rarity == Some(rarity));
+            card.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: px(6),
+                flex_wrap: FlexWrap::Wrap,
+                row_gap: px(6),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn(Node {
+                    width: px(48),
+                    ..default()
+                })
+                .with_child((
+                    Text::new("Rarity"),
+                    UiFonts::style(&fonts.body, 16.0, MUTED),
+                ));
+                choice(
+                    row,
+                    fonts,
+                    "Any",
+                    Control::PickRarity(None),
+                    picker.rarity.is_none(),
+                );
+                for (label, rarity) in [
+                    ("Normal", Rarity::Common),
+                    ("Magic", Rarity::Magic),
+                    ("Rare", Rarity::Rare),
+                    ("Legendary", Rarity::Legendary),
+                ] {
+                    choice(
+                        row,
+                        fonts,
+                        label,
+                        Control::PickRarity(Some(rarity)),
+                        picker.rarity == Some(rarity),
+                    );
                 }
             });
             match picker.preview() {
-                Some(item) => words(card, &fonts.body_medium, 17.0, rarity_color(item.rarity), item.title().to_string()),
-                None if picker.rarity.is_some() => words(card, &fonts.body, 14.0, BAD, format!("No {} within {} seeds.", picker.rarity.map_or("item", rarity_word), picker.search)),
+                Some(item) => words(
+                    card,
+                    &fonts.body_medium,
+                    17.0,
+                    rarity_color(item.rarity),
+                    item.title().to_string(),
+                ),
+                None if picker.rarity.is_some() => words(
+                    card,
+                    &fonts.body,
+                    14.0,
+                    BAD,
+                    format!(
+                        "No {} within {} seeds.",
+                        picker.rarity.map_or("item", rarity_word),
+                        picker.search
+                    ),
+                ),
                 None => {}
             }
-            card.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
+            card.spawn(Node {
+                column_gap: px(8),
+                ..default()
+            })
+            .with_children(|row| {
                 button(row, fonts, "Put on", Control::PutOn);
                 button(row, fonts, "Cancel", Control::ClosePicker);
             });
@@ -1584,7 +2427,9 @@ fn rebuild_sheet(
     builds.0 += 1;
     let view = lab_sheet::view_marked(&state, &time, &saved.saved);
     commands.entity(root).despawn_children();
-    commands.entity(root).with_children(|root| build_sheet(root, &fonts, &view, &picker, &figure));
+    commands
+        .entity(root)
+        .with_children(|root| build_sheet(root, &fonts, &view, &picker, &figure));
     current.0 = Some(view);
 }
 
@@ -1592,7 +2437,12 @@ fn rebuild_sheet(
 /// (Capacity per STR to 20, the giant rat's attack bonus to +2, hours walking to Starving to 20),
 /// a 14 day walk (which ends in death), 1,000 fights and One fight, and holds Armour's tooltip up ([`setup`]).
 /// `FB_LAB_TAB=1` opens that tab.
-fn demo(mut state: ResMut<LabState>, mut run: ResMut<TimeRun>, mut fight: ResMut<FightLab>, mut tab: ResMut<LabTab>) {
+fn demo(
+    mut state: ResMut<LabState>,
+    mut run: ResMut<TimeRun>,
+    mut fight: ResMut<FightLab>,
+    mut tab: ResMut<LabTab>,
+) {
     if std::env::var("FB_LAB_DEMO").is_ok_and(|v| v == "1") {
         crate::lab_rules::step(&mut state.ruleset, "load/capacity_per_strength", 5);
         crate::lab_rules::step(&mut state.ruleset, "creatures/Giant Rat/attack_bonus", -1);
@@ -1608,7 +2458,10 @@ fn demo(mut state: ResMut<LabState>, mut run: ResMut<TimeRun>, mut fight: ResMut
         run.push(TimeAction::Pass(168.0), &state);
         fight.want_many = true;
         fight.want_one = true;
-        if let Some(open) = std::env::var("FB_LAB_TAB").ok().and_then(|t| t.parse().ok()) {
+        if let Some(open) = std::env::var("FB_LAB_TAB")
+            .ok()
+            .and_then(|t| t.parse().ok())
+        {
             tab.0 = open;
         }
     }
@@ -1660,7 +2513,10 @@ fn press_controls(
         return;
     }
     let Some(point) = cursor(&window) else { return };
-    if let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+    if let Some((control, ..)) = controls
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    {
         pressed.write(ControlPressed(control.clone()));
     }
 }
@@ -1691,17 +2547,33 @@ fn apply_pressed(
             _ => {}
         }
         if *control == Control::Save {
-            match crate::lab_rules::save_files(&folder.0, &state.ruleset, &|a, b| std::fs::rename(a, b)) {
-                Ok(()) => *note = SaveNote { failed: None, saved_until: Some(time.elapsed_secs_f64() + SAVED_SHOWN) },
+            match crate::lab_rules::save_files(&folder.0, &state.ruleset, &|a, b| {
+                std::fs::rename(a, b)
+            }) {
+                Ok(()) => {
+                    *note = SaveNote {
+                        failed: None,
+                        saved_until: Some(time.elapsed_secs_f64() + SAVED_SHOWN),
+                    }
+                }
                 Err(error) => {
                     warn!("lab: could not save the rules: {error}");
-                    *note = SaveNote { failed: Some(error), saved_until: None };
+                    *note = SaveNote {
+                        failed: Some(error),
+                        saved_until: None,
+                    };
                     continue;
                 }
             }
         }
-        let (mut next_state, mut next_picker, mut next_tab, mut next_saved) = (state.clone(), picker.clone(), *tab, saved.saved.clone());
-        control.apply(&mut next_state, &mut next_picker, &mut next_tab, &mut next_saved);
+        let (mut next_state, mut next_picker, mut next_tab, mut next_saved) =
+            (state.clone(), picker.clone(), *tab, saved.saved.clone());
+        control.apply(
+            &mut next_state,
+            &mut next_picker,
+            &mut next_tab,
+            &mut next_saved,
+        );
         next_picker.refresh();
         saved.set_if_neq(LabRules { saved: next_saved });
         state.set_if_neq(next_state);
@@ -1711,8 +2583,15 @@ fn apply_pressed(
 }
 
 /// Shows the save note in the footer, and takes "Saved" away when its time is up.
-fn show_save_note(time: Res<Time<Real>>, mut note: ResMut<SaveNote>, mut line: Query<(&mut Text, &mut TextColor), With<SaveNoteText>>) {
-    if note.saved_until.is_some_and(|t| time.elapsed_secs_f64() >= t) {
+fn show_save_note(
+    time: Res<Time<Real>>,
+    mut note: ResMut<SaveNote>,
+    mut line: Query<(&mut Text, &mut TextColor), With<SaveNoteText>>,
+) {
+    if note
+        .saved_until
+        .is_some_and(|t| time.elapsed_secs_f64() >= t)
+    {
         note.saved_until = None;
     }
     let (words, colour) = match (&note.failed, note.saved_until) {
@@ -1733,11 +2612,21 @@ fn show_save_note(time: Res<Time<Real>>, mut note: ResMut<SaveNote>, mut line: Q
 /// When the rules file changes on disk (an edit outside the lab, or the lab's own save coming
 /// back), the saved rules follow it, and the affix strengths are read again from their file;
 /// the edited ones follow too unless there are unsaved changes.
-fn follow_disk(game: Option<Res<GameRules>>, folder: Res<DataFolder>, mut saved: ResMut<LabRules>, mut state: ResMut<LabState>) {
-    let Some(game) = game.filter(|g| g.is_changed()) else { return };
+fn follow_disk(
+    game: Option<Res<GameRules>>,
+    folder: Res<DataFolder>,
+    mut saved: ResMut<LabRules>,
+    mut state: ResMut<LabState>,
+) {
+    let Some(game) = game.filter(|g| g.is_changed()) else {
+        return;
+    };
     let mut next = saved.saved.clone();
     next.rules = game.0.clone();
-    if let Some(strengths) = std::fs::read_to_string(folder.0.join("afx.json")).ok().and_then(|t| crate::lab_rules::strengths_from_json(&t)) {
+    if let Some(strengths) = std::fs::read_to_string(folder.0.join("afx.json"))
+        .ok()
+        .and_then(|t| crate::lab_rules::strengths_from_json(&t))
+    {
         next.strengths = strengths;
     }
     if next == saved.saved {
@@ -1755,38 +2644,118 @@ fn rule_field(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &crate:
     let changed = field.was.is_some();
     parent
         .spawn((
-            Node { flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::axes(px(6), px(4)), border_radius: BorderRadius::all(px(4)), ..default() },
-            BackgroundColor(if changed { Color::srgb(0.17, 0.145, 0.10) } else { Color::NONE }),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                padding: UiRect::axes(px(6), px(4)),
+                border_radius: BorderRadius::all(px(4)),
+                ..default()
+            },
+            BackgroundColor(if changed {
+                Color::srgb(0.17, 0.145, 0.10)
+            } else {
+                Color::NONE
+            }),
         ))
         .with_children(|f| {
-            f.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
-                row.spawn(Node { flex_direction: FlexDirection::Column, flex_shrink: 1.0, min_width: px(0), ..default() }).with_children(|label| {
-                    words(label, &fonts.body, 15.0, if changed { BRIGHT } else { MUTED }, field.label.clone());
+            f.spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    flex_shrink: 1.0,
+                    min_width: px(0),
+                    ..default()
+                })
+                .with_children(|label| {
+                    words(
+                        label,
+                        &fonts.body,
+                        15.0,
+                        if changed { BRIGHT } else { MUTED },
+                        field.label.clone(),
+                    );
                     if let Some(was) = &field.was {
                         words(label, &fonts.body, 12.0, FRAME_GOLD, format!("was {was}"));
                     }
                 });
-                row.spawn(Node { align_items: AlignItems::Center, column_gap: px(4), flex_shrink: 0.0, ..default() }).with_children(|controls| match field.kind {
+                row.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(4),
+                    flex_shrink: 0.0,
+                    ..default()
+                })
+                .with_children(|controls| match field.kind {
                     FieldKind::Switch => {
-                        button(controls, fonts, &field.now, Control::Rule(field.path.clone(), 1));
+                        button(
+                            controls,
+                            fonts,
+                            &field.now,
+                            Control::Rule(field.path.clone(), 1),
+                        );
                     }
                     FieldKind::Number => {
-                        small_button(controls, fonts, "\u{2212}", Control::Rule(field.path.clone(), -1));
-                        controls.spawn(Node { width: px(46), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new(field.now.clone()), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
+                        small_button(
+                            controls,
+                            fonts,
+                            "\u{2212}",
+                            Control::Rule(field.path.clone(), -1),
+                        );
+                        controls
+                            .spawn(Node {
+                                width: px(46),
+                                justify_content: JustifyContent::Center,
+                                ..default()
+                            })
+                            .with_child((
+                                Text::new(field.now.clone()),
+                                UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT),
+                            ));
                         small_button(controls, fonts, "+", Control::Rule(field.path.clone(), 1));
                     }
                     FieldKind::Dice => {
-                        controls.spawn((Text::new(field.now.clone()), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
+                        controls.spawn((
+                            Text::new(field.now.clone()),
+                            UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT),
+                        ));
                     }
                 });
             });
             if field.kind == FieldKind::Dice {
-                f.spawn(Node { column_gap: px(10), justify_content: JustifyContent::End, ..default() }).with_children(|row| {
-                    for (caption, part) in [("dice", DicePart::Count), ("sides", DicePart::Sides), ("bonus", DicePart::Bonus)] {
-                        row.spawn(Node { align_items: AlignItems::Center, column_gap: px(3), ..default() }).with_children(|group| {
+                f.spawn(Node {
+                    column_gap: px(10),
+                    justify_content: JustifyContent::End,
+                    ..default()
+                })
+                .with_children(|row| {
+                    for (caption, part) in [
+                        ("dice", DicePart::Count),
+                        ("sides", DicePart::Sides),
+                        ("bonus", DicePart::Bonus),
+                    ] {
+                        row.spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: px(3),
+                            ..default()
+                        })
+                        .with_children(|group| {
                             words(group, &fonts.body, 12.0, MUTED, caption);
-                            small_button(group, fonts, "\u{2212}", Control::Dice(field.path.clone(), part, -1));
-                            small_button(group, fonts, "+", Control::Dice(field.path.clone(), part, 1));
+                            small_button(
+                                group,
+                                fonts,
+                                "\u{2212}",
+                                Control::Dice(field.path.clone(), part, -1),
+                            );
+                            small_button(
+                                group,
+                                fonts,
+                                "+",
+                                Control::Dice(field.path.clone(), part, 1),
+                            );
                         });
                     }
                 });
@@ -1806,29 +2775,54 @@ fn rebuild_rules(
     mut built: Local<Option<(RuleSet, RuleSet)>>,
 ) {
     let Ok(body) = body.single() else { return };
-    if built.as_ref().is_some_and(|(e, s)| *e == state.ruleset && *s == saved.saved) {
+    if built
+        .as_ref()
+        .is_some_and(|(e, s)| *e == state.ruleset && *s == saved.saved)
+    {
         return;
     }
     *built = Some((state.ruleset.clone(), saved.saved.clone()));
     let changed = crate::lab_rules::changed(&state.ruleset, &saved.saved).len();
     for mut text in &mut count {
-        text.0 = if changed == 0 { String::new() } else { format!("{changed} changed") };
+        text.0 = if changed == 0 {
+            String::new()
+        } else {
+            format!("{changed} changed")
+        };
     }
     let sections = crate::lab_rules::sections(&state.ruleset, &saved.saved);
-    commands.entity(body).despawn_children().with_children(|body| {
-        for section in &sections {
-            body.spawn(Node { margin: UiRect::top(px(10)), ..default() }).with_child((Text::new(section.title.clone()), UiFonts::style(&fonts.body_medium, 17.0, INK)));
-            for field in &section.fields {
-                rule_field(body, &fonts, field);
+    commands
+        .entity(body)
+        .despawn_children()
+        .with_children(|body| {
+            for section in &sections {
+                body.spawn(Node {
+                    margin: UiRect::top(px(10)),
+                    ..default()
+                })
+                .with_child((
+                    Text::new(section.title.clone()),
+                    UiFonts::style(&fonts.body_medium, 17.0, INK),
+                ));
+                for field in &section.fields {
+                    rule_field(body, &fonts, field);
+                }
             }
-        }
-    });
+        });
 }
 
 /// Opens the tab that is chosen and marks its button.
-fn show_tabs(tab: Res<LabTab>, mut panes: Query<(&TabPane, &mut Node)>, mut buttons: Query<(&TabButton, &mut BackgroundColor, &mut BorderColor)>) {
+fn show_tabs(
+    tab: Res<LabTab>,
+    mut panes: Query<(&TabPane, &mut Node)>,
+    mut buttons: Query<(&TabButton, &mut BackgroundColor, &mut BorderColor)>,
+) {
     for (pane, mut node) in &mut panes {
-        node.display = if pane.0 == tab.0 { Display::Flex } else { Display::None };
+        node.display = if pane.0 == tab.0 {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
     for (button, mut background, mut border) in &mut buttons {
         let open = button.0 == tab.0;
@@ -1841,12 +2835,26 @@ fn show_tabs(tab: Res<LabTab>, mut panes: Query<(&TabPane, &mut Node)>, mut butt
 fn refresh_controls(state: Res<LabState>, mut texts: Query<(&ControlText, &mut Text)>) {
     for (which, mut text) in &mut texts {
         let line = match which {
-            ControlText::Side => if state.swapped { "They attack".to_string() } else { "They are attacked by".to_string() },
+            ControlText::Side => {
+                if state.swapped {
+                    "They attack".to_string()
+                } else {
+                    "They are attacked by".to_string()
+                }
+            }
             ControlText::Attacker => state.attacker.label(),
             ControlText::StrikeSeed => state.strike_seed.to_string(),
             ControlText::Activity => activity_word(state.activity).to_string(),
-            ControlText::Depth => state.depth.map_or_else(|| "comfortable surroundings".to_string(), |d| format!("level {d}")),
-            ControlText::Fire => if state.by_fire { "by a brazier" } else { "away from fire" }.to_string(),
+            ControlText::Depth => state.depth.map_or_else(
+                || "comfortable surroundings".to_string(),
+                |d| format!("level {d}"),
+            ),
+            ControlText::Fire => if state.by_fire {
+                "by a brazier"
+            } else {
+                "away from fire"
+            }
+            .to_string(),
             ControlText::ApplyAt => format!("at {}", rate_text(state.apply_at)),
         };
         if text.0 != line {
@@ -1868,7 +2876,11 @@ fn mean(value: Option<f64>) -> String {
 /// The attacker's blows to down them, or "rarely wins" when it wins under 5% of fights, too few
 /// for a mean to mean anything.
 fn blows_text(summary: &FightSummary) -> String {
-    if summary.attacker_wins < 0.05 { "rarely wins".to_string() } else { mean(summary.blows_to_down) }
+    if summary.attacker_wins < 0.05 {
+        "rarely wins".to_string()
+    } else {
+        mean(summary.blows_to_down)
+    }
 }
 
 /// The four answers of a thousand fights, each with the saved rules' value when it differs:
@@ -1876,39 +2888,115 @@ fn blows_text(summary: &FightSummary) -> String {
 fn fight_tiles(now: &FightSummary, was: &FightSummary) -> Vec<(String, String, Option<String>)> {
     let name = &now.attacker;
     let rows = [
-        (format!("{name} hits them"), rate_text(now.attacker_hit_rate), rate_text(was.attacker_hit_rate)),
-        ("Damage per hit".to_string(), mean(now.damage_per_hit), mean(was.damage_per_hit)),
-        (format!("{name} blows to down them, in fights it wins"), blows_text(now), blows_text(was)),
-        ("They win".to_string(), rate_text(now.they_win), rate_text(was.they_win)),
+        (
+            format!("{name} hits them"),
+            rate_text(now.attacker_hit_rate),
+            rate_text(was.attacker_hit_rate),
+        ),
+        (
+            "Damage per hit".to_string(),
+            mean(now.damage_per_hit),
+            mean(was.damage_per_hit),
+        ),
+        (
+            format!("{name} blows to down them, in fights it wins"),
+            blows_text(now),
+            blows_text(was),
+        ),
+        (
+            "They win".to_string(),
+            rate_text(now.they_win),
+            rate_text(was.they_win),
+        ),
     ];
-    rows.into_iter().map(|(label, value, before)| (label, value.clone(), crate::lab_rules::was_text(&value, &before))).collect()
+    rows.into_iter()
+        .map(|(label, value, before)| {
+            (
+                label,
+                value.clone(),
+                crate::lab_rules::was_text(&value, &before),
+            )
+        })
+        .collect()
 }
 
 /// A chart with its caption, the words at its edges and the image.
 #[allow(clippy::too_many_arguments)]
-fn chart_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str, note: &str, chart: &Chart, image: &Option<Handle<Image>>, aspect: f32, grow: f32) {
+fn chart_figure(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    title: &str,
+    note: &str,
+    chart: &Chart,
+    image: &Option<Handle<Image>>,
+    aspect: f32,
+    grow: f32,
+) {
     parent
-        .spawn((Node { flex_grow: grow, flex_basis: px(0), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::all(px(12)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(8)), ..default() }, BackgroundColor(CELL), BorderColor::all(FAINT)))
+        .spawn((
+            Node {
+                flex_grow: grow,
+                flex_basis: px(0),
+                min_width: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                padding: UiRect::all(px(12)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(8)),
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(FAINT),
+        ))
         .with_children(|figure| {
             words(figure, &fonts.body_medium, 16.0, BRIGHT, title);
             words(figure, &fonts.body, 12.0, MUTED, note);
-            figure.spawn(Node { column_gap: px(6), ..default() }).with_children(|plot| {
-                plot.spawn(Node { flex_direction: FlexDirection::Column, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::End, ..default() }).with_children(|axis| {
-                    words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.0.clone());
-                    words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.1.clone());
+            figure
+                .spawn(Node {
+                    column_gap: px(6),
+                    ..default()
+                })
+                .with_children(|plot| {
+                    plot.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::End,
+                        ..default()
+                    })
+                    .with_children(|axis| {
+                        words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.0.clone());
+                        words(axis, &fonts.body, 12.0, MUTED, chart.y_labels.1.clone());
+                    });
+                    if let Some(image) = image {
+                        plot.spawn((
+                            ImageNode::new(image.clone()),
+                            Node {
+                                flex_grow: 1.0,
+                                min_width: px(0),
+                                aspect_ratio: Some(aspect),
+                                ..default()
+                            },
+                        ));
+                    }
                 });
-                if let Some(image) = image {
-                    plot.spawn((ImageNode::new(image.clone()), Node { flex_grow: 1.0, min_width: px(0), aspect_ratio: Some(aspect), ..default() }));
-                }
-            });
             figure.spawn(Node { ..default() }).with_children(|axis| {
                 let share = chart.draw.unwrap_or(0.0) * 100.0;
-                axis.spawn(Node { width: percent(100.0 - share), justify_content: JustifyContent::SpaceBetween, ..default() }).with_children(|ends| {
+                axis.spawn(Node {
+                    width: percent(100.0 - share),
+                    justify_content: JustifyContent::SpaceBetween,
+                    ..default()
+                })
+                .with_children(|ends| {
                     words(ends, &fonts.body, 12.0, MUTED, chart.x_labels.0.clone());
                     words(ends, &fonts.body, 12.0, MUTED, chart.x_labels.1.clone());
                 });
                 if chart.draw.is_some() {
-                    axis.spawn(Node { width: percent(share), justify_content: JustifyContent::Center, ..default() }).with_child((Text::new("draw"), UiFonts::style(&fonts.body, 12.0, MUTED)));
+                    axis.spawn(Node {
+                        width: percent(share),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child((Text::new("draw"), UiFonts::style(&fonts.body, 12.0, MUTED)));
                 }
             });
         });
@@ -1916,8 +3004,16 @@ fn chart_figure(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str,
 
 /// The fight's answers and charts, and the one fight played out, built again when a run
 /// finishes.
-fn refresh_fight(mut commands: Commands, lab: Res<FightLab>, images: Res<FightImages>, fonts: Res<UiFonts>, results: Query<Entity, With<FightResults>>) {
-    let Ok(results) = results.single() else { return };
+fn refresh_fight(
+    mut commands: Commands,
+    lab: Res<FightLab>,
+    images: Res<FightImages>,
+    fonts: Res<UiFonts>,
+    results: Query<Entity, With<FightResults>>,
+) {
+    let Ok(results) = results.single() else {
+        return;
+    };
     commands.entity(results).despawn_children().with_children(|r| {
         match (&lab.many, &lab.axes) {
             (Some((now, was)), Some((life, histogram))) => {
@@ -1966,11 +3062,20 @@ fn refresh_fight(mut commands: Commands, lab: Res<FightLab>, images: Res<FightIm
 
 /// A blow's tooltip: the attack roll's terms, then the damage's.
 fn blow_tip(blow: &crate::lab_fight::Blow) -> lab_sheet::Tip {
-    let mut sections = vec![lab_sheet::TipSection { heading: Some(format!("Attack {}", number(blow.attack.roll.value()))), rows: lab_sheet::tip_rows(&blow.attack.roll) }];
+    let mut sections = vec![lab_sheet::TipSection {
+        heading: Some(format!("Attack {}", number(blow.attack.roll.value()))),
+        rows: lab_sheet::tip_rows(&blow.attack.roll),
+    }];
     if let Some(damage) = &blow.damage {
-        sections.push(lab_sheet::TipSection { heading: Some(format!("Damage {}", number(damage.value()))), rows: lab_sheet::tip_rows(damage) });
+        sections.push(lab_sheet::TipSection {
+            heading: Some(format!("Damage {}", number(damage.value()))),
+            rows: lab_sheet::tip_rows(damage),
+        });
     }
-    lab_sheet::Tip { title: format!("Against armour {}", blow.attack.armour_class), sections }
+    lab_sheet::Tip {
+        title: format!("Against armour {}", blow.attack.armour_class),
+        sections,
+    }
 }
 
 /// Which big number or played-out line the mouse is over, or the number a demo holds up.
@@ -1981,9 +3086,18 @@ fn hover_tiles(
     mut hover: ResMut<Hover>,
 ) {
     let point = cursor(&window);
-    let over = |rect: &ComputedNode, transform: &UiGlobalTransform| point.is_some_and(|p| node_rect(rect, transform).contains(p));
-    let tile = tiles.iter().find(|(_, n, t)| over(n, t)).map(|(tile, ..)| tile.0);
-    let line = if tile.is_none() { lines.iter().find(|(_, n, t)| over(n, t)).map(|(l, ..)| l.0) } else { None };
+    let over = |rect: &ComputedNode, transform: &UiGlobalTransform| {
+        point.is_some_and(|p| node_rect(rect, transform).contains(p))
+    };
+    let tile = tiles
+        .iter()
+        .find(|(_, n, t)| over(n, t))
+        .map(|(tile, ..)| tile.0);
+    let line = if tile.is_none() {
+        lines.iter().find(|(_, n, t)| over(n, t)).map(|(l, ..)| l.0)
+    } else {
+        None
+    };
     let tile = tile.or(if line.is_none() { hover.pinned } else { None });
     if hover.tile != tile || hover.line != line {
         hover.tile = tile;
@@ -2007,10 +3121,20 @@ fn show_tip(
     mut shown: Local<Option<(bool, usize, u32, u32)>>,
     builds: Res<SheetBuilds>,
 ) {
-    let Ok((entity, mut node, mut visibility, size)) = tip.single_mut() else { return };
+    let Ok((entity, mut node, mut visibility, size)) = tip.single_mut() else {
+        return;
+    };
     let content = match (hover.tile, hover.line) {
-        (Some(i), _) => current.0.as_ref().and_then(|s| s.tiles.get(i)).map(|t| ((false, i, builds.0, 0), t.tip.clone())),
-        (None, Some(i)) => fight.one.as_ref().and_then(|r| r.blows.get(i)).map(|b| ((true, i, 0, fight.generation), blow_tip(b))),
+        (Some(i), _) => current
+            .0
+            .as_ref()
+            .and_then(|s| s.tiles.get(i))
+            .map(|t| ((false, i, builds.0, 0), t.tip.clone())),
+        (None, Some(i)) => fight
+            .one
+            .as_ref()
+            .and_then(|r| r.blows.get(i))
+            .map(|b| ((true, i, 0, fight.generation), blow_tip(b))),
         _ => None,
     };
     let Some((key, content)) = content else {
@@ -2022,18 +3146,32 @@ fn show_tip(
     };
     if *shown != Some(key) {
         *shown = Some(key);
-        commands.entity(entity).despawn_children().with_children(|t| tip_body(t, &fonts, &content));
+        commands
+            .entity(entity)
+            .despawn_children()
+            .with_children(|t| tip_body(t, &fonts, &content));
     }
     let rect = if key.0 {
-        lines.iter().find(|(l, ..)| l.0 == key.1).map(|(_, n, t)| node_rect(n, t))
+        lines
+            .iter()
+            .find(|(l, ..)| l.0 == key.1)
+            .map(|(_, n, t)| node_rect(n, t))
     } else {
-        tiles.iter().find(|(t, ..)| t.0 == key.1).map(|(_, n, t)| node_rect(n, t))
+        tiles
+            .iter()
+            .find(|(t, ..)| t.0 == key.1)
+            .map(|(_, n, t)| node_rect(n, t))
     };
     let Some(rect) = rect else { return };
-    let window = root.single().map_or(Vec2::MAX, |r| r.size * r.inverse_scale_factor);
+    let window = root
+        .single()
+        .map_or(Vec2::MAX, |r| r.size * r.inverse_scale_factor);
     let height = size.size.y * size.inverse_scale_factor;
     let left = if key.0 { rect.min.x + 40.0 } else { rect.min.x };
-    let (left, top) = (left.min(window.x - 270.0).max(8.0), (rect.max.y + 6.0).min(window.y - height - 8.0).max(8.0));
+    let (left, top) = (
+        left.min(window.x - 270.0).max(8.0),
+        (rect.max.y + 6.0).min(window.y - height - 8.0).max(8.0),
+    );
     if node.left != px(left) || node.top != px(top) {
         node.left = px(left);
         node.top = px(top);
@@ -2051,7 +3189,12 @@ fn tip_body(tip: &mut ChildSpawnerCommands, fonts: &UiFonts, content: &lab_sheet
             words(tip, &fonts.body_medium, 14.0, FRAME_GOLD, heading.clone());
         }
         for (label, value) in &section.rows {
-            tip.spawn(Node { justify_content: JustifyContent::SpaceBetween, column_gap: px(12), ..default() }).with_children(|row| {
+            tip.spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: px(12),
+                ..default()
+            })
+            .with_children(|row| {
                 words(row, &fonts.body, 15.0, MUTED, label.clone());
                 words(row, &fonts.body_medium, 15.0, BRIGHT, value.clone());
             });
@@ -2063,7 +3206,15 @@ fn tip_body(tip: &mut ChildSpawnerCommands, fonts: &UiFonts, content: &lab_sheet
 fn scroll_columns(
     scroll: Res<AccumulatedMouseScroll>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    mut areas: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform, &Node), With<ScrollArea>>,
+    mut areas: Query<
+        (
+            &mut ScrollPosition,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &Node,
+        ),
+        With<ScrollArea>,
+    >,
 ) {
     let lines = match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
@@ -2074,10 +3225,15 @@ fn scroll_columns(
         return;
     }
     for (mut position, node, transform, style) in &mut areas {
-        if style.display == Display::None || style.overflow.y != OverflowAxis::Scroll || !node_rect(node, transform).contains(point) {
+        if style.display == Display::None
+            || style.overflow.y != OverflowAxis::Scroll
+            || !node_rect(node, transform).contains(point)
+        {
             continue;
         }
-        let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+        let max = ((node.content_size() - node.size()) * node.inverse_scale_factor)
+            .y
+            .max(0.0);
         position.y = (position.y - lines * SCROLL_LINE).clamp(0.0, max);
     }
 }
@@ -2092,13 +3248,20 @@ mod tests {
 
     /// A seed whose rolled `base` has the affix named `affix`.
     fn seed_with(base: &str, affix: &str) -> u32 {
-        (1..2000).find(|&s| roll_item(base, s).is_some_and(|i| i.affixes.iter().any(|a| a.name == affix))).unwrap_or_else(|| panic!("no {base} of {affix}"))
+        (1..2000)
+            .find(|&s| {
+                roll_item(base, s).is_some_and(|i| i.affixes.iter().any(|a| a.name == affix))
+            })
+            .unwrap_or_else(|| panic!("no {base} of {affix}"))
     }
 
     #[test]
     fn opens_on_a_human_fighter() {
         let state = LabState::from_args(args("--lab")).unwrap();
-        assert_eq!((state.character.folk, state.character.class), (Folk::Human, Class::Fighter));
+        assert_eq!(
+            (state.character.folk, state.character.class),
+            (Folk::Human, Class::Fighter)
+        );
         assert_eq!(state.character.attributes.strength, 10);
     }
 
@@ -2115,7 +3278,10 @@ mod tests {
     fn opens_dressed_and_armed() {
         let state = LabState::default();
         let held = state.slot(Slot::Mainhand).roll().unwrap().item;
-        assert_eq!((held.base.as_str(), held.name.as_str()), ("Sword", "Messer"));
+        assert_eq!(
+            (held.base.as_str(), held.name.as_str()),
+            ("Sword", "Messer")
+        );
         assert_eq!(state.items().len(), 3);
     }
 
@@ -2124,8 +3290,14 @@ mod tests {
         let mut state = LabState::default();
         state.cycle_folk(1);
         state.reroll();
-        assert_eq!((state.seed, state.character.folk), (DEFAULT_SEED + 1, Folk::Dwarf));
-        assert_eq!(state.character, Character::roll_folk(Folk::Dwarf, DEFAULT_SEED + 1));
+        assert_eq!(
+            (state.seed, state.character.folk),
+            (DEFAULT_SEED + 1, Folk::Dwarf)
+        );
+        assert_eq!(
+            state.character,
+            Character::roll_folk(Folk::Dwarf, DEFAULT_SEED + 1)
+        );
     }
 
     #[test]
@@ -2172,14 +3344,23 @@ mod tests {
     #[test]
     fn the_picker_puts_a_chosen_base_and_seed_in_a_slot() {
         let mut state = LabState::default();
-        let mut picker = Picker { open: true, ..Picker::default() };
+        let mut picker = Picker {
+            open: true,
+            ..Picker::default()
+        };
         picker.step_slot(SLOTS.iter().position(|&s| s == Slot::Belt).unwrap() as isize);
         assert_eq!(picker.slot(), Slot::Belt);
         let ox = seed_with("Belt", "of the Ox");
-        let at = bases_for(Slot::Belt).iter().position(|b| b == "Belt").unwrap();
+        let at = bases_for(Slot::Belt)
+            .iter()
+            .position(|b| b == "Belt")
+            .unwrap();
         picker.step_base(at as isize);
         picker.step_seed(ox as i64 - 1);
-        assert_eq!((picker.base_name().as_deref(), picker.seed), (Some("Belt"), ox));
+        assert_eq!(
+            (picker.base_name().as_deref(), picker.seed),
+            (Some("Belt"), ox)
+        );
         assert!(picker.preview().unwrap().name.contains("of the Ox"));
         picker.put_on(&mut state);
         assert!(!picker.open);
@@ -2189,37 +3370,114 @@ mod tests {
     }
 
     /// Applies `control` to a fresh lab, with the saved rules as given.
-    fn press(control: Control, state: &mut LabState, picker: &mut Picker, tab: &mut LabTab, saved: &mut RuleSet) {
+    fn press(
+        control: Control,
+        state: &mut LabState,
+        picker: &mut Picker,
+        tab: &mut LabTab,
+        saved: &mut RuleSet,
+    ) {
         control.apply(state, picker, tab, saved);
     }
 
     #[test]
     fn controls_change_only_what_they_name() {
-        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
+        let (mut state, mut picker, mut tab, mut saved) = (
+            LabState::default(),
+            Picker::default(),
+            LabTab::default(),
+            RuleSet::default(),
+        );
         let was = state.clone();
-        press(Control::Tab(1), &mut state, &mut picker, &mut tab, &mut saved);
-        assert_eq!((tab, &state, &picker), (LabTab(1), &was, &Picker::default()));
-        press(Control::Tab(3), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::Tab(1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
+        assert_eq!(
+            (tab, &state, &picker),
+            (LabTab(1), &was, &Picker::default())
+        );
+        press(
+            Control::Tab(3),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(tab, LabTab(3), "Effects opens");
-        press(Control::OpenPicker, &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::OpenPicker,
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert!(picker.open);
-        press(Control::Score(1, 2), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::Score(1, 2),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(state.character.attributes.dexterity, 12);
-        press(Control::StrikeSeed(-5), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::StrikeSeed(-5),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(state.strike_seed, 0);
     }
 
     #[test]
     fn the_effects_controls_step_the_level_the_fire_and_the_strength_and_put_an_effect_on() {
-        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
-        press(Control::Depth(-1), &mut state, &mut picker, &mut tab, &mut saved);
-        assert_eq!(state.depth, Some(DEEPEST), "comfortable wraps round to the deepest");
-        press(Control::Depth(1), &mut state, &mut picker, &mut tab, &mut saved);
-        press(Control::Depth(1), &mut state, &mut picker, &mut tab, &mut saved);
+        let (mut state, mut picker, mut tab, mut saved) = (
+            LabState::default(),
+            Picker::default(),
+            LabTab::default(),
+            RuleSet::default(),
+        );
+        press(
+            Control::Depth(-1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
+        assert_eq!(
+            state.depth,
+            Some(DEEPEST),
+            "comfortable wraps round to the deepest"
+        );
+        press(
+            Control::Depth(1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
+        press(
+            Control::Depth(1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(state.depth, Some(1));
         press(Control::Fire, &mut state, &mut picker, &mut tab, &mut saved);
         assert!(state.by_fire);
-        press(Control::ApplyAt(1), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::ApplyAt(1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(state.apply_at, 1.0);
         let mut run = TimeRun::default();
         run.push(TimeAction::Apply("sewer_plague"), &state);
@@ -2229,8 +3487,15 @@ mod tests {
 
     #[test]
     fn the_sheets_controls_do_what_they_say() {
-        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
-        let mut go = |c: Control, state: &mut LabState, picker: &mut Picker| press(c, state, picker, &mut tab, &mut saved);
+        let (mut state, mut picker, mut tab, mut saved) = (
+            LabState::default(),
+            Picker::default(),
+            LabTab::default(),
+            RuleSet::default(),
+        );
+        let mut go = |c: Control, state: &mut LabState, picker: &mut Picker| {
+            press(c, state, picker, &mut tab, &mut saved)
+        };
         go(Control::Folk(1), &mut state, &mut picker);
         assert_eq!(state.character.folk, Folk::Dwarf);
         go(Control::Class(1), &mut state, &mut picker);
@@ -2241,7 +3506,11 @@ mod tests {
         assert_eq!(state.slot(Slot::Head).base, None);
         let ox = seed_with("Belt", "of the Ox");
         state.equip(Slot::Belt, "Belt", ox);
-        go(Control::Affix(Slot::Belt, "of the Ox".into()), &mut state, &mut picker);
+        go(
+            Control::Affix(Slot::Belt, "of the Ox".into()),
+            &mut state,
+            &mut picker,
+        );
         assert!(state.slot(Slot::Belt).off.contains("of the Ox"));
         go(Control::OpenPicker, &mut state, &mut picker);
         go(Control::PickSlot(1), &mut state, &mut picker);
@@ -2251,7 +3520,9 @@ mod tests {
         go(Control::PickSeed(5), &mut state, &mut picker);
         assert_eq!(picker.seed, 6);
         go(Control::PutOn, &mut state, &mut picker);
-        assert!(!picker.open && state.slot(SLOTS[1]).base.is_some() && state.slot(SLOTS[1]).seed == 6);
+        assert!(
+            !picker.open && state.slot(SLOTS[1]).base.is_some() && state.slot(SLOTS[1]).seed == 6
+        );
         go(Control::OpenPicker, &mut state, &mut picker);
         go(Control::ClosePicker, &mut state, &mut picker);
         assert!(!picker.open);
@@ -2260,17 +3531,40 @@ mod tests {
     #[test]
     fn editing_the_rules_moves_the_numbers_and_save_and_undo_settle_them() {
         use crate::lab_rules::changed;
-        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
+        let (mut state, mut picker, mut tab, mut saved) = (
+            LabState::default(),
+            Picker::default(),
+            LabTab::default(),
+            RuleSet::default(),
+        );
         let rat = "creatures/Giant Rat/attack_bonus".to_string();
         for _ in 0..2 {
-            press(Control::Rule(rat.clone(), -1), &mut state, &mut picker, &mut tab, &mut saved);
+            press(
+                Control::Rule(rat.clone(), -1),
+                &mut state,
+                &mut picker,
+                &mut tab,
+                &mut saved,
+            );
         }
         assert_eq!(state.ruleset.rules.creatures["Giant Rat"].attack_bonus, 2);
         assert_eq!(changed(&state.ruleset, &saved), vec![rat]);
         press(Control::Undo, &mut state, &mut picker, &mut tab, &mut saved);
         assert!(changed(&state.ruleset, &saved).is_empty());
-        press(Control::Rule("load/capacity_per_strength".into(), 1), &mut state, &mut picker, &mut tab, &mut saved);
-        press(Control::Dice("creatures/Giant Rat/bite".into(), DicePart::Bonus, 1), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::Rule("load/capacity_per_strength".into(), 1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
+        press(
+            Control::Dice("creatures/Giant Rat/bite".into(), DicePart::Bonus, 1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(changed(&state.ruleset, &saved).len(), 2);
         press(Control::Save, &mut state, &mut picker, &mut tab, &mut saved);
         assert!(changed(&state.ruleset, &saved).is_empty());
@@ -2282,7 +3576,12 @@ mod tests {
         let mut state = LabState::default();
         let ox = seed_with("Belt", "of the Ox");
         state.equip(Slot::Belt, "Belt", ox);
-        let capacity = |s: &LabState| s.character.loadout(&s.inventory()).capacity_with(&s.ruleset.rules, 10).value();
+        let capacity = |s: &LabState| {
+            s.character
+                .loadout(&s.inventory())
+                .capacity_with(&s.ruleset.rules, 10)
+                .value()
+        };
         assert_eq!(capacity(&state), 175.0);
         crate::lab_rules::step(&mut state.ruleset, "affixes/of the Ox/0", 1);
         let ox_by = state.ruleset.strengths["of the Ox"][0];
@@ -2305,41 +3604,93 @@ mod tests {
 
     #[test]
     fn the_picker_can_ask_for_a_rarity_and_finds_the_first_seed_that_rolls_it() {
-        let mut picker = Picker { slot: SLOTS.iter().position(|&s| s == Slot::Belt).unwrap(), ..Picker::default() };
-        picker.base = bases_for(Slot::Belt).iter().position(|b| b == "Belt").unwrap();
+        let mut picker = Picker {
+            slot: SLOTS.iter().position(|&s| s == Slot::Belt).unwrap(),
+            ..Picker::default()
+        };
+        picker.base = bases_for(Slot::Belt)
+            .iter()
+            .position(|b| b == "Belt")
+            .unwrap();
         picker.seed = 100;
         assert_eq!(picker.resolved_seed(), Some(100));
         for rarity in [Rarity::Common, Rarity::Magic, Rarity::Rare] {
             picker.rarity = Some(rarity);
-            let seed = picker.resolved_seed().unwrap_or_else(|| panic!("no {rarity:?} belt"));
+            let seed = picker
+                .resolved_seed()
+                .unwrap_or_else(|| panic!("no {rarity:?} belt"));
             assert!(seed >= 100);
             assert_eq!(picker.preview().unwrap().rarity, rarity);
-            assert!((100..seed).all(|s| roll_item("Belt", s).unwrap().rarity != rarity), "the first one");
+            assert!(
+                (100..seed).all(|s| roll_item("Belt", s).unwrap().rarity != rarity),
+                "the first one"
+            );
         }
         let mut state = LabState::default();
         picker.rarity = Some(Rarity::Magic);
         let seed = picker.resolved_seed().unwrap();
         picker.put_on(&mut state);
         assert_eq!(state.slot(Slot::Belt).seed, seed);
-        assert_eq!(state.slot(Slot::Belt).roll().unwrap().item.rarity, Rarity::Magic);
+        assert_eq!(
+            state.slot(Slot::Belt).roll().unwrap().item.rarity,
+            Rarity::Magic
+        );
     }
 
     #[test]
     fn the_equip_tab_controls_pick_slot_base_and_rarity_directly() {
-        let (mut state, mut picker, mut tab, mut saved) = (LabState::default(), Picker::default(), LabTab::default(), RuleSet::default());
-        press(Control::PickSlotAt(3), &mut state, &mut picker, &mut tab, &mut saved);
+        let (mut state, mut picker, mut tab, mut saved) = (
+            LabState::default(),
+            Picker::default(),
+            LabTab::default(),
+            RuleSet::default(),
+        );
+        press(
+            Control::PickSlotAt(3),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(picker.slot(), Slot::Cloak);
-        press(Control::PickBaseAt(1), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::PickBaseAt(1),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(picker.base, 1);
-        press(Control::PickRarity(Some(Rarity::Rare)), &mut state, &mut picker, &mut tab, &mut saved);
+        press(
+            Control::PickRarity(Some(Rarity::Rare)),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         assert_eq!(picker.rarity, Some(Rarity::Rare));
-        press(Control::PickSlotAt(0), &mut state, &mut picker, &mut tab, &mut saved);
-        assert_eq!((picker.slot(), picker.base), (Slot::Head, 0), "a new slot starts at its first base");
+        press(
+            Control::PickSlotAt(0),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
+        assert_eq!(
+            (picker.slot(), picker.base),
+            (Slot::Head, 0),
+            "a new slot starts at its first base"
+        );
     }
 
     #[test]
     fn the_rarity_search_runs_once_per_change_of_the_choice() {
-        let mut picker = Picker { slot: SLOTS.iter().position(|&s| s == Slot::Belt).unwrap(), rarity: Some(Rarity::Rare), seed: 7, ..Picker::default() };
+        let mut picker = Picker {
+            slot: SLOTS.iter().position(|&s| s == Slot::Belt).unwrap(),
+            rarity: Some(Rarity::Rare),
+            seed: 7,
+            ..Picker::default()
+        };
         picker.refresh();
         let after = searches_run();
         for _ in 0..5 {
@@ -2347,13 +3698,24 @@ mod tests {
             assert!(picker.preview().is_some());
             picker.refresh();
         }
-        assert_eq!(searches_run(), after, "reading and refreshing an unchanged choice searches no more");
+        assert_eq!(
+            searches_run(),
+            after,
+            "reading and refreshing an unchanged choice searches no more"
+        );
         picker.step_seed(1);
         picker.refresh();
         assert_eq!(searches_run(), after + 1, "a new seed is one search");
         // Through a control, as a click does.
-        let (mut state, mut tab, mut saved) = (LabState::default(), LabTab::default(), RuleSet::default());
-        press(Control::PickRarity(Some(Rarity::Magic)), &mut state, &mut picker, &mut tab, &mut saved);
+        let (mut state, mut tab, mut saved) =
+            (LabState::default(), LabTab::default(), RuleSet::default());
+        press(
+            Control::PickRarity(Some(Rarity::Magic)),
+            &mut state,
+            &mut picker,
+            &mut tab,
+            &mut saved,
+        );
         picker.refresh();
         assert_eq!(searches_run(), after + 2);
     }

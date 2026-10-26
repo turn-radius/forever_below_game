@@ -13,7 +13,9 @@ use super::items::{Inventory, ItemId, Location};
 use super::{Dragging, Hovered};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{Screen, ScreenOpen};
-use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, coin_spans, numbers_line, rarity_color};
+use crate::ui::{
+    BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, coin_spans, numbers_line, rarity_color,
+};
 
 /// The price line under a card's title, its coins each in their metal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +25,11 @@ pub enum Price {
     /// What a purse holds, opened by a double-click: "Holds 2 gp 3 sp".
     Holds(Coins),
     /// A ware's price while bartering, what it is worth, and whether the delver can pay it.
-    Costs { price: Coins, worth: Coins, afford: bool },
+    Costs {
+        price: Coins,
+        worth: Coins,
+        afford: bool,
+    },
     /// What the trader pays for something of the delver's, and what it is worth.
     SellsFor { price: Coins, worth: Coins },
 }
@@ -34,8 +40,12 @@ impl Price {
         match self {
             Price::Worth(c) => ("Worth", c, None),
             Price::Holds(c) => ("Holds", c, Some("double-click to open".into())),
-            Price::Costs { price, worth, .. } => ("Costs", price, Some(format!("worth {}", worth.short()))),
-            Price::SellsFor { price, worth } => ("Sells for", price, Some(format!("worth {}", worth.short()))),
+            Price::Costs { price, worth, .. } => {
+                ("Costs", price, Some(format!("worth {}", worth.short())))
+            }
+            Price::SellsFor { price, worth } => {
+                ("Sells for", price, Some(format!("worth {}", worth.short())))
+            }
         }
     }
 
@@ -108,11 +118,18 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
             if s.article.burnt >= armory::kindle::CANDLE_BURNT_OUT {
                 return Some("Spent".into());
             }
-            (if s.article.lit { "Burning" } else { "Unlit" }, s.article.lit)
+            (
+                if s.article.lit { "Burning" } else { "Unlit" },
+                s.article.lit,
+            )
         }
         _ => return None,
     };
-    Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
+    Some(format!(
+        "{state} \u{b7} {} \u{b7} L {}",
+        fuel?,
+        if lit { "puts it out" } else { "lights it" }
+    ))
 }
 
 /// How much food or drink eases, "Eases hunger 40%", or what a book teaches, "Teaches +1 WIS".
@@ -120,10 +137,18 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
 /// is in the card's actions.
 pub fn consume_line(item: &Item) -> Option<String> {
     if let Some(teaching) = item.teaching() {
-        return Some(format!("{}\nWritten in {}", teaching.description(), fb_denizens::tongue::tongue_name(teaching.kind)));
+        return Some(format!(
+            "{}\nWritten in {}",
+            teaching.description(),
+            fb_denizens::tongue::tongue_name(teaching.kind)
+        ));
     }
     if let Some(stat) = item.lesson() {
-        return Some(format!("Teaches {:+} {}", fb_items::lesson::LESSON_POINTS, fb_items::lesson::short_name(stat)));
+        return Some(format!(
+            "Teaches {:+} {}",
+            fb_items::lesson::LESSON_POINTS,
+            fb_items::lesson::short_name(stat)
+        ));
     }
     item.consume()?;
     let p = item.provision()?;
@@ -148,7 +173,11 @@ pub fn number(value: f32) -> String {
 }
 
 fn signed(value: f32) -> String {
-    if value >= 0.0 { format!("+{}", number(value)) } else { format!("\u{2212}{}", number(-value)) }
+    if value >= 0.0 {
+        format!("+{}", number(value))
+    } else {
+        format!("\u{2212}{}", number(-value))
+    }
 }
 
 fn capitalised(rarity: Rarity) -> &'static str {
@@ -169,7 +198,11 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     let meta: Vec<String> = if p.kind == Kind::Gear {
         let noun = fb_items::naming::noun(&item.base, &item.shape);
         let damage = s.damage.map(|d| {
-            let bonus = if s.damage_bonus != 0.0 { signed(s.damage_bonus) } else { String::new() };
+            let bonus = if s.damage_bonus != 0.0 {
+                signed(s.damage_bonus)
+            } else {
+                String::new()
+            };
             format!("{d}{bonus} damage")
         });
         [
@@ -187,16 +220,26 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         .collect()
     } else {
         // A purse's description is its coins, which the price line says.
-        let description = (!p.description.is_empty() && item.coins.is_none()).then(|| p.description.clone());
-        [description, Some(weight), Some(cells)].into_iter().flatten().collect()
+        let description =
+            (!p.description.is_empty() && item.coins.is_none()).then(|| p.description.clone());
+        [description, Some(weight), Some(cells)]
+            .into_iter()
+            .flatten()
+            .collect()
     };
-    let price = item.coins.map_or_else(|| Price::Worth(item.value()), Price::Holds);
+    let price = item
+        .coins
+        .map_or_else(|| Price::Worth(item.value()), Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
         let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
         match held {
             Some((inventory, id)) if inventory.contents_count(id) > 0 => {
                 let n = inventory.contents_count(id);
-                format!("Holds {n} {} \u{b7} {} lb inside \u{b7} {inside}", if n == 1 { "thing" } else { "things" }, number(inventory.contents_weight(id)))
+                format!(
+                    "Holds {n} {} \u{b7} {} lb inside \u{b7} {inside}",
+                    if n == 1 { "thing" } else { "things" },
+                    number(inventory.contents_weight(id))
+                )
             }
             _ => format!("Empty \u{b7} {inside}"),
         }
@@ -208,13 +251,27 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         price,
         meta: meta.join(" \u{b7} "),
         contents,
-        affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
+        affixes: item
+            .affixes
+            .iter()
+            .map(|a| AffixLine {
+                text: a.text.clone(),
+                name: a.name.clone(),
+                good: a.good,
+            })
+            .collect(),
         stats: stat_lines(s),
         light: light_line(&item.shape),
         consume: consume_line(item),
         words: item.words.clone(),
         actions: Vec::new(),
-        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
+        history: item
+            .legend
+            .as_ref()
+            .map_or_else(Vec::new, |l| l.history.to_vec())
+            .into_iter()
+            .chain(item.history.iter().cloned())
+            .collect(),
     }
 }
 
@@ -235,7 +292,10 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     let mut differ = |new: f32, old: f32, name: &str, unit: &str, higher: bool| {
         let by = new - old;
         if by.abs() >= 0.005 {
-            lines.push(Change { text: format!("{}{unit} {name}", signed(by)), better: (by > 0.0) == higher });
+            lines.push(Change {
+                text: format!("{}{unit} {name}", signed(by)),
+                better: (by > 0.0) == higher,
+            });
         }
     };
     let blow = |s: &Stats| s.damage.map_or(0.0, |d| d.mean() + s.damage_bonus);
@@ -244,24 +304,78 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.warmth, old.warmth, "warmth", "", true);
     differ(new.light, old.light, "light", " ft", true);
     differ(new.to_hit, old.to_hit, "to hit", "", true);
-    differ(new.ranged_to_hit, old.ranged_to_hit, "to hit with missiles", "", true);
+    differ(
+        new.ranged_to_hit,
+        old.ranged_to_hit,
+        "to hit with missiles",
+        "",
+        true,
+    );
     differ(new.stealth, old.stealth, "stealth", "", true);
     differ(new.lockpicking, old.lockpicking, "lockpicking", "", true);
     differ(new.carry, old.carry, "carry", " lb", true);
     differ(new.darkvision, old.darkvision, "darkvision", " ft", true);
-    differ(new.heal_on_kill, old.heal_on_kill, "heal on a kill", "", true);
+    differ(
+        new.heal_on_kill,
+        old.heal_on_kill,
+        "heal on a kill",
+        "",
+        true,
+    );
     // Rates are multiples of normal, written as the change in that multiple.
     differ(new.burn_time, old.burn_time, "burn time", "\u{d7}", true);
     differ(new.hunger_rate, old.hunger_rate, "hunger", "\u{d7}", false);
-    differ(new.sleepiness_rate, old.sleepiness_rate, "sleepiness", "\u{d7}", false);
-    differ(new.disease_risk, old.disease_risk, "disease risk", "\u{d7}", false);
+    differ(
+        new.sleepiness_rate,
+        old.sleepiness_rate,
+        "sleepiness",
+        "\u{d7}",
+        false,
+    );
+    differ(
+        new.disease_risk,
+        old.disease_risk,
+        "disease risk",
+        "\u{d7}",
+        false,
+    );
     differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
-    differ(new.attack_rate * 100.0, old.attack_rate * 100.0, "attack speed", "%", true);
-    differ(new.stamina_refill * 100.0, old.stamina_refill * 100.0, "stamina refill", "%", true);
-    differ(new.stamina_cost * 100.0, old.stamina_cost * 100.0, "stamina cost", "%", false);
-    differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
+    differ(
+        new.attack_rate * 100.0,
+        old.attack_rate * 100.0,
+        "attack speed",
+        "%",
+        true,
+    );
+    differ(
+        new.stamina_refill * 100.0,
+        old.stamina_refill * 100.0,
+        "stamina refill",
+        "%",
+        true,
+    );
+    differ(
+        new.stamina_cost * 100.0,
+        old.stamina_cost * 100.0,
+        "stamina cost",
+        "%",
+        false,
+    );
+    differ(
+        new.block_chance * 100.0,
+        old.block_chance * 100.0,
+        "chance to block",
+        "%",
+        true,
+    );
     differ(new.luck, old.luck, "luck", "", true);
-    differ(new.break_chance * 100.0, old.break_chance * 100.0, "chance to break", "%", false);
+    differ(
+        new.break_chance * 100.0,
+        old.break_chance * 100.0,
+        "chance to break",
+        "%",
+        false,
+    );
     for (new, old, name) in [
         (new.strength, old.strength, "STR"),
         (new.dexterity, old.dexterity, "DEX"),
@@ -274,10 +388,28 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     }
     for foe in fb_items::Foe::ALL {
         let (i, kind) = (foe.index(), foe.label().to_lowercase());
-        differ(new.ward[i] * 100.0, old.ward[i] * 100.0, &format!("less damage from {kind}"), "%", true);
-        differ(new.shun[i] * 100.0, old.shun[i] * 100.0, &format!("chance {kind} pay no heed"), "%", true);
+        differ(
+            new.ward[i] * 100.0,
+            old.ward[i] * 100.0,
+            &format!("less damage from {kind}"),
+            "%",
+            true,
+        );
+        differ(
+            new.shun[i] * 100.0,
+            old.shun[i] * 100.0,
+            &format!("chance {kind} pay no heed"),
+            "%",
+            true,
+        );
         let mean = |s: &Stats| s.bane[i].map_or(0.0, |d| d.mean());
-        differ(mean(new), mean(old), &format!("damage against {}", bane_kind(foe)), "", true);
+        differ(
+            mean(new),
+            mean(old),
+            &format!("damage against {}", bane_kind(foe)),
+            "",
+            true,
+        );
     }
     differ(new.weight, old.weight, "weight", " lb", false);
     lines
@@ -287,10 +419,19 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
 /// room inside.
 pub fn swap_changes(new: &Item, old: Option<&Item>) -> Vec<Change> {
     let mut lines = changes(&new.profile.stats, old.map(|o| &o.profile.stats));
-    let room = |item: Option<&Item>| item.and_then(|i| i.profile.holds.as_ref()).map_or(0, |g| g.cols as i32 * g.rows as i32);
+    let room = |item: Option<&Item>| {
+        item.and_then(|i| i.profile.holds.as_ref())
+            .map_or(0, |g| g.cols as i32 * g.rows as i32)
+    };
     let by = room(Some(new)) - room(old);
     if by != 0 {
-        lines.insert(0, Change { text: format!("{} cells inside", signed(by as f32)), better: by > 0 });
+        lines.insert(
+            0,
+            Change {
+                text: format!("{} cells inside", signed(by as f32)),
+                better: by > 0,
+            },
+        );
     }
     lines
 }
@@ -311,36 +452,62 @@ fn compare_slots(item: &Item) -> Vec<Slot> {
 /// main hand's weapon and a ring against a worn ring; with all its slots empty, the one it
 /// would be worn in. Each step on is the next of its slots after that, wrapping round. `None`
 /// for goods and for what is already worn.
-pub fn compare_with(inventory: &Inventory, id: ItemId, step: usize) -> Option<(Slot, Option<ItemId>)> {
+pub fn compare_with(
+    inventory: &Inventory,
+    id: ItemId,
+    step: usize,
+) -> Option<(Slot, Option<ItemId>)> {
     let item = inventory.item(id)?;
     item.profile.slot?;
     if matches!(inventory.location(id), Some(Location::Worn(_))) {
         return None;
     }
     let slots = compare_slots(item);
-    let first = slots.iter().position(|&slot| inventory.worn(slot).is_some()).or_else(|| slots.iter().position(|&slot| Some(slot) == inventory.target_slot(id)))?;
+    let first = slots
+        .iter()
+        .position(|&slot| inventory.worn(slot).is_some())
+        .or_else(|| {
+            slots
+                .iter()
+                .position(|&slot| Some(slot) == inventory.target_slot(id))
+        })?;
     let slot = slots[(first + step) % slots.len()];
     Some((slot, inventory.worn(slot)))
 }
 
 /// The slot's name as the doll labels it.
 fn slot_label(slot: Slot) -> String {
-    slot_places().iter().find(|p| p.slot == slot).map_or_else(|| format!("{slot:?}"), |p| p.label.clone())
+    slot_places()
+        .iter()
+        .find(|p| p.slot == slot)
+        .map_or_else(|| format!("{slot:?}"), |p| p.label.clone())
 }
 
 /// The compare card's banner: "Worn \u{b7} Head", or "Nothing worn \u{b7} Head".
 pub fn compare_banner(slot: Slot, worn: bool) -> String {
-    format!("{} \u{b7} {}", if worn { "Worn" } else { "Nothing worn" }, slot_label(slot))
+    format!(
+        "{} \u{b7} {}",
+        if worn { "Worn" } else { "Nothing worn" },
+        slot_label(slot)
+    )
 }
 
 /// "Undead deal 25% less": a ward against `foe` of `fraction`.
 pub fn ward_text(foe: fb_items::Foe, fraction: f32) -> String {
-    format!("{} deal {}% less", foe.label(), number((fraction * 100.0).round()))
+    format!(
+        "{} deal {}% less",
+        foe.label(),
+        number((fraction * 100.0).round())
+    )
 }
 
 /// The kind a bane names: "the undead", "vermin", "spiders".
 fn bane_kind(foe: fb_items::Foe) -> String {
-    if foe == fb_items::Foe::Undead { "the undead".to_string() } else { foe.label().to_lowercase() }
+    if foe == fb_items::Foe::Undead {
+        "the undead".to_string()
+    } else {
+        foe.label().to_lowercase()
+    }
 }
 
 /// "+1d6 against the undead": a weapon's extra `dice` against `foe`.
@@ -350,7 +517,11 @@ pub fn bane_text(foe: fb_items::Foe, dice: fb_items::dice::Dice) -> String {
 
 /// "Vermin often pay no heed (50%)": a shun of `chance` for `foe`.
 pub fn shun_text(foe: fb_items::Foe, chance: f32) -> String {
-    format!("{} often pay no heed ({}%)", foe.label(), number((chance * 100.0).round()))
+    format!(
+        "{} often pay no heed ({}%)",
+        foe.label(),
+        number((chance * 100.0).round())
+    )
 }
 
 /// The stats the meta line leaves out, where they differ from an ordinary thing's.
@@ -396,27 +567,49 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     rate(s.sleepiness_rate, plain.sleepiness_rate, "sleepiness");
     rate(s.disease_risk, plain.disease_risk, "disease risk");
     if s.break_chance > 0.0 {
-        lines.push(format!("{}% chance to break on a hard blow", number(s.break_chance * 100.0)));
+        lines.push(format!(
+            "{}% chance to break on a hard blow",
+            number(s.break_chance * 100.0)
+        ));
     }
     if s.speed != plain.speed {
         lines.push(format!("{:+}% speed", ((s.speed - 1.0) * 100.0).round()));
     }
     if s.attack_rate != plain.attack_rate {
-        lines.push(format!("{:+}% attack speed", ((s.attack_rate - 1.0) * 100.0).round()));
+        lines.push(format!(
+            "{:+}% attack speed",
+            ((s.attack_rate - 1.0) * 100.0).round()
+        ));
     }
     if s.stamina_refill != plain.stamina_refill {
-        lines.push(format!("{:+}% stamina refill", ((s.stamina_refill - 1.0) * 100.0).round()));
+        lines.push(format!(
+            "{:+}% stamina refill",
+            ((s.stamina_refill - 1.0) * 100.0).round()
+        ));
     }
     if s.stamina_cost != plain.stamina_cost {
-        lines.push(format!("{:+}% stamina cost", ((s.stamina_cost - 1.0) * 100.0).round()));
+        lines.push(format!(
+            "{:+}% stamina cost",
+            ((s.stamina_cost - 1.0) * 100.0).round()
+        ));
     }
     if s.block_chance > 0.0 {
-        lines.push(format!("{}% chance to block a blow", number((s.block_chance * 100.0).round())));
+        lines.push(format!(
+            "{}% chance to block a blow",
+            number((s.block_chance * 100.0).round())
+        ));
     }
     if s.luck != 0.0 {
         lines.push(format!("{} luck", signed(s.luck)));
     }
-    for (value, name) in [(s.strength, "STR"), (s.dexterity, "DEX"), (s.constitution, "CON"), (s.intelligence, "INT"), (s.wisdom, "WIS"), (s.charisma, "CHA")] {
+    for (value, name) in [
+        (s.strength, "STR"),
+        (s.dexterity, "DEX"),
+        (s.constitution, "CON"),
+        (s.intelligence, "INT"),
+        (s.wisdom, "WIS"),
+        (s.charisma, "CHA"),
+    ] {
         if value != 0.0 {
             lines.push(format!("{} {name}", signed(value)));
         }
@@ -450,7 +643,11 @@ pub fn place_beside(anchor: Rect, size: Vec2, screen: Vec2) -> Vec2 {
 
 /// Where a card of `size` goes centred under `point` (the crosshair), kept on the screen.
 pub fn place_under(point: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
-    keep_on_screen(Vec2::new(point.x - size.x * 0.5, point.y + 2.0 * CARD_GAP), size, screen)
+    keep_on_screen(
+        Vec2::new(point.x - size.x * 0.5, point.y + 2.0 * CARD_GAP),
+        size,
+        screen,
+    )
 }
 
 /// Where the compare card of `size` goes beside the `card` it compares with: on the side away
@@ -504,11 +701,17 @@ pub enum CardAnchor {
 }
 
 /// Spawns the card, hidden, once there is a camera drawing over the held torch to draw it.
-pub fn spawn_card(mut commands: Commands, cards: Query<(), With<ItemCard>>, cameras: Query<Entity, With<crate::carry::ViewModelCamera>>) {
+pub fn spawn_card(
+    mut commands: Commands,
+    cards: Query<(), With<ItemCard>>,
+    cameras: Query<Entity, With<crate::carry::ViewModelCamera>>,
+) {
     if !cards.is_empty() {
         return;
     }
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     commands.spawn((card_frame(camera), Name::new("Item card"), ItemCard));
     commands.spawn((card_frame(camera), Name::new("Compare card"), CompareCard));
 }
@@ -529,7 +732,13 @@ fn card_frame(camera: Entity) -> impl Bundle {
         },
         BackgroundColor(BG),
         BorderColor::all(LINE),
-        BoxShadow::new(Color::srgba(0.0, 0.0, 0.0, 0.55), px(0), px(14), px(0), px(34)),
+        BoxShadow::new(
+            Color::srgba(0.0, 0.0, 0.0, 0.55),
+            px(0),
+            px(14),
+            px(0),
+            px(34),
+        ),
         GlobalZIndex(40),
         Visibility::Hidden,
         Pickable::IGNORE,
@@ -547,32 +756,66 @@ struct Comparison<'a> {
 
 /// Fills `card` with what [`card_text`] says, under the item's picture. A compare card puts
 /// its banner on top and the swap's changes at the foot, and with nothing worn has only those.
-fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardText)>, comparison: Option<Comparison>, fonts: &UiFonts, icons: &mut Icons) {
-    commands.entity(card).despawn_children().with_children(|card| {
-        if let Some(comparison) = &comparison {
-            card.spawn((Node { padding: UiRect::new(px(14), px(14), px(8), px(8)), ..default() }, BackgroundColor(BG.mix(&GOLD, 0.28))))
-                .with_child((Text::new(comparison.banner.to_string()), UiFonts::style(&fonts.display, 15.0, INK)));
-        }
-        if let Some((item, text)) = shown {
-            fill_item(card, item, text, fonts, icons);
-        }
-        if let Some(comparison) = &comparison {
-            card.spawn((
-                Node { flex_direction: FlexDirection::Column, row_gap: px(3), padding: UiRect::new(px(14), px(14), px(10), px(12)), border: UiRect::top(px(1)), ..default() },
-                BorderColor::all(FAINT),
-            ))
-            .with_children(|list| {
-                list.spawn((Text::new(comparison.heading.to_string()), UiFonts::style(&fonts.body_italic, 13.5, GOLD)));
-                if comparison.changes.is_empty() {
-                    list.spawn((Text::new("No change"), UiFonts::style(&fonts.mono, 13.0, MUTED)));
-                }
-                for change in comparison.changes {
-                    let ink = if change.better { OK } else { BAD };
-                    list.spawn((Text::new(change.text.clone()), UiFonts::style(&fonts.mono_bold, 13.0, ink)));
-                }
-            });
-        }
-    });
+fn fill_card(
+    commands: &mut Commands,
+    card: Entity,
+    shown: Option<(&Item, &CardText)>,
+    comparison: Option<Comparison>,
+    fonts: &UiFonts,
+    icons: &mut Icons,
+) {
+    commands
+        .entity(card)
+        .despawn_children()
+        .with_children(|card| {
+            if let Some(comparison) = &comparison {
+                card.spawn((
+                    Node {
+                        padding: UiRect::new(px(14), px(14), px(8), px(8)),
+                        ..default()
+                    },
+                    BackgroundColor(BG.mix(&GOLD, 0.28)),
+                ))
+                .with_child((
+                    Text::new(comparison.banner.to_string()),
+                    UiFonts::style(&fonts.display, 15.0, INK),
+                ));
+            }
+            if let Some((item, text)) = shown {
+                fill_item(card, item, text, fonts, icons);
+            }
+            if let Some(comparison) = &comparison {
+                card.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(3),
+                        padding: UiRect::new(px(14), px(14), px(10), px(12)),
+                        border: UiRect::top(px(1)),
+                        ..default()
+                    },
+                    BorderColor::all(FAINT),
+                ))
+                .with_children(|list| {
+                    list.spawn((
+                        Text::new(comparison.heading.to_string()),
+                        UiFonts::style(&fonts.body_italic, 13.5, GOLD),
+                    ));
+                    if comparison.changes.is_empty() {
+                        list.spawn((
+                            Text::new("No change"),
+                            UiFonts::style(&fonts.mono, 13.0, MUTED),
+                        ));
+                    }
+                    for change in comparison.changes {
+                        let ink = if change.better { OK } else { BAD };
+                        list.spawn((
+                            Text::new(change.text.clone()),
+                            UiFonts::style(&fonts.mono_bold, 13.0, ink),
+                        ));
+                    }
+                });
+            }
+        });
 }
 
 /// "Costs 2 gp 3 sp", then "worth 1 gp 5 sp" under it: the word in the body face, the coins
@@ -581,14 +824,26 @@ fn fill_card(commands: &mut Commands, card: Entity, shown: Option<(&Item, &CardT
 fn price_line(info: &mut ChildSpawnerCommands, fonts: &UiFonts, price: Price) {
     let (word, coins, note) = price.parts();
     let size = 16.0;
-    info.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|column| {
-        column.spawn((Text::new(format!("{word}\u{a0}\u{a0}")), UiFonts::style(&fonts.body_medium, size, INK))).with_children(|line| {
-            if matches!(price, Price::Costs { afford: false, .. }) {
-                line.spawn((TextSpan::new(coins.short()), UiFonts::style(&fonts.mono_bold, size - 1.0, BAD)));
-            } else {
-                coin_spans(line, fonts, coins, size - 1.0);
-            }
-        });
+    info.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        ..default()
+    })
+    .with_children(|column| {
+        column
+            .spawn((
+                Text::new(format!("{word}\u{a0}\u{a0}")),
+                UiFonts::style(&fonts.body_medium, size, INK),
+            ))
+            .with_children(|line| {
+                if matches!(price, Price::Costs { afford: false, .. }) {
+                    line.spawn((
+                        TextSpan::new(coins.short()),
+                        UiFonts::style(&fonts.mono_bold, size - 1.0, BAD),
+                    ));
+                } else {
+                    coin_spans(line, fonts, coins, size - 1.0);
+                }
+            });
         if let Some(note) = note {
             column.spawn((Text::new(note), UiFonts::style(&fonts.mono, 12.0, MUTED)));
         }
@@ -596,85 +851,148 @@ fn price_line(info: &mut ChildSpawnerCommands, fonts: &UiFonts, price: Price) {
 }
 
 /// The item's picture and what [`card_text`] says of it.
-fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, fonts: &UiFonts, icons: &mut Icons) {
+fn fill_item(
+    card: &mut ChildSpawnerCommands,
+    item: &Item,
+    text: &CardText,
+    fonts: &UiFonts,
+    icons: &mut Icons,
+) {
     let footprint = item.profile.footprint;
     // The plate's `viewH`: the picture's height follows the item's shape, within limits.
-    let picture = (CARD_WIDTH * 0.62 * footprint.rows as f32 / footprint.cols.max(1) as f32).clamp(110.0, 230.0);
+    let picture = (CARD_WIDTH * 0.62 * footprint.rows as f32 / footprint.cols.max(1) as f32)
+        .clamp(110.0, 230.0);
     let size = super::icon::icon_size(item, false).as_vec2();
     let scale = ((CARD_WIDTH - 40.0) / size.x).min((picture - 20.0) / size.y);
     let colour = rarity_color(text.rarity);
     card.spawn((
-        Node { height: px(picture), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+        Node {
+            height: px(picture),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
         BackgroundColor(BG.mix(&GOLD, 0.12)),
     ))
     .with_children(|frame| {
-        icons.spawn(frame, item, false, Node { width: px(size.x * scale), height: px(size.y * scale), ..default() }, 48.0);
+        icons.spawn(
+            frame,
+            item,
+            false,
+            Node {
+                width: px(size.x * scale),
+                height: px(size.y * scale),
+                ..default()
+            },
+            48.0,
+        );
     });
-    card.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::new(px(14), px(14), px(10), px(12)), ..default() })
-        .with_children(|info| {
-            info.spawn((Text::new(text.title.clone()), UiFonts::style(&fonts.display, 22.0, colour)));
-            if let Some(subtitle) = &text.subtitle {
-                info.spawn((Text::new(subtitle.clone()), UiFonts::style(&fonts.body_italic, 15.0, colour)));
-            }
-            price_line(info, fonts, text.price);
-            numbers_line(info, fonts, &text.meta, 12.0);
-            if let Some(contents) = &text.contents {
-                numbers_line(info, fonts, contents, 12.0);
-            }
-            for affix in &text.affixes {
-                let ink = if affix.good { INK } else { BAD };
-                info.spawn((Text::new(format!("\u{2022} {} ", affix.text)), UiFonts::style(&fonts.body, 14.0, ink))).with_child((
-                    TextSpan::new(format!("({})", affix.name)),
-                    UiFonts::style(&fonts.mono, 12.0, MUTED),
-                ));
-            }
-            // The totals, with every affix counted, on one line under them.
-            if !text.stats.is_empty() {
-                numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
-            }
-            if let Some(light) = &text.light {
-                info.spawn((Text::new(light.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
-            }
-            if let Some(consume) = &text.consume {
-                info.spawn((Text::new(consume.clone()), UiFonts::style(&fonts.body_medium, 14.0, INK)));
-            }
-            if let Some(words) = &text.words {
-                info.spawn((
-                    Node { margin: UiRect::vertical(px(4)), padding: UiRect::axes(px(10), px(8)), ..default() },
-                    BackgroundColor(BG.mix(&GOLD, 0.2)),
-                ))
-                .with_child((Text::new(words.clone()), UiFonts::style(&fonts.body_italic, 14.5, INK)));
-            }
-            if !text.actions.is_empty() {
-                info.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(6), margin: UiRect::top(px(2)), ..default() }).with_children(|row| {
-                    for (n, (key, name)) in text.actions.iter().enumerate() {
-                        let sep = if n == 0 { "" } else { "\u{b7} " };
-                        row.spawn((Text::new(format!("{sep}{key} ")), UiFonts::style(&fonts.mono, 12.0, GOLD))).with_child((
-                            TextSpan::new(*name),
-                            UiFonts::style(&fonts.body_medium, 14.0, INK),
-                        ));
-                    }
-                });
-            }
-            if !text.history.is_empty() {
-                info.spawn((
-                    Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(3),
-                        margin: UiRect::top(px(4)),
-                        padding: UiRect::left(px(10)),
-                        border: UiRect::left(px(2)),
-                        ..default()
-                    },
-                    BorderColor::all(FAINT),
-                ))
-                .with_children(|history| {
-                    for line in &text.history {
-                        history.spawn((Text::new(line.clone()), UiFonts::style(&fonts.body_italic, 13.5, MUTED)));
-                    }
-                });
-            }
-        });
+    card.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: px(4),
+        padding: UiRect::new(px(14), px(14), px(10), px(12)),
+        ..default()
+    })
+    .with_children(|info| {
+        info.spawn((
+            Text::new(text.title.clone()),
+            UiFonts::style(&fonts.display, 22.0, colour),
+        ));
+        if let Some(subtitle) = &text.subtitle {
+            info.spawn((
+                Text::new(subtitle.clone()),
+                UiFonts::style(&fonts.body_italic, 15.0, colour),
+            ));
+        }
+        price_line(info, fonts, text.price);
+        numbers_line(info, fonts, &text.meta, 12.0);
+        if let Some(contents) = &text.contents {
+            numbers_line(info, fonts, contents, 12.0);
+        }
+        for affix in &text.affixes {
+            let ink = if affix.good { INK } else { BAD };
+            info.spawn((
+                Text::new(format!("\u{2022} {} ", affix.text)),
+                UiFonts::style(&fonts.body, 14.0, ink),
+            ))
+            .with_child((
+                TextSpan::new(format!("({})", affix.name)),
+                UiFonts::style(&fonts.mono, 12.0, MUTED),
+            ));
+        }
+        // The totals, with every affix counted, on one line under them.
+        if !text.stats.is_empty() {
+            numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
+        }
+        if let Some(light) = &text.light {
+            info.spawn((
+                Text::new(light.clone()),
+                UiFonts::style(&fonts.body_medium, 14.0, INK),
+            ));
+        }
+        if let Some(consume) = &text.consume {
+            info.spawn((
+                Text::new(consume.clone()),
+                UiFonts::style(&fonts.body_medium, 14.0, INK),
+            ));
+        }
+        if let Some(words) = &text.words {
+            info.spawn((
+                Node {
+                    margin: UiRect::vertical(px(4)),
+                    padding: UiRect::axes(px(10), px(8)),
+                    ..default()
+                },
+                BackgroundColor(BG.mix(&GOLD, 0.2)),
+            ))
+            .with_child((
+                Text::new(words.clone()),
+                UiFonts::style(&fonts.body_italic, 14.5, INK),
+            ));
+        }
+        if !text.actions.is_empty() {
+            info.spawn(Node {
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(6),
+                margin: UiRect::top(px(2)),
+                ..default()
+            })
+            .with_children(|row| {
+                for (n, (key, name)) in text.actions.iter().enumerate() {
+                    let sep = if n == 0 { "" } else { "\u{b7} " };
+                    row.spawn((
+                        Text::new(format!("{sep}{key} ")),
+                        UiFonts::style(&fonts.mono, 12.0, GOLD),
+                    ))
+                    .with_child((
+                        TextSpan::new(*name),
+                        UiFonts::style(&fonts.body_medium, 14.0, INK),
+                    ));
+                }
+            });
+        }
+        if !text.history.is_empty() {
+            info.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(3),
+                    margin: UiRect::top(px(4)),
+                    padding: UiRect::left(px(10)),
+                    border: UiRect::left(px(2)),
+                    ..default()
+                },
+                BorderColor::all(FAINT),
+            ))
+            .with_children(|history| {
+                for line in &text.history {
+                    history.spawn((
+                        Text::new(line.clone()),
+                        UiFonts::style(&fonts.body_italic, 13.5, MUTED),
+                    ));
+                }
+            });
+        }
+    });
 }
 
 /// What the card shows now: the item under the mouse on the screen, unless one is being
@@ -686,7 +1004,10 @@ pub fn card_subject(
     aimed: Option<ItemId>,
 ) -> Option<(ItemId, CardAnchor)> {
     if open {
-        hovered.0.filter(|_| !dragging).map(|(id, rect)| (id, CardAnchor::Beside(rect)))
+        hovered
+            .0
+            .filter(|_| !dragging)
+            .map(|(id, rect)| (id, CardAnchor::Beside(rect)))
     } else {
         aimed.map(|id| (id, CardAnchor::Crosshair))
     }
@@ -695,7 +1016,12 @@ pub fn card_subject(
 /// `subject` once the mouse has rested on it `delay` seconds (the tuning's `hover_delay`), at
 /// `now` seconds: an item hovered on the screen waits that long, counted from when the mouse
 /// came onto it (kept in `since`); the item under the crosshair shows at once.
-pub fn after_hover_delay(subject: Option<(ItemId, CardAnchor)>, now: f32, delay: f32, since: &mut Option<(ItemId, f32)>) -> Option<(ItemId, CardAnchor)> {
+pub fn after_hover_delay(
+    subject: Option<(ItemId, CardAnchor)>,
+    now: f32,
+    delay: f32,
+    since: &mut Option<(ItemId, f32)>,
+) -> Option<(ItemId, CardAnchor)> {
     let Some((id, CardAnchor::Beside(_))) = subject else {
         *since = None;
         return subject;
@@ -724,30 +1050,67 @@ pub fn show_card(
     keymap: Option<Res<crate::keymap::Keymap>>,
     fonts: Res<UiFonts>,
     mut icons: Icons,
-    mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    (tuning, time, barter): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>),
+    mut cards: Query<
+        (
+            Entity,
+            &mut Node,
+            &mut Visibility,
+            &ComputedNode,
+            &ComputedUiRenderTargetInfo,
+        ),
+        With<ItemCard>,
+    >,
+    (tuning, time, barter): (
+        Option<Res<crate::tuning::Tuning>>,
+        Option<Res<Time<Real>>>,
+        Option<Res<crate::barter::Barter>>,
+    ),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
 ) {
     on_screen.set_if_neq(ShownCard(None));
     let aimed_entity = aimed.and_then(|a| a.0);
-    let aimed_item = aimed_entity.and_then(|entity| floor.get(entity).map(|f| f.id).or_else(|_| containers.get(entity).map(|c| c.id)).ok());
+    let aimed_item = aimed_entity.and_then(|entity| {
+        floor
+            .get(entity)
+            .map(|f| f.id)
+            .or_else(|_| containers.get(entity).map(|c| c.id))
+            .ok()
+    });
     // A container under the crosshair has its own prompt (`crate::props`), so its card lists no
     // keys. Only the crosshair's card: the crosshair still holds the container after the screen
     // opens on it, and the cards of the items in the screen are theirs.
     let aimed_container = aimed_entity.is_some_and(|entity| containers.contains(entity));
     // No card over the menu.
-    let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
+    let subject = if open.is(Screen::Menu) {
+        None
+    } else {
+        card_subject(
+            open.is(Screen::Inventory),
+            *hovered,
+            dragging.0.is_some_and(|d| d.active),
+            aimed_item,
+        )
+    };
     let delay = tuning.map_or(0.0, |t| t.interface.hover_delay);
-    let subject = after_hover_delay(subject, time.map_or(0.0, |t| t.elapsed_secs()), delay, &mut hovered_since);
+    let subject = after_hover_delay(
+        subject,
+        time.map_or(0.0, |t| t.elapsed_secs()),
+        delay,
+        &mut hovered_since,
+    );
     for (card, mut node, mut visibility, computed, target) in &mut cards {
         let Some((id, anchor)) = subject.filter(|(id, _)| inventory.item(*id).is_some()) else {
             *visibility = Visibility::Hidden;
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+        if *shown != Some(id)
+            || inventory.is_changed()
+            || barter.as_ref().is_some_and(|b| b.is_changed())
+            || keymap.as_ref().is_some_and(|k| k.is_changed())
+        {
             let item = inventory.item(id).expect("checked above");
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
@@ -758,7 +1121,8 @@ pub fn show_card(
             if !(aimed_container && matches!(anchor, CardAnchor::Crosshair))
                 && let Some(target) = crate::interact::item_target(&inventory, id)
             {
-                let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
+                let verbs =
+                    crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
             }
             if inventory.is_carried(id)
@@ -766,7 +1130,14 @@ pub fn show_card(
             {
                 text.actions.push((key.label(), "Drop"));
             }
-            fill_card(&mut commands, card, Some((item, &text)), None, &fonts, &mut icons);
+            fill_card(
+                &mut commands,
+                card,
+                Some((item, &text)),
+                None,
+                &fonts,
+                &mut icons,
+            );
             *shown = Some(id);
             *visibility = Visibility::Hidden;
             continue;
@@ -780,14 +1151,23 @@ pub fn show_card(
         node.left = px(at.x);
         node.top = px(at.y);
         *visibility = Visibility::Inherited;
-        on_screen.set_if_neq(ShownCard(Some((id, Rect::from_corners(at, at + size), beside))));
+        on_screen.set_if_neq(ShownCard(Some((
+            id,
+            Rect::from_corners(at, at + size),
+            beside,
+        ))));
     }
 }
 
 /// How many times Shift has stepped the comparison of the `hovered` item on, kept in
 /// `stepped` with the item it is for. Shift counts only while Alt is held (`comparing`), and
 /// another item, or letting go of Alt, starts again.
-fn compare_step(stepped: &mut (Option<ItemId>, usize), hovered: Option<ItemId>, comparing: bool, shift: bool) -> usize {
+fn compare_step(
+    stepped: &mut (Option<ItemId>, usize),
+    hovered: Option<ItemId>,
+    comparing: bool,
+    shift: bool,
+) -> usize {
     if !comparing || stepped.0 != hovered {
         *stepped = (hovered, 0);
     } else if shift {
@@ -808,17 +1188,33 @@ pub fn show_compare(
     inventory: Res<Inventory>,
     fonts: Res<UiFonts>,
     mut icons: Icons,
-    mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<CompareCard>>,
+    mut cards: Query<
+        (
+            Entity,
+            &mut Node,
+            &mut Visibility,
+            &ComputedNode,
+            &ComputedUiRenderTargetInfo,
+        ),
+        With<CompareCard>,
+    >,
     mut shown: Local<Option<(ItemId, Slot, Option<ItemId>)>>,
     // The item the step is for, and how many times Shift has stepped on from its first slot.
     mut stepped: Local<(Option<ItemId>, usize)>,
 ) {
     let comparing = input.pressed(Action::Compare) || compare_forced();
-    let step = compare_step(&mut stepped, on_screen.0.map(|(id, ..)| id), comparing, input.just_pressed(Action::Sprint));
+    let step = compare_step(
+        &mut stepped,
+        on_screen.0.map(|(id, ..)| id),
+        comparing,
+        input.just_pressed(Action::Sprint),
+    );
     let subject = on_screen
         .0
         .filter(|_| comparing)
-        .and_then(|(id, card, beside)| Some((id, compare_with(&inventory, id, step)?, card, beside)));
+        .and_then(|(id, card, beside)| {
+            Some((id, compare_with(&inventory, id, step)?, card, beside))
+        });
     for (entity, mut node, mut visibility, computed, target) in &mut cards {
         let Some((id, (slot, worn), card, beside)) = subject else {
             *visibility = Visibility::Hidden;
@@ -832,8 +1228,19 @@ pub fn show_compare(
             let banner = compare_banner(slot, old.is_some());
             let changes = swap_changes(new, old);
             let heading = format!("Swapping in the {}", new.title());
-            let comparison = Comparison { banner: &banner, heading: &heading, changes: &changes };
-            fill_card(&mut commands, entity, text.as_ref().map(|(item, text)| (*item, text)), Some(comparison), &fonts, &mut icons);
+            let comparison = Comparison {
+                banner: &banner,
+                heading: &heading,
+                changes: &changes,
+            };
+            fill_card(
+                &mut commands,
+                entity,
+                text.as_ref().map(|(item, text)| (*item, text)),
+                Some(comparison),
+                &fonts,
+                &mut icons,
+            );
             *shown = Some((id, slot, worn));
             *visibility = Visibility::Hidden;
             continue;
@@ -860,7 +1267,11 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
         let over = |id| Some((ItemId(id), CardAnchor::Beside(rect)));
         let mut since = None;
-        assert_eq!(after_hover_delay(over(3), 1.0, 0.0, &mut since), over(3), "no delay: at once");
+        assert_eq!(
+            after_hover_delay(over(3), 1.0, 0.0, &mut since),
+            over(3),
+            "no delay: at once"
+        );
         let mut since = None;
         assert_eq!(after_hover_delay(over(3), 1.0, 0.5, &mut since), None);
         assert_eq!(after_hover_delay(over(3), 1.4, 0.5, &mut since), None);
@@ -875,20 +1286,46 @@ mod tests {
 
     #[test]
     fn every_field_comes_from_the_item() {
-        let magic = (1..3_000).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.rarity == Rarity::Magic).unwrap();
+        let magic = (1..3_000)
+            .filter_map(|s| fb_items::roll_item("Sword", s))
+            .find(|i| i.rarity == Rarity::Magic)
+            .unwrap();
         let card = card_text(&magic, None);
-        assert_eq!((card.title.as_str(), card.rarity, card.subtitle.as_ref()), (magic.name.as_str(), Rarity::Magic, None));
+        assert_eq!(
+            (card.title.as_str(), card.rarity, card.subtitle.as_ref()),
+            (magic.name.as_str(), Rarity::Magic, None)
+        );
         let s = &magic.profile.stats;
         assert!(card.meta.starts_with("Magic \u{b7} "), "{}", card.meta);
-        assert!(card.meta.contains(&format!("{} lb", number(s.weight))), "{}", card.meta);
-        assert!(card.meta.contains(&format!("{}", s.damage.unwrap())), "{}", card.meta);
+        assert!(
+            card.meta.contains(&format!("{} lb", number(s.weight))),
+            "{}",
+            card.meta
+        );
+        assert!(
+            card.meta.contains(&format!("{}", s.damage.unwrap())),
+            "{}",
+            card.meta
+        );
         assert_eq!(card.price, Price::Worth(magic.value()));
-        assert!(!card.meta.contains(&magic.value().short()), "the price has a line of its own: {}", card.meta);
+        assert!(
+            !card.meta.contains(&magic.value().short()),
+            "the price has a line of its own: {}",
+            card.meta
+        );
         let fp = magic.profile.footprint;
-        assert!(card.meta.ends_with(&format!("{}\u{d7}{} cells", fp.cols, fp.rows)), "{}", card.meta);
+        assert!(
+            card.meta
+                .ends_with(&format!("{}\u{d7}{} cells", fp.cols, fp.rows)),
+            "{}",
+            card.meta
+        );
         assert_eq!(card.affixes.len(), magic.affixes.len());
         for (line, affix) in card.affixes.iter().zip(&magic.affixes) {
-            assert_eq!((line.text.as_str(), line.name.as_str(), line.good), (affix.text.as_str(), affix.name.as_str(), affix.good));
+            assert_eq!(
+                (line.text.as_str(), line.name.as_str(), line.good),
+                (affix.text.as_str(), affix.name.as_str(), affix.good)
+            );
         }
         assert!(card.history.is_empty());
         assert_eq!(card.words, None);
@@ -900,13 +1337,23 @@ mod tests {
         let note = fb_items::roll_item("Note", 12).unwrap().in_world(&lore);
         assert_eq!(card_text(&note, None).words, note.words);
         assert!(card_text(&note, None).words.is_some());
-        assert_eq!(crate::interact::use_of(&note), Some(crate::interact::Verb::Read));
-        assert_eq!(crate::interact::use_of(&fb_items::roll_item("Note", 12).unwrap()), None, "a blank note has nothing to read");
+        assert_eq!(
+            crate::interact::use_of(&note),
+            Some(crate::interact::Verb::Read)
+        );
+        assert_eq!(
+            crate::interact::use_of(&fb_items::roll_item("Note", 12).unwrap()),
+            None,
+            "a blank note has nothing to read"
+        );
     }
 
     #[test]
     fn an_items_own_history_follows_a_legends() {
-        let mut legend = (1..5_000).filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        let mut legend = (1..5_000)
+            .filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8)))
+            .find(|i| i.rarity == Rarity::Legendary)
+            .unwrap();
         legend.history.push("Made by Brenna Holt".into());
         let card = card_text(&legend, None);
         assert_eq!(card.history.len(), 4);
@@ -916,40 +1363,75 @@ mod tests {
 
     #[test]
     fn a_legendary_shows_its_title_old_name_and_history() {
-        let legend = (1..5_000).filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8))).find(|i| i.rarity == Rarity::Legendary).unwrap();
+        let legend = (1..5_000)
+            .filter_map(|s| fb_items::roll_item_with("Sword", s, fb_items::Odds::loot(8)))
+            .find(|i| i.rarity == Rarity::Legendary)
+            .unwrap();
         let l = legend.legend.as_ref().unwrap();
         let card = card_text(&legend, None);
         assert_eq!(card.title, l.title);
         assert_eq!(card.subtitle.as_deref(), Some(l.subtitle.as_str()));
         assert_eq!(card.history, l.history.to_vec());
         assert_eq!(card.history.len(), 3);
-        assert!(!card.meta.contains(&fb_items::naming::noun(&legend.base, &legend.shape)), "the old name already says what it is");
+        assert!(
+            !card
+                .meta
+                .contains(&fb_items::naming::noun(&legend.base, &legend.shape)),
+            "the old name already says what it is"
+        );
     }
 
     #[test]
     fn a_purse_says_what_it_holds_and_how_to_open_it() {
         let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Purse", 4).unwrap());
-        parts.coins = Some(Coins { gp: 2, sp: 3, cp: 0 });
+        parts.coins = Some(Coins {
+            gp: 2,
+            sp: 3,
+            cp: 0,
+        });
         let purse = fb_items::Item::from_parts(parts).unwrap();
         let card = card_text(&purse, None);
-        assert_eq!(card.price.line(), "Holds 2 gp 3 sp \u{b7} double-click to open");
-        assert!(!card.meta.contains("gp"), "the coins are said once: {}", card.meta);
+        assert_eq!(
+            card.price.line(),
+            "Holds 2 gp 3 sp \u{b7} double-click to open"
+        );
+        assert!(
+            !card.meta.contains("gp"),
+            "the coins are said once: {}",
+            card.meta
+        );
     }
 
     #[test]
     fn goods_and_containers_say_what_they_are() {
         let bread = fb_items::roll_item("Bread", 3).unwrap();
         let card = card_text(&bread, None);
-        assert!(card.meta.starts_with(&bread.profile.description), "{}", card.meta);
+        assert!(
+            card.meta.starts_with(&bread.profile.description),
+            "{}",
+            card.meta
+        );
         assert!(card.affixes.is_empty() && card.contents.is_none());
-        assert_eq!(card.price.line(), format!("Worth {}", bread.value().short()));
+        assert_eq!(
+            card.price.line(),
+            format!("Worth {}", bread.value().short())
+        );
 
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
-        assert_eq!(card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.as_deref(), Some("Empty \u{b7} 8\u{d7}5 inside"));
+        assert_eq!(
+            card_text(inventory.item(pack).unwrap(), Some((&inventory, pack)))
+                .contents
+                .as_deref(),
+            Some("Empty \u{b7} 8\u{d7}5 inside")
+        );
         let bread = inventory.add(bread);
-        inventory.put(bread, pack, super::super::grid::Placement::new(0, 0, false)).unwrap();
-        let contents = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();
+        inventory
+            .put(bread, pack, super::super::grid::Placement::new(0, 0, false))
+            .unwrap();
+        let contents = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack)))
+            .contents
+            .unwrap();
         assert!(contents.starts_with("Holds 1 thing \u{b7} "), "{contents}");
     }
 
@@ -959,11 +1441,26 @@ mod tests {
         let mut banes = Stats::default();
         banes.bane[fb_items::Foe::Undead.index()] = Some(fb_items::dice::Dice::new(1, 6));
         banes.bane[fb_items::Foe::Beast.index()] = Some(fb_items::dice::Dice::new(1, 4));
-        assert_eq!(stat_lines(&banes), vec!["+1d6 against the undead", "+1d4 against beasts"]);
+        assert_eq!(
+            stat_lines(&banes),
+            vec!["+1d6 against the undead", "+1d4 against beasts"]
+        );
         let lines = changes(&banes, Some(&Stats::default()));
-        assert!(lines.iter().any(|c| c.text.contains("damage against the undead") && c.better));
-        let s = Stats { stealth: -2.0, hunger_rate: 0.85, darkvision: 10.0, ..Stats::default() };
-        assert_eq!(stat_lines(&s), vec!["\u{2212}2 stealth", "darkvision 10 ft", "hunger \u{d7}0.85"]);
+        assert!(
+            lines
+                .iter()
+                .any(|c| c.text.contains("damage against the undead") && c.better)
+        );
+        let s = Stats {
+            stealth: -2.0,
+            hunger_rate: 0.85,
+            darkvision: 10.0,
+            ..Stats::default()
+        };
+        assert_eq!(
+            stat_lines(&s),
+            vec!["\u{2212}2 stealth", "darkvision 10 ft", "hunger \u{d7}0.85"]
+        );
         assert_eq!(number(3.0), "3");
         assert_eq!(number(0.05), "0.05");
     }
@@ -972,56 +1469,160 @@ mod tests {
     fn the_card_shows_the_hovered_item_on_the_screen_and_the_aimed_one_in_the_level() {
         let rect = Rect::new(0.0, 0.0, 46.0, 92.0);
         let hovered = Hovered(Some((ItemId(3), rect)));
-        assert_eq!(card_subject(true, hovered, false, Some(ItemId(9))), Some((ItemId(3), CardAnchor::Beside(rect))));
-        assert_eq!(card_subject(true, hovered, true, None), None, "not while dragging");
-        assert_eq!(card_subject(false, hovered, false, Some(ItemId(9))), Some((ItemId(9), CardAnchor::Crosshair)));
+        assert_eq!(
+            card_subject(true, hovered, false, Some(ItemId(9))),
+            Some((ItemId(3), CardAnchor::Beside(rect)))
+        );
+        assert_eq!(
+            card_subject(true, hovered, true, None),
+            None,
+            "not while dragging"
+        );
+        assert_eq!(
+            card_subject(false, hovered, false, Some(ItemId(9))),
+            Some((ItemId(9), CardAnchor::Crosshair))
+        );
         assert_eq!(card_subject(false, Hovered(None), false, None), None);
     }
 
     #[test]
     fn a_swap_lists_what_it_changes_and_which_way_is_better() {
-        let worn = Stats { armour: 2.0, weight: 4.0, stealth: -1.0, ..Stats::default() };
-        let new = Stats { armour: 3.5, weight: 6.0, stealth: -1.0, hunger_rate: 0.9, ..Stats::default() };
-        let text = |c: &[Change]| c.iter().map(|c| (c.text.clone(), c.better)).collect::<Vec<_>>();
+        let worn = Stats {
+            armour: 2.0,
+            weight: 4.0,
+            stealth: -1.0,
+            ..Stats::default()
+        };
+        let new = Stats {
+            armour: 3.5,
+            weight: 6.0,
+            stealth: -1.0,
+            hunger_rate: 0.9,
+            ..Stats::default()
+        };
+        let text = |c: &[Change]| {
+            c.iter()
+                .map(|c| (c.text.clone(), c.better))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
             text(&changes(&new, Some(&worn))),
-            vec![("+1.5 armour".into(), true), ("\u{2212}0.1\u{d7} hunger".into(), true), ("+2 lb weight".into(), false)],
+            vec![
+                ("+1.5 armour".into(), true),
+                ("\u{2212}0.1\u{d7} hunger".into(), true),
+                ("+2 lb weight".into(), false)
+            ],
             "stealth stays the same, so it is left out"
         );
         assert!(changes(&worn, Some(&worn)).is_empty());
         // Against nothing worn, everything it brings is a change.
-        assert_eq!(text(&changes(&worn, None)), vec![("+2 armour".into(), true), ("\u{2212}1 stealth".into(), false), ("+4 lb weight".into(), false)]);
+        assert_eq!(
+            text(&changes(&worn, None)),
+            vec![
+                ("+2 armour".into(), true),
+                ("\u{2212}1 stealth".into(), false),
+                ("+4 lb weight".into(), false)
+            ]
+        );
         // Weapons by their average blow: 1d8+1 is 5.5, 1d6 is 3.5.
-        let sword = Stats { damage: Some(fb_items::dice::Dice::new(1, 8)), damage_bonus: 1.0, ..Stats::default() };
-        let knife = Stats { damage: Some(fb_items::dice::Dice::new(1, 6)), ..Stats::default() };
-        assert_eq!(text(&changes(&sword, Some(&knife))), vec![("+2 damage a blow".into(), true)]);
+        let sword = Stats {
+            damage: Some(fb_items::dice::Dice::new(1, 8)),
+            damage_bonus: 1.0,
+            ..Stats::default()
+        };
+        let knife = Stats {
+            damage: Some(fb_items::dice::Dice::new(1, 6)),
+            ..Stats::default()
+        };
+        assert_eq!(
+            text(&changes(&sword, Some(&knife))),
+            vec![("+2 damage a blow".into(), true)]
+        );
         // Speed and block as percentages, and the ability scores by name.
-        let boots = Stats { speed: 1.1, sleepiness_rate: 1.2, dexterity: 1.0, ..Stats::default() };
-        let shield = Stats { block_chance: 0.15, strength: -1.0, ..Stats::default() };
+        let boots = Stats {
+            speed: 1.1,
+            sleepiness_rate: 1.2,
+            dexterity: 1.0,
+            ..Stats::default()
+        };
+        let shield = Stats {
+            block_chance: 0.15,
+            strength: -1.0,
+            ..Stats::default()
+        };
         assert_eq!(
             text(&changes(&boots, None)),
-            vec![("+0.2\u{d7} sleepiness".into(), false), ("+10% speed".into(), true), ("+1 DEX".into(), true)]
+            vec![
+                ("+0.2\u{d7} sleepiness".into(), false),
+                ("+10% speed".into(), true),
+                ("+1 DEX".into(), true)
+            ]
         );
-        assert_eq!(text(&changes(&shield, None)), vec![("+15% chance to block".into(), true), ("\u{2212}1 STR".into(), false)]);
+        assert_eq!(
+            text(&changes(&shield, None)),
+            vec![
+                ("+15% chance to block".into(), true),
+                ("\u{2212}1 STR".into(), false)
+            ]
+        );
         // A bag also by the room inside: a pack holds 8x5, a sack less.
         let pack = fb_items::roll_item("Pack", 7).unwrap();
         let sack = fb_items::roll_item("Sack", 7).unwrap();
-        let room = |i: &Item| i.profile.holds.as_ref().map_or(0, |g| g.cols as i32 * g.rows as i32);
+        let room = |i: &Item| {
+            i.profile
+                .holds
+                .as_ref()
+                .map_or(0, |g| g.cols as i32 * g.rows as i32)
+        };
         let by = room(&pack) - room(&sack);
         assert!(by > 0);
-        assert_eq!(swap_changes(&pack, Some(&sack))[0], Change { text: format!("+{by} cells inside"), better: true });
-        assert_eq!(swap_changes(&sack, Some(&pack))[0], Change { text: format!("\u{2212}{by} cells inside"), better: false });
+        assert_eq!(
+            swap_changes(&pack, Some(&sack))[0],
+            Change {
+                text: format!("+{by} cells inside"),
+                better: true
+            }
+        );
+        assert_eq!(
+            swap_changes(&sack, Some(&pack))[0],
+            Change {
+                text: format!("\u{2212}{by} cells inside"),
+                better: false
+            }
+        );
     }
 
     #[test]
     fn changes_are_what_the_new_thing_gives_over_the_old() {
         let worse = Stats {
-            armour: 1.0, warmth: 1.0, light: 20.0, to_hit: 1.0, carry: 10.0, darkvision: 30.0, weight: 3.0, burn_time: 1.0, break_chance: 0.1, ..Stats::default()
+            armour: 1.0,
+            warmth: 1.0,
+            light: 20.0,
+            to_hit: 1.0,
+            carry: 10.0,
+            darkvision: 30.0,
+            weight: 3.0,
+            burn_time: 1.0,
+            break_chance: 0.1,
+            ..Stats::default()
         };
         let better = Stats {
-            armour: 2.0, warmth: 2.0, light: 30.0, to_hit: 2.0, carry: 15.0, darkvision: 60.0, weight: 2.0, burn_time: 2.0, break_chance: 0.05, ..Stats::default()
+            armour: 2.0,
+            warmth: 2.0,
+            light: 30.0,
+            to_hit: 2.0,
+            carry: 15.0,
+            darkvision: 60.0,
+            weight: 2.0,
+            burn_time: 2.0,
+            break_chance: 0.05,
+            ..Stats::default()
         };
-        let text = |c: &[Change]| c.iter().map(|c| (c.text.clone(), c.better)).collect::<Vec<_>>();
+        let text = |c: &[Change]| {
+            c.iter()
+                .map(|c| (c.text.clone(), c.better))
+                .collect::<Vec<_>>()
+        };
         // The better thing over the worse: gains read plus and green, less weight and breakage minus and green.
         assert_eq!(
             text(&changes(&better, Some(&worse))),
@@ -1057,8 +1658,20 @@ mod tests {
         let mut hovered = worn.clone();
         worn.profile.stats.armour = 1.0;
         hovered.profile.stats.armour = 2.0;
-        assert_eq!(swap_changes(&hovered, Some(&worn)), vec![Change { text: "+1 armour".into(), better: true }]);
-        assert_eq!(swap_changes(&worn, Some(&hovered)), vec![Change { text: "\u{2212}1 armour".into(), better: false }]);
+        assert_eq!(
+            swap_changes(&hovered, Some(&worn)),
+            vec![Change {
+                text: "+1 armour".into(),
+                better: true
+            }]
+        );
+        assert_eq!(
+            swap_changes(&worn, Some(&hovered)),
+            vec![Change {
+                text: "\u{2212}1 armour".into(),
+                better: false
+            }]
+        );
     }
 
     #[test]
@@ -1071,20 +1684,40 @@ mod tests {
         // Nothing on the head yet: compared with the empty slot.
         assert_eq!(compare_with(&inventory, helm, 0), Some((Slot::Head, None)));
         inventory.wear(helm, Slot::Head).unwrap();
-        assert_eq!(compare_with(&inventory, other_helm, 0), Some((Slot::Head, Some(helm))));
-        assert_eq!(compare_with(&inventory, helm, 0), None, "what is worn has nothing to compare with");
-        assert_eq!(compare_with(&inventory, bread, 0), None, "goods are not worn");
+        assert_eq!(
+            compare_with(&inventory, other_helm, 0),
+            Some((Slot::Head, Some(helm)))
+        );
+        assert_eq!(
+            compare_with(&inventory, helm, 0),
+            None,
+            "what is worn has nothing to compare with"
+        );
+        assert_eq!(
+            compare_with(&inventory, bread, 0),
+            None,
+            "goods are not worn"
+        );
         // A second ring is held up against the worn one, not the empty ring slot.
         let ring = inventory.add(roll("Ring"));
         let other_ring = inventory.add(roll("Ring"));
         inventory.wear(ring, Slot::Ring2).unwrap();
-        assert_eq!(compare_with(&inventory, other_ring, 0), Some((Slot::Ring2, Some(ring))));
+        assert_eq!(
+            compare_with(&inventory, other_ring, 0),
+            Some((Slot::Ring2, Some(ring)))
+        );
         // A weapon against the main hand's.
         let sword = inventory.add(roll("Sword"));
         let mace = inventory.add(roll("Mace"));
         inventory.wear(mace, Slot::Mainhand).unwrap();
-        assert_eq!(compare_with(&inventory, sword, 0), Some((Slot::Mainhand, Some(mace))));
-        assert_eq!(compare_banner(Slot::Head, true), format!("Worn \u{b7} {}", slot_label(Slot::Head)));
+        assert_eq!(
+            compare_with(&inventory, sword, 0),
+            Some((Slot::Mainhand, Some(mace)))
+        );
+        assert_eq!(
+            compare_banner(Slot::Head, true),
+            format!("Worn \u{b7} {}", slot_label(Slot::Head))
+        );
         assert!(compare_banner(Slot::Head, false).starts_with("Nothing worn \u{b7} "));
     }
 
@@ -1100,40 +1733,83 @@ mod tests {
         let held = inventory.add(roll("Torch"));
         inventory.wear(held, Slot::Offhand).unwrap();
         let spare = inventory.add(roll("Torch"));
-        assert_eq!(compare_with(&inventory, spare, 0), Some((Slot::Offhand, Some(held))));
+        assert_eq!(
+            compare_with(&inventory, spare, 0),
+            Some((Slot::Offhand, Some(held)))
+        );
         // A torch fits either hand, the off hand first, and then the hip.
-        assert_eq!(compare_with(&inventory, spare, 1), Some((Slot::Mainhand, None)));
-        assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Hip, Some(lantern))));
-        assert_eq!(compare_with(&inventory, spare, 3), Some((Slot::Offhand, Some(held))), "wraps round");
+        assert_eq!(
+            compare_with(&inventory, spare, 1),
+            Some((Slot::Mainhand, None))
+        );
+        assert_eq!(
+            compare_with(&inventory, spare, 2),
+            Some((Slot::Hip, Some(lantern)))
+        );
+        assert_eq!(
+            compare_with(&inventory, spare, 3),
+            Some((Slot::Offhand, Some(held))),
+            "wraps round"
+        );
         // Nothing at the hip: the banner says so.
         inventory.take_out(lantern);
         assert_eq!(compare_with(&inventory, spare, 2), Some((Slot::Hip, None)));
         // Both ring fingers worn: the first ring, then the second.
-        let (ring1, ring2, third) = (inventory.add(roll("Ring")), inventory.add(roll("Ring")), inventory.add(roll("Ring")));
+        let (ring1, ring2, third) = (
+            inventory.add(roll("Ring")),
+            inventory.add(roll("Ring")),
+            inventory.add(roll("Ring")),
+        );
         inventory.wear(ring1, Slot::Ring1).unwrap();
         inventory.wear(ring2, Slot::Ring2).unwrap();
-        assert_eq!(compare_with(&inventory, third, 0), Some((Slot::Ring1, Some(ring1))));
-        assert_eq!(compare_with(&inventory, third, 1), Some((Slot::Ring2, Some(ring2))));
-        assert_eq!(compare_with(&inventory, third, 2), Some((Slot::Ring1, Some(ring1))));
+        assert_eq!(
+            compare_with(&inventory, third, 0),
+            Some((Slot::Ring1, Some(ring1)))
+        );
+        assert_eq!(
+            compare_with(&inventory, third, 1),
+            Some((Slot::Ring2, Some(ring2)))
+        );
+        assert_eq!(
+            compare_with(&inventory, third, 2),
+            Some((Slot::Ring1, Some(ring1)))
+        );
         // One slot only: every step shows the head.
         let helm = inventory.add(roll("Helm"));
         let other = inventory.add(roll("Helm"));
         inventory.wear(helm, Slot::Head).unwrap();
-        assert_eq!([0, 1, 2].map(|step| compare_with(&inventory, other, step)), [Some((Slot::Head, Some(helm))); 3]);
+        assert_eq!(
+            [0, 1, 2].map(|step| compare_with(&inventory, other, step)),
+            [Some((Slot::Head, Some(helm))); 3]
+        );
     }
 
     #[test]
     fn shift_with_alt_steps_on_and_a_new_item_starts_again() {
         let mut stepped: (Option<ItemId>, usize) = (None, 0);
-        let mut step = |hovered: Option<u32>, comparing, shift| compare_step(&mut stepped, hovered.map(ItemId), comparing, shift);
+        let mut step = |hovered: Option<u32>, comparing, shift| {
+            compare_step(&mut stepped, hovered.map(ItemId), comparing, shift)
+        };
         assert_eq!(step(Some(1), true, false), 0);
         assert_eq!(step(Some(1), true, true), 1);
-        assert_eq!(step(Some(1), true, false), 1, "the step stays while Alt is held");
+        assert_eq!(
+            step(Some(1), true, false),
+            1,
+            "the step stays while Alt is held"
+        );
         assert_eq!(step(Some(1), true, true), 2);
-        assert_eq!(step(Some(2), true, true), 0, "another item starts at its first slot");
+        assert_eq!(
+            step(Some(2), true, true),
+            0,
+            "another item starts at its first slot"
+        );
         assert_eq!(step(Some(2), false, true), 0, "Shift alone does not step");
         assert_eq!(step(Some(2), true, true), 1);
-        assert_eq!(step(Some(2), false, false), 0, "letting go of Alt starts again");
+        assert_eq!(
+            step(Some(2), false, false),
+            0,
+            "letting go of Alt starts again"
+        );
     }
 
     #[test]
@@ -1143,19 +1819,33 @@ mod tests {
         // The card to the item's right: the compare card further right.
         let item = Rect::new(500.0, 300.0, 546.0, 392.0);
         let card = Rect::new(556.0, 300.0, 856.0, 700.0);
-        assert_eq!(place_compare(card, Some(item), size, screen), Vec2::new(866.0, 300.0));
+        assert_eq!(
+            place_compare(card, Some(item), size, screen),
+            Vec2::new(866.0, 300.0)
+        );
         // The card flipped to the item's left: the compare card further left.
         let item = Rect::new(1700.0, 300.0, 1746.0, 392.0);
         let card = Rect::new(1390.0, 300.0, 1690.0, 700.0);
-        assert_eq!(place_compare(card, Some(item), size, screen), Vec2::new(1080.0, 300.0));
+        assert_eq!(
+            place_compare(card, Some(item), size, screen),
+            Vec2::new(1080.0, 300.0)
+        );
         // Under the crosshair it goes right, or left with no room on the right.
         let card = Rect::new(810.0, 560.0, 1110.0, 960.0);
         assert_eq!(place_compare(card, None, size, screen).x, 1120.0);
         let card = Rect::new(1600.0, 560.0, 1900.0, 960.0);
         assert_eq!(place_compare(card, None, size, screen).x, 1290.0);
         // Never off the screen.
-        let at = place_compare(Rect::new(8.0, 900.0, 308.0, 1300.0), None, size, Vec2::new(400.0, 1080.0));
-        assert!(at.x >= CARD_MARGIN && at.y + size.y <= 1080.0 - CARD_MARGIN, "{at}");
+        let at = place_compare(
+            Rect::new(8.0, 900.0, 308.0, 1300.0),
+            None,
+            size,
+            Vec2::new(400.0, 1080.0),
+        );
+        assert!(
+            at.x >= CARD_MARGIN && at.y + size.y <= 1080.0 - CARD_MARGIN,
+            "{at}"
+        );
     }
 
     #[test]
@@ -1163,11 +1853,17 @@ mod tests {
         let screen = Vec2::new(1920.0, 1080.0);
         let size = Vec2::new(300.0, 400.0);
         let inside = |at: Vec2| {
-            at.x >= CARD_MARGIN && at.y >= CARD_MARGIN && at.x + size.x <= screen.x - CARD_MARGIN && at.y + size.y <= screen.y - CARD_MARGIN
+            at.x >= CARD_MARGIN
+                && at.y >= CARD_MARGIN
+                && at.x + size.x <= screen.x - CARD_MARGIN
+                && at.y + size.y <= screen.y - CARD_MARGIN
         };
         // Room on the right: it goes there, level with the item's top.
         let middle = Rect::new(500.0, 300.0, 546.0, 392.0);
-        assert_eq!(place_beside(middle, size, screen), Vec2::new(546.0 + CARD_GAP, 300.0));
+        assert_eq!(
+            place_beside(middle, size, screen),
+            Vec2::new(546.0 + CARD_GAP, 300.0)
+        );
         // At the right edge it flips to the left.
         let right = Rect::new(1850.0, 300.0, 1896.0, 346.0);
         let at = place_beside(right, size, screen);
@@ -1185,7 +1881,10 @@ mod tests {
         assert!(inside(place_under(screen * 0.5, size, screen)));
         assert!(inside(place_under(Vec2::new(5.0, 1075.0), size, screen)));
         // Bigger than the screen: pinned to the top left.
-        assert_eq!(keep_on_screen(Vec2::new(50.0, 50.0), Vec2::new(2000.0, 2000.0), screen), Vec2::splat(CARD_MARGIN));
+        assert_eq!(
+            keep_on_screen(Vec2::new(50.0, 50.0), Vec2::new(2000.0, 2000.0), screen),
+            Vec2::splat(CARD_MARGIN)
+        );
     }
 
     #[test]
@@ -1208,7 +1907,10 @@ mod tests {
             let target = crate::interact::item_target(inventory, id).unwrap();
             key_line(&keymap, &verbs_for(&target, &Delver::default()))
         };
-        assert_eq!(line(&inventory, dagger), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        assert_eq!(
+            line(&inventory, dagger),
+            "F Take \u{b7} G Equip \u{b7} Alt Compare"
+        );
         let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
         inventory.wear(pack, fb_items::Slot::Back).unwrap();
         inventory.stow(bread).unwrap();
@@ -1230,19 +1932,41 @@ mod tests {
             .init_resource::<Assets<Image>>()
             .insert_resource(Inventory::default())
             .add_systems(Update, show_card);
-        let dagger = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Bread", 3).unwrap());
-        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        let dagger = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(fb_items::roll_item("Bread", 3).unwrap());
+        app.world_mut().spawn((
+            ItemCard,
+            Node::default(),
+            Visibility::Hidden,
+            ComputedNode::default(),
+            ComputedUiRenderTargetInfo::default(),
+        ));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
-        app.world_mut().resource_mut::<Hovered>().0 = Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        app.world_mut().resource_mut::<Hovered>().0 =
+            Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));
         let keys = |app: &mut App| {
             let mut texts = app.world_mut().query::<&Text>();
-            texts.iter(app.world()).map(|t| t.0.clone()).collect::<Vec<_>>()
+            texts
+                .iter(app.world())
+                .map(|t| t.0.clone())
+                .collect::<Vec<_>>()
         };
         app.update();
         app.update();
-        assert!(keys(&mut app).iter().any(|t| t == "F "), "{:?}", keys(&mut app));
+        assert!(
+            keys(&mut app).iter().any(|t| t == "F "),
+            "{:?}",
+            keys(&mut app)
+        );
         let mut keymap = app.world_mut().resource_mut::<Keymap>();
-        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        keymap
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::Primary)
+            .unwrap()
+            .inputs = vec![Input::Key(KeyCode::KeyE)];
         app.update();
         app.update();
         let texts = keys(&mut app);
@@ -1274,11 +1998,26 @@ mod tests {
             .init_resource::<crate::carry::Aimed>()
             .insert_resource(inventory)
             .add_systems(Update, show_card);
-        let chest = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Chest", 1).unwrap());
-        let prop = app.world_mut().spawn(crate::props::Container { id: chest, opened: true }).id();
+        let chest = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(fb_items::roll_item("Chest", 1).unwrap());
+        let prop = app
+            .world_mut()
+            .spawn(crate::props::Container {
+                id: chest,
+                opened: true,
+            })
+            .id();
         app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(prop);
         let id = ids(app.world().resource::<Inventory>());
-        app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().spawn((
+            ItemCard,
+            Node::default(),
+            Visibility::Hidden,
+            ComputedNode::default(),
+            ComputedUiRenderTargetInfo::default(),
+        ));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         app.world_mut().resource_mut::<Hovered>().0 = Some((id, Rect::new(0.0, 0.0, 10.0, 10.0)));
         app.update();
@@ -1298,10 +2037,19 @@ mod tests {
         let dagger = inventory.add(fb_items::roll_item("Dagger", 7).unwrap());
         let (b, r, d) = (bread, ring, dagger);
         let texts = card_over(inventory.clone(), |_| b);
-        assert!(texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"), "{texts:?}");
-        assert!(texts.iter().any(|t| t == "\u{b7} X ") && texts.iter().any(|t| t == "Drop"), "{texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "F ") && texts.iter().any(|t| t == "Eat"),
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "\u{b7} X ") && texts.iter().any(|t| t == "Drop"),
+            "{texts:?}"
+        );
         let texts = card_over(inventory.clone(), |_| r);
-        assert!(texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"), "{texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "G ") && texts.iter().any(|t| t == "Take off"),
+            "{texts:?}"
+        );
         // Underfoot, the dagger is taken or equipped.
         let texts = card_over(inventory, |_| d);
         for want in ["F ", "Take", "\u{b7} G ", "Equip", "\u{b7} Alt ", "Compare"] {
@@ -1317,7 +2065,10 @@ mod tests {
         let mut torch = fb_items::roll_item("Spare torch", 3).unwrap();
         torch.shape.set_lit(true).unwrap();
         torch.burn(18.0 * 60.0);
-        assert_eq!(light_line(&torch.shape).unwrap(), "Burning \u{b7} Fuel 0:42 \u{b7} L puts it out");
+        assert_eq!(
+            light_line(&torch.shape).unwrap(),
+            "Burning \u{b7} Fuel 0:42 \u{b7} L puts it out"
+        );
         torch.burn(1.0e6);
         assert_eq!(light_line(&torch.shape).unwrap(), "Spent");
     }

@@ -52,17 +52,34 @@ impl FrameCapturePlugin {
     pub fn frames(path: impl Into<String>, frames: Range<u32>) -> Self {
         let frames = frames.start..frames.end.max(frames.start + 1);
         let exit_frame = frames.end + Self::SETTLE_FRAMES;
-        FrameCapturePlugin { path: path.into(), size: UVec2::new(1920, 1080), frames, every: 1, exit_frame }
+        FrameCapturePlugin {
+            path: path.into(),
+            size: UVec2::new(1920, 1080),
+            frames,
+            every: 1,
+            exit_frame,
+        }
     }
 
     /// The plugin when `FB_SCREENSHOT` is set, saving the frames `FB_SCREENSHOT_FRAMES` names.
     pub fn from_env() -> Option<Self> {
-        let path = std::env::var("FB_SCREENSHOT").ok().filter(|path| !path.is_empty())?;
-        let frames = std::env::var("FB_SCREENSHOT_FRAMES").ok().filter(|f| !f.is_empty());
-        let every = std::env::var("FB_SCREENSHOT_EVERY").ok().and_then(|n| n.trim().parse::<u32>().ok()).unwrap_or(1).max(1);
+        let path = std::env::var("FB_SCREENSHOT")
+            .ok()
+            .filter(|path| !path.is_empty())?;
+        let frames = std::env::var("FB_SCREENSHOT_FRAMES")
+            .ok()
+            .filter(|f| !f.is_empty());
+        let every = std::env::var("FB_SCREENSHOT_EVERY")
+            .ok()
+            .and_then(|n| n.trim().parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1);
         let plugin = match frames.as_deref().map(parse_frames) {
             None => FrameCapturePlugin::new(path),
-            Some(Ok(frames)) => FrameCapturePlugin { every, ..FrameCapturePlugin::frames(path, frames) },
+            Some(Ok(frames)) => FrameCapturePlugin {
+                every,
+                ..FrameCapturePlugin::frames(path, frames)
+            },
             Some(Err(error)) => {
                 warn!("FB_SCREENSHOT_FRAMES: {error}; saving one frame");
                 FrameCapturePlugin::new(path)
@@ -75,12 +92,16 @@ impl FrameCapturePlugin {
             }
             size
         });
-        Some(FrameCapturePlugin { size: size.unwrap_or(plugin.size), ..plugin })
+        Some(FrameCapturePlugin {
+            size: size.unwrap_or(plugin.size),
+            ..plugin
+        })
     }
 
     /// Whether frame `frame` is one to save.
     pub fn saves(&self, frame: u32) -> bool {
-        self.frames.contains(&frame) && (frame - self.frames.start).is_multiple_of(self.every.max(1))
+        self.frames.contains(&frame)
+            && (frame - self.frames.start).is_multiple_of(self.every.max(1))
     }
 
     /// Where frame `frame` is saved: `path` for a single frame, else `path` with `_<frame>`
@@ -90,7 +111,10 @@ impl FrameCapturePlugin {
             return self.path.clone();
         }
         let path = std::path::Path::new(&self.path);
-        let stem = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default();
         let name = match path.extension() {
             Some(ext) => format!("{stem}_{frame}.{}", ext.to_string_lossy()),
             None => format!("{stem}_{frame}"),
@@ -109,7 +133,11 @@ pub fn parse_size(spec: &str) -> Option<UVec2> {
 /// Frames to capture written as a Rust range: `120..136` (120 to 135), `120..=135`, or one
 /// frame, `120`.
 pub fn parse_frames(spec: &str) -> Result<Range<u32>, String> {
-    let number = |s: &str| s.trim().parse::<u32>().map_err(|_| format!("{s:?} is not a frame number"));
+    let number = |s: &str| {
+        s.trim()
+            .parse::<u32>()
+            .map_err(|_| format!("{s:?} is not a frame number"))
+    };
     let range = if let Some((start, end)) = spec.split_once("..=") {
         number(start)?..number(end)? + 1
     } else if let Some((start, end)) = spec.split_once("..") {
@@ -142,7 +170,12 @@ pub struct IgnoreInput;
 
 impl Plugin for IgnoreInput {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, ignore_input.after(InputSystems).before(crate::keymap::HoldSet));
+        app.add_systems(
+            PreUpdate,
+            ignore_input
+                .after(InputSystems)
+                .before(crate::keymap::HoldSet),
+        );
     }
 }
 
@@ -180,20 +213,31 @@ fn retarget_cameras(
     lod_origins: Query<(), With<ShadowLodOrigin>>,
 ) {
     // A camera already drawing to an image (the title's lettering) keeps drawing there.
-    let on_window: Vec<Entity> = cameras.iter().filter(|(_, target)| !matches!(target, Some(RenderTarget::Image(_)))).map(|(camera, _)| camera).collect();
+    let on_window: Vec<Entity> = cameras
+        .iter()
+        .filter(|(_, target)| !matches!(target, Some(RenderTarget::Image(_))))
+        .map(|(camera, _)| camera)
+        .collect();
     if on_window.is_empty() {
         return;
     }
     let image = match target {
         Some(target) => target.0.clone(),
         None => {
-            let image = images.add(Image::new_target_texture(settings.size.x, settings.size.y, TextureFormat::Rgba8Unorm, Some(TextureFormat::Rgba8UnormSrgb)));
+            let image = images.add(Image::new_target_texture(
+                settings.size.x,
+                settings.size.y,
+                TextureFormat::Rgba8Unorm,
+                Some(TextureFormat::Rgba8UnormSrgb),
+            ));
             commands.insert_resource(CaptureTarget(image.clone()));
             image
         }
     };
     for &camera in &on_window {
-        commands.entity(camera).insert(RenderTarget::Image(image.clone().into()));
+        commands
+            .entity(camera)
+            .insert(RenderTarget::Image(image.clone().into()));
     }
     // Point-light shadow LOD otherwise looks for a camera on the window and warns when none is.
     if lod_origins.is_empty()
@@ -213,7 +257,9 @@ fn capture_and_exit(
     let Some(target) = target else { return };
     *frame += 1;
     if settings.saves(*frame) {
-        commands.spawn(Screenshot::image(target.0.clone())).observe(save_to_disk(settings.path_for(*frame)));
+        commands
+            .spawn(Screenshot::image(target.0.clone()))
+            .observe(save_to_disk(settings.path_for(*frame)));
     }
     if *frame == settings.exit_frame {
         exit.write(AppExit::Success);
@@ -245,8 +291,14 @@ mod tests {
     fn a_run_of_frames_numbers_each_file() {
         let one = FrameCapturePlugin::new("out/shot.png");
         assert_eq!(one.path_for(120), "out/shot.png");
-        let sparse = FrameCapturePlugin { every: 30, ..FrameCapturePlugin::frames("shot.png", 100..200) };
-        assert_eq!((100..200).filter(|&f| sparse.saves(f)).collect::<Vec<_>>(), vec![100, 130, 160, 190]);
+        let sparse = FrameCapturePlugin {
+            every: 30,
+            ..FrameCapturePlugin::frames("shot.png", 100..200)
+        };
+        assert_eq!(
+            (100..200).filter(|&f| sparse.saves(f)).collect::<Vec<_>>(),
+            vec![100, 130, 160, 190]
+        );
         let run = FrameCapturePlugin::frames("out/shot.png", 120..136);
         assert_eq!(run.path_for(120), "out/shot_120.png");
         assert_eq!(run.path_for(135), "out/shot_135.png");

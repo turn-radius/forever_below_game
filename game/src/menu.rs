@@ -112,11 +112,21 @@ pub enum Rebinding {
     Idle,
     /// Waiting for a key or button for `slot` of `action`. `fresh` skips the frame of the
     /// click that began it.
-    Capturing { action: Action, slot: usize, fresh: bool },
+    Capturing {
+        action: Action,
+        slot: usize,
+        fresh: bool,
+    },
     /// `input` is in use by `other`; waiting for Swap or Cancel. `swappable` is false when
     /// the swap would leave `other` with no key, or either action sharing a key with another
     /// in some context ([`Keymap::can_swap`]); only Cancel is offered then.
-    Asking { action: Action, slot: usize, input: Input, other: Action, swappable: bool },
+    Asking {
+        action: Action,
+        slot: usize,
+        input: Input,
+        other: Action,
+        swappable: bool,
+    },
 }
 
 /// The group the controls page shows.
@@ -138,7 +148,10 @@ pub struct ControlsView {
 
 impl Default for ControlsView {
     fn default() -> Self {
-        ControlsView { group: ControlsGroup::default().0, rebinding: Rebinding::Idle }
+        ControlsView {
+            group: ControlsGroup::default().0,
+            rebinding: Rebinding::Idle,
+        }
     }
 }
 
@@ -167,7 +180,10 @@ pub struct ButtonInk {
 impl Default for ButtonInk {
     /// The pause menu's: muted tan, cream under the mouse.
     fn default() -> Self {
-        ButtonInk { idle: MUTED, hover: INK }
+        ButtonInk {
+            idle: MUTED,
+            hover: INK,
+        }
     }
 }
 
@@ -220,7 +236,12 @@ impl Plugin for MenuPlugin {
             .init_resource::<ControlsGroup>()
             .init_resource::<OpenChoices>()
             .add_message::<MenuCommand>()
-            .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| capture_page().is_some()))
+            .add_systems(
+                PostStartup,
+                open_for_capture
+                    .run_if(in_state(AppState::Delving))
+                    .run_if(|| capture_page().is_some()),
+            )
             .add_systems(
                 Update,
                 (
@@ -245,16 +266,30 @@ impl Plugin for MenuPlugin {
 
 /// The page `FB_OPEN_MENU` asks for.
 pub fn capture_page() -> Option<MenuPage> {
-    std::env::var("FB_OPEN_MENU").ok().and_then(|name| MenuPage::named(&name))
+    std::env::var("FB_OPEN_MENU")
+        .ok()
+        .and_then(|name| MenuPage::named(&name))
 }
 
-fn open_for_capture(mut open: ResMut<ScreenOpen>, mut page: ResMut<MenuPage>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
+fn open_for_capture(
+    mut open: ResMut<ScreenOpen>,
+    mut page: ResMut<MenuPage>,
+    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+) {
     *page = capture_page().unwrap_or_default();
-    show_screen(&mut open, Some(Screen::Menu), cursor.as_deref_mut().map(|c| &mut **c));
+    show_screen(
+        &mut open,
+        Some(Screen::Menu),
+        cursor.as_deref_mut().map(|c| &mut **c),
+    );
 }
 
 /// Stops the level's clock while the menu is open, and opens it on the main page next time.
-fn pause_while_open(open: Res<ScreenOpen>, time: Option<ResMut<Time<Virtual>>>, mut page: ResMut<MenuPage>) {
+fn pause_while_open(
+    open: Res<ScreenOpen>,
+    time: Option<ResMut<Time<Virtual>>>,
+    mut page: ResMut<MenuPage>,
+) {
     if !open.is_changed() {
         return;
     }
@@ -277,7 +312,10 @@ pub(crate) fn hovered_button<'a>(
     buttons: impl IntoIterator<Item = (&'a MenuButton, &'a ComputedNode, &'a UiGlobalTransform)>,
 ) -> Option<MenuCommand> {
     let point = cursor?;
-    buttons.into_iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)).map(|(button, ..)| button.0)
+    buttons
+        .into_iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+        .map(|(button, ..)| button.0)
 }
 
 /// Whether `button` can be chosen: any, unless a dropdown is open, when only its own box and
@@ -285,7 +323,9 @@ pub(crate) fn hovered_button<'a>(
 fn choosable(open: Option<Setting>, button: &MenuButton) -> bool {
     match open {
         None => true,
-        Some(open) => matches!(button.0, MenuCommand::OpenChoices(s) | MenuCommand::Pick(s, _) if s == open),
+        Some(open) => {
+            matches!(button.0, MenuCommand::OpenChoices(s) | MenuCommand::Pick(s, _) if s == open)
+        }
     }
 }
 
@@ -302,7 +342,10 @@ fn choose_buttons(
     if !input.just_pressed(Action::Choose) {
         return;
     }
-    match hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().filter(|(b, ..)| choosable(open.0, b))) {
+    match hovered_button(
+        window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())),
+        buttons.iter().filter(|(b, ..)| choosable(open.0, b)),
+    ) {
         Some(command) => {
             chosen.write(command);
         }
@@ -323,7 +366,13 @@ fn apply_choices(
 ) {
     for command in chosen.read() {
         match *command {
-            MenuCommand::OpenChoices(setting) => open.0 = if open.0 == Some(setting) { None } else { Some(setting) },
+            MenuCommand::OpenChoices(setting) => {
+                open.0 = if open.0 == Some(setting) {
+                    None
+                } else {
+                    Some(setting)
+                }
+            }
             MenuCommand::Pick(setting, index) => {
                 let mut next = *settings;
                 setting.set(&mut next, index as f32);
@@ -341,7 +390,11 @@ fn apply_choices(
 /// Shows the open dropdown's list and hides the rest.
 fn show_choices(open: Res<OpenChoices>, mut lists: Query<(&SettingChoices, &mut Node)>) {
     for (list, mut node) in &mut lists {
-        let display = if open.0 == Some(list.0) { Display::Flex } else { Display::None };
+        let display = if open.0 == Some(list.0) {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != display {
             node.display = display;
         }
@@ -357,7 +410,9 @@ fn apply_commands(
 ) {
     for command in chosen.read() {
         match *command {
-            MenuCommand::Resume => show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c)),
+            MenuCommand::Resume => {
+                show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c))
+            }
             MenuCommand::Show(shown) => *page = shown,
             MenuCommand::Quit => {
                 exit.write(AppExit::Success);
@@ -387,12 +442,20 @@ fn apply_rebinds(
 ) {
     for command in chosen.read() {
         match *command {
-            MenuCommand::Capture(action, slot) => *rebinding = Rebinding::Capturing { action, slot, fresh: true },
+            MenuCommand::Capture(action, slot) => {
+                *rebinding = Rebinding::Capturing {
+                    action,
+                    slot,
+                    fresh: true,
+                }
+            }
             MenuCommand::ShowGroup(shown) => {
                 group.0 = shown;
                 *rebinding = Rebinding::Idle;
             }
-            MenuCommand::Show(_) | MenuCommand::Resume | MenuCommand::KeepKeys => *rebinding = Rebinding::Idle,
+            MenuCommand::Show(_) | MenuCommand::Resume | MenuCommand::KeepKeys => {
+                *rebinding = Rebinding::Idle
+            }
             // Each of these cancels an open capture or swap prompt.
             MenuCommand::ResetKeys(action) => {
                 keymap.reset(action);
@@ -413,13 +476,28 @@ fn apply_rebinds(
                 *rebinding = Rebinding::Idle;
             }
             MenuCommand::SwapKeys => {
-                if let Rebinding::Asking { action, slot, input, other, swappable: true } = *rebinding {
+                if let Rebinding::Asking {
+                    action,
+                    slot,
+                    input,
+                    other,
+                    swappable: true,
+                } = *rebinding
+                {
                     keymap.swap(action, slot, input, other);
                     save_keymap(&keymap, file.as_deref());
                     *rebinding = Rebinding::Idle;
                 }
             }
-            MenuCommand::Quit | MenuCommand::NewDelve | MenuCommand::Continue | MenuCommand::ResumeDelve | MenuCommand::AskReplace(_) | MenuCommand::KeepSave | MenuCommand::Creator(_) | MenuCommand::OpenChoices(_) | MenuCommand::Pick(..) => {}
+            MenuCommand::Quit
+            | MenuCommand::NewDelve
+            | MenuCommand::Continue
+            | MenuCommand::ResumeDelve
+            | MenuCommand::AskReplace(_)
+            | MenuCommand::KeepSave
+            | MenuCommand::Creator(_)
+            | MenuCommand::OpenChoices(_)
+            | MenuCommand::Pick(..) => {}
         }
     }
 }
@@ -435,23 +513,41 @@ fn capture_input(
     file: Option<Res<KeybindingsFile>>,
     inspector: Option<Res<crate::inspect::InspectorOpen>>,
 ) {
-    let Rebinding::Capturing { action, slot, fresh } = *rebinding else { return };
+    let Rebinding::Capturing {
+        action,
+        slot,
+        fresh,
+    } = *rebinding
+    else {
+        return;
+    };
     // The debug inspector has the keyboard while it is open.
     if inspector.is_some_and(|i| i.0) {
         return;
     }
     if fresh {
-        *rebinding = Rebinding::Capturing { action, slot, fresh: false };
+        *rebinding = Rebinding::Capturing {
+            action,
+            slot,
+            fresh: false,
+        };
         return;
     }
-    if keys.as_deref().is_some_and(|k| k.just_pressed(KeyCode::Escape)) {
+    if keys
+        .as_deref()
+        .is_some_and(|k| k.just_pressed(KeyCode::Escape))
+    {
         *rebinding = Rebinding::Idle;
         return;
     }
     let pressed = keys
         .as_deref()
         .and_then(|k| k.get_just_pressed().next().copied().map(Input::Key))
-        .or_else(|| mouse.as_deref().and_then(|m| m.get_just_pressed().next().copied().map(Input::Mouse)));
+        .or_else(|| {
+            mouse
+                .as_deref()
+                .and_then(|m| m.get_just_pressed().next().copied().map(Input::Mouse))
+        });
     let Some(input) = pressed else { return };
     let Some(binding) = keymap.binding(action) else {
         *rebinding = Rebinding::Idle;
@@ -459,7 +555,11 @@ fn capture_input(
     };
     // Already one of this action's keys: in the other slot, the two slots trade places.
     let sides = input.sides();
-    if let Some(held) = binding.slots().iter().position(|s| s.iter().any(|i| sides.contains(i))) {
+    if let Some(held) = binding
+        .slots()
+        .iter()
+        .position(|s| s.iter().any(|i| sides.contains(i)))
+    {
         if held != slot {
             keymap.exchange_slots(action, slot, held);
             save_keymap(&keymap, file.as_deref());
@@ -475,18 +575,31 @@ fn capture_input(
         }
         Some(other) => {
             let swappable = keymap.can_swap(action, slot, input, other);
-            *rebinding = Rebinding::Asking { action, slot, input, other, swappable };
+            *rebinding = Rebinding::Asking {
+                action,
+                slot,
+                input,
+                other,
+                swappable,
+            };
         }
     }
 }
 
 /// Lets [`ActionInput`] know a key is being captured, and drops any rebinding when the menu
 /// closes.
-fn sync_capture(open: Res<ScreenOpen>, mut rebinding: ResMut<Rebinding>, mut capture: ResMut<InputCapture>) {
+fn sync_capture(
+    open: Res<ScreenOpen>,
+    mut rebinding: ResMut<Rebinding>,
+    mut capture: ResMut<InputCapture>,
+) {
     if !open.is(Screen::Menu) {
         rebinding.set_if_neq(Rebinding::Idle);
     }
-    capture.set_if_neq(InputCapture(matches!(*rebinding, Rebinding::Capturing { .. })));
+    capture.set_if_neq(InputCapture(matches!(
+        *rebinding,
+        Rebinding::Capturing { .. }
+    )));
 }
 
 /// One line of the controls list: an action, its name and its keys ("Right click").
@@ -496,7 +609,15 @@ pub type ControlLine = (Action, &'static str, String);
 pub fn controls(keymap: &Keymap) -> Vec<(Group, Vec<ControlLine>)> {
     Group::ALL
         .iter()
-        .map(|&group| (group, keymap.in_group(group).map(|b| (b.action, b.name, b.labels().join(" or "))).collect()))
+        .map(|&group| {
+            (
+                group,
+                keymap
+                    .in_group(group)
+                    .map(|b| (b.action, b.name, b.labels().join(" or ")))
+                    .collect(),
+            )
+        })
         .collect()
 }
 
@@ -521,11 +642,19 @@ fn build_menu(
         }
         return;
     }
-    if existing.is_some() && !open.is_changed() && !page.is_changed() && !keymap.is_changed() && !group.is_changed() && !rebinding.is_changed() {
+    if existing.is_some()
+        && !open.is_changed()
+        && !page.is_changed()
+        && !keymap.is_changed()
+        && !group.is_changed()
+        && !rebinding.is_changed()
+    {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD and inventory are.
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     if let Some(menu) = existing {
         commands.entity(menu).despawn();
     }
@@ -548,15 +677,51 @@ fn build_menu(
             GlobalZIndex(20),
         ))
         .with_children(|root| {
-            root.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(18), width: px(MENU_PX), ..default() })
-                .with_children(|menu| menu_page(menu, &fonts, *page, &keymap, &settings, &ControlsView { group: group.0, rebinding: *rebinding }));
+            root.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: px(18),
+                width: px(MENU_PX),
+                ..default()
+            })
+            .with_children(|menu| {
+                menu_page(
+                    menu,
+                    &fonts,
+                    *page,
+                    &keymap,
+                    &settings,
+                    &ControlsView {
+                        group: group.0,
+                        rebinding: *rebinding,
+                    },
+                )
+            });
         });
 }
 
 /// A page of the menu under the game's name and a rule, into a column `MENU_PX` wide.
-pub fn menu_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, page: MenuPage, keymap: &Keymap, settings: &GameSettings, controls: &ControlsView) {
-    menu.spawn((Text::new("Forever Below"), UiFonts::style(&fonts.display, 54.0, INK)));
-    menu.spawn((Node { width: percent(100), height: px(1), margin: UiRect::bottom(px(10)), ..default() }, BackgroundColor(FAINT)));
+pub fn menu_page(
+    menu: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    page: MenuPage,
+    keymap: &Keymap,
+    settings: &GameSettings,
+    controls: &ControlsView,
+) {
+    menu.spawn((
+        Text::new("Forever Below"),
+        UiFonts::style(&fonts.display, 54.0, INK),
+    ));
+    menu.spawn((
+        Node {
+            width: percent(100),
+            height: px(1),
+            margin: UiRect::bottom(px(10)),
+            ..default()
+        },
+        BackgroundColor(FAINT),
+    ));
     match page {
         MenuPage::Main => main_page(menu, fonts),
         MenuPage::Controls => controls_page(menu, fonts, keymap, controls),
@@ -565,14 +730,37 @@ pub fn menu_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, page: MenuPag
 }
 
 /// A button: a word in the body face, muted until the mouse is over it.
-fn button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: MenuCommand, size: f32) {
-    parent.spawn((MenuButton(command), Node { padding: UiRect::axes(px(18), px(4)), ..default() })).with_children(|b| {
-        b.spawn((Text::new(label), UiFonts::style(&fonts.body_medium, size, MUTED)));
-    });
+fn button(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    command: MenuCommand,
+    size: f32,
+) {
+    parent
+        .spawn((
+            MenuButton(command),
+            Node {
+                padding: UiRect::axes(px(18), px(4)),
+                ..default()
+            },
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new(label),
+                UiFonts::style(&fonts.body_medium, size, MUTED),
+            ));
+        });
 }
 
 fn main_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts) {
-    menu.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(6), ..default() }).with_children(|list| {
+    menu.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        align_items: AlignItems::Center,
+        row_gap: px(6),
+        ..default()
+    })
+    .with_children(|list| {
         for (label, command) in [
             ("Resume", MenuCommand::Resume),
             ("Controls", MenuCommand::Show(MenuPage::Controls)),
@@ -586,20 +774,38 @@ fn main_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts) {
 
 /// A page's heading, in the display face, as the inventory's is.
 fn heading(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &str) {
-    menu.spawn(Node { width: percent(100), ..default() }).with_child((Text::new(text), UiFonts::style(&fonts.display, 26.0, INK)));
+    menu.spawn(Node {
+        width: percent(100),
+        ..default()
+    })
+    .with_child((Text::new(text), UiFonts::style(&fonts.display, 26.0, INK)));
 }
 
 fn back_button(menu: &mut ChildSpawnerCommands, fonts: &UiFonts) {
-    menu.spawn(Node { margin: UiRect::top(px(8)), ..default() }).with_children(|row| button(row, fonts, "Back", MenuCommand::Show(MenuPage::Main), 20.0));
+    menu.spawn(Node {
+        margin: UiRect::top(px(8)),
+        ..default()
+    })
+    .with_children(|row| button(row, fonts, "Back", MenuCommand::Show(MenuPage::Main), 20.0));
 }
 
 /// A small bordered button for a key slot or a choice on the controls page: `ink` at rest,
 /// cream under the mouse.
-fn key_button(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: MenuCommand, width: f32, ink: Color) {
+fn key_button(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    command: MenuCommand,
+    width: f32,
+    ink: Color,
+) {
     parent
         .spawn((
             MenuButton(command),
-            ButtonInk { idle: ink, hover: INK },
+            ButtonInk {
+                idle: ink,
+                hover: INK,
+            },
             Node {
                 width: px(width),
                 padding: UiRect::axes(px(6), px(2)),
@@ -621,7 +827,12 @@ const SLOT_PX: f32 = 110.0;
 
 /// One line of the controls page: the action's name, its key slots as buttons (or its keys as
 /// text when they can't be rebound) and, once changed, a Reset.
-fn control_row(list: &mut ChildSpawnerCommands, fonts: &UiFonts, binding: &Binding, view: &ControlsView) {
+fn control_row(
+    list: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    binding: &Binding,
+    view: &ControlsView,
+) {
     list.spawn((
         ControlRow(binding.action),
         Node { align_items: AlignItems::Center, column_gap: px(8), border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(3)), ..default() },
@@ -648,15 +859,38 @@ fn control_row(list: &mut ChildSpawnerCommands, fonts: &UiFonts, binding: &Bindi
     });
 }
 
-fn controls_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keymap, view: &ControlsView) {
+fn controls_page(
+    menu: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    keymap: &Keymap,
+    view: &ControlsView,
+) {
     heading(menu, fonts, "controls");
-    menu.spawn(Node { width: percent(100), column_gap: px(8), ..default() }).with_children(|tabs| {
+    menu.spawn(Node {
+        width: percent(100),
+        column_gap: px(8),
+        ..default()
+    })
+    .with_children(|tabs| {
         for group in Group::ALL {
             let ink = if group == view.group { INK } else { MUTED };
-            key_button(tabs, fonts, group.name(), MenuCommand::ShowGroup(group), 96.0, ink);
+            key_button(
+                tabs,
+                fonts,
+                group.name(),
+                MenuCommand::ShowGroup(group),
+                96.0,
+                ink,
+            );
         }
     });
-    menu.spawn(Node { flex_direction: FlexDirection::Column, width: percent(100), row_gap: px(6), ..default() }).with_children(|list| {
+    menu.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        width: percent(100),
+        row_gap: px(6),
+        ..default()
+    })
+    .with_children(|list| {
         for binding in keymap.in_group(view.group) {
             control_row(list, fonts, binding, view);
         }
@@ -665,20 +899,57 @@ fn controls_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keym
                 CrouchMode::Hold => "Hold",
                 CrouchMode::Toggle => "Toggle",
             };
-            list.spawn((Node { align_items: AlignItems::Center, column_gap: px(8), border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(3)), ..default() }, BorderColor::all(FAINT)))
-                .with_children(|row| {
-                    row.spawn((Text::new("Crouch while the key is"), UiFonts::style(&fonts.body, 16.0, MUTED), Node { flex_grow: 1.0, flex_basis: px(0), ..default() }));
-                    key_button(row, fonts, mode, MenuCommand::ToggleCrouch, SLOT_PX, BRIGHT);
-                    row.spawn(Node { width: px(52), ..default() });
+            list.spawn((
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    border: UiRect::bottom(px(1)),
+                    padding: UiRect::bottom(px(3)),
+                    ..default()
+                },
+                BorderColor::all(FAINT),
+            ))
+            .with_children(|row| {
+                row.spawn((
+                    Text::new("Crouch while the key is"),
+                    UiFonts::style(&fonts.body, 16.0, MUTED),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        ..default()
+                    },
+                ));
+                key_button(row, fonts, mode, MenuCommand::ToggleCrouch, SLOT_PX, BRIGHT);
+                row.spawn(Node {
+                    width: px(52),
+                    ..default()
                 });
+            });
         }
     });
     match view.rebinding {
-        Rebinding::Asking { input, other, swappable, .. } => {
+        Rebinding::Asking {
+            input,
+            other,
+            swappable,
+            ..
+        } => {
             let name = keymap.binding(other).map_or("another action", |b| b.name);
-            let question = if swappable { format!("{} is {}. Swap?", input.label(), name) } else { format!("{} is {}, and can't be swapped.", input.label(), name) };
-            menu.spawn(Node { align_items: AlignItems::Center, column_gap: px(14), ..default() }).with_children(|ask| {
-                ask.spawn((Text::new(question), UiFonts::style(&fonts.body_italic, 17.0, INK)));
+            let question = if swappable {
+                format!("{} is {}. Swap?", input.label(), name)
+            } else {
+                format!("{} is {}, and can't be swapped.", input.label(), name)
+            };
+            menu.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: px(14),
+                ..default()
+            })
+            .with_children(|ask| {
+                ask.spawn((
+                    Text::new(question),
+                    UiFonts::style(&fonts.body_italic, 17.0, INK),
+                ));
                 if swappable {
                     button(ask, fonts, "Swap", MenuCommand::SwapKeys, 20.0);
                 }
@@ -686,47 +957,94 @@ fn controls_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keym
             });
         }
         Rebinding::Capturing { .. } => {
-            menu.spawn((Text::new("Press a key or button. Esc cancels."), UiFonts::style(&fonts.body_italic, 15.0, MUTED)));
+            menu.spawn((
+                Text::new("Press a key or button. Esc cancels."),
+                UiFonts::style(&fonts.body_italic, 15.0, MUTED),
+            ));
         }
         Rebinding::Idle => {}
     }
-    menu.spawn(Node { column_gap: px(24), margin: UiRect::top(px(8)), ..default() }).with_children(|row| {
+    menu.spawn(Node {
+        column_gap: px(24),
+        margin: UiRect::top(px(8)),
+        ..default()
+    })
+    .with_children(|row| {
         button(row, fonts, "Reset all", MenuCommand::ResetAllKeys, 20.0);
         button(row, fonts, "Back", MenuCommand::Show(MenuPage::Main), 20.0);
     });
 }
 
-fn settings_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keymap, settings: &GameSettings) {
+fn settings_page(
+    menu: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    keymap: &Keymap,
+    settings: &GameSettings,
+) {
     heading(menu, fonts, "settings");
-    menu.spawn(Node { flex_direction: FlexDirection::Column, width: percent(100), row_gap: px(10), ..default() }).with_children(|list| {
+    menu.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        width: percent(100),
+        row_gap: px(10),
+        ..default()
+    })
+    .with_children(|list| {
         for setting in Setting::ALL {
-            list.spawn(Node { align_items: AlignItems::Center, column_gap: px(20), border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(8)), ..default() })
-                .insert(BorderColor::all(FAINT))
-                .with_children(|row| {
-                    row.spawn((Text::new(setting.name()), UiFonts::style(&fonts.body, 17.0, MUTED), Node { width: px(200), ..default() }));
-                    if let Some(choices) = setting.choices() {
-                        dropdown(row, fonts, setting, &choices, settings);
-                        return;
-                    }
-                    match setting.range() {
-                        Some(_) => slider(row, setting, setting.fraction(settings)),
-                        None => toggle(row, setting, setting.fraction(settings) >= 0.5),
-                    }
-                    row.spawn((
-                        SettingValue(setting),
-                        Text::new(setting.shown(settings)),
-                        UiFonts::style(&fonts.mono, 15.0, BRIGHT),
-                        TextLayout::justify(Justify::Right),
-                        Node { flex_grow: 1.0, ..default() },
-                    ));
-                });
+            list.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: px(20),
+                border: UiRect::bottom(px(1)),
+                padding: UiRect::bottom(px(8)),
+                ..default()
+            })
+            .insert(BorderColor::all(FAINT))
+            .with_children(|row| {
+                row.spawn((
+                    Text::new(setting.name()),
+                    UiFonts::style(&fonts.body, 17.0, MUTED),
+                    Node {
+                        width: px(200),
+                        ..default()
+                    },
+                ));
+                if let Some(choices) = setting.choices() {
+                    dropdown(row, fonts, setting, &choices, settings);
+                    return;
+                }
+                match setting.range() {
+                    Some(_) => slider(row, setting, setting.fraction(settings)),
+                    None => toggle(row, setting, setting.fraction(settings) >= 0.5),
+                }
+                row.spawn((
+                    SettingValue(setting),
+                    Text::new(setting.shown(settings)),
+                    UiFonts::style(&fonts.mono, 15.0, BRIGHT),
+                    TextLayout::justify(Justify::Right),
+                    Node {
+                        flex_grow: 1.0,
+                        ..default()
+                    },
+                ));
+            });
         }
     });
-    let keys = |action| keymap.binding(action).map(|b| b.labels().join(" or ")).unwrap_or_default();
+    let keys = |action| {
+        keymap
+            .binding(action)
+            .map(|b| b.labels().join(" or "))
+            .unwrap_or_default()
+    };
     menu.spawn((
-        Node { width: percent(100), ..default() },
+        Node {
+            width: percent(100),
+            ..default()
+        },
         children![(
-            Text::new(format!("The music also turns down and up with {} and {}.", keys(Action::MusicQuieter), keys(Action::MusicLouder))),
+            Text::new(format!(
+                "The music also turns down and up with {} and {}.",
+                keys(Action::MusicQuieter),
+                keys(Action::MusicLouder)
+            )),
             UiFonts::style(&fonts.body_italic, 15.0, MUTED),
         )],
     ));
@@ -736,13 +1054,37 @@ fn settings_page(menu: &mut ChildSpawnerCommands, fonts: &UiFonts, keymap: &Keym
 /// A slider in the ledger's colours: a cell-dark bar ruled in tan, filled to its value in muted
 /// tan, with a cream knob. The node is taller than the bar so it is easy to catch.
 fn slider(row: &mut ChildSpawnerCommands, setting: Setting, fraction: f32) {
-    row.spawn((SettingControl(setting), Node { width: px(SLIDER_PX), height: px(22), align_items: AlignItems::Center, ..default() })).with_children(|bar| {
+    row.spawn((
+        SettingControl(setting),
+        Node {
+            width: px(SLIDER_PX),
+            height: px(22),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+    ))
+    .with_children(|bar| {
         bar.spawn((
-            Node { width: percent(100), height: px(6), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() },
+            Node {
+                width: percent(100),
+                height: px(6),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
             BackgroundColor(CELL),
             BorderColor::all(LINE),
         ))
-        .with_child((SettingFill(setting), Node { width: percent(fraction * 100.0), height: percent(100), border_radius: BorderRadius::all(px(3)), ..default() }, BackgroundColor(MUTED)));
+        .with_child((
+            SettingFill(setting),
+            Node {
+                width: percent(fraction * 100.0),
+                height: percent(100),
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
+            BackgroundColor(MUTED),
+        ));
         bar.spawn((
             SettingKnob(setting),
             Node {
@@ -764,12 +1106,25 @@ fn slider(row: &mut ChildSpawnerCommands, setting: Setting, fraction: f32) {
 /// A dropdown: a box ruled in tan showing the choice, as wide as a slider, over its list of
 /// choices (hidden until opened, [`show_choices`]). The list is drawn above the rest of the
 /// menu, the choice in cream and the others muted ([`show_settings`]).
-fn dropdown(row: &mut ChildSpawnerCommands, fonts: &UiFonts, setting: Setting, choices: &[String], settings: &GameSettings) {
+fn dropdown(
+    row: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    setting: Setting,
+    choices: &[String],
+    settings: &GameSettings,
+) {
     let chosen = setting.get(settings) as usize;
-    row.spawn(Node { width: px(SLIDER_PX), ..default() }).with_children(|cell| {
+    row.spawn(Node {
+        width: px(SLIDER_PX),
+        ..default()
+    })
+    .with_children(|cell| {
         cell.spawn((
             MenuButton(MenuCommand::OpenChoices(setting)),
-            ButtonInk { idle: BRIGHT, hover: INK },
+            ButtonInk {
+                idle: BRIGHT,
+                hover: INK,
+            },
             Node {
                 width: percent(100),
                 padding: UiRect::axes(px(8), px(2)),
@@ -782,12 +1137,30 @@ fn dropdown(row: &mut ChildSpawnerCommands, fonts: &UiFonts, setting: Setting, c
             BorderColor::all(LINE),
         ))
         .with_children(|b| {
-            b.spawn((SettingValue(setting), Text::new(setting.shown(settings)), UiFonts::style(&fonts.mono, 15.0, BRIGHT)));
+            b.spawn((
+                SettingValue(setting),
+                Text::new(setting.shown(settings)),
+                UiFonts::style(&fonts.mono, 15.0, BRIGHT),
+            ));
             // A chevron: two sides of a small square, turned to point down.
             b.spawn((
-                Node { width: px(6), height: px(6), align_self: AlignSelf::Center, margin: UiRect::bottom(px(3)), border: UiRect { right: px(1.5), bottom: px(1.5), ..default() }, ..default() },
+                Node {
+                    width: px(6),
+                    height: px(6),
+                    align_self: AlignSelf::Center,
+                    margin: UiRect::bottom(px(3)),
+                    border: UiRect {
+                        right: px(1.5),
+                        bottom: px(1.5),
+                        ..default()
+                    },
+                    ..default()
+                },
                 BorderColor::all(BRIGHT),
-                UiTransform { rotation: Rot2::degrees(45.0), ..default() },
+                UiTransform {
+                    rotation: Rot2::degrees(45.0),
+                    ..default()
+                },
             ));
         });
         cell.spawn((
@@ -810,8 +1183,21 @@ fn dropdown(row: &mut ChildSpawnerCommands, fonts: &UiFonts, setting: Setting, c
         .with_children(|list| {
             for (index, choice) in choices.iter().enumerate() {
                 let ink = if index == chosen { INK } else { MUTED };
-                list.spawn((MenuButton(MenuCommand::Pick(setting, index)), ButtonInk { idle: ink, hover: INK }, Node { padding: UiRect::axes(px(8), px(1)), ..default() }))
-                    .with_child((Text::new(choice.clone()), UiFonts::style(&fonts.mono, 15.0, ink)));
+                list.spawn((
+                    MenuButton(MenuCommand::Pick(setting, index)),
+                    ButtonInk {
+                        idle: ink,
+                        hover: INK,
+                    },
+                    Node {
+                        padding: UiRect::axes(px(8), px(1)),
+                        ..default()
+                    },
+                ))
+                .with_child((
+                    Text::new(choice.clone()),
+                    UiFonts::style(&fonts.mono, 15.0, ink),
+                ));
             }
         });
     });
@@ -819,7 +1205,16 @@ fn dropdown(row: &mut ChildSpawnerCommands, fonts: &UiFonts, setting: Setting, c
 
 /// A toggle: a small box ruled in tan, with a cream mark when on.
 fn toggle(row: &mut ChildSpawnerCommands, setting: Setting, on: bool) {
-    row.spawn((SettingControl(setting), Node { width: px(SLIDER_PX), height: px(22), align_items: AlignItems::Center, ..default() })).with_children(|cell| {
+    row.spawn((
+        SettingControl(setting),
+        Node {
+            width: px(SLIDER_PX),
+            height: px(22),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+    ))
+    .with_children(|cell| {
         cell.spawn((
             Node {
                 width: px(20),
@@ -835,9 +1230,18 @@ fn toggle(row: &mut ChildSpawnerCommands, setting: Setting, on: bool) {
         ))
         .with_child((
             SettingFill(setting),
-            Node { width: px(10), height: px(10), border_radius: BorderRadius::all(px(2)), ..default() },
+            Node {
+                width: px(10),
+                height: px(10),
+                border_radius: BorderRadius::all(px(2)),
+                ..default()
+            },
             BackgroundColor(INK),
-            if on { Visibility::Inherited } else { Visibility::Hidden },
+            if on {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
         ));
     });
 }
@@ -867,12 +1271,16 @@ fn adjust_settings(
         *held = None;
         return;
     }
-    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
+    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else {
+        return;
+    };
     let mut next = *settings;
     // An open dropdown's list lies over the controls below it and takes the click.
     if input.just_pressed(Action::Choose)
         && open.0.is_none()
-        && let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point))
+        && let Some((control, ..)) = controls
+            .iter()
+            .find(|(_, node, transform)| node_rect(node, transform).contains(point))
     {
         match control.0.range() {
             Some(_) => *held = Some(control.0),
@@ -885,7 +1293,10 @@ fn adjust_settings(
     if let Some(setting) = *held
         && let Some((_, node, transform)) = controls.iter().find(|(c, ..)| c.0 == setting)
     {
-        setting.set_fraction(&mut next, fraction_along(node_rect(node, transform), point.x));
+        setting.set_fraction(
+            &mut next,
+            fraction_along(node_rect(node, transform), point.x),
+        );
     }
     settings.set_if_neq(next);
 }
@@ -904,7 +1315,11 @@ fn show_settings(
     }
     for (button, mut ink) in &mut choices {
         if let MenuCommand::Pick(setting, index) = button.0 {
-            let idle = if setting.get(&settings) as usize == index { INK } else { MUTED };
+            let idle = if setting.get(&settings) as usize == index {
+                INK
+            } else {
+                MUTED
+            };
             if ink.idle != idle {
                 ink.idle = idle;
             }
@@ -918,7 +1333,11 @@ fn show_settings(
                 node.width = width;
             }
         } else {
-            visibility.set_if_neq(if fraction >= 0.5 { Visibility::Inherited } else { Visibility::Hidden });
+            visibility.set_if_neq(if fraction >= 0.5 {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
         }
     }
     for (knob, mut node) in &mut knobs {
@@ -939,14 +1358,30 @@ fn show_settings(
 pub(crate) fn light_hovered(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
-    buttons: Query<(&MenuButton, &ButtonInk, &ComputedNode, &UiGlobalTransform, &Children)>,
+    buttons: Query<(
+        &MenuButton,
+        &ButtonInk,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &Children,
+    )>,
     open: Option<Res<OpenChoices>>,
     mut colours: Query<&mut TextColor>,
 ) {
     let open = open.and_then(|o| o.0);
-    let over = hovered_button(window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())), buttons.iter().filter(|(b, ..)| choosable(open, b)).map(|(b, _, n, t, _)| (b, n, t)));
+    let over = hovered_button(
+        window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())),
+        buttons
+            .iter()
+            .filter(|(b, ..)| choosable(open, b))
+            .map(|(b, _, n, t, _)| (b, n, t)),
+    );
     for (button, ink, _, _, children) in &buttons {
-        let colour = if over == Some(button.0) { ink.hover } else { ink.idle };
+        let colour = if over == Some(button.0) {
+            ink.hover
+        } else {
+            ink.idle
+        };
         for child in children {
             if let Ok(mut text) = colours.get_mut(*child) {
                 text.set_if_neq(TextColor(colour));
@@ -968,13 +1403,18 @@ mod tests {
             .init_resource::<crate::play::SheetTab>()
             .add_systems(Update, switch_screens)
             .add_plugins(MenuPlugin);
-        app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
-        app.world_mut().spawn((Window::default(), CursorOptions::default(), PrimaryWindow));
+        app.world_mut().spawn(ViewModelCamera {
+            follows: Entity::PLACEHOLDER,
+        });
+        app.world_mut()
+            .spawn((Window::default(), CursorOptions::default(), PrimaryWindow));
         app
     }
 
     fn press(app: &mut App, key: KeyCode) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
         app.update();
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(key);
@@ -1026,7 +1466,11 @@ mod tests {
         assert_eq!(open(&app), None);
         assert!(grabbed(&mut app));
         press(&mut app, KeyCode::Escape);
-        assert_eq!(*app.world().resource::<MenuPage>(), MenuPage::Main, "it opens on the main page again");
+        assert_eq!(
+            *app.world().resource::<MenuPage>(),
+            MenuPage::Main,
+            "it opens on the main page again"
+        );
     }
 
     #[test]
@@ -1035,7 +1479,11 @@ mod tests {
         press(&mut app, KeyCode::Escape);
         choose(&mut app, MenuCommand::Quit);
         let exits = app.world().resource::<Messages<AppExit>>();
-        assert!(exits.iter_current_update_messages().any(|e| *e == AppExit::Success));
+        assert!(
+            exits
+                .iter_current_update_messages()
+                .any(|e| *e == AppExit::Success)
+        );
     }
 
     #[test]
@@ -1051,23 +1499,43 @@ mod tests {
     #[test]
     fn the_settings_page_shows_every_setting_and_follows_the_keys() {
         let mut app = menu_app();
-        app.add_systems(Update, crate::audio::turn_music_volume.before(switch_screens));
+        app.add_systems(
+            Update,
+            crate::audio::turn_music_volume.before(switch_screens),
+        );
         press(&mut app, KeyCode::Escape);
         choose(&mut app, MenuCommand::Show(MenuPage::Settings));
         app.update();
         let mut controls = app.world_mut().query::<&SettingControl>();
-        let sliders_and_toggles: Vec<Setting> = Setting::ALL.into_iter().filter(|s| s.choices().is_none()).collect();
-        assert_eq!(controls.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(), sliders_and_toggles);
+        let sliders_and_toggles: Vec<Setting> = Setting::ALL
+            .into_iter()
+            .filter(|s| s.choices().is_none())
+            .collect();
+        assert_eq!(
+            controls.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(),
+            sliders_and_toggles
+        );
         let mut dropdowns = app.world_mut().query::<&SettingChoices>();
-        assert_eq!(dropdowns.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(), vec![Setting::Resolution]);
+        assert_eq!(
+            dropdowns.iter(app.world()).map(|c| c.0).collect::<Vec<_>>(),
+            vec![Setting::Resolution]
+        );
         let shown = |app: &mut App, setting: Setting| {
             let mut values = app.world_mut().query::<(&SettingValue, &Text)>();
-            values.iter(app.world()).find(|(v, _)| v.0 == setting).map(|(_, t)| t.0.clone()).unwrap()
+            values
+                .iter(app.world())
+                .find(|(v, _)| v.0 == setting)
+                .map(|(_, t)| t.0.clone())
+                .unwrap()
         };
         assert_eq!(shown(&mut app, Setting::MusicVolume), "100%");
         assert_eq!(shown(&mut app, Setting::Fullscreen), "Off");
         press(&mut app, KeyCode::Minus);
-        assert_eq!(shown(&mut app, Setting::MusicVolume), "90%", "minus still turns the music down, and the page shows it");
+        assert_eq!(
+            shown(&mut app, Setting::MusicVolume),
+            "90%",
+            "minus still turns the music down, and the page shows it"
+        );
         app.world_mut().resource_mut::<GameSettings>().fullscreen = true;
         app.update();
         assert_eq!(shown(&mut app, Setting::Fullscreen), "On");
@@ -1081,32 +1549,74 @@ mod tests {
         app.update();
         let shown_list = |app: &mut App| {
             let mut lists = app.world_mut().query::<(&SettingChoices, &Node)>();
-            lists.iter(app.world()).filter(|(c, n)| c.0 == Setting::Resolution && n.display != Display::None).count()
+            lists
+                .iter(app.world())
+                .filter(|(c, n)| c.0 == Setting::Resolution && n.display != Display::None)
+                .count()
         };
         let mut picks = app.world_mut().query::<&MenuButton>();
-        let offered = picks.iter(app.world()).filter(|b| matches!(b.0, MenuCommand::Pick(Setting::Resolution, _))).count();
+        let offered = picks
+            .iter(app.world())
+            .filter(|b| matches!(b.0, MenuCommand::Pick(Setting::Resolution, _)))
+            .count();
         assert_eq!(offered, Setting::Resolution.choices().unwrap().len());
         assert_eq!(shown_list(&mut app), 0, "closed until opened");
 
         choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
-        assert_eq!(app.world().resource::<OpenChoices>().0, Some(Setting::Resolution));
+        assert_eq!(
+            app.world().resource::<OpenChoices>().0,
+            Some(Setting::Resolution)
+        );
         assert_eq!(shown_list(&mut app), 1);
-        assert!(!choosable(Some(Setting::Resolution), &MenuButton(MenuCommand::Show(MenuPage::Main))), "the list covers Back");
+        assert!(
+            !choosable(
+                Some(Setting::Resolution),
+                &MenuButton(MenuCommand::Show(MenuPage::Main))
+            ),
+            "the list covers Back"
+        );
 
-        let index = crate::settings::RESOLUTIONS.iter().position(|&r| r == [1920, 1080]).unwrap() + 1;
+        let index = crate::settings::RESOLUTIONS
+            .iter()
+            .position(|&r| r == [1920, 1080])
+            .unwrap()
+            + 1;
         choose(&mut app, MenuCommand::Pick(Setting::Resolution, index));
-        assert_eq!(app.world().resource::<GameSettings>().resolution, Some([1920, 1080]));
-        assert_eq!(app.world().resource::<OpenChoices>().0, None, "picking closes it");
+        assert_eq!(
+            app.world().resource::<GameSettings>().resolution,
+            Some([1920, 1080])
+        );
+        assert_eq!(
+            app.world().resource::<OpenChoices>().0,
+            None,
+            "picking closes it"
+        );
         assert_eq!(shown_list(&mut app), 0);
         let mut values = app.world_mut().query::<(&SettingValue, &Text)>();
-        assert_eq!(values.iter(app.world()).find(|(v, _)| v.0 == Setting::Resolution).unwrap().1.0, "1920\u{d7}1080");
+        assert_eq!(
+            values
+                .iter(app.world())
+                .find(|(v, _)| v.0 == Setting::Resolution)
+                .unwrap()
+                .1
+                .0,
+            "1920\u{d7}1080"
+        );
 
         choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
         choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
-        assert_eq!(app.world().resource::<OpenChoices>().0, None, "its box closes it again");
+        assert_eq!(
+            app.world().resource::<OpenChoices>().0,
+            None,
+            "its box closes it again"
+        );
         choose(&mut app, MenuCommand::OpenChoices(Setting::Resolution));
         choose(&mut app, MenuCommand::Show(MenuPage::Main));
-        assert_eq!(app.world().resource::<OpenChoices>().0, None, "leaving the page closes it");
+        assert_eq!(
+            app.world().resource::<OpenChoices>().0,
+            None,
+            "leaving the page closes it"
+        );
     }
 
     #[test]
@@ -1115,17 +1625,36 @@ mod tests {
         press(&mut app, KeyCode::Escape);
         let mut buttons = app.world_mut().query::<&MenuButton>();
         let shown: Vec<MenuCommand> = buttons.iter(app.world()).map(|b| b.0).collect();
-        assert_eq!(shown, vec![MenuCommand::Resume, MenuCommand::Show(MenuPage::Controls), MenuCommand::Show(MenuPage::Settings), MenuCommand::Quit]);
+        assert_eq!(
+            shown,
+            vec![
+                MenuCommand::Resume,
+                MenuCommand::Show(MenuPage::Controls),
+                MenuCommand::Show(MenuPage::Settings),
+                MenuCommand::Quit
+            ]
+        );
     }
 
     #[test]
     fn the_controls_list_is_the_keymap() {
         let keymap = Keymap::default();
-        let listed: Vec<Action> = controls(&keymap).into_iter().flat_map(|(_, rows)| rows.into_iter().map(|(a, ..)| a)).collect();
+        let listed: Vec<Action> = controls(&keymap)
+            .into_iter()
+            .flat_map(|(_, rows)| rows.into_iter().map(|(a, ..)| a))
+            .collect();
         let mut bound: Vec<Action> = keymap.bindings.iter().map(|b| b.action).collect();
-        bound.sort_by_key(|a| Group::ALL.iter().position(|&g| keymap.binding(*a).unwrap().group == g));
+        bound.sort_by_key(|a| {
+            Group::ALL
+                .iter()
+                .position(|&g| keymap.binding(*a).unwrap().group == g)
+        });
         assert_eq!(listed, bound, "every binding, once, by group");
-        let turn = controls(&keymap).into_iter().flat_map(|(_, rows)| rows).find(|(a, ..)| *a == Action::TurnItem).unwrap();
+        let turn = controls(&keymap)
+            .into_iter()
+            .flat_map(|(_, rows)| rows)
+            .find(|(a, ..)| *a == Action::TurnItem)
+            .unwrap();
         assert_eq!(turn.2, "R or Right click");
 
         // And the page shows exactly those lines, a group at a time, each with its keys.
@@ -1137,18 +1666,35 @@ mod tests {
             app.update();
             let mut rows = app.world_mut().query::<(&ControlRow, &Children)>();
             let shown: Vec<Action> = rows.iter(app.world()).map(|(row, _)| row.0).collect();
-            assert_eq!(shown, lines.iter().map(|l| l.0).collect::<Vec<_>>(), "{group:?}");
-            let names: Vec<String> = rows.iter(app.world()).filter_map(|(_, c)| app.world().get::<Text>(c[0]).map(|t| t.0.clone())).collect();
-            assert_eq!(names, lines.iter().map(|l| l.1.to_string()).collect::<Vec<_>>());
+            assert_eq!(
+                shown,
+                lines.iter().map(|l| l.0).collect::<Vec<_>>(),
+                "{group:?}"
+            );
+            let names: Vec<String> = rows
+                .iter(app.world())
+                .filter_map(|(_, c)| app.world().get::<Text>(c[0]).map(|t| t.0.clone()))
+                .collect();
+            assert_eq!(
+                names,
+                lines.iter().map(|l| l.1.to_string()).collect::<Vec<_>>()
+            );
         }
         // The unrebindable lines show their keys as text, the rest a button per slot.
         let slots = |app: &mut App| {
             let mut buttons = app.world_mut().query::<&MenuButton>();
-            buttons.iter(app.world()).filter(|b| matches!(b.0, MenuCommand::Capture(..))).count()
+            buttons
+                .iter(app.world())
+                .filter(|b| matches!(b.0, MenuCommand::Capture(..)))
+                .count()
         };
         choose(&mut app, MenuCommand::ShowGroup(Group::Moving));
         app.update();
-        assert_eq!(slots(&mut app), 2 * 10, "two slots for each of the ten rebindable moving actions");
+        assert_eq!(
+            slots(&mut app),
+            2 * 10,
+            "two slots for each of the ten rebindable moving actions"
+        );
     }
 
     fn rebind_app(name: &str) -> (App, std::path::PathBuf) {
@@ -1173,8 +1719,18 @@ mod tests {
     fn clicking_a_slot_captures_the_next_key_and_saves_it() {
         let (mut app, path) = rebind_app("capture");
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
-        assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Capturing { action: Action::Jump, slot: 0, .. }));
-        assert!(app.world().resource::<InputCapture>().0, "actions stand still while a key is awaited");
+        assert!(matches!(
+            *app.world().resource::<Rebinding>(),
+            Rebinding::Capturing {
+                action: Action::Jump,
+                slot: 0,
+                ..
+            }
+        ));
+        assert!(
+            app.world().resource::<InputCapture>().0,
+            "actions stand still while a key is awaited"
+        );
         // The page says so.
         let mut texts = app.world_mut().query::<&Text>();
         assert!(texts.iter(app.world()).any(|t| t.0 == "Press a key..."));
@@ -1182,25 +1738,48 @@ mod tests {
         assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB)]);
         assert_eq!(*app.world().resource::<Rebinding>(), Rebinding::Idle);
         assert!(!app.world().resource::<InputCapture>().0);
-        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::KeyB)], "saved");
+        assert_eq!(
+            Keymap::load(&path).inputs(Action::Jump),
+            &[Input::Key(KeyCode::KeyB)],
+            "saved"
+        );
         // A second slot adds a key.
         choose(&mut app, MenuCommand::Capture(Action::Jump, 1));
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Middle);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Middle);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB), Input::Mouse(MouseButton::Middle)]);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        assert_eq!(
+            inputs(&app, Action::Jump),
+            vec![Input::Key(KeyCode::KeyB), Input::Mouse(MouseButton::Middle)]
+        );
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn the_click_that_starts_a_capture_is_not_the_key() {
         let (mut app, path) = rebind_app("fresh");
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::Space)], "same frame");
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        assert_eq!(
+            inputs(&app, Action::Jump),
+            vec![Input::Key(KeyCode::Space)],
+            "same frame"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
         app.update();
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::Space)], "the click is still down, not newly pressed");
+        assert_eq!(
+            inputs(&app, Action::Jump),
+            vec![Input::Key(KeyCode::Space)],
+            "the click is still down, not newly pressed"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1222,14 +1801,35 @@ mod tests {
         let (mut app, path) = rebind_app("swap");
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
         press(&mut app, KeyCode::KeyF);
-        assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Asking { other: Action::Primary, swappable: true, .. }));
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::Space)], "nothing changes until it is answered");
+        assert!(matches!(
+            *app.world().resource::<Rebinding>(),
+            Rebinding::Asking {
+                other: Action::Primary,
+                swappable: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            inputs(&app, Action::Jump),
+            vec![Input::Key(KeyCode::Space)],
+            "nothing changes until it is answered"
+        );
         let mut texts = app.world_mut().query::<&Text>();
-        assert!(texts.iter(app.world()).any(|t| t.0 == "F is Primary action. Swap?"));
+        assert!(
+            texts
+                .iter(app.world())
+                .any(|t| t.0 == "F is Primary action. Swap?")
+        );
         choose(&mut app, MenuCommand::SwapKeys);
         assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyF)]);
-        assert_eq!(inputs(&app, Action::Primary), vec![Input::Key(KeyCode::Space)]);
-        assert_eq!(Keymap::load(&path).inputs(Action::Primary), &[Input::Key(KeyCode::Space)]);
+        assert_eq!(
+            inputs(&app, Action::Primary),
+            vec![Input::Key(KeyCode::Space)]
+        );
+        assert_eq!(
+            Keymap::load(&path).inputs(Action::Primary),
+            &[Input::Key(KeyCode::Space)]
+        );
         // Declining leaves things be.
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
         press(&mut app, KeyCode::KeyG);
@@ -1242,14 +1842,30 @@ mod tests {
     #[test]
     fn the_menu_is_stricter_than_the_game_about_a_press_on_a_held_input() {
         let mut keymap = Keymap::default();
-        assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Right)), Some(Action::Block));
-        assert_eq!(keymap.clash(Action::Stab, Input::Mouse(MouseButton::Left)), None, "Attack and Stab share the click by design");
-        assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Attack));
+        assert_eq!(
+            keymap.clash(Action::Jump, Input::Mouse(MouseButton::Right)),
+            Some(Action::Block)
+        );
+        assert_eq!(
+            keymap.clash(Action::Stab, Input::Mouse(MouseButton::Left)),
+            None,
+            "Attack and Stab share the click by design"
+        );
+        assert_eq!(
+            keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)),
+            Some(Action::Attack)
+        );
         // With Attack moved off it, only Stab holds left click: the game lets Jump press it too,
         // the menu does not.
         keymap.set_slot(Action::Attack, 0, Input::Key(KeyCode::KeyH));
-        assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)), None);
-        assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Stab));
+        assert_eq!(
+            keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)),
+            None
+        );
+        assert_eq!(
+            keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)),
+            Some(Action::Stab)
+        );
         assert_eq!(keymap.clash(Action::Jump, Input::Key(KeyCode::KeyB)), None);
     }
 
@@ -1259,28 +1875,51 @@ mod tests {
         // Jump's third slot is empty, and Primary has only F.
         choose(&mut app, MenuCommand::Capture(Action::Jump, 1));
         press(&mut app, KeyCode::KeyF);
-        assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Asking { swappable: false, .. }));
+        assert!(matches!(
+            *app.world().resource::<Rebinding>(),
+            Rebinding::Asking {
+                swappable: false,
+                ..
+            }
+        ));
         choose(&mut app, MenuCommand::SwapKeys);
-        assert_eq!(inputs(&app, Action::Primary), vec![Input::Key(KeyCode::KeyF)]);
+        assert_eq!(
+            inputs(&app, Action::Primary),
+            vec![Input::Key(KeyCode::KeyF)]
+        );
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn rows_and_the_whole_list_reset() {
         let (mut app, path) = rebind_app("reset");
-        for (action, key) in [(Action::Jump, KeyCode::KeyB), (Action::Crouch, KeyCode::KeyN)] {
+        for (action, key) in [
+            (Action::Jump, KeyCode::KeyB),
+            (Action::Crouch, KeyCode::KeyN),
+        ] {
             choose(&mut app, MenuCommand::Capture(action, 0));
             press(&mut app, key);
         }
         assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB)]);
         choose(&mut app, MenuCommand::ResetKeys(Action::Jump));
         assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::Space)]);
-        assert_eq!(inputs(&app, Action::Crouch), vec![Input::Key(KeyCode::KeyN)], "only the row; the slot held both ctrl keys");
-        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::Space)]);
+        assert_eq!(
+            inputs(&app, Action::Crouch),
+            vec![Input::Key(KeyCode::KeyN)],
+            "only the row; the slot held both ctrl keys"
+        );
+        assert_eq!(
+            Keymap::load(&path).inputs(Action::Jump),
+            &[Input::Key(KeyCode::Space)]
+        );
         choose(&mut app, MenuCommand::ToggleCrouch);
         choose(&mut app, MenuCommand::ResetAllKeys);
         assert_eq!(keymap(&app).bindings, Keymap::default().bindings);
-        assert_eq!(keymap(&app).crouch, CrouchMode::Toggle, "the crouch mode is not a key");
+        assert_eq!(
+            keymap(&app).crouch,
+            CrouchMode::Toggle,
+            "the crouch mode is not a key"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1289,7 +1928,11 @@ mod tests {
         let mut keymap = Keymap::default();
         keymap.swap(Action::Jump, 0, Input::Key(KeyCode::KeyF), Action::Primary);
         keymap.reset(Action::Primary);
-        assert_eq!(keymap, Keymap::default(), "Jump went back to Space, so F is free for Primary");
+        assert_eq!(
+            keymap,
+            Keymap::default(),
+            "Jump went back to Space, so F is free for Primary"
+        );
     }
 
     #[test]
@@ -1298,7 +1941,10 @@ mod tests {
         assert_eq!(keymap(&app).crouch, CrouchMode::Hold);
         choose(&mut app, MenuCommand::ToggleCrouch);
         assert_eq!(keymap(&app).crouch, CrouchMode::Toggle);
-        assert!(std::fs::read_to_string(&path).unwrap().contains("toggle"), "saved");
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("toggle"),
+            "saved"
+        );
         choose(&mut app, MenuCommand::ToggleCrouch);
         assert_eq!(keymap(&app).crouch, CrouchMode::Hold);
         let _ = std::fs::remove_file(&path);
@@ -1308,7 +1954,12 @@ mod tests {
     fn assert_no_shared_inputs(keymap: &Keymap) {
         for binding in &keymap.bindings {
             for &input in &binding.inputs {
-                assert_eq!(keymap.clash_all(binding.action, input), vec![], "{:?} on {input:?}", binding.action);
+                assert_eq!(
+                    keymap.clash_all(binding.action, input),
+                    vec![],
+                    "{:?} on {input:?}",
+                    binding.action
+                );
             }
         }
     }
@@ -1321,17 +1972,37 @@ mod tests {
         // Primary on the left click in the level, where Attack is.
         choose(&mut app, MenuCommand::Capture(Action::DragItem, 0));
         press(&mut app, KeyCode::KeyF);
-        assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Asking { other: Action::Primary, swappable: false, .. }));
+        assert!(matches!(
+            *app.world().resource::<Rebinding>(),
+            Rebinding::Asking {
+                other: Action::Primary,
+                swappable: false,
+                ..
+            }
+        ));
         choose(&mut app, MenuCommand::SwapKeys);
         assert_eq!(*keymap(&app), Keymap::default());
         choose(&mut app, MenuCommand::KeepKeys);
         // Primary onto the left click clashes with Attack and DragItem both.
         choose(&mut app, MenuCommand::Capture(Action::Primary, 0));
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
-        assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Asking { swappable: false, .. }));
-        assert_eq!(keymap(&app).clash_all(Action::Primary, Input::Mouse(MouseButton::Left)), vec![Action::Attack, Action::Stab, Action::DragItem]);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        assert!(matches!(
+            *app.world().resource::<Rebinding>(),
+            Rebinding::Asking {
+                swappable: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            keymap(&app).clash_all(Action::Primary, Input::Mouse(MouseButton::Left)),
+            vec![Action::Attack, Action::Stab, Action::DragItem]
+        );
         choose(&mut app, MenuCommand::SwapKeys);
         assert_no_shared_inputs(keymap(&app));
         let _ = std::fs::remove_file(&path);
@@ -1342,11 +2013,29 @@ mod tests {
         let (mut app, path) = rebind_app("shift");
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
         press(&mut app, KeyCode::ShiftLeft);
-        assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Asking { other: Action::Sprint, swappable: true, .. }));
+        assert!(matches!(
+            *app.world().resource::<Rebinding>(),
+            Rebinding::Asking {
+                other: Action::Sprint,
+                swappable: true,
+                ..
+            }
+        ));
         choose(&mut app, MenuCommand::SwapKeys);
-        let shifts = vec![Input::Key(KeyCode::ShiftLeft), Input::Key(KeyCode::ShiftRight)];
-        assert_eq!(inputs(&app, Action::Jump), shifts, "both sides of the modifier");
-        assert_eq!(inputs(&app, Action::Sprint), vec![Input::Key(KeyCode::Space)], "and Sprint keeps neither");
+        let shifts = vec![
+            Input::Key(KeyCode::ShiftLeft),
+            Input::Key(KeyCode::ShiftRight),
+        ];
+        assert_eq!(
+            inputs(&app, Action::Jump),
+            shifts,
+            "both sides of the modifier"
+        );
+        assert_eq!(
+            inputs(&app, Action::Sprint),
+            vec![Input::Key(KeyCode::Space)],
+            "and Sprint keeps neither"
+        );
         assert_no_shared_inputs(keymap(&app));
         // Right shift names the same slot.
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
@@ -1362,23 +2051,44 @@ mod tests {
         press(&mut app, KeyCode::KeyB);
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
         press(&mut app, KeyCode::KeyB);
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB), Input::Key(KeyCode::Space)]);
-        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::KeyB), Input::Key(KeyCode::Space)]);
+        assert_eq!(
+            inputs(&app, Action::Jump),
+            vec![Input::Key(KeyCode::KeyB), Input::Key(KeyCode::Space)]
+        );
+        assert_eq!(
+            Keymap::load(&path).inputs(Action::Jump),
+            &[Input::Key(KeyCode::KeyB), Input::Key(KeyCode::Space)]
+        );
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn resets_and_the_crouch_choice_cancel_an_open_prompt() {
         let (mut app, path) = rebind_app("cancel_prompt");
-        for command in [MenuCommand::ResetKeys(Action::Jump), MenuCommand::ResetAllKeys, MenuCommand::ToggleCrouch] {
+        for command in [
+            MenuCommand::ResetKeys(Action::Jump),
+            MenuCommand::ResetAllKeys,
+            MenuCommand::ToggleCrouch,
+        ] {
             choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
             choose(&mut app, command);
-            assert_eq!(*app.world().resource::<Rebinding>(), Rebinding::Idle, "{command:?} over a capture");
+            assert_eq!(
+                *app.world().resource::<Rebinding>(),
+                Rebinding::Idle,
+                "{command:?} over a capture"
+            );
             choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
             press(&mut app, KeyCode::KeyF);
-            assert!(matches!(*app.world().resource::<Rebinding>(), Rebinding::Asking { .. }));
+            assert!(matches!(
+                *app.world().resource::<Rebinding>(),
+                Rebinding::Asking { .. }
+            ));
             choose(&mut app, command);
-            assert_eq!(*app.world().resource::<Rebinding>(), Rebinding::Idle, "{command:?} over a prompt");
+            assert_eq!(
+                *app.world().resource::<Rebinding>(),
+                Rebinding::Idle,
+                "{command:?} over a prompt"
+            );
         }
         let _ = std::fs::remove_file(&path);
     }

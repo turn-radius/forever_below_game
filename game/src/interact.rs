@@ -39,8 +39,8 @@ use bevy::{prelude::*, ui::ComputedUiRenderTargetInfo};
 use fb_items::Item;
 
 use crate::carry::ViewModelCamera;
-use crate::inventory::{Inventory, ItemId, Location};
 use crate::inventory::card::{CARD_GAP, keep_on_screen};
+use crate::inventory::{Inventory, ItemId, Location};
 use crate::keymap::{Action, Keymap};
 use crate::play::{DelveSystems, ScreenOpen};
 use crate::ui::{BG, LINE, MUTED, UiFonts};
@@ -55,7 +55,12 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const ALL: [Slot; 4] = [Slot::Primary, Slot::Secondary, Slot::Tertiary, Slot::Special];
+    pub const ALL: [Slot; 4] = [
+        Slot::Primary,
+        Slot::Secondary,
+        Slot::Tertiary,
+        Slot::Special,
+    ];
 
     /// The slot an action fires; `None` for every other action, Compare included.
     pub fn of(action: Action) -> Option<Slot> {
@@ -171,7 +176,10 @@ impl Verbs {
 
     /// The slots that have a verb, with it, in slot order.
     pub fn available(&self) -> Vec<(Slot, Verb)> {
-        Slot::ALL.into_iter().filter_map(|slot| Some((slot, self.get(slot)?))).collect()
+        Slot::ALL
+            .into_iter()
+            .filter_map(|slot| Some((slot, self.get(slot)?)))
+            .collect()
     }
 }
 
@@ -181,7 +189,11 @@ impl Verbs {
 /// key, are left out.
 pub fn key_actions(keymap: &Keymap, verbs: &Verbs) -> Vec<(String, &'static str)> {
     let key = |action| keymap.inputs(action).first().map(|input| input.label());
-    let mut pairs: Vec<(String, &'static str)> = verbs.available().into_iter().filter_map(|(slot, verb)| Some((key(slot.action())?, verb.name()))).collect();
+    let mut pairs: Vec<(String, &'static str)> = verbs
+        .available()
+        .into_iter()
+        .filter_map(|(slot, verb)| Some((key(slot.action())?, verb.name())))
+        .collect();
     if verbs.compare {
         pairs.extend(key(Action::Compare).map(|k| (k, "Compare")));
     }
@@ -190,7 +202,11 @@ pub fn key_actions(keymap: &Keymap, verbs: &Verbs) -> Vec<(String, &'static str)
 
 /// [`key_actions`] as one line: "F Take \u{b7} G Equip \u{b7} Alt Compare". Empty if there are none.
 pub fn key_line(keymap: &Keymap, verbs: &Verbs) -> String {
-    key_actions(keymap, verbs).iter().map(|(key, name)| format!("{key} {name}")).collect::<Vec<_>>().join(" \u{b7} ")
+    key_actions(keymap, verbs)
+        .iter()
+        .map(|(key, name)| format!("{key} {name}"))
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
 }
 
 /// Where an item is, as far as its verbs go.
@@ -213,9 +229,18 @@ pub struct Lock {
 }
 
 impl Lock {
-    pub const NONE: Lock = Lock { has_lock: false, locked: false };
-    pub const LOCKED: Lock = Lock { has_lock: true, locked: true };
-    pub const UNLOCKED: Lock = Lock { has_lock: true, locked: false };
+    pub const NONE: Lock = Lock {
+        has_lock: false,
+        locked: false,
+    };
+    pub const LOCKED: Lock = Lock {
+        has_lock: true,
+        locked: true,
+    };
+    pub const UNLOCKED: Lock = Lock {
+        has_lock: true,
+        locked: false,
+    };
 }
 
 /// What is aimed at.
@@ -263,22 +288,66 @@ pub struct Delver {
 /// The verbs `target` gives `delver`.
 pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
     match *target {
-        Target::Item { place, uses, equippable, hangs } => {
+        Target::Item {
+            place,
+            uses,
+            equippable,
+            hangs,
+        } => {
             let equip = equippable.then_some(Verb::Equip);
             let special = hangs.then_some(Verb::HangAtHip);
             match place {
-                Place::Ground => Verbs { primary: Some(Verb::Take), secondary: equip, special, compare: equippable, ..Verbs::default() },
-                Place::Carried => Verbs { primary: uses, secondary: equip, special, compare: equippable, ..Verbs::default() },
-                Place::Worn => Verbs { primary: uses, secondary: Some(Verb::TakeOff), special, compare: equippable, ..Verbs::default() },
+                Place::Ground => Verbs {
+                    primary: Some(Verb::Take),
+                    secondary: equip,
+                    special,
+                    compare: equippable,
+                    ..Verbs::default()
+                },
+                Place::Carried => Verbs {
+                    primary: uses,
+                    secondary: equip,
+                    special,
+                    compare: equippable,
+                    ..Verbs::default()
+                },
+                Place::Worn => Verbs {
+                    primary: uses,
+                    secondary: Some(Verb::TakeOff),
+                    special,
+                    compare: equippable,
+                    ..Verbs::default()
+                },
             }
         }
-        Target::Door { open, lock } => Verbs { primary: Some(if open { Verb::Close } else { Verb::Open }), ..locks(lock, delver) },
+        Target::Door { open, lock } => Verbs {
+            primary: Some(if open { Verb::Close } else { Verb::Open }),
+            ..locks(lock, delver)
+        },
         // A container left standing open is looked in again with the same key.
-        Target::Container { open, lock } => Verbs { primary: Some(if open { Verb::LookIn } else { Verb::Open }), ..locks(lock, delver) },
-        Target::Switch => Verbs { primary: Some(Verb::Pull), ..Verbs::default() },
-        Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
-        Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
-        Target::Camp => Verbs { primary: Some(Verb::Sleep), secondary: Some(Verb::PackUp), ..Verbs::default() },
+        Target::Container { open, lock } => Verbs {
+            primary: Some(if open { Verb::LookIn } else { Verb::Open }),
+            ..locks(lock, delver)
+        },
+        Target::Switch => Verbs {
+            primary: Some(Verb::Pull),
+            ..Verbs::default()
+        },
+        Target::Folk => Verbs {
+            primary: Some(Verb::Talk),
+            secondary: Some(Verb::Barter),
+            tertiary: delver.hidden.then_some(Verb::Steal),
+            ..Verbs::default()
+        },
+        Target::Stair { down } => Verbs {
+            primary: Some(if down { Verb::GoDown } else { Verb::GoUp }),
+            ..Verbs::default()
+        },
+        Target::Camp => Verbs {
+            primary: Some(Verb::Sleep),
+            secondary: Some(Verb::PackUp),
+            ..Verbs::default()
+        },
     }
 }
 
@@ -289,7 +358,11 @@ fn locks(lock: Lock, delver: &Delver) -> Verbs {
         return Verbs::default();
     }
     Verbs {
-        secondary: delver.has_key.then_some(if lock.locked { Verb::Unlock } else { Verb::Lock }),
+        secondary: delver.has_key.then_some(if lock.locked {
+            Verb::Unlock
+        } else {
+            Verb::Lock
+        }),
         tertiary: (delver.has_lockpicks && lock.locked).then_some(Verb::PickLock),
         ..Verbs::default()
     }
@@ -328,7 +401,11 @@ pub fn use_of(item: &Item) -> Option<Verb> {
         if lit {
             Some(Verb::PutOut)
         } else {
-            item.shape.clone().set_lit(true).is_ok().then_some(Verb::Light)
+            item.shape
+                .clone()
+                .set_lit(true)
+                .is_ok()
+                .then_some(Verb::Light)
         }
     })
 }
@@ -348,8 +425,14 @@ pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
         Location::In { .. } | Location::Loose => Place::Ground,
     };
     let uses = use_of(item).filter(|&verb| verb != Verb::Refill || inventory.lantern_wants_oil());
-    let hangs = inventory.location(id) != Some(Location::Worn(fb_items::Slot::Hip)) && inventory.check_wear(id, fb_items::Slot::Hip).is_ok();
-    Some(Target::Item { place, uses, equippable: !item.slots().is_empty(), hangs })
+    let hangs = inventory.location(id) != Some(Location::Worn(fb_items::Slot::Hip))
+        && inventory.check_wear(id, fb_items::Slot::Hip).is_ok();
+    Some(Target::Item {
+        place,
+        uses,
+        equippable: !item.slots().is_empty(),
+        hangs,
+    })
 }
 
 /// The line shown over the crosshair for what is aimed at; `None` shows nothing.
@@ -364,17 +447,33 @@ pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt.after(crate::props::prompt_aimed_container).after(crate::travel::prompt_stair)).chain().in_set(DelveSystems));
+        app.init_resource::<CrosshairPrompt>().add_systems(
+            Update,
+            (
+                spawn_prompt,
+                show_prompt
+                    .after(crate::props::prompt_aimed_container)
+                    .after(crate::travel::prompt_stair),
+            )
+                .chain()
+                .in_set(DelveSystems),
+        );
     }
 }
 
 /// Spawns the prompt, hidden, once there is a camera drawing over the held torch to draw it
 /// (as the item card is).
-fn spawn_prompt(mut commands: Commands, nodes: Query<(), With<PromptNode>>, cameras: Query<Entity, With<ViewModelCamera>>) {
+fn spawn_prompt(
+    mut commands: Commands,
+    nodes: Query<(), With<PromptNode>>,
+    cameras: Query<Entity, With<ViewModelCamera>>,
+) {
     if !nodes.is_empty() {
         return;
     }
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     commands.spawn((
         Name::new("Crosshair prompt"),
         DespawnOnExit(crate::launch::AppState::Delving),
@@ -405,11 +504,23 @@ fn show_prompt(
     open: Option<Res<ScreenOpen>>,
     journey: Option<Res<crate::travel::Journey>>,
     fonts: Option<Res<UiFonts>>,
-    mut nodes: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<PromptNode>>,
+    mut nodes: Query<
+        (
+            Entity,
+            &mut Node,
+            &mut Visibility,
+            &ComputedNode,
+            &ComputedUiRenderTargetInfo,
+        ),
+        With<PromptNode>,
+    >,
     mut shown: Local<Option<String>>,
 ) {
     let Some(fonts) = fonts else { return };
-    let text = prompt.0.clone().filter(|_| !open.is_some_and(|o| o.0.is_some()) && journey.is_none());
+    let text = prompt
+        .0
+        .clone()
+        .filter(|_| !open.is_some_and(|o| o.0.is_some()) && journey.is_none());
     for (entity, mut node, mut visibility, computed, target) in &mut nodes {
         let Some(text) = &text else {
             *visibility = Visibility::Hidden;
@@ -417,7 +528,10 @@ fn show_prompt(
             continue;
         };
         if shown.as_ref() != Some(text) {
-            commands.entity(entity).insert((Text::new(text.clone()), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+            commands.entity(entity).insert((
+                Text::new(text.clone()),
+                UiFonts::style(&fonts.mono, 13.0, MUTED),
+            ));
             *shown = Some(text.clone());
             *visibility = Visibility::Hidden;
             continue;
@@ -425,7 +539,11 @@ fn show_prompt(
         let size = computed.size * computed.inverse_scale_factor;
         let screen = target.logical_size();
         let centre = screen * 0.5;
-        let at = keep_on_screen(Vec2::new(centre.x - size.x * 0.5, centre.y - size.y - CARD_GAP), size, screen);
+        let at = keep_on_screen(
+            Vec2::new(centre.x - size.x * 0.5, centre.y - size.y - CARD_GAP),
+            size,
+            screen,
+        );
         node.left = px(at.x);
         node.top = px(at.y);
         *visibility = Visibility::Inherited;
@@ -443,28 +561,85 @@ mod tests {
     fn the_prompt_names_the_bound_keys() {
         let keymap = Keymap::default();
         let line = |target: Target, delver: Delver| key_line(&keymap, &verbs_for(&target, &delver));
-        let strongbox = Target::Container { open: false, lock: Lock::LOCKED };
-        assert_eq!(line(strongbox, Delver { has_lockpicks: true, ..Delver::default() }), "F Open \u{b7} R Pick the lock");
-        assert_eq!(line(Target::Folk, Delver::default()), "F Talk \u{b7} G Barter");
-        assert_eq!(line(Target::Folk, Delver { hidden: true, ..Delver::default() }), "F Talk \u{b7} G Barter \u{b7} R Steal");
-        let open = Target::Container { open: true, lock: Lock::NONE };
+        let strongbox = Target::Container {
+            open: false,
+            lock: Lock::LOCKED,
+        };
+        assert_eq!(
+            line(
+                strongbox,
+                Delver {
+                    has_lockpicks: true,
+                    ..Delver::default()
+                }
+            ),
+            "F Open \u{b7} R Pick the lock"
+        );
+        assert_eq!(
+            line(Target::Folk, Delver::default()),
+            "F Talk \u{b7} G Barter"
+        );
+        assert_eq!(
+            line(
+                Target::Folk,
+                Delver {
+                    hidden: true,
+                    ..Delver::default()
+                }
+            ),
+            "F Talk \u{b7} G Barter \u{b7} R Steal"
+        );
+        let open = Target::Container {
+            open: true,
+            lock: Lock::NONE,
+        };
         assert_eq!(line(open, Delver::default()), "F Look in");
-        assert_eq!(line(Target::Stair { down: true }, Delver::default()), "F Go down");
-        assert_eq!(line(Target::Stair { down: false }, Delver::default()), "F Go up");
+        assert_eq!(
+            line(Target::Stair { down: true }, Delver::default()),
+            "F Go down"
+        );
+        assert_eq!(
+            line(Target::Stair { down: false }, Delver::default()),
+            "F Go up"
+        );
     }
 
     #[test]
     fn the_prompt_follows_a_rebinding_and_adds_compare() {
         let mut keymap = Keymap::default();
-        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
-        assert_eq!(key_line(&keymap, &verbs_for(&Target::Folk, &Delver::default())), "E Talk \u{b7} G Barter");
+        keymap
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::Primary)
+            .unwrap()
+            .inputs = vec![Input::Key(KeyCode::KeyE)];
+        assert_eq!(
+            key_line(&keymap, &verbs_for(&Target::Folk, &Delver::default())),
+            "E Talk \u{b7} G Barter"
+        );
         let dagger = roll_item("Dagger", 7).unwrap();
-        let on_floor = Target::Item { place: Place::Ground, uses: None, equippable: !dagger.slots().is_empty(), hangs: false };
-        assert_eq!(key_line(&Keymap::default(), &verbs_for(&on_floor, &Delver::default())), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        let on_floor = Target::Item {
+            place: Place::Ground,
+            uses: None,
+            equippable: !dagger.slots().is_empty(),
+            hangs: false,
+        };
+        assert_eq!(
+            key_line(
+                &Keymap::default(),
+                &verbs_for(&on_floor, &Delver::default())
+            ),
+            "F Take \u{b7} G Equip \u{b7} Alt Compare"
+        );
     }
 
     fn target(item: &Item, place: Place) -> Target {
-        Target::Item { place, uses: use_of(item), equippable: !item.slots().is_empty(), hangs: false }
+        Target::Item {
+            place,
+            uses: use_of(item),
+            equippable: !item.slots().is_empty(),
+            hangs: false,
+        }
     }
 
     fn carried(base: &str, place: Place) -> Verbs {
@@ -491,7 +666,11 @@ mod tests {
         let sack = inventory.add(roll_item("Sack", 1).unwrap());
         let loose = inventory.add(roll_item("Dagger", 7).unwrap());
         let in_sack = inventory.add(roll_item("Dagger", 8).unwrap());
-        let at = inventory.grid(sack).unwrap().first_free(inventory.item(in_sack).unwrap().profile.footprint).unwrap();
+        let at = inventory
+            .grid(sack)
+            .unwrap()
+            .first_free(inventory.item(in_sack).unwrap().profile.footprint)
+            .unwrap();
         inventory.put(in_sack, sack, at).unwrap();
         let place = |inventory: &Inventory, id| match item_target(inventory, id) {
             Some(Target::Item { place, .. }) => place,
@@ -515,19 +694,32 @@ mod tests {
         inventory.wear(pack, fb_items::Slot::Back).unwrap();
         let lantern = inventory.add(roll_item("Lantern", 3).unwrap());
         inventory.stow(lantern).unwrap();
-        let verbs = |inventory: &Inventory, id| verbs_for(&item_target(inventory, id).unwrap(), &Delver::default());
+        let verbs = |inventory: &Inventory, id| {
+            verbs_for(&item_target(inventory, id).unwrap(), &Delver::default())
+        };
         assert_eq!(verbs(&inventory, lantern).special, None, "no belt");
         let belt = inventory.add(roll_item("Belt", 1).unwrap());
         inventory.wear(belt, fb_items::Slot::Belt).unwrap();
         assert_eq!(verbs(&inventory, lantern).special, Some(Verb::HangAtHip));
-        assert_eq!(key_line(&Keymap::default(), &verbs(&inventory, lantern)), "F Put out \u{b7} G Equip \u{b7} T Hang at hip \u{b7} Alt Compare");
+        assert_eq!(
+            key_line(&Keymap::default(), &verbs(&inventory, lantern)),
+            "F Put out \u{b7} G Equip \u{b7} T Hang at hip \u{b7} Alt Compare"
+        );
         inventory.wear(lantern, fb_items::Slot::Offhand).unwrap();
-        assert_eq!(verbs(&inventory, lantern).special, Some(Verb::HangAtHip), "from the hand");
+        assert_eq!(
+            verbs(&inventory, lantern).special,
+            Some(Verb::HangAtHip),
+            "from the hand"
+        );
         inventory.take_out(lantern);
         inventory.wear(lantern, fb_items::Slot::Hip).unwrap();
         assert_eq!(verbs(&inventory, lantern).special, None, "already there");
         let dagger = inventory.add(roll_item("Dagger", 7).unwrap());
-        assert_eq!(verbs(&inventory, dagger).special, None, "a dagger does not hang");
+        assert_eq!(
+            verbs(&inventory, dagger).special,
+            None,
+            "a dagger does not hang"
+        );
     }
 
     #[test]
@@ -539,7 +731,10 @@ mod tests {
 
     #[test]
     fn a_drink_in_a_bag_is_drunk() {
-        assert_eq!(carried("Tankard", Place::Carried).primary, Some(Verb::Drink));
+        assert_eq!(
+            carried("Tankard", Place::Carried).primary,
+            Some(Verb::Drink)
+        );
     }
 
     #[test]
@@ -553,56 +748,123 @@ mod tests {
     fn a_torch_in_a_bag_lights_or_puts_out() {
         let lit = crate::carry::lit_torch(3);
         let v = verbs_for(&target(&lit, Place::Carried), &Delver::default());
-        assert_eq!((v.primary, v.secondary), (Some(Verb::PutOut), Some(Verb::Equip)));
+        assert_eq!(
+            (v.primary, v.secondary),
+            (Some(Verb::PutOut), Some(Verb::Equip))
+        );
         let mut out = lit.clone();
         out.shape.toggle_lit().unwrap();
-        assert_eq!(verbs_for(&target(&out, Place::Carried), &Delver::default()).primary, Some(Verb::Light));
+        assert_eq!(
+            verbs_for(&target(&out, Place::Carried), &Delver::default()).primary,
+            Some(Verb::Light)
+        );
     }
 
     #[test]
     fn a_spent_torch_or_empty_lantern_cannot_be_lit() {
         let mut spent = roll_item("Torch", 3).unwrap();
-        let armory::Item::Torch(s) = &mut spent.shape else { panic!("torch") };
+        let armory::Item::Torch(s) = &mut spent.shape else {
+            panic!("torch")
+        };
         s.burn.state = armory::families::torch::BurnState::Spent;
         assert_eq!(use_of(&spent), None);
         let mut empty = roll_item("Lantern", 3).unwrap();
-        let armory::Item::Lantern(s) = &mut empty.shape else { panic!("lantern") };
+        let armory::Item::Lantern(s) = &mut empty.shape else {
+            panic!("lantern")
+        };
         s.flame.fuel_left = 0.0;
         s.flame.lit = false;
         assert_eq!(use_of(&empty), None);
-        assert_eq!(verbs_for(&target(&spent, Place::Carried), &Delver::default()).primary, None);
+        assert_eq!(
+            verbs_for(&target(&spent, Place::Carried), &Delver::default()).primary,
+            None
+        );
     }
 
     #[test]
     fn a_locked_strongbox_is_picked_with_lockpicks() {
-        let strongbox = Target::Container { open: false, lock: Lock::LOCKED };
-        let picks = Delver { has_lockpicks: true, ..Delver::default() };
-        assert_eq!(row(verbs_for(&strongbox, &picks)), (Some(Verb::Open), None, Some(Verb::PickLock), None));
-        let key = Delver { has_key: true, ..Delver::default() };
-        assert_eq!(row(verbs_for(&strongbox, &key)), (Some(Verb::Open), Some(Verb::Unlock), None, None));
+        let strongbox = Target::Container {
+            open: false,
+            lock: Lock::LOCKED,
+        };
+        let picks = Delver {
+            has_lockpicks: true,
+            ..Delver::default()
+        };
+        assert_eq!(
+            row(verbs_for(&strongbox, &picks)),
+            (Some(Verb::Open), None, Some(Verb::PickLock), None)
+        );
+        let key = Delver {
+            has_key: true,
+            ..Delver::default()
+        };
+        assert_eq!(
+            row(verbs_for(&strongbox, &key)),
+            (Some(Verb::Open), Some(Verb::Unlock), None, None)
+        );
     }
 
     #[test]
     fn a_locked_door_with_nothing_is_only_opened() {
-        let door = Target::Door { open: false, lock: Lock::LOCKED };
-        assert_eq!(row(verbs_for(&door, &Delver::default())), (Some(Verb::Open), None, None, None));
+        let door = Target::Door {
+            open: false,
+            lock: Lock::LOCKED,
+        };
+        assert_eq!(
+            row(verbs_for(&door, &Delver::default())),
+            (Some(Verb::Open), None, None, None)
+        );
     }
 
     #[test]
     fn open_doors_close_and_unlocked_ones_lock_with_a_key() {
-        let both = Delver { has_key: true, has_lockpicks: true, hidden: false };
-        let open = Target::Door { open: true, lock: Lock::UNLOCKED };
-        assert_eq!(row(verbs_for(&open, &both)), (Some(Verb::Close), Some(Verb::Lock), None, None));
-        let plain = Target::Door { open: false, lock: Lock::NONE };
-        assert_eq!(row(verbs_for(&plain, &both)), (Some(Verb::Open), None, None, None));
+        let both = Delver {
+            has_key: true,
+            has_lockpicks: true,
+            hidden: false,
+        };
+        let open = Target::Door {
+            open: true,
+            lock: Lock::UNLOCKED,
+        };
+        assert_eq!(
+            row(verbs_for(&open, &both)),
+            (Some(Verb::Close), Some(Verb::Lock), None, None)
+        );
+        let plain = Target::Door {
+            open: false,
+            lock: Lock::NONE,
+        };
+        assert_eq!(
+            row(verbs_for(&plain, &both)),
+            (Some(Verb::Open), None, None, None)
+        );
     }
 
     #[test]
     fn folk_are_stolen_from_only_while_hidden() {
         let seen = verbs_for(&Target::Folk, &Delver::default());
-        assert_eq!(row(seen), (Some(Verb::Talk), Some(Verb::Barter), None, None));
-        let hidden = verbs_for(&Target::Folk, &Delver { hidden: true, ..Delver::default() });
-        assert_eq!(row(hidden), (Some(Verb::Talk), Some(Verb::Barter), Some(Verb::Steal), None));
+        assert_eq!(
+            row(seen),
+            (Some(Verb::Talk), Some(Verb::Barter), None, None)
+        );
+        let hidden = verbs_for(
+            &Target::Folk,
+            &Delver {
+                hidden: true,
+                ..Delver::default()
+            },
+        );
+        assert_eq!(
+            row(hidden),
+            (
+                Some(Verb::Talk),
+                Some(Verb::Barter),
+                Some(Verb::Steal),
+                None
+            )
+        );
         assert!(!hidden.compare);
     }
 
@@ -618,7 +880,10 @@ mod tests {
     #[test]
     fn a_floor_dagger_lists_its_keys() {
         let line = |v| key_line(&Keymap::default(), &v);
-        assert_eq!(line(carried("Dagger", Place::Ground)), "F Take \u{b7} G Equip \u{b7} Alt Compare");
+        assert_eq!(
+            line(carried("Dagger", Place::Ground)),
+            "F Take \u{b7} G Equip \u{b7} Alt Compare"
+        );
         assert_eq!(line(carried("Bread", Place::Carried)), "F Eat");
         assert_eq!(line(Verbs::default()), "");
     }
@@ -626,8 +891,16 @@ mod tests {
     #[test]
     fn a_rebound_key_changes_the_line() {
         let mut keymap = Keymap::default();
-        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
-        assert_eq!(key_line(&keymap, &carried("Dagger", Place::Ground)), "E Take \u{b7} G Equip \u{b7} Alt Compare");
+        keymap
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::Primary)
+            .unwrap()
+            .inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
+        assert_eq!(
+            key_line(&keymap, &carried("Dagger", Place::Ground)),
+            "E Take \u{b7} G Equip \u{b7} Alt Compare"
+        );
     }
 
     #[test]
@@ -659,7 +932,13 @@ mod tests {
         inventory.toggle_light(lantern).unwrap();
         inventory.burn_lights(600.0);
         assert_eq!(uses(&inventory), Some(Verb::Refill));
-        assert_eq!(key_line(&Keymap::default(), &verbs_for(&item_target(&inventory, oil).unwrap(), &Delver::default())), "F Refill");
+        assert_eq!(
+            key_line(
+                &Keymap::default(),
+                &verbs_for(&item_target(&inventory, oil).unwrap(), &Delver::default())
+            ),
+            "F Refill"
+        );
     }
 
     #[test]

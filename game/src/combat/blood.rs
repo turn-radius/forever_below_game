@@ -29,7 +29,10 @@ impl Plugin for BloodPlugin {
         } else if app.world().contains_resource::<AssetServer>() {
             app.init_asset::<BloodMaterial>();
         }
-        app.init_resource::<GaspBlood>().add_systems(Update, (spawn_blood, show_blood).chain().in_set(DelveSystems));
+        app.init_resource::<GaspBlood>().add_systems(
+            Update,
+            (spawn_blood, show_blood).chain().in_set(DelveSystems),
+        );
     }
 }
 
@@ -69,15 +72,34 @@ impl UiMaterial for BloodMaterial {
 
 /// Lays the blood over each new view, hidden until a gasp: the HUD's first child and below its
 /// siblings, so the orbs and the quickslots stay readable over it.
-fn spawn_blood(mut commands: Commands, roots: Query<Entity, Added<VitalsRoot>>, materials: Option<ResMut<Assets<BloodMaterial>>>) {
-    let Some(mut materials) = materials else { return };
+fn spawn_blood(
+    mut commands: Commands,
+    roots: Query<Entity, Added<VitalsRoot>>,
+    materials: Option<ResMut<Assets<BloodMaterial>>>,
+) {
+    let Some(mut materials) = materials else {
+        return;
+    };
     for root in &roots {
         let blood = commands
             .spawn((
                 Name::new("Blood"),
                 Blood,
-                MaterialNode(materials.add(BloodMaterial { style: BloodStyle { colour: BLOOD.into(), deep: BLOOD_DEEP.into(), spread: 0.0, strength: 0.0, seed: 0.0 } })),
-                Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
+                MaterialNode(materials.add(BloodMaterial {
+                    style: BloodStyle {
+                        colour: BLOOD.into(),
+                        deep: BLOOD_DEEP.into(),
+                        spread: 0.0,
+                        strength: 0.0,
+                        seed: 0.0,
+                    },
+                })),
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
                 ZIndex(-1),
                 Visibility::Hidden,
                 Pickable::IGNORE,
@@ -96,7 +118,9 @@ fn show_blood(
     mut gasps: Local<f32>,
     mut was: Local<bool>,
 ) {
-    let Some(mut materials) = materials else { return };
+    let Some(mut materials) = materials else {
+        return;
+    };
     if !gasp.is_changed() {
         return;
     }
@@ -106,7 +130,11 @@ fn show_blood(
     }
     *was = showing;
     for (node, mut visibility) in &mut blood {
-        visibility.set_if_neq(if showing { Visibility::Inherited } else { Visibility::Hidden });
+        visibility.set_if_neq(if showing {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
         if let Some(mut material) = materials.get_mut(&node.0) {
             material.style.strength = gasp.strength;
             material.style.spread = gasp.spread;

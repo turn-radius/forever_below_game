@@ -45,14 +45,21 @@ impl ViewHold {
     /// The same hold in the other hand: mirrored across the view's middle.
     pub fn mirrored(self) -> ViewHold {
         let [x, y, z, w] = self.turn.to_array();
-        ViewHold { fist: self.fist * Vec3::new(-1.0, 1.0, 1.0), turn: Quat::from_xyzw(x, -y, -z, w) }
+        ViewHold {
+            fist: self.fist * Vec3::new(-1.0, 1.0, 1.0),
+            turn: Quat::from_xyzw(x, -y, -z, w),
+        }
     }
 }
 
 /// The hand a hand slot holds in: the main hand is the right, as on the doll
 /// ([`fb_body::MAIN_HAND`]).
 pub fn side_of(hand: Slot) -> Side {
-    if hand == Slot::Offhand { fb_body::OFF_HAND } else { fb_body::MAIN_HAND }
+    if hand == Slot::Offhand {
+        fb_body::OFF_HAND
+    } else {
+        fb_body::MAIN_HAND
+    }
 }
 
 /// A turn of `spin` about the view's up axis (for an item standing upright in the fist, about
@@ -60,7 +67,10 @@ pub fn side_of(hand: Slot) -> Side {
 /// axis (positive leans the top to the left), then `tip` about its right axis (negative tips the
 /// top away from the eye), then `yaw` about its up axis (positive turns the right side away).
 fn turn(spin: f32, roll: f32, tip: f32, yaw: f32) -> Quat {
-    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(tip) * Quat::from_rotation_z(roll) * Quat::from_rotation_y(spin)
+    Quat::from_rotation_y(yaw)
+        * Quat::from_rotation_x(tip)
+        * Quat::from_rotation_z(roll)
+        * Quat::from_rotation_y(spin)
 }
 
 /// How far ahead of the eye a ranged weapon in view is aimed to cross the line of sight, view
@@ -69,7 +79,10 @@ pub const AIM_DISTANCE: f32 = 300.0;
 
 /// The turn that points straight ahead (-Z) from `from` to the crosshair at [`AIM_DISTANCE`].
 pub fn aimed_from(from: Vec3) -> Quat {
-    Quat::from_rotation_arc(Vec3::NEG_Z, (Vec3::new(0.0, 0.0, -AIM_DISTANCE) - from).normalize())
+    Quat::from_rotation_arc(
+        Vec3::NEG_Z,
+        (Vec3::new(0.0, 0.0, -AIM_DISTANCE) - from).normalize(),
+    )
 }
 
 /// Where `hold` sits in the view for the hand on `side`.
@@ -89,15 +102,40 @@ pub fn aimed_from(from: Vec3) -> Quat {
 pub fn view_hold(hold: Hold, side: Side) -> ViewHold {
     const SPIN: f32 = 0.7;
     let right = match hold {
-        Hold::OneHanded => ViewHold { fist: Vec3::new(4.03, -5.55, -9.5), turn: turn(SPIN, -0.3, -0.3, 0.0) },
-        Hold::Upright => ViewHold { fist: Vec3::new(4.3, -7.0, -11.5), turn: turn(0.0, -0.3, -0.5, 0.15) },
-        Hold::Bow => ViewHold { fist: Vec3::new(3.61, -5.14, -11.0), turn: turn(0.0, 0.3, -0.1, 0.7) },
-        Hold::Shield => ViewHold { fist: Vec3::new(6.25, -5.28, -11.0), turn: turn(0.0, 0.0, 0.0, 0.15) },
-        Hold::Torch => ViewHold { fist: Vec3::new(5.0, -5.83, -9.6), turn: turn(0.0, 0.22, -0.32, 0.0) },
-        Hold::Lantern => ViewHold { fist: Vec3::new(5.0, 0.56, -11.0), turn: Quat::IDENTITY },
-        Hold::Crossbow => ViewHold { fist: Vec3::new(1.3, -2.3, -3.2), turn: Quat::IDENTITY },
+        Hold::OneHanded => ViewHold {
+            fist: Vec3::new(4.03, -5.55, -9.5),
+            turn: turn(SPIN, -0.3, -0.3, 0.0),
+        },
+        Hold::Upright => ViewHold {
+            fist: Vec3::new(4.3, -7.0, -11.5),
+            turn: turn(0.0, -0.3, -0.5, 0.15),
+        },
+        Hold::Bow => ViewHold {
+            fist: Vec3::new(3.61, -5.14, -11.0),
+            turn: turn(0.0, 0.3, -0.1, 0.7),
+        },
+        Hold::Shield => ViewHold {
+            fist: Vec3::new(6.25, -5.28, -11.0),
+            turn: turn(0.0, 0.0, 0.0, 0.15),
+        },
+        Hold::Torch => ViewHold {
+            fist: Vec3::new(5.0, -5.83, -9.6),
+            turn: turn(0.0, 0.22, -0.32, 0.0),
+        },
+        Hold::Lantern => ViewHold {
+            fist: Vec3::new(5.0, 0.56, -11.0),
+            turn: Quat::IDENTITY,
+        },
+        Hold::Crossbow => ViewHold {
+            fist: Vec3::new(1.3, -2.3, -3.2),
+            turn: Quat::IDENTITY,
+        },
     };
-    if side == Side::Left { right.mirrored() } else { right }
+    if side == Side::Left {
+        right.mirrored()
+    } else {
+        right
+    }
 }
 
 /// Body space (soles on y = 0, the face toward +Z, the wearer's left +X) turned to face the way
@@ -125,42 +163,74 @@ pub struct HeldInView {
 
 /// The point of `item` held at `grip` (both in its own space): the vertex farthest from it.
 pub fn point_of(item: &Item, grip: Vec3) -> Vec3 {
-    item.build().parts.iter().flat_map(|p| p.positions.iter()).map(|&p| Vec3::from_array(p)).max_by(|a, b| a.distance_squared(grip).total_cmp(&b.distance_squared(grip))).unwrap_or(grip)
+    item.build()
+        .parts
+        .iter()
+        .flat_map(|p| p.positions.iter())
+        .map(|&p| Vec3::from_array(p))
+        .max_by(|a, b| {
+            a.distance_squared(grip)
+                .total_cmp(&b.distance_squared(grip))
+        })
+        .unwrap_or(grip)
 }
 
 /// What each hand holds, placed in the view for a delver of body `spec` and drawn `scale` times
 /// its size about the grip: the main hand's first, then the off hand's. A hand whose item is
 /// not held (or that holds nothing) is left out.
-pub fn held_in_view(spec: &BodySpec, main: Option<&Item>, off: Option<&Item>, scale: f32) -> Vec<HeldInView> {
+pub fn held_in_view(
+    spec: &BodySpec,
+    main: Option<&Item>,
+    off: Option<&Item>,
+    scale: f32,
+) -> Vec<HeldInView> {
     let hands = fit_hands(spec, main, off);
-    [(Slot::Mainhand, main, hands.main), (Slot::Offhand, off, hands.off)]
-        .into_iter()
-        .filter_map(|(hand, item, fit)| {
-            let (item, fit) = (item?, fit?);
-            let side = side_of(hand);
-            let [x, y, z] = fit.placement.rotation.cols.map(Vec3::from_array);
-            let placed = Quat::from_mat3(&Mat3::from_cols(x, y, z));
-            // The fist in the item's own space: the doll's grip, undone of its placement and
-            // scale. Thinning narrows a handle about its axis, so the grip sits at the same
-            // point on the item as rolled.
-            let fist = Vec3::from_array(hands.body.grip(side).origin);
-            let grip = match fit.hold {
-                // Placed by its butt, at the shoulder.
-                Hold::Crossbow => Vec3::ZERO,
-                _ => placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale,
-            };
-            let at = view_hold(fit.hold, side);
-            let rotation = match fit.hold {
-                // Shouldered and aimed: the stock level, turned in toward the line of sight,
-                // the deck up, whatever the doll's grip. Level rather than at the crosshair, so
-                // the prod stays out of the middle of the view.
-                Hold::Crossbow => aimed_from(at.fist * Vec3::new(1.0, 0.0, 1.0)) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
-                _ => at.turn * BODY_TO_VIEW * placed,
-            };
-            let transform = Transform { translation: at.fist - rotation * grip * scale, rotation, scale: Vec3::splat(scale) };
-            Some(HeldInView { hand, hold: fit.hold, item: item.clone(), transform, point: point_of(item, grip), grip, fist: at.fist })
+    [
+        (Slot::Mainhand, main, hands.main),
+        (Slot::Offhand, off, hands.off),
+    ]
+    .into_iter()
+    .filter_map(|(hand, item, fit)| {
+        let (item, fit) = (item?, fit?);
+        let side = side_of(hand);
+        let [x, y, z] = fit.placement.rotation.cols.map(Vec3::from_array);
+        let placed = Quat::from_mat3(&Mat3::from_cols(x, y, z));
+        // The fist in the item's own space: the doll's grip, undone of its placement and
+        // scale. Thinning narrows a handle about its axis, so the grip sits at the same
+        // point on the item as rolled.
+        let fist = Vec3::from_array(hands.body.grip(side).origin);
+        let grip = match fit.hold {
+            // Placed by its butt, at the shoulder.
+            Hold::Crossbow => Vec3::ZERO,
+            _ => placed.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale,
+        };
+        let at = view_hold(fit.hold, side);
+        let rotation = match fit.hold {
+            // Shouldered and aimed: the stock level, turned in toward the line of sight,
+            // the deck up, whatever the doll's grip. Level rather than at the crosshair, so
+            // the prod stays out of the middle of the view.
+            Hold::Crossbow => {
+                aimed_from(at.fist * Vec3::new(1.0, 0.0, 1.0))
+                    * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
+            }
+            _ => at.turn * BODY_TO_VIEW * placed,
+        };
+        let transform = Transform {
+            translation: at.fist - rotation * grip * scale,
+            rotation,
+            scale: Vec3::splat(scale),
+        };
+        Some(HeldInView {
+            hand,
+            hold: fit.hold,
+            item: item.clone(),
+            transform,
+            point: point_of(item, grip),
+            grip,
+            fist: at.fist,
         })
-        .collect()
+    })
+    .collect()
 }
 
 /// How far a lantern hung at the hip swings about its hook at walking pace, radians, as
@@ -194,8 +264,16 @@ pub fn hip_in_view(spec: &BodySpec, worn: &[(Slot, Item)], eye_height: f32) -> O
     let [x, y, z] = hip.placement.rotation.cols.map(Vec3::from_array);
     let placed = Quat::from_mat3(&Mat3::from_cols(x, y, z));
     let hook = Vec3::from_array(hip.hook);
-    let transform = Transform { translation: BODY_TO_VIEW * (Vec3::from_array(hip.placement.origin) - hook), rotation: BODY_TO_VIEW * placed, scale: Vec3::splat(hip.scale) };
-    Some(HipInView { item, hook: BODY_TO_VIEW * hook + Vec3::Y * (eye_height - body.head.centre[1]), transform })
+    let transform = Transform {
+        translation: BODY_TO_VIEW * (Vec3::from_array(hip.placement.origin) - hook),
+        rotation: BODY_TO_VIEW * placed,
+        scale: Vec3::splat(hip.scale),
+    };
+    Some(HipInView {
+        item,
+        hook: BODY_TO_VIEW * hook + Vec3::Y * (eye_height - body.head.centre[1]),
+        transform,
+    })
 }
 
 /// The hip lantern's turn about its hook at the step's `bob` ([`crate::player::Gait::bob`],
@@ -215,9 +293,9 @@ pub fn on_screen(p: Vec3, fov_degrees: f32) -> Option<Vec2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tuning::ViewTuning;
     use armory::Family;
     use fb_body::Folk;
-    use crate::tuning::ViewTuning;
 
     /// The held scale and field of view as shipped.
     fn view() -> ViewTuning {
@@ -238,7 +316,13 @@ mod tests {
 
     /// Every vertex of a placed item in view space.
     fn points(held: &HeldInView) -> Vec<Vec3> {
-        held.item.build().parts.iter().flat_map(|p| p.positions.clone()).map(|p| held.transform.transform_point(Vec3::from_array(p))).collect()
+        held.item
+            .build()
+            .parts
+            .iter()
+            .flat_map(|p| p.positions.clone())
+            .map(|p| held.transform.transform_point(Vec3::from_array(p)))
+            .collect()
     }
 
     fn centroid(held: &HeldInView) -> Vec3 {
@@ -254,11 +338,28 @@ mod tests {
     fn the_main_hand_is_on_the_right_and_the_off_hand_on_the_left() {
         let (mace, torch) = (roll("Mace", 3), crate::carry::lit_torch(4).shape);
         let held = held_in_view(&spec(Folk::Human), Some(&mace), Some(&torch));
-        assert_eq!(held.iter().map(|h| (h.hand, h.hold)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Hold::OneHanded), (Slot::Offhand, Hold::Torch)]);
-        assert!(centroid(&held[0]).x > 2.0, "the mace on the right: {}", centroid(&held[0]));
-        assert!(centroid(&held[1]).x < -2.0, "the torch on the left: {}", centroid(&held[1]));
+        assert_eq!(
+            held.iter().map(|h| (h.hand, h.hold)).collect::<Vec<_>>(),
+            vec![
+                (Slot::Mainhand, Hold::OneHanded),
+                (Slot::Offhand, Hold::Torch)
+            ]
+        );
+        assert!(
+            centroid(&held[0]).x > 2.0,
+            "the mace on the right: {}",
+            centroid(&held[0])
+        );
+        assert!(
+            centroid(&held[1]).x < -2.0,
+            "the torch on the left: {}",
+            centroid(&held[1])
+        );
         // Each fist is where its hold puts it, the off hand's mirrored.
-        assert_eq!(view_hold(Hold::Torch, Side::Left).fist.x, -view_hold(Hold::Torch, Side::Right).fist.x);
+        assert_eq!(
+            view_hold(Hold::Torch, Side::Left).fist.x,
+            -view_hold(Hold::Torch, Side::Right).fist.x
+        );
         assert_eq!(side_of(Slot::Mainhand), Side::Right);
         assert_eq!(side_of(Slot::Offhand), Side::Left);
     }
@@ -266,13 +367,23 @@ mod tests {
     #[test]
     fn every_weapon_family_in_the_off_hand_is_held_on_the_left() {
         let human = spec(Folk::Human);
-        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
+        for base in [
+            "Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow",
+        ] {
             let (sword, item) = (roll("Sword", 3), roll(base, 8));
             let held = held_in_view(&human, Some(&sword), Some(&item));
-            let off = held.iter().find(|h| h.hand == Slot::Offhand).unwrap_or_else(|| panic!("{base} not held"));
+            let off = held
+                .iter()
+                .find(|h| h.hand == Slot::Offhand)
+                .unwrap_or_else(|| panic!("{base} not held"));
             let main = held.iter().find(|h| h.hand == Slot::Mainhand).unwrap();
             assert!(view_hold(off.hold, Side::Left).fist.x < 0.0, "{base}");
-            assert!(centroid(off).x < 0.0 && centroid(main).x > 0.0, "{base}: off {} main {}", centroid(off), centroid(main));
+            assert!(
+                centroid(off).x < 0.0 && centroid(main).x > 0.0,
+                "{base}: off {} main {}",
+                centroid(off),
+                centroid(main)
+            );
         }
     }
 
@@ -282,27 +393,58 @@ mod tests {
         let lantern = roll("Lantern", 2);
         for folk in Folk::ALL {
             let worn = [(Slot::Belt, roll("Belt", 3)), (Slot::Hip, lantern.clone())];
-            let hip = hip_in_view(&spec(folk), &worn, EYE_HEIGHT).unwrap_or_else(|| panic!("{folk:?}"));
+            let hip =
+                hip_in_view(&spec(folk), &worn, EYE_HEIGHT).unwrap_or_else(|| panic!("{folk:?}"));
             // On the left, a little ahead, well below the eye and above the feet.
-            assert!(hip.hook.x < 0.0 && hip.hook.z < 0.0, "{folk:?}: {}", hip.hook);
-            assert!(hip.hook.y > 0.0 && hip.hook.y < EYE_HEIGHT * 0.75, "{folk:?}: {}", hip.hook);
+            assert!(
+                hip.hook.x < 0.0 && hip.hook.z < 0.0,
+                "{folk:?}: {}",
+                hip.hook
+            );
+            assert!(
+                hip.hook.y > 0.0 && hip.hook.y < EYE_HEIGHT * 0.75,
+                "{folk:?}: {}",
+                hip.hook
+            );
             // Every part hangs below the hook.
             for p in lantern.build().parts.iter().flat_map(|p| &p.positions) {
-                assert!(hip.transform.transform_point(Vec3::from_array(*p)).y <= 0.05, "{folk:?}");
+                assert!(
+                    hip.transform.transform_point(Vec3::from_array(*p)).y <= 0.05,
+                    "{folk:?}"
+                );
             }
         }
-        assert!(hip_in_view(&spec(Folk::Human), &[(Slot::Hip, lantern.clone())], EYE_HEIGHT).is_none(), "no belt, no hip");
+        assert!(
+            hip_in_view(
+                &spec(Folk::Human),
+                &[(Slot::Hip, lantern.clone())],
+                EYE_HEIGHT
+            )
+            .is_none(),
+            "no belt, no hip"
+        );
         assert_eq!(hip_swing(Vec2::ZERO), Quat::IDENTITY);
         assert!(hip_swing(Vec2::new(1.0, 0.5)).angle_between(Quat::IDENTITY) > 0.1);
     }
 
     #[test]
     fn a_mirrored_hold_is_a_reflection() {
-        for hold in [Hold::OneHanded, Hold::Upright, Hold::Bow, Hold::Shield, Hold::Torch, Hold::Lantern, Hold::Crossbow] {
+        for hold in [
+            Hold::OneHanded,
+            Hold::Upright,
+            Hold::Bow,
+            Hold::Shield,
+            Hold::Torch,
+            Hold::Lantern,
+            Hold::Crossbow,
+        ] {
             let (right, left) = (view_hold(hold, Side::Right), view_hold(hold, Side::Left));
             let flip = Vec3::new(-1.0, 1.0, 1.0);
             for v in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(0.3, 0.8, -0.5)] {
-                assert!((left.turn * (v * flip)).abs_diff_eq((right.turn * v) * flip, 1e-5), "{hold:?}");
+                assert!(
+                    (left.turn * (v * flip)).abs_diff_eq((right.turn * v) * flip, 1e-5),
+                    "{hold:?}"
+                );
             }
             assert_eq!(left.mirrored(), right);
         }
@@ -315,17 +457,41 @@ mod tests {
             for base in ["Sword", "Mace", "Shield", "Bow", "Staff"] {
                 let item = roll(base, 7);
                 let held = &held_in_view(&spec, Some(&item), None)[0];
-                let fit = fb_body::fit_held(&fb_body::Body::new(&spec), Side::Right, &item).unwrap();
-                assert_eq!(held.item, item, "{folk:?} {base}: the item as rolled, not thinned");
-                assert_eq!(held.transform.scale, Vec3::splat(view().held_scale), "{folk:?} {base}: scaled evenly");
+                let fit =
+                    fb_body::fit_held(&fb_body::Body::new(&spec), Side::Right, &item).unwrap();
+                assert_eq!(
+                    held.item, item,
+                    "{folk:?} {base}: the item as rolled, not thinned"
+                );
+                assert_eq!(
+                    held.transform.scale,
+                    Vec3::splat(view().held_scale),
+                    "{folk:?} {base}: scaled evenly"
+                );
                 // The doll's turn in the fist, then the hold's turn into the view.
                 let rot = Quat::from_mat3(&Mat3::from_cols_array_2d(&fit.placement.rotation.cols));
                 let at = view_hold(fit.hold, Side::Right);
-                assert!(held.transform.rotation.abs_diff_eq(at.turn * BODY_TO_VIEW * rot, 1e-5), "{folk:?} {base}");
+                assert!(
+                    held.transform
+                        .rotation
+                        .abs_diff_eq(at.turn * BODY_TO_VIEW * rot, 1e-5),
+                    "{folk:?} {base}"
+                );
                 // The grip sits at the hold's fist.
-                let fist = Vec3::from_array(fb_body::fit_hands(&spec, Some(&item), None).body.grip(Side::Right).origin);
-                let grip = rot.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
-                assert!(held.transform.transform_point(grip).abs_diff_eq(at.fist, 1e-4), "{folk:?} {base}");
+                let fist = Vec3::from_array(
+                    fb_body::fit_hands(&spec, Some(&item), None)
+                        .body
+                        .grip(Side::Right)
+                        .origin,
+                );
+                let grip =
+                    rot.inverse() * (fist - Vec3::from_array(fit.placement.origin)) / fit.scale;
+                assert!(
+                    held.transform
+                        .transform_point(grip)
+                        .abs_diff_eq(at.fist, 1e-4),
+                    "{folk:?} {base}"
+                );
             }
         }
     }
@@ -336,8 +502,14 @@ mod tests {
         for base in ["Mace", "Sword", "Hand axe", "Dagger", "Club"] {
             for hand in [Slot::Mainhand, Slot::Offhand] {
                 let item = roll(base, 5);
-                let held = if hand == Slot::Mainhand { held_in_view(&human, Some(&item), None) } else { held_in_view(&human, None, Some(&item)) };
-                let Some(held) = held.first() else { panic!("{base} not held") };
+                let held = if hand == Slot::Mainhand {
+                    held_in_view(&human, Some(&item), None)
+                } else {
+                    held_in_view(&human, None, Some(&item))
+                };
+                let Some(held) = held.first() else {
+                    panic!("{base} not held")
+                };
                 if held.hold != Hold::OneHanded {
                     continue;
                 }
@@ -377,10 +549,19 @@ mod tests {
             let torch_points = points(torch_held);
 
             // All haft points stay to the right of all torch points on screen.
-            let min_torch_x = torch_points.iter().filter_map(|p| on_screen(*p)).map(|s| s.x).fold(f32::INFINITY, f32::min);
+            let min_torch_x = torch_points
+                .iter()
+                .filter_map(|p| on_screen(*p))
+                .map(|s| s.x)
+                .fold(f32::INFINITY, f32::min);
             for p in &haft_points {
                 if let Some(screen) = on_screen(*p) {
-                    assert!(screen.x >= min_torch_x, "{base}: haft at {p} has screen_x {}, left of torch min {}", screen.x, min_torch_x);
+                    assert!(
+                        screen.x >= min_torch_x,
+                        "{base}: haft at {p} has screen_x {}, left of torch min {}",
+                        screen.x,
+                        min_torch_x
+                    );
                 }
             }
         }
@@ -396,9 +577,16 @@ mod tests {
                     for torch_base in ["Torch", "Lantern"] {
                         let haft = roll(haft_base, seed);
                         let torch = roll(torch_base, seed);
-                        let held = held_in_view(&BodySpec::roll(folk, seed), Some(&haft), Some(&torch));
-                        let haft_held = held.iter().find(|h| h.hand == Slot::Mainhand).unwrap_or_else(|| panic!("{haft_base} not held"));
-                        let torch_held = held.iter().find(|h| h.hand == Slot::Offhand).unwrap_or_else(|| panic!("{torch_base} not held"));
+                        let held =
+                            held_in_view(&BodySpec::roll(folk, seed), Some(&haft), Some(&torch));
+                        let haft_held = held
+                            .iter()
+                            .find(|h| h.hand == Slot::Mainhand)
+                            .unwrap_or_else(|| panic!("{haft_base} not held"));
+                        let torch_held = held
+                            .iter()
+                            .find(|h| h.hand == Slot::Offhand)
+                            .unwrap_or_else(|| panic!("{torch_base} not held"));
                         let haft_points = points(haft_held);
                         let torch_points = points(torch_held);
                         let mut min_distance = f32::INFINITY;
@@ -415,7 +603,11 @@ mod tests {
                 }
             }
         }
-        assert!(failures.is_empty(), "Long hafts too close to off-hand torch/lantern:\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "Long hafts too close to off-hand torch/lantern:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -436,11 +628,16 @@ mod tests {
             for seed in [1u32, 5, 9, 1207] {
                 for (main, off) in pairs {
                     let (main, off) = (main.map(|b| roll(b, seed)), off.map(|b| roll(b, seed)));
-                    for held in held_in_view(&BodySpec::roll(folk, seed), main.as_ref(), off.as_ref()) {
+                    for held in
+                        held_in_view(&BodySpec::roll(folk, seed), main.as_ref(), off.as_ref())
+                    {
                         for p in points(&held) {
                             let screen = on_screen(p).unwrap_or(Vec2::ZERO);
                             if -p.z < NEAREST || screen.length() < CLEAR_CENTRE {
-                                failures.push(format!("{folk:?} {seed}: {:?} at {p}", held.item.family()));
+                                failures.push(format!(
+                                    "{folk:?} {seed}: {:?} at {p}",
+                                    held.item.family()
+                                ));
                                 break;
                             }
                         }
@@ -467,13 +664,21 @@ mod tests {
     /// How tall a placed item is drawn, as a fraction of the half height of the view: the whole
     /// of it, including any part past the edge.
     fn screen_height(held: &HeldInView) -> f32 {
-        let ys: Vec<f32> = points(held).into_iter().filter_map(on_screen).map(|s| s.y).collect();
+        let ys: Vec<f32> = points(held)
+            .into_iter()
+            .filter_map(on_screen)
+            .map(|s| s.y)
+            .collect();
         ys.iter().copied().fold(f32::MIN, f32::max) - ys.iter().copied().fold(f32::MAX, f32::min)
     }
 
     #[test]
     fn the_view_model_sees_narrower_than_the_world() {
-        assert_eq!(view().world_fov_degrees, 70.0, "the world's field of view is unchanged");
+        assert_eq!(
+            view().world_fov_degrees,
+            70.0,
+            "the world's field of view is unchanged"
+        );
         assert!(view().held_fov_degrees < view().world_fov_degrees);
     }
 
@@ -490,9 +695,17 @@ mod tests {
             (Folk::Gnome, "Staff", 1.667),
         ];
         for (folk, base, old) in before {
-            let heights: Vec<f32> = [1u32, 5, 9, 1207].iter().map(|&seed| screen_height(&held_in_view(&spec(folk), Some(&roll(base, seed)), None)[0])).collect();
+            let heights: Vec<f32> = [1u32, 5, 9, 1207]
+                .iter()
+                .map(|&seed| {
+                    screen_height(&held_in_view(&spec(folk), Some(&roll(base, seed)), None)[0])
+                })
+                .collect();
             let now = heights.iter().sum::<f32>() / heights.len() as f32;
-            assert!(now >= 1.5 * old, "{folk:?} {base}: {now:.3} against {old:.3} before");
+            assert!(
+                now >= 1.5 * old,
+                "{folk:?} {base}: {now:.3} against {old:.3} before"
+            );
         }
     }
 }

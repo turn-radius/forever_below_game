@@ -53,7 +53,10 @@ fn theta_max(arch: &Arch) -> f32 {
 /// The point at angle `theta` on the arc of `side` (+1 right, -1 left), at `radius`.
 fn point(arch: &Arch, side: f32, theta: f32, radius: f32) -> P2 {
     let c = arch.hw - arch.r;
-    [side * (c + radius * theta.cos()), arch.spring + radius * theta.sin()]
+    [
+        side * (c + radius * theta.cos()),
+        arch.spring + radius * theta.sin(),
+    ]
 }
 
 /// A convex polygon, however it is wound, as a block `depth` through the wall centred on
@@ -79,7 +82,9 @@ pub(super) fn prism(poly: &[P2], depth: f32, ch: f32) -> MeshBuilder {
         let (a, b) = edge(i);
         ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
     });
-    let ch = ch.min(shortest.fold(f32::MAX, f32::min) * 0.3).min(depth * 0.25);
+    let ch = ch
+        .min(shortest.fold(f32::MAX, f32::min) * 0.3)
+        .min(depth * 0.25);
     // The face's outline, each corner moved in along the mitre.
     let inset: Vec<P2> = (0..n)
         .map(|i| {
@@ -95,13 +100,22 @@ pub(super) fn prism(poly: &[P2], depth: f32, ch: f32) -> MeshBuilder {
         let face = side * h;
         let rim = side * (h - ch);
         for i in 1..n - 1 {
-            let tri = [at(inset[0], face), at(inset[i], face), at(inset[i + 1], face)];
+            let tri = [
+                at(inset[0], face),
+                at(inset[i], face),
+                at(inset[i + 1], face),
+            ];
             mesh.push_flat_triangle(tri, tri.map(uv), [0.0, 0.0, side]);
         }
         for i in 0..n {
             let j = (i + 1) % n;
             let nm = normal(i);
-            let quad = [at(poly[i], rim), at(poly[j], rim), at(inset[j], face), at(inset[i], face)];
+            let quad = [
+                at(poly[i], rim),
+                at(poly[j], rim),
+                at(inset[j], face),
+                at(inset[i], face),
+            ];
             mesh.push_flat_quad(quad, quad.map(uv), [-nm[0], -nm[1], side]);
         }
     }
@@ -109,7 +123,12 @@ pub(super) fn prism(poly: &[P2], depth: f32, ch: f32) -> MeshBuilder {
     for i in 0..n {
         let j = (i + 1) % n;
         let nm = normal(i);
-        let quad = [at(poly[i], front), at(poly[j], front), at(poly[j], back), at(poly[i], back)];
+        let quad = [
+            at(poly[i], front),
+            at(poly[j], front),
+            at(poly[j], back),
+            at(poly[i], back),
+        ];
         mesh.push_flat_quad(quad, quad.map(uv), [-nm[0], -nm[1], 0.0]);
     }
     mesh
@@ -117,7 +136,11 @@ pub(super) fn prism(poly: &[P2], depth: f32, ch: f32) -> MeshBuilder {
 
 /// A block `lo..hi` across by `bottom..top` up, `depth` through the wall.
 fn block(lo: f32, hi: f32, bottom: f32, top: f32, depth: f32, ch: f32) -> MeshBuilder {
-    prism(&[[lo, bottom], [hi, bottom], [hi, top], [lo, top]], depth, ch)
+    prism(
+        &[[lo, bottom], [hi, bottom], [hi, top], [lo, top]],
+        depth,
+        ch,
+    )
 }
 
 /// `poly` (convex) cut to the side of the line `y = from.1 + slope * (x - from.0)` that lies above.
@@ -142,7 +165,14 @@ fn above(poly: &[P2], from: P2, slope: f32) -> Vec<P2> {
 /// from each spring up to a keystone seat that rises `key_rise` over the ring and stands proud
 /// of it (none when `rough`, whose
 /// stones are thicker, deeper and wander outward).
-fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f32), key_rise: f32, rough: bool, rng: &mut Mulberry32) -> MeshBuilder {
+fn voussoirs(
+    arch: &Arch,
+    (joint, chamfer): (f32, f32),
+    (thick, depth): (f32, f32),
+    key_rise: f32,
+    rough: bool,
+    rng: &mut Mulberry32,
+) -> MeshBuilder {
     let mut ring = MeshBuilder::new();
     let r_mid = arch.r + thick * 0.5;
     let theta_max = theta_max(&arch);
@@ -153,14 +183,37 @@ fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f3
     for side in [-1.0f32, 1.0] {
         let mut lo = 0.0;
         for k in 0..stones {
-            let hi = if k + 1 == stones { seat } else { seat * (k + 1) as f32 / stones as f32 + if rough { rng.range_f32(-0.08, 0.08) } else { 0.0 } };
+            let hi = if k + 1 == stones {
+                seat
+            } else {
+                seat * (k + 1) as f32 / stones as f32
+                    + if rough {
+                        rng.range_f32(-0.08, 0.08)
+                    } else {
+                        0.0
+                    }
+            };
             let (a, b) = (lo + gap_in * 0.5, (hi - gap_in * 0.5).max(lo + gap_in));
             lo = hi;
-            let t = if rough { rng.range_f32(ROCK_RING.0, ROCK_RING.1) } else { thick };
+            let t = if rough {
+                rng.range_f32(ROCK_RING.0, ROCK_RING.1)
+            } else {
+                thick
+            };
             // The rock-cut rim wanders outward only, so the opening is never narrower.
             let inner = if rough { rng.range_f32(0.0, 0.3) } else { 0.0 };
-            let poly = [point(&arch, side, a, arch.r + inner), point(&arch, side, b, arch.r + inner), point(&arch, side, b, arch.r + t), point(&arch, side, a, arch.r + t)];
-            let depth = depth + if rough { rng.range_f32(0.0, 0.9) } else { (rng.range_f32(0.0, 1.0) - 0.5) * 0.25 };
+            let poly = [
+                point(&arch, side, a, arch.r + inner),
+                point(&arch, side, b, arch.r + inner),
+                point(&arch, side, b, arch.r + t),
+                point(&arch, side, a, arch.r + t),
+            ];
+            let depth = depth
+                + if rough {
+                    rng.range_f32(0.0, 0.9)
+                } else {
+                    (rng.range_f32(0.0, 1.0) - 0.5) * 0.25
+                };
             let mut stone = prism(&poly, depth, chamfer);
             stone.translate([0.0, 0.0, (rng.range_f32(0.0, 1.0) - 0.5) * 0.2]);
             ring.append(&stone);
@@ -170,8 +223,18 @@ fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f3
         // The keystone: wedge-sided over the crown, rising a little above the ring.
         let key_in = |side: f32| point(&arch, side, seat, arch.r);
         let key_out = |side: f32| point(&arch, side, seat, arch.r + thick);
-        let crown = arch.height(0.0, arch.r + thick).unwrap_or(arch.spring + arch.r + thick) + key_rise;
-        let poly = [key_in(-1.0), key_in(1.0), key_out(1.0), [1.2, crown], [-1.2, crown], key_out(-1.0)];
+        let crown = arch
+            .height(0.0, arch.r + thick)
+            .unwrap_or(arch.spring + arch.r + thick)
+            + key_rise;
+        let poly = [
+            key_in(-1.0),
+            key_in(1.0),
+            key_out(1.0),
+            [1.2, crown],
+            [-1.2, crown],
+            key_out(-1.0),
+        ];
         ring.append(&prism(&poly, depth + KEY_PROUD, chamfer));
     }
     ring
@@ -181,7 +244,14 @@ fn voussoirs(arch: &Arch, (joint, chamfer): (f32, f32), (thick, depth): (f32, f3
 /// voussoirs with its keystone (rougher and unkeyed for [`DoorStyle::RockCut`]), and the
 /// wall's masonry laid in `courses` up to `top`, reaching `reach` either side of the centre,
 /// cut round the ring's outer face.
-pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
+pub fn door_arch(
+    style: DoorStyle,
+    courses: &[(f32, f32)],
+    top: f32,
+    reach: f32,
+    (joint, chamfer): (f32, f32),
+    seed: u32,
+) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ 0xa4c4_d007);
     let rough = style == DoorStyle::RockCut;
     let arch = Arch::new(style);
@@ -190,28 +260,67 @@ pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
 
     // The thinnest a stone is, which the masonry is cut to.
     let thin = if rough { ROCK_RING.0 } else { RING };
-    let mut ring = voussoirs(&arch, (joint, ring_chamfer), (RING, RING_DEPTH), KEY_RISE, rough, &mut rng);
+    let mut ring = voussoirs(
+        &arch,
+        (joint, ring_chamfer),
+        (RING, RING_DEPTH),
+        KEY_RISE,
+        rough,
+        &mut rng,
+    );
 
     // Jambs of dressed blocks up to the impost, the stones alternating wide and narrow.
-    let impost_bottom = if rough { spring } else { spring - IMPOST_HEIGHT };
+    let impost_bottom = if rough {
+        spring
+    } else {
+        spring - IMPOST_HEIGHT
+    };
     let courses_up = ((impost_bottom / 4.4).round() as usize).max(2);
     let mut jambs = MeshBuilder::new();
     for side in [-1.0f32, 1.0] {
         let mut bottom = 0.0;
         for k in 0..courses_up {
-            let h = if rough { rng.range_f32(3.4, 5.6) } else { impost_bottom / courses_up as f32 };
-            let top_of = if k + 1 == courses_up { impost_bottom } else { (bottom + h).min(impost_bottom - 1.0) };
-            let long = if rough { rng.range_f32(0.0, 1.8) } else if k % 2 == 0 { 0.0 } else { 1.3 };
+            let h = if rough {
+                rng.range_f32(3.4, 5.6)
+            } else {
+                impost_bottom / courses_up as f32
+            };
+            let top_of = if k + 1 == courses_up {
+                impost_bottom
+            } else {
+                (bottom + h).min(impost_bottom - 1.0)
+            };
+            let long = if rough {
+                rng.range_f32(0.0, 1.8)
+            } else if k % 2 == 0 {
+                0.0
+            } else {
+                1.3
+            };
             let (x0, x1) = (hw, hw + RING + long);
             let depth = JAMB_DEPTH + if rough { rng.range_f32(0.0, 0.8) } else { 0.0 };
             let (lo, hi) = if side < 0.0 { (-x1, -x0) } else { (x0, x1) };
-            jambs.append(&block(lo, hi, bottom + joint * 0.5, top_of - joint * 0.5, depth, ring_chamfer));
+            jambs.append(&block(
+                lo,
+                hi,
+                bottom + joint * 0.5,
+                top_of - joint * 0.5,
+                depth,
+                ring_chamfer,
+            ));
             bottom = top_of;
         }
         if !rough {
             let (x0, x1) = (hw, hw + RING + 0.7);
             let (lo, hi) = if side < 0.0 { (-x1, -x0) } else { (x0, x1) };
-            jambs.append(&block(lo, hi, impost_bottom, spring - joint * 0.5, IMPOST_DEPTH, ring_chamfer));
+            jambs.append(&block(
+                lo,
+                hi,
+                impost_bottom,
+                spring - joint * 0.5,
+                IMPOST_DEPTH,
+                ring_chamfer,
+            ));
         }
     }
 
@@ -229,7 +338,9 @@ pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
         let mut poly = vec![[lo, bottom], [hi, bottom], [hi, top_of], [lo, top_of]];
         if inside {
             // Above the outer face: its chord, a hair lower, so the block tucks behind the ring.
-            let (Some(ya), Some(yb)) = (arch.height(lo, cut), arch.height(hi, cut)) else { return };
+            let (Some(ya), Some(yb)) = (arch.height(lo, cut), arch.height(hi, cut)) else {
+                return;
+            };
             let (ya, yb) = (ya - TUCK, yb - TUCK);
             poly = above(&poly, [lo, ya], (yb - ya) / (hi - lo));
             let area = signed_area(&poly).abs();
@@ -252,7 +363,11 @@ pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
             x += len;
             // Cut where the ring's span starts and ends, and at the crown, under the keystone.
             let mut at = vec![a];
-            at.extend([-edge_x, 0.0, edge_x].into_iter().filter(|&c| c > a + 0.05 && c < b - 0.05));
+            at.extend(
+                [-edge_x, 0.0, edge_x]
+                    .into_iter()
+                    .filter(|&c| c > a + 0.05 && c < b - 0.05),
+            );
             at.push(b);
             for pair in at.windows(2) {
                 piece(pair[0], pair[1], bottom, top_of, &mut rng);
@@ -273,7 +388,11 @@ pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
     let mut outline: Vec<P2> = vec![[-inner, top], [-inner, spring], [-hw, spring]];
     let intrados = |side: f32, theta: f32| point(&arch, side, theta, arch.r);
     outline.extend((1..=steps).map(|i| intrados(-1.0, theta_max * i as f32 / steps as f32)));
-    outline.extend((0..steps).rev().map(|i| intrados(1.0, theta_max * i as f32 / steps as f32)));
+    outline.extend(
+        (0..steps)
+            .rev()
+            .map(|i| intrados(1.0, theta_max * i as f32 / steps as f32)),
+    );
     outline.extend([[inner, spring], [inner, top]]);
     outline.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4);
     masonry.append(&extrude(&outline, &[], core_depth));
@@ -281,7 +400,11 @@ pub fn door_arch(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
     let mut parts = Parts::new();
     parts.add("masonry", masonry, MaterialKind::Stone);
     ring.append(&jambs);
-    parts.add_look("arch", ring, Look::of(MaterialKind::Stone).tinted(if rough { CAVE_ARCH } else { ARCH_STONE }));
+    parts.add_look(
+        "arch",
+        ring,
+        Look::of(MaterialKind::Stone).tinted(if rough { CAVE_ARCH } else { ARCH_STONE }),
+    );
     parts.finish()
 }
 
@@ -339,7 +462,12 @@ fn straight(level: &Level, x: i32, y: i32) -> Option<bool> {
     if level.cell(x, y) != Cell::Floor || level.room_at(x, y).is_some() {
         return None;
     }
-    let (n, e, s, w) = (level.is_open(x, y - 1), level.is_open(x + 1, y), level.is_open(x, y + 1), level.is_open(x - 1, y));
+    let (n, e, s, w) = (
+        level.is_open(x, y - 1),
+        level.is_open(x + 1, y),
+        level.is_open(x, y + 1),
+        level.is_open(x - 1, y),
+    );
     match (n, e, s, w) {
         (false, true, false, true) => Some(true),
         (true, false, true, false) => Some(false),
@@ -360,7 +488,10 @@ pub fn corridor_runs(level: &Level) -> Vec<CorridorRun> {
                 if at < length && straight(level, x, y) == Some(along_x) {
                     run.push((x, y));
                 } else if !run.is_empty() {
-                    runs.push(CorridorRun { cells: std::mem::take(&mut run), along_x });
+                    runs.push(CorridorRun {
+                        cells: std::mem::take(&mut run),
+                        along_x,
+                    });
                 }
             }
         }
@@ -380,23 +511,45 @@ pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> 
     let soffit = level.ceiling;
     let flat = |x: i32, y: i32| {
         let (cx, cz) = ((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL);
-        [(0.0, 0.0), (-0.5, 0.0), (0.5, 0.0), (0.0, -0.5), (0.0, 0.5)].iter().all(|&(dx, dz)| (vaults.height(cx + dx * CELL, cz + dz * CELL) - soffit).abs() < FLAT_SOFFIT)
+        [(0.0, 0.0), (-0.5, 0.0), (0.5, 0.0), (0.0, -0.5), (0.0, 0.5)]
+            .iter()
+            .all(|&(dx, dz)| {
+                (vaults.height(cx + dx * CELL, cz + dz * CELL) - soffit).abs() < FLAT_SOFFIT
+            })
     };
-    let near_stair = |x: i32, y: i32| level.stairs.iter().any(|s| (s.x as i32 - x).abs() <= 1 && (s.y as i32 - y).abs() <= 1);
+    let near_stair = |x: i32, y: i32| {
+        level
+            .stairs
+            .iter()
+            .any(|s| (s.x as i32 - x).abs() <= 1 && (s.y as i32 - y).abs() <= 1)
+    };
     // A plain corridor cell: floor, outside every room.
     let plain = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && level.room_at(x, y).is_none();
     // No open cell diagonally beside it: the corridor does not widen or bend away at its ends,
     // so an arch never stands where it would span only part of a wider corridor.
-    let hemmed = |x: i32, y: i32| [(-1, -1), (1, -1), (-1, 1), (1, 1)].iter().all(|&(dx, dy)| !level.is_open(x + dx, y + dy));
+    let hemmed = |x: i32, y: i32| {
+        [(-1, -1), (1, -1), (-1, 1), (1, 1)]
+            .iter()
+            .all(|&(dx, dy)| !level.is_open(x + dx, y + dy))
+    };
     let mut out = Vec::new();
     for run in corridor_runs(level) {
         let (x0, y0) = run.cells[0];
-        let mut rng = Mulberry32::new(level.seed ^ level.depth.wrapping_mul(0x9e37_79b9) ^ (x0 as u32).wrapping_mul(0x85eb_ca6b) ^ (y0 as u32).wrapping_mul(0xc2b2_ae35) ^ 0xa4c4_c0a0);
+        let mut rng = Mulberry32::new(
+            level.seed
+                ^ level.depth.wrapping_mul(0x9e37_79b9)
+                ^ (x0 as u32).wrapping_mul(0x85eb_ca6b)
+                ^ (y0 as u32).wrapping_mul(0xc2b2_ae35)
+                ^ 0xa4c4_c0a0,
+        );
         let mut i = rng.int(0, ARCH_SPACING.1 - ARCH_SPACING.0) as usize;
         while i < run.cells.len() {
             let (x, y) = run.cells[i];
             let (dx, dy) = if run.along_x { (1, 0) } else { (0, 1) };
-            let vaulted = finishes.quarter(x, y).map(|q| &finishes.quarters()[q]).filter(|q| q.character == Character::Vaulted);
+            let vaulted = finishes
+                .quarter(x, y)
+                .map(|q| &finishes.quarters()[q])
+                .filter(|q| q.character == Character::Vaulted);
             if let Some(quarter) = vaulted
                 && plain(x - dx, y - dy)
                 && plain(x + dx, y + dy)
@@ -404,7 +557,12 @@ pub fn corridor_arches(level: &Level, finishes: &Finishes) -> Vec<CorridorArch> 
                 && flat(x, y)
                 && !near_stair(x, y)
             {
-                out.push(CorridorArch { cell: (x, y), along_x: run.along_x, soffit, pointed: quarter.door == DoorStyle::PointedArch });
+                out.push(CorridorArch {
+                    cell: (x, y),
+                    along_x: run.along_x,
+                    soffit,
+                    pointed: quarter.door == DoorStyle::PointedArch,
+                });
             }
             i += rng.int(ARCH_SPACING.0, ARCH_SPACING.1) as usize;
         }
@@ -432,29 +590,64 @@ pub fn corridor_arch(soffit: f32, seed: u32, pointed: bool) -> Option<ItemMesh> 
         return None;
     }
     let (joint, chamfer) = RIB_STONE;
-    let arch = Arch { hw: radius, spring, r };
-    let mut stone = voussoirs(&arch, (joint, chamfer), (RIB_THICK, RIB_ALONG), RIB_KEY_RISE, false, &mut rng);
+    let arch = Arch {
+        hw: radius,
+        spring,
+        r,
+    };
+    let mut stone = voussoirs(
+        &arch,
+        (joint, chamfer),
+        (RIB_THICK, RIB_ALONG),
+        RIB_KEY_RISE,
+        false,
+        &mut rng,
+    );
 
     // Into the wall, so the pilasters bed behind its blocks.
     let wall = CELL * 0.5 + 0.2;
-    let side_block = |mesh: &mut MeshBuilder, [near, far]: [f32; 2], [bottom, top]: [f32; 2], along: f32| {
-        for side in [-1.0f32, 1.0] {
-            let (lo, hi) = if side < 0.0 { (-far, -near) } else { (near, far) };
-            mesh.append(&block(lo, hi, bottom, top, along, chamfer));
-        }
-    };
-    side_block(&mut stone, [radius, wall], [0.0, PLINTH_HEIGHT], PILASTER_FOOT_ALONG);
-    side_block(&mut stone, [radius, wall], [impost_bottom, spring - joint * 0.5], PILASTER_FOOT_ALONG);
+    let side_block =
+        |mesh: &mut MeshBuilder, [near, far]: [f32; 2], [bottom, top]: [f32; 2], along: f32| {
+            for side in [-1.0f32, 1.0] {
+                let (lo, hi) = if side < 0.0 {
+                    (-far, -near)
+                } else {
+                    (near, far)
+                };
+                mesh.append(&block(lo, hi, bottom, top, along, chamfer));
+            }
+        };
+    side_block(
+        &mut stone,
+        [radius, wall],
+        [0.0, PLINTH_HEIGHT],
+        PILASTER_FOOT_ALONG,
+    );
+    side_block(
+        &mut stone,
+        [radius, wall],
+        [impost_bottom, spring - joint * 0.5],
+        PILASTER_FOOT_ALONG,
+    );
     // The shaft, in drums a little over four units tall.
     let drums = (((impost_bottom - PLINTH_HEIGHT) / 4.4).round() as usize).max(2);
     let drum = (impost_bottom - PLINTH_HEIGHT) / drums as f32;
     for k in 0..drums {
         let bottom = PLINTH_HEIGHT + k as f32 * drum;
         let along = PILASTER_ALONG + (rng.range_f32(0.0, 1.0) - 0.5) * 0.2;
-        side_block(&mut stone, [face, wall], [bottom + joint * 0.5, bottom + drum - joint * 0.5], along);
+        side_block(
+            &mut stone,
+            [face, wall],
+            [bottom + joint * 0.5, bottom + drum - joint * 0.5],
+            along,
+        );
     }
     let mut parts = Parts::new();
-    parts.add_look("arch", stone, Look::of(MaterialKind::Stone).tinted(RIB_TINT));
+    parts.add_look(
+        "arch",
+        stone,
+        Look::of(MaterialKind::Stone).tinted(RIB_TINT),
+    );
     Some(parts.finish())
 }
 
@@ -463,12 +656,25 @@ mod tests {
     use super::*;
     use crate::level::geometry::{CEILING_RELIEF, DOOR_WIDTH, WALL_RELIEF, stone};
 
-    const STYLES: [DoorStyle; 3] = [DoorStyle::RoundArch, DoorStyle::PointedArch, DoorStyle::RockCut];
+    const STYLES: [DoorStyle; 3] = [
+        DoorStyle::RoundArch,
+        DoorStyle::PointedArch,
+        DoorStyle::RockCut,
+    ];
 
     fn made(style: DoorStyle, seed: u32) -> ItemMesh {
         let top = 40.0 + CEILING_RELIEF;
-        let courses: Vec<(f32, f32)> = (0..(top / 4.6).ceil() as usize).map(|i| (i as f32 * 4.6, 4.6f32.min(top - i as f32 * 4.6))).collect();
-        door_arch(style, &courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
+        let courses: Vec<(f32, f32)> = (0..(top / 4.6).ceil() as usize)
+            .map(|i| (i as f32 * 4.6, 4.6f32.min(top - i as f32 * 4.6)))
+            .collect();
+        door_arch(
+            style,
+            &courses,
+            top,
+            CELL * 0.5 + WALL_RELIEF,
+            (0.18, 0.35),
+            seed,
+        )
     }
 
     #[test]
@@ -489,8 +695,13 @@ mod tests {
                     for p in &part.positions {
                         // Under the intrados and between the jambs, bar the keystone's flat seat,
                         // which sits a hair inside the arc.
-                        let under = arch.height(p[0], arch.r).map_or(p[1] < arch.spring, |h| p[1] < h - 0.3);
-                        assert!(!(p[0].abs() < arch.hw - 0.02 && p[1] > 0.5 && under), "{style:?} seed {seed}: {p:?} in the opening");
+                        let under = arch
+                            .height(p[0], arch.r)
+                            .map_or(p[1] < arch.spring, |h| p[1] < h - 0.3);
+                        assert!(
+                            !(p[0].abs() < arch.hw - 0.02 && p[1] > 0.5 && under),
+                            "{style:?} seed {seed}: {p:?} in the opening"
+                        );
                     }
                 }
             }
@@ -511,7 +722,10 @@ mod tests {
                     .filter(|p| p[0].abs() < 0.2 && p[1] > DOOR_HEIGHT - 3.0)
                     .map(|p| p[1])
                     .fold(f32::MAX, f32::min);
-                assert!(lowest >= DOOR_HEIGHT - 1e-3, "{style:?} seed {seed}: clear height {lowest}");
+                assert!(
+                    lowest >= DOOR_HEIGHT - 1e-3,
+                    "{style:?} seed {seed}: clear height {lowest}"
+                );
             }
         }
     }
@@ -521,8 +735,16 @@ mod tests {
         for style in STYLES {
             for seed in 1..=10 {
                 let (lo, hi) = made(style, seed).bounds().unwrap();
-                assert!(lo[0] >= -(CELL * 0.5 + WALL_RELIEF) - 1e-3 && hi[0] <= CELL * 0.5 + WALL_RELIEF + 1e-3, "{style:?} {lo:?} {hi:?}");
-                assert!(hi[1] <= 40.0 + CEILING_RELIEF + 1e-3, "{style:?} reaches {}", hi[1]);
+                assert!(
+                    lo[0] >= -(CELL * 0.5 + WALL_RELIEF) - 1e-3
+                        && hi[0] <= CELL * 0.5 + WALL_RELIEF + 1e-3,
+                    "{style:?} {lo:?} {hi:?}"
+                );
+                assert!(
+                    hi[1] <= 40.0 + CEILING_RELIEF + 1e-3,
+                    "{style:?} reaches {}",
+                    hi[1]
+                );
                 assert!(lo[1] >= -0.5);
                 assert!(hi[2] < 3.5 && lo[2] > -3.5, "{style:?} depth {lo:?} {hi:?}");
             }
@@ -532,7 +754,10 @@ mod tests {
     #[test]
     fn a_halls_doorway_takes_its_style() {
         let level = fb_level::generate(1207, 2);
-        let doorway = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).find(|&(x, y)| level.cell(x, y) == fb_level::Cell::Door).unwrap();
+        let doorway = (0..level.height as i32)
+            .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+            .find(|&(x, y)| level.cell(x, y) == fb_level::Cell::Door)
+            .unwrap();
         let timber = stone::door_frame(&level, doorway, DoorStyle::Timber, 1);
         let round = stone::door_frame(&level, doorway, DoorStyle::RoundArch, 1);
         assert!(timber.parts.iter().any(|p| p.name == "frame"));
@@ -545,23 +770,49 @@ mod tests {
         let mut total = 0;
         for seed in 1..=30 {
             let level = fb_level::generate(seed, 2);
-            let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
+            let finishes =
+                fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
             let arches = corridor_arches(&level, &finishes);
             assert_eq!(arches, corridor_arches(&level, &finishes), "seed {seed}");
             for a in &arches {
                 let (x, y) = a.cell;
                 let quarter = &finishes.quarters()[finishes.quarter(x, y).unwrap()];
-                assert_eq!(quarter.character, Character::Vaulted, "seed {seed}: arch outside a vaulted quarter at {x},{y}");
-                assert_eq!(a.pointed, quarter.door == DoorStyle::PointedArch, "seed {seed}: arch shape differs from its quarter's at {x},{y}");
+                assert_eq!(
+                    quarter.character,
+                    Character::Vaulted,
+                    "seed {seed}: arch outside a vaulted quarter at {x},{y}"
+                );
+                assert_eq!(
+                    a.pointed,
+                    quarter.door == DoorStyle::PointedArch,
+                    "seed {seed}: arch shape differs from its quarter's at {x},{y}"
+                );
                 assert_eq!(level.cell(x, y), Cell::Floor);
-                assert!(level.room_at(x, y).is_none(), "seed {seed}: arch in a room at {x},{y}");
-                assert_eq!(straight(&level, x, y), Some(a.along_x), "seed {seed}: arch in a turn or junction at {x},{y}");
+                assert!(
+                    level.room_at(x, y).is_none(),
+                    "seed {seed}: arch in a room at {x},{y}"
+                );
+                assert_eq!(
+                    straight(&level, x, y),
+                    Some(a.along_x),
+                    "seed {seed}: arch in a turn or junction at {x},{y}"
+                );
                 let (dx, dy) = if a.along_x { (1, 0) } else { (0, 1) };
                 for k in [-1, 1] {
-                    assert_eq!(level.cell(x + dx * k, y + dy * k), Cell::Floor, "seed {seed}: arch beside a door at {x},{y}");
+                    assert_eq!(
+                        level.cell(x + dx * k, y + dy * k),
+                        Cell::Floor,
+                        "seed {seed}: arch beside a door at {x},{y}"
+                    );
                     assert!(level.room_at(x + dx * k, y + dy * k).is_none());
                 }
-                assert!(level.stairs.iter().all(|s| (s.x as i32 - x).abs() > 1 || (s.y as i32 - y).abs() > 1), "seed {seed}: arch by a stair");
+                assert!(
+                    level
+                        .stairs
+                        .iter()
+                        .all(|s| (s.x as i32 - x).abs() > 1 || (s.y as i32 - y).abs() > 1),
+                    "seed {seed}: arch by a stair"
+                );
             }
             total += arches.len();
         }
@@ -573,12 +824,23 @@ mod tests {
         let mut wide_cells = 0;
         let mut arches_seen = 0;
         for width in [2, 3] {
-            let params = fb_level::LevelParams { corridor_width_min: width, corridor_width_max: width, ..fb_level::LevelParams::for_style(fb_level::LevelStyle::StoneHalls) };
+            let params = fb_level::LevelParams {
+                corridor_width_min: width,
+                corridor_width_max: width,
+                ..fb_level::LevelParams::for_style(fb_level::LevelStyle::StoneHalls)
+            };
             for seed in 1..=30 {
                 let level = fb_level::generate_with(seed, 2, &params);
                 let finishes = fb_level::finishes(&level, &params);
                 let plain = |x: i32, y: i32| level.is_open(x, y) && level.room_at(x, y).is_none();
-                wide_cells += (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| plain(x, y) && (plain(x + 1, y) || plain(x - 1, y)) && (plain(x, y + 1) || plain(x, y - 1))).count();
+                wide_cells += (0..level.height as i32)
+                    .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+                    .filter(|&(x, y)| {
+                        plain(x, y)
+                            && (plain(x + 1, y) || plain(x - 1, y))
+                            && (plain(x, y + 1) || plain(x, y - 1))
+                    })
+                    .count();
                 for a in corridor_arches(&level, &finishes) {
                     let (x, y) = a.cell;
                     let (px, py) = if a.along_x { (0, 1) } else { (1, 0) };
@@ -586,14 +848,20 @@ mod tests {
                     for side in [-1, 1] {
                         for along in [-1, 0, 1] {
                             let (cx, cy) = (x + px * side + dx * along, y + py * side + dy * along);
-                            assert!(!level.is_open(cx, cy), "seed {seed}, width {width}: arch at {x},{y} stands beside open cell {cx},{cy}");
+                            assert!(
+                                !level.is_open(cx, cy),
+                                "seed {seed}, width {width}: arch at {x},{y} stands beside open cell {cx},{cy}"
+                            );
                         }
                     }
                     arches_seen += 1;
                 }
             }
         }
-        assert!(wide_cells > 100, "only {wide_cells} wide corridor cells, so the test proves little");
+        assert!(
+            wide_cells > 100,
+            "only {wide_cells} wide corridor cells, so the test proves little"
+        );
         assert!(arches_seen > 0, "no arches stood in the narrow stretches");
     }
 
@@ -602,13 +870,25 @@ mod tests {
         let mut rhythmic = 0;
         for seed in 1..=30 {
             let level = fb_level::generate(seed, 2);
-            let arches = corridor_arches(&level, &fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style)));
+            let arches = corridor_arches(
+                &level,
+                &fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style)),
+            );
             for run in corridor_runs(&level) {
-                let at: Vec<usize> = run.cells.iter().enumerate().filter(|(_, c)| arches.iter().any(|a| a.cell == **c)).map(|(i, _)| i).collect();
+                let at: Vec<usize> = run
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| arches.iter().any(|a| a.cell == **c))
+                    .map(|(i, _)| i)
+                    .collect();
                 for pair in at.windows(2) {
                     let gap = pair[1] - pair[0];
                     // Ineligible cells are skipped, so a gap is a spacing or a few of them.
-                    assert!(gap >= ARCH_SPACING.0 as usize, "seed {seed}: arches {gap} cells apart");
+                    assert!(
+                        gap >= ARCH_SPACING.0 as usize,
+                        "seed {seed}: arches {gap} cells apart"
+                    );
                 }
                 rhythmic += (at.len() >= 3) as u32;
             }
@@ -620,7 +900,13 @@ mod tests {
     fn rough_rock_has_no_corridor_arches() {
         for seed in 1..=20 {
             let level = fb_level::generate(seed, 1);
-            assert!(corridor_arches(&level, &fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style))).is_empty());
+            assert!(
+                corridor_arches(
+                    &level,
+                    &fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style))
+                )
+                .is_empty()
+            );
         }
     }
 
@@ -631,7 +917,10 @@ mod tests {
         for pointed in [false, true] {
             corridor_arch_spans(soffit, pointed);
             // Other ceilings: where a rib is made at all it clears a door and fits its soffit.
-            let made: Vec<f32> = [30.0, 34.0, 38.0, 44.0, 52.0, 64.0].into_iter().filter(|&s| corridor_arch(s, 1, pointed).is_some()).collect();
+            let made: Vec<f32> = [30.0, 34.0, 38.0, 44.0, 52.0, 64.0]
+                .into_iter()
+                .filter(|&s| corridor_arch(s, 1, pointed).is_some())
+                .collect();
             assert!(!made.is_empty(), "no ceiling takes a pointed={pointed} rib");
             for s in made {
                 corridor_arch_spans(s, pointed);
@@ -645,8 +934,15 @@ mod tests {
         let mesh = corridor_arch(soffit, 1, pointed).expect("the halls' soffit is high enough");
         let (lo, hi) = mesh.bounds().unwrap();
         // Inside the cell's width and up to just under the soffit.
-        assert!(lo[0] >= -(CELL * 0.5 + 0.3) && hi[0] <= CELL * 0.5 + 0.3, "{lo:?} {hi:?}");
-        assert!(hi[1] < soffit && hi[1] > soffit - 1.0, "tops out at {} under a soffit at {soffit}", hi[1]);
+        assert!(
+            lo[0] >= -(CELL * 0.5 + 0.3) && hi[0] <= CELL * 0.5 + 0.3,
+            "{lo:?} {hi:?}"
+        );
+        assert!(
+            hi[1] < soffit && hi[1] > soffit - 1.0,
+            "tops out at {} under a soffit at {soffit}",
+            hi[1]
+        );
         // Nothing across the middle of the cell under the rib's clear height.
         let radius = CELL * 0.5 - PILASTER_DEPTH - IMPOST_PROJECTION;
         let r = if pointed { radius * 2.0 } else { radius };
@@ -654,8 +950,18 @@ mod tests {
         assert!(spring + (r * r - (r - radius).powi(2)).sqrt() >= DOOR_HEIGHT);
         for part in &mesh.parts {
             for p in &part.positions {
-                let clear = if p[1] < spring { f32::MAX } else { (r * r - (p[0].abs() - (radius - r)).powi(2)).max(0.0).sqrt() + spring };
-                assert!(p[0].abs() >= radius - 0.02 || p[1] >= clear - 0.3, "{p:?} stands in the way");
+                let clear = if p[1] < spring {
+                    f32::MAX
+                } else {
+                    (r * r - (p[0].abs() - (radius - r)).powi(2))
+                        .max(0.0)
+                        .sqrt()
+                        + spring
+                };
+                assert!(
+                    p[0].abs() >= radius - 0.02 || p[1] >= clear - 0.3,
+                    "{p:?} stands in the way"
+                );
             }
         }
         // And it is the same arch from the same seed.

@@ -30,19 +30,21 @@ pub struct BelongingsPlugin;
 
 impl Plugin for BelongingsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Tuning>().init_resource::<FloorChanges>().add_systems(
-            Update,
-            // After every system that lays a body down (a critter's fall, a folk's blow, a troll's
-            // last regeneration) and before a folk is laid back, so the items fall where it fell.
-            drop_belongings
-                .after(collapse)
-                .after(take_blows)
-                .after(take_folk_blows)
-                .after(crate::creatures::trolls::regenerate)
-                .before(collapse_folk)
-                .before(apply_floor_changes)
-                .in_set(DelveSystems),
-        );
+        app.init_resource::<Tuning>()
+            .init_resource::<FloorChanges>()
+            .add_systems(
+                Update,
+                // After every system that lays a body down (a critter's fall, a folk's blow, a troll's
+                // last regeneration) and before a folk is laid back, so the items fall where it fell.
+                drop_belongings
+                    .after(collapse)
+                    .after(take_blows)
+                    .after(take_folk_blows)
+                    .after(crate::creatures::trolls::regenerate)
+                    .before(collapse_folk)
+                    .before(apply_floor_changes)
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -59,7 +61,11 @@ pub struct Belongings {
 
 impl Belongings {
     pub fn new(seed: u32, items: impl IntoIterator<Item = Item>) -> Belongings {
-        Belongings { items: items.into_iter().collect(), seed, stood_in: None }
+        Belongings {
+            items: items.into_iter().collect(),
+            seed,
+            stood_in: None,
+        }
     }
 
     /// These belongings of a character that blocked a circle of `radius`.
@@ -75,11 +81,25 @@ impl Belongings {
         let species = critter.spot.species;
         if species.is_skeleton() {
             let kit = critter.kit.as_ref()?;
-            Some(Belongings::new(seed, kit.outfit.worn.iter().map(|(_, item)| item).chain(&kit.outfit.goods).cloned()))
+            Some(Belongings::new(
+                seed,
+                kit.outfit
+                    .worn
+                    .iter()
+                    .map(|(_, item)| item)
+                    .chain(&kit.outfit.goods)
+                    .cloned(),
+            ))
         } else if species.is_jackalope() {
-            Some(Belongings::new(seed, fb_items::jackalope::jackalope_drop(seed, depth)))
+            Some(Belongings::new(
+                seed,
+                fb_items::jackalope::jackalope_drop(seed, depth),
+            ))
         } else {
-            critter.arms.as_ref().map(|arms| Belongings::new(seed, [arms.weapon.clone()]))
+            critter
+                .arms
+                .as_ref()
+                .map(|arms| Belongings::new(seed, [arms.weapon.clone()]))
         }
     }
 }
@@ -109,7 +129,16 @@ pub fn drop_belongings(
     sounds: Option<Res<BoneSounds>>,
     mut inventory: ResMut<Inventory>,
     mut changes: ResMut<FloorChanges>,
-    bodies: Query<(Entity, &Belongings, &Transform, Option<&Critter>, Option<&Troll>), (With<Corpse>, Without<Looted>)>,
+    bodies: Query<
+        (
+            Entity,
+            &Belongings,
+            &Transform,
+            Option<&Critter>,
+            Option<&Troll>,
+        ),
+        (With<Corpse>, Without<Looted>),
+    >,
     gear: Query<(Entity, &ChildOf), With<WornGear>>,
     bones: Query<&Bones>,
 ) {
@@ -124,7 +153,14 @@ pub fn drop_belongings(
         if let (Some(sounds), Some(critter)) = (&sounds, critter)
             && critter.spot.species.is_skeleton()
         {
-            play_at(&mut commands, "bones fall", sounds.collapse.clone(), at.translation, &game, &tuning);
+            play_at(
+                &mut commands,
+                "bones fall",
+                sounds.collapse.clone(),
+                at.translation,
+                &game,
+                &tuning,
+            );
         }
         // Off the bones.
         let own: Vec<Entity> = bones.get(entity).map(|b| b.0.clone()).unwrap_or_default();
@@ -143,7 +179,16 @@ pub fn drop_belongings(
                 .collect(),
             None => obstacles.0.clone(),
         };
-        set_down_around(at.translation.xz(), belongings.items.iter(), belongings.seed, &mut inventory, &mut changes, &blocked, &others, tuning.view.floor_item_scale);
+        set_down_around(
+            at.translation.xz(),
+            belongings.items.iter(),
+            belongings.seed,
+            &mut inventory,
+            &mut changes,
+            &blocked,
+            &others,
+            tuning.view.floor_item_scale,
+        );
         info!("A body drops {} things", belongings.items.len());
     }
 }
@@ -154,7 +199,7 @@ mod tests {
     use crate::creatures::skeletons::SkeletonKit;
     use crate::creatures::trolls::TrollArms;
     use crate::inventory::underfoot::FloorChange;
-    use fb_creatures::{Creature, Species, SkeletonGear, TrollState};
+    use fb_creatures::{Creature, SkeletonGear, Species, TrollState};
     use fb_level::CreatureSpot;
 
     const DEPTH: u32 = 3;
@@ -173,14 +218,32 @@ mod tests {
     }
 
     fn spot(species: Species, seed: u32) -> CreatureSpot {
-        CreatureSpot { x: 20.5, y: 20.5, yaw: 0.0, species, seed, pack: 0 }
+        CreatureSpot {
+            x: 20.5,
+            y: 20.5,
+            yaw: 0.0,
+            species,
+            seed,
+            pack: 0,
+        }
     }
 
     /// `critter` lying as a body, with the belongings it spawns with, `looted` as given.
     fn body_of(critter: Critter, looted: bool) -> (App, Entity) {
         let mut app = app();
         let at = Transform::from_xyz(30.0, 0.0, 30.0);
-        let id = app.world_mut().spawn((critter.clone(), Corpse { since: 30.0, fell: at }, at, Bones(Vec::new()))).id();
+        let id = app
+            .world_mut()
+            .spawn((
+                critter.clone(),
+                Corpse {
+                    since: 30.0,
+                    fell: at,
+                },
+                at,
+                Bones(Vec::new()),
+            ))
+            .id();
         if let Some(belongings) = Belongings::of(&critter, DEPTH) {
             app.world_mut().entity_mut(id).insert(belongings);
         }
@@ -208,7 +271,9 @@ mod tests {
             .0
             .iter()
             .filter_map(|change| match change {
-                FloorChange::SetDownAt(id, ..) => inventory.item(*id).map(|i| (i.base.clone(), i.seed, i.rarity)),
+                FloorChange::SetDownAt(id, ..) => inventory
+                    .item(*id)
+                    .map(|i| (i.base.clone(), i.seed, i.rarity)),
                 _ => None,
             })
             .collect();
@@ -220,11 +285,19 @@ mod tests {
 
     fn armed_skeleton(looted: bool) -> (App, Entity, usize) {
         let spot = spot(Species::Skeleton, 5);
-        let Creature::Skeleton(state) = spot.creature() else { panic!("a skeleton") };
+        let Creature::Skeleton(state) = spot.creature() else {
+            panic!("a skeleton")
+        };
         let gear = SkeletonGear::roll(&state, fb_items::Odds::kit(1));
         let kit = SkeletonKit::armed(&state, &gear);
         // What it wears, and the quiver an archer carries (its arrows fall in it).
-        let shed = kit.outfit.worn.len() + kit.outfit.goods.iter().filter(|i| i.base == "Quiver").count();
+        let shed = kit.outfit.worn.len()
+            + kit
+                .outfit
+                .goods
+                .iter()
+                .filter(|i| i.base == "Quiver")
+                .count();
         let (app, id) = body_of(Critter::new(spot, spot.creature()).with_kit(kit), looted);
         (app, id, shed)
     }
@@ -245,22 +318,51 @@ mod tests {
     #[test]
     fn a_slain_skeleton_archer_leaves_its_arrows_in_its_quiver() {
         let odds = fb_items::Odds::kit(1);
-        let seed = (0..400).find(|&s| fb_items::undead::skeleton_outfit(s, odds).item(fb_items::Slot::Mainhand).is_some_and(|w| w.base == "Bow")).expect("some skeleton holds a bow");
+        let seed = (0..400)
+            .find(|&s| {
+                fb_items::undead::skeleton_outfit(s, odds)
+                    .item(fb_items::Slot::Mainhand)
+                    .is_some_and(|w| w.base == "Bow")
+            })
+            .expect("some skeleton holds a bow");
         let spot = spot(Species::Skeleton, seed);
-        let Creature::Skeleton(state) = spot.creature() else { panic!("a skeleton") };
+        let Creature::Skeleton(state) = spot.creature() else {
+            panic!("a skeleton")
+        };
         let kit = SkeletonKit::armed(&state, &SkeletonGear::roll(&state, odds));
-        let arrows = kit.outfit.goods.iter().filter(|i| i.base == "Arrow").count();
+        let arrows = kit
+            .outfit
+            .goods
+            .iter()
+            .filter(|i| i.base == "Arrow")
+            .count();
         assert!(arrows > 0, "an archer carries arrows");
         let (mut app, _) = body_of(Critter::new(spot, spot.creature()).with_kit(kit), false);
         app.update();
         let lying = things(&app);
-        assert!(lying.iter().all(|(base, ..)| base != "Arrow"), "no arrow lies loose: {lying:?}");
+        assert!(
+            lying.iter().all(|(base, ..)| base != "Arrow"),
+            "no arrow lies loose: {lying:?}"
+        );
         let inventory = app.world().resource::<Inventory>();
-        let quiver = app.world().resource::<FloorChanges>().0.iter().find_map(|c| match c {
-            FloorChange::SetDownAt(id, ..) if inventory.item(*id).is_some_and(|i| i.base == "Quiver") => Some(*id),
-            _ => None,
-        });
-        assert_eq!(quiver.map(|q| inventory.contents_count(q)), Some(arrows), "the quiver falls with every arrow in it");
+        let quiver = app
+            .world()
+            .resource::<FloorChanges>()
+            .0
+            .iter()
+            .find_map(|c| match c {
+                FloorChange::SetDownAt(id, ..)
+                    if inventory.item(*id).is_some_and(|i| i.base == "Quiver") =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            });
+        assert_eq!(
+            quiver.map(|q| inventory.contents_count(q)),
+            Some(arrows),
+            "the quiver falls with every arrow in it"
+        );
     }
 
     #[test]
@@ -276,7 +378,13 @@ mod tests {
 
     /// A seed whose troll holds a weapon.
     fn armed_seed() -> u32 {
-        (0..40).find(|&s| !fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1)).worn.is_empty()).expect("some troll is armed")
+        (0..40)
+            .find(|&s| {
+                !fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1))
+                    .worn
+                    .is_empty()
+            })
+            .expect("some troll is armed")
     }
 
     /// A troll of `seed`, armed as it rolled, lying as a body with `spent` and `looted` as given.
@@ -332,11 +440,20 @@ mod tests {
 
     #[test]
     fn an_unarmed_troll_has_nothing_to_drop() {
-        let seed = (0..40).find(|&s| fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1)).worn.is_empty()).unwrap();
+        let seed = (0..40)
+            .find(|&s| {
+                fb_items::troll::troll_outfit(s, fb_items::Odds::kit(1))
+                    .worn
+                    .is_empty()
+            })
+            .unwrap();
         let (mut app, troll) = troll(seed, true, false);
         app.update();
         assert_eq!(set_down(&app), 0);
-        assert!(app.world().get::<Looted>(troll).is_none(), "nothing carried, so nothing to mark");
+        assert!(
+            app.world().get::<Looted>(troll).is_none(),
+            "nothing carried, so nothing to mark"
+        );
     }
 
     #[test]
@@ -357,9 +474,18 @@ mod tests {
         let wanted = fb_items::jackalope::jackalope_drop(7, DEPTH);
         assert!(!wanted.is_empty());
         app.update();
-        assert_eq!(set_down(&app), wanted.len(), "what the roll gives falls where it fell");
+        assert_eq!(
+            set_down(&app),
+            wanted.len(),
+            "what the roll gives falls where it fell"
+        );
         assert!(app.world().get::<Looted>(jackalope).is_some());
-        assert!(things(&app).iter().all(|(.., rarity)| *rarity > fb_items::Rarity::Common), "never a common thing");
+        assert!(
+            things(&app)
+                .iter()
+                .all(|(.., rarity)| *rarity > fb_items::Rarity::Common),
+            "never a common thing"
+        );
         for _ in 0..30 {
             app.update();
         }
@@ -396,7 +522,17 @@ mod tests {
         let mut app = app();
         let item = fb_items::jackalope::jackalope_drop(7, DEPTH).remove(0);
         let at = Transform::from_xyz(30.0, 0.0, 30.0);
-        let body = app.world_mut().spawn((Belongings::new(9, [item]).standing_in(2.0), Corpse { since: 30.0, fell: at }, at)).id();
+        let body = app
+            .world_mut()
+            .spawn((
+                Belongings::new(9, [item]).standing_in(2.0),
+                Corpse {
+                    since: 30.0,
+                    fell: at,
+                },
+                at,
+            ))
+            .id();
         app.update();
         assert_eq!(set_down(&app), 1);
         assert!(app.world().get::<Looted>(body).is_some());

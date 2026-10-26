@@ -23,7 +23,10 @@ use fb_items::{Item, Slot};
 
 use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::eat::Eating;
-use crate::inventory::{Dragging, FloorChange, FloorChanges, Hovered, Icons, Inventory, ItemId, Location, Refusal, Target, Toast, take_up};
+use crate::inventory::{
+    Dragging, FloorChange, FloorChanges, Hovered, Icons, Inventory, ItemId, Location, Refusal,
+    Target, Toast, take_up,
+};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::AppState;
 use crate::play::{DelveSystems, inventory_open, level_has_focus};
@@ -116,7 +119,11 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Refill)
     } else if item.lesson().is_some() || item.teaching().is_some() || item.words.is_some() {
         Some(QuickUse::Read)
-    } else if item.slots().iter().any(|s| matches!(s, Slot::Mainhand | Slot::Offhand)) {
+    } else if item
+        .slots()
+        .iter()
+        .any(|s| matches!(s, Slot::Mainhand | Slot::Offhand))
+    {
         Some(QuickUse::Draw)
     } else {
         None
@@ -125,7 +132,10 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
 
 /// Whether `id` is held in a hand or hung at the hip.
 fn in_hand(inventory: &Inventory, id: ItemId) -> bool {
-    matches!(inventory.location(id), Some(Location::Worn(Slot::Mainhand | Slot::Offhand | Slot::Hip)))
+    matches!(
+        inventory.location(id),
+        Some(Location::Worn(Slot::Mainhand | Slot::Offhand | Slot::Hip))
+    )
 }
 
 /// Empties each slot whose item is no longer in the inventory (used up, or set down or lost).
@@ -134,7 +144,9 @@ fn empty_lost_slots(inventory: Res<Inventory>, mut slots: ResMut<Quickslots>) {
     if !inventory.is_changed() {
         return;
     }
-    let gone = |slot: &Option<ItemId>| slot.is_some_and(|id| inventory.item(id).is_none() || !inventory.is_carried(id));
+    let gone = |slot: &Option<ItemId>| {
+        slot.is_some_and(|id| inventory.item(id).is_none() || !inventory.is_carried(id))
+    };
     if slots.0.iter().any(gone) {
         for bound in &mut slots.0 {
             if gone(bound) {
@@ -146,24 +158,50 @@ fn empty_lost_slots(inventory: Res<Inventory>, mut slots: ResMut<Quickslots>) {
 
 /// Another carried item of the same base and use as `id`, which has just been used up, and bound
 /// to no slot: a slot never refills by taking another slot's item.
-fn next_of_a_kind(inventory: &Inventory, slots: &Quickslots, base: &str, use_: QuickUse) -> Option<ItemId> {
-    let mut ids: Vec<ItemId> = inventory.ids().filter(|&other| inventory.is_carried(other) && slots.slot_of(other).is_none()).collect();
+fn next_of_a_kind(
+    inventory: &Inventory,
+    slots: &Quickslots,
+    base: &str,
+    use_: QuickUse,
+) -> Option<ItemId> {
+    let mut ids: Vec<ItemId> = inventory
+        .ids()
+        .filter(|&other| inventory.is_carried(other) && slots.slot_of(other).is_none())
+        .collect();
     ids.sort();
-    ids.into_iter().find(|&other| inventory.item(other).is_some_and(|item| item.base == base && quick_use(item) == Some(use_)))
+    ids.into_iter().find(|&other| {
+        inventory
+            .item(other)
+            .is_some_and(|item| item.base == base && quick_use(item) == Some(use_))
+    })
 }
 
 /// What pressing a slot's key does to the item in it, and what the toast says. `None` if the
 /// slot is empty.
-pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, eating: &mut Eating, floor_changes: &mut FloorChanges) -> String {
-    let Some(id) = slots.get(slot) else { return format!("Nothing is bound to slot {}", number(slot)) };
+pub fn use_slot(
+    slot: usize,
+    slots: &mut Quickslots,
+    inventory: &mut Inventory,
+    eating: &mut Eating,
+    floor_changes: &mut FloorChanges,
+) -> String {
+    let Some(id) = slots.get(slot) else {
+        return format!("Nothing is bound to slot {}", number(slot));
+    };
     let Some(item) = inventory.item(id) else {
         slots.clear(slot);
         return format!("Nothing is bound to slot {}", number(slot));
     };
-    let (use_, base, name) = (quick_use(item), item.base.clone(), item.title().to_lowercase());
+    let (use_, base, name) = (
+        quick_use(item),
+        item.base.clone(),
+        item.title().to_lowercase(),
+    );
     match use_ {
         Some(QuickUse::Consume) => {
-            let said = eating.eat(inventory, id).unwrap_or_else(|| "You cannot eat that now".to_string());
+            let said = eating
+                .eat(inventory, id)
+                .unwrap_or_else(|| "You cannot eat that now".to_string());
             if inventory.item(id).is_none() {
                 match next_of_a_kind(inventory, slots, &base, QuickUse::Consume) {
                     Some(next) => slots.bind(slot, next),
@@ -184,13 +222,24 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
             }
             said
         }
-        Some(QuickUse::Read) => eating.read(inventory, id).unwrap_or_else(|| format!("You cannot read the {name} now")),
-        Some(QuickUse::Light) if in_hand(inventory, id) => crate::kindle::toggle_and_say(inventory, id),
+        Some(QuickUse::Read) => eating
+            .read(inventory, id)
+            .unwrap_or_else(|| format!("You cannot read the {name} now")),
+        Some(QuickUse::Light) if in_hand(inventory, id) => {
+            crate::kindle::toggle_and_say(inventory, id)
+        }
         Some(QuickUse::Light | QuickUse::Draw) => {
-            if matches!(use_, Some(QuickUse::Draw)) && matches!(inventory.location(id), Some(Location::Worn(Slot::Mainhand | Slot::Offhand))) {
+            if matches!(use_, Some(QuickUse::Draw))
+                && matches!(
+                    inventory.location(id),
+                    Some(Location::Worn(Slot::Mainhand | Slot::Offhand))
+                )
+            {
                 return format!("You already hold the {name}");
             }
-            let Some(into) = inventory.target_slot(id) else { return format!("You cannot hold the {name}") };
+            let Some(into) = inventory.target_slot(id) else {
+                return format!("You cannot hold the {name}");
+            };
             match crate::inventory::equip(inventory, id, into) {
                 Ok(changes) => {
                     floor_changes.0.extend(changes);
@@ -221,8 +270,16 @@ fn use_quickslot(
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
-    let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
-    let said = use_slot(slot, &mut slots, &mut inventory, &mut eating, &mut floor_changes);
+    let Some(slot) = input.just_pressed_index(Action::Quickslot) else {
+        return;
+    };
+    let said = use_slot(
+        slot,
+        &mut slots,
+        &mut inventory,
+        &mut eating,
+        &mut floor_changes,
+    );
     toast.say(said, time.map_or(0.0, |t| t.elapsed_secs()));
 }
 
@@ -238,7 +295,9 @@ fn bind_hovered(
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
-    let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
+    let Some(slot) = input.just_pressed_index(Action::Quickslot) else {
+        return;
+    };
     let Some((id, _)) = hovered.0 else { return };
     let said = match pick_up_and_bind(&mut slots, &mut inventory, id, slot) {
         Ok((said, changes)) => {
@@ -254,7 +313,12 @@ fn bind_hovered(
 /// it is not carried ([`take_up`]: the first carried place with room, as a pickup puts it), and
 /// says so, with what that changes in the level. Something a slot cannot use is refused before
 /// anything is picked up, and with no room for it nothing is picked up or bound.
-pub fn pick_up_and_bind(slots: &mut Quickslots, inventory: &mut Inventory, id: ItemId, slot: usize) -> Result<(String, Vec<FloorChange>), Refusal> {
+pub fn pick_up_and_bind(
+    slots: &mut Quickslots,
+    inventory: &mut Inventory,
+    id: ItemId,
+    slot: usize,
+) -> Result<(String, Vec<FloorChange>), Refusal> {
     let item = inventory.item(id).ok_or(Refusal::Unknown)?;
     if quick_use(item).is_none() {
         return Err(Refusal::NotUsable);
@@ -262,7 +326,11 @@ pub fn pick_up_and_bind(slots: &mut Quickslots, inventory: &mut Inventory, id: I
     let carried = inventory.is_carried(id);
     let changes = take_up(inventory, id)?;
     let said = bind_dropped(slots, inventory, id, slot)?;
-    let said = if carried { said } else { said.replacen(" is bound", " is picked up and bound", 1) };
+    let said = if carried {
+        said
+    } else {
+        said.replacen(" is bound", " is picked up and bound", 1)
+    };
     Ok((said, changes))
 }
 
@@ -296,38 +364,51 @@ pub struct SlotStyle {
 
 /// Spawns the ten slots as a row under `parent`. Each carries its [`QuickSlot`], and `drop`
 /// slots a [`QuickslotDrop`] as well. The row is positioned by the caller's node.
-pub fn spawn_slots(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, style: SlotStyle, drop: bool, row: Node) {
-    parent.spawn((Name::new("Quickslots"), row, Pickable::IGNORE)).with_children(|row| {
-        for slot in 0..SLOTS {
-            let mut square = row.spawn((
-                Name::new(format!("Quickslot {}", number(slot))),
-                QuickSlot(slot),
-                Shown::default(),
-                Node {
-                    width: style.size,
-                    height: style.size,
-                    border: UiRect::all(px(1.5)),
-                    border_radius: BorderRadius::all(px(3)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BackgroundColor(CELL),
-                BorderColor::all(LINE),
-                Pickable::IGNORE,
-            ));
-            if drop {
-                square.insert(QuickslotDrop(slot));
+pub fn spawn_slots(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    style: SlotStyle,
+    drop: bool,
+    row: Node,
+) {
+    parent
+        .spawn((Name::new("Quickslots"), row, Pickable::IGNORE))
+        .with_children(|row| {
+            for slot in 0..SLOTS {
+                let mut square = row.spawn((
+                    Name::new(format!("Quickslot {}", number(slot))),
+                    QuickSlot(slot),
+                    Shown::default(),
+                    Node {
+                        width: style.size,
+                        height: style.size,
+                        border: UiRect::all(px(1.5)),
+                        border_radius: BorderRadius::all(px(3)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(CELL),
+                    BorderColor::all(LINE),
+                    Pickable::IGNORE,
+                ));
+                if drop {
+                    square.insert(QuickslotDrop(slot));
+                }
+                square.with_child((
+                    Text::new(number(slot)),
+                    TextFont::from_font_size(style.number).with_font(fonts.mono.clone()),
+                    TextColor(BRIGHT.with_alpha(0.55)),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(2),
+                        top: px(0),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ));
             }
-            square.with_child((
-                Text::new(number(slot)),
-                TextFont::from_font_size(style.number).with_font(fonts.mono.clone()),
-                TextColor(BRIGHT.with_alpha(0.55)),
-                Node { position_type: PositionType::Absolute, left: px(2), top: px(0), ..default() },
-                Pickable::IGNORE,
-            ));
-        }
-    });
+        });
 }
 
 /// Whether `id` may be bound to a quickslot: carried, and something a slot can use.
@@ -343,18 +424,33 @@ pub fn check_bind(inventory: &Inventory, id: ItemId) -> Result<(), Refusal> {
 }
 
 /// Binds `id` to `slot`, dropped on the strip's slot or by the slot's key over it, and says so.
-pub fn bind_dropped(slots: &mut Quickslots, inventory: &Inventory, id: ItemId, slot: usize) -> Result<String, Refusal> {
+pub fn bind_dropped(
+    slots: &mut Quickslots,
+    inventory: &Inventory,
+    id: ItemId,
+    slot: usize,
+) -> Result<String, Refusal> {
     check_bind(inventory, id)?;
     slots.bind(slot, id);
-    let name = inventory.item(id).map_or_else(String::new, |item| item.title().to_lowercase());
+    let name = inventory
+        .item(id)
+        .map_or_else(String::new, |item| item.title().to_lowercase());
     Ok(format!("The {name} is bound to slot {}", number(slot)))
 }
 
 /// The strip of slots the inventory screen shows, which items are dropped on: [`STRIP_SIZE`]
 /// logical pixels square.
 pub fn strip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts) {
-    let style = SlotStyle { size: px(STRIP_SIZE), gap: px(STRIP_GAP), number: FontSize::Px(12.0) };
-    let row = Node { flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
+    let style = SlotStyle {
+        size: px(STRIP_SIZE),
+        gap: px(STRIP_GAP),
+        number: FontSize::Px(12.0),
+    };
+    let row = Node {
+        flex_direction: FlexDirection::Row,
+        column_gap: style.gap,
+        ..default()
+    };
     spawn_slots(parent, fonts, style, true, row);
 }
 
@@ -364,20 +460,40 @@ pub const STRIP_GAP: f32 = 6.0;
 
 /// Draws the bar into each new cluster: the ten slots starting just right of the eye and level
 /// with it, positioned from the layout ([`cluster_layout`]).
-fn spawn_bar(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, fonts: Option<Res<UiFonts>>) {
+fn spawn_bar(
+    mut commands: Commands,
+    clusters: Query<Entity, Added<OrbCluster>>,
+    fonts: Option<Res<UiFonts>>,
+) {
     let Some(fonts) = fonts else { return };
     let layout = cluster_layout();
     for cluster in &clusters {
         commands.entity(cluster).with_children(|cluster| {
-            let style = SlotStyle { size: hud(layout.slot), gap: hud(layout.gap), number: hud_font(layout.slot * 0.3) };
-            let row = Node { position_type: PositionType::Absolute, left: hud(layout.bar.min.x), top: hud(layout.bar.min.y), flex_direction: FlexDirection::Row, column_gap: style.gap, ..default() };
+            let style = SlotStyle {
+                size: hud(layout.slot),
+                gap: hud(layout.gap),
+                number: hud_font(layout.slot * 0.3),
+            };
+            let row = Node {
+                position_type: PositionType::Absolute,
+                left: hud(layout.bar.min.x),
+                top: hud(layout.bar.min.y),
+                flex_direction: FlexDirection::Row,
+                column_gap: style.gap,
+                ..default()
+            };
             spawn_slots(cluster, &fonts, style, false, row);
             // The arrows or bolts left, over the bar's left end.
             cluster.spawn((
                 crate::combat::shoot::AmmunitionCount,
                 Text::new(""),
                 UiFonts::style(&fonts.body, 16.0, BRIGHT),
-                Node { position_type: PositionType::Absolute, left: hud(layout.bar.min.x), top: hud(layout.bar.min.y - layout.slot * 0.45), ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: hud(layout.bar.min.x),
+                    top: hud(layout.bar.min.y - layout.slot * 0.45),
+                    ..default()
+                },
                 Pickable::IGNORE,
             ));
         });
@@ -416,13 +532,22 @@ fn fill_slots(
                 ..default()
             };
             commands.entity(entity).with_children(|slot| {
-                shown.icon = Some(icons.spawn(slot, item, false, node, 14.0).insert(Pickable::IGNORE).id());
+                shown.icon = Some(
+                    icons
+                        .spawn(slot, item, false, node, 14.0)
+                        .insert(Pickable::IGNORE)
+                        .id(),
+                );
             });
         }
     };
     for (entity, slot, mut shown, mut border) in &mut squares {
         fill(&mut commands, entity, slot.0, &mut shown);
-        let colour = if shown.item.is_some() { BRIGHT.with_alpha(0.7) } else { LINE };
+        let colour = if shown.item.is_some() {
+            BRIGHT.with_alpha(0.7)
+        } else {
+            LINE
+        };
         if border.top != colour {
             *border = BorderColor::all(colour);
         }
@@ -434,13 +559,18 @@ fn fill_slots(
 
 /// A strip slot under a dragged item shows whether it may be bound there, green or red;
 /// otherwise a filled one is cream and an empty one tan.
-fn hint_slots(dragging: Res<Dragging>, mut drops: Query<(&QuickSlot, &Shown, &mut BorderColor), With<QuickslotDrop>>) {
+fn hint_slots(
+    dragging: Res<Dragging>,
+    mut drops: Query<(&QuickSlot, &Shown, &mut BorderColor), With<QuickslotDrop>>,
+) {
     let drag = dragging.0.filter(|d| d.active);
     for (slot, shown, mut border) in &mut drops {
-        let hint = drag.and_then(|d| d.target).and_then(|(target, fits)| match target {
-            Target::Quickslot(s) if s == slot.0 => Some(if fits.is_ok() { OK } else { BAD }),
-            _ => None,
-        });
+        let hint = drag
+            .and_then(|d| d.target)
+            .and_then(|(target, fits)| match target {
+                Target::Quickslot(s) if s == slot.0 => Some(if fits.is_ok() { OK } else { BAD }),
+                _ => None,
+            });
         let colour = hint.unwrap_or(if shown.item.is_some() { BRIGHT } else { LINE });
         if border.top != colour {
             *border = BorderColor::all(colour);
@@ -490,7 +620,10 @@ mod tests {
         run_delve_systems_while_delving(&mut app);
         let mut needs = fb_character::Needs::default();
         needs.hunger.value = 0.55;
-        let player = app.world_mut().spawn((Player, DelverNeeds(needs), Health { hp: 3, max: 12 })).id();
+        let player = app
+            .world_mut()
+            .spawn((Player, DelverNeeds(needs), Health { hp: 3, max: 12 }))
+            .id();
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
@@ -514,7 +647,9 @@ mod tests {
     }
 
     fn press(app: &mut App, key: KeyCode) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
         app.update();
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(key);
@@ -540,9 +675,16 @@ mod tests {
         let (a, b) = (ItemId(1), ItemId(2));
         slots.bind(0, a);
         slots.bind(1, b);
-        assert_eq!((slots.get(0), slots.get(1), slots.slot_of(b)), (Some(a), Some(b), Some(1)));
+        assert_eq!(
+            (slots.get(0), slots.get(1), slots.slot_of(b)),
+            (Some(a), Some(b), Some(1))
+        );
         slots.bind(1, a);
-        assert_eq!((slots.get(0), slots.get(1)), (None, Some(a)), "an item is in one slot only, and the new one replaces the old");
+        assert_eq!(
+            (slots.get(0), slots.get(1)),
+            (None, Some(a)),
+            "an item is in one slot only, and the new one replaces the old"
+        );
         slots.bind(SLOTS, b);
         assert_eq!(slots.slot_of(b), None, "there is no eleventh slot");
         slots.clear(1);
@@ -551,9 +693,35 @@ mod tests {
 
     #[test]
     fn food_lights_and_weapons_each_have_their_use() {
-        let uses: Vec<_> = ["Bread", "Tankard", "Healing draught", "Torch", "Lantern", "Sword", "Dagger", "Ring", "Mail"].into_iter().map(|b| quick_use(&item(b))).collect();
+        let uses: Vec<_> = [
+            "Bread",
+            "Tankard",
+            "Healing draught",
+            "Torch",
+            "Lantern",
+            "Sword",
+            "Dagger",
+            "Ring",
+            "Mail",
+        ]
+        .into_iter()
+        .map(|b| quick_use(&item(b)))
+        .collect();
         use QuickUse::*;
-        assert_eq!(uses, vec![Some(Consume), Some(Consume), Some(Consume), Some(Light), Some(Light), Some(Draw), Some(Draw), None, None]);
+        assert_eq!(
+            uses,
+            vec![
+                Some(Consume),
+                Some(Consume),
+                Some(Consume),
+                Some(Light),
+                Some(Light),
+                Some(Draw),
+                Some(Draw),
+                None,
+                None
+            ]
+        );
     }
 
     #[test]
@@ -574,8 +742,22 @@ mod tests {
         press(&mut app, KeyCode::Digit3);
         assert!(!has(&app, first) && has(&app, second));
         assert!(toast(&app).starts_with("You eat the "), "{}", toast(&app));
-        assert!((app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value - 0.15).abs() < 1e-9);
-        assert_eq!(bound(&app, 2), Some(second), "the slot moves to the next loaf");
+        assert!(
+            (app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .hunger
+                .value
+                - 0.15)
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(
+            bound(&app, 2),
+            Some(second),
+            "the slot moves to the next loaf"
+        );
         press(&mut app, KeyCode::Digit3);
         assert!(!has(&app, second));
         assert_eq!(bound(&app, 2), None, "and empties after the last");
@@ -586,15 +768,27 @@ mod tests {
     #[test]
     fn eating_from_one_slot_leaves_the_other_slots_alone() {
         let (mut app, _) = delve();
-        let (a, b, c) = (give(&mut app, item("Bread")), give(&mut app, item("Bread")), give(&mut app, item("Bread")));
+        let (a, b, c) = (
+            give(&mut app, item("Bread")),
+            give(&mut app, item("Bread")),
+            give(&mut app, item("Bread")),
+        );
         bind(&mut app, 0, a);
         bind(&mut app, 1, b);
         press(&mut app, KeyCode::Digit1);
         assert!(!has(&app, a));
-        assert_eq!((bound(&app, 0), bound(&app, 1)), (Some(c), Some(b)), "slot 1 moves to the loaf no slot holds, and slot 2 keeps its own");
+        assert_eq!(
+            (bound(&app, 0), bound(&app, 1)),
+            (Some(c), Some(b)),
+            "slot 1 moves to the loaf no slot holds, and slot 2 keeps its own"
+        );
         press(&mut app, KeyCode::Digit1);
         assert!(!has(&app, c));
-        assert_eq!((bound(&app, 0), bound(&app, 1)), (None, Some(b)), "with only slot 2's loaf left, slot 1 empties rather than take it");
+        assert_eq!(
+            (bound(&app, 0), bound(&app, 1)),
+            (None, Some(b)),
+            "with only slot 2's loaf left, slot 1 empties rather than take it"
+        );
     }
 
     #[test]
@@ -604,13 +798,25 @@ mod tests {
         bind(&mut app, 0, torch);
         press(&mut app, KeyCode::Digit1);
         let held = app.world().resource::<Inventory>().location(torch);
-        assert!(matches!(held, Some(Location::Worn(Slot::Mainhand | Slot::Offhand))), "{held:?}");
+        assert!(
+            matches!(held, Some(Location::Worn(Slot::Mainhand | Slot::Offhand))),
+            "{held:?}"
+        );
         assert!(toast(&app).starts_with("You draw the "), "{}", toast(&app));
         assert_eq!(bound(&app, 0), Some(torch), "a held item stays bound");
-        let lit = |app: &App| app.world().resource::<Inventory>().item(torch).and_then(|i| i.shape.lit());
+        let lit = |app: &App| {
+            app.world()
+                .resource::<Inventory>()
+                .item(torch)
+                .and_then(|i| i.shape.lit())
+        };
         assert_eq!(lit(&app), Some(true));
         press(&mut app, KeyCode::Digit1);
-        assert_eq!(lit(&app), Some(false), "pressed again it puts the light out");
+        assert_eq!(
+            lit(&app),
+            Some(false),
+            "pressed again it puts the light out"
+        );
         assert_eq!(toast(&app), "You put out the torch");
         press(&mut app, KeyCode::Digit1);
         assert_eq!(lit(&app), Some(true));
@@ -638,15 +844,30 @@ mod tests {
         };
         assert_eq!(quick_use(&item(fb_items::LAMP_OIL)), Some(QuickUse::Refill));
         assert_eq!(quick_use(&item("Book")), Some(QuickUse::Read));
-        assert_eq!(quick_use(&item("Scroll")), None, "a scroll does nothing yet");
-        assert_eq!(quick_use(&item("Note").in_world(&fb_items::notes::Lore::default())), Some(QuickUse::Read), "a note is read");
+        assert_eq!(
+            quick_use(&item("Scroll")),
+            None,
+            "a scroll does nothing yet"
+        );
+        assert_eq!(
+            quick_use(&item("Note").in_world(&fb_items::notes::Lore::default())),
+            Some(QuickUse::Read),
+            "a note is read"
+        );
         bind(&mut app, 4, first);
         press(&mut app, KeyCode::Digit5);
         assert_eq!(toast(&app), "You fill the lantern");
         let inventory = app.world().resource::<Inventory>();
-        assert_eq!(inventory.item(lantern).unwrap().fuel_left(), inventory.item(lantern).unwrap().fuel_capacity());
+        assert_eq!(
+            inventory.item(lantern).unwrap().fuel_left(),
+            inventory.item(lantern).unwrap().fuel_capacity()
+        );
         assert!(has(&app, first), "the empty flask is kept");
-        assert_eq!(bound(&app, 4), Some(second), "the slot moves to the full flask");
+        assert_eq!(
+            bound(&app, 4),
+            Some(second),
+            "the slot moves to the full flask"
+        );
         press(&mut app, KeyCode::Digit5);
         assert_eq!(toast(&app), "Your lantern is already full");
     }
@@ -657,9 +878,16 @@ mod tests {
         let sword = give(&mut app, item("Sword"));
         bind(&mut app, 1, sword);
         press(&mut app, KeyCode::Digit2);
-        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(Location::Worn(Slot::Mainhand)));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(sword),
+            Some(Location::Worn(Slot::Mainhand))
+        );
         press(&mut app, KeyCode::Digit2);
-        assert!(toast(&app).starts_with("You already hold the "), "{}", toast(&app));
+        assert!(
+            toast(&app).starts_with("You already hold the "),
+            "{}",
+            toast(&app)
+        );
     }
 
     #[test]
@@ -671,7 +899,11 @@ mod tests {
         let hp = app.world().get::<Health>(player).unwrap().hp;
         assert!((7..=12).contains(&hp), "{hp}");
         assert!(!has(&app, draught) && bound(&app, 3).is_none());
-        assert!(toast(&app).starts_with("You drink the healing draught (+"), "{}", toast(&app));
+        assert!(
+            toast(&app).starts_with("You drink the healing draught (+"),
+            "{}",
+            toast(&app)
+        );
     }
 
     #[test]
@@ -698,7 +930,15 @@ mod tests {
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         press(&mut app, KeyCode::Digit3);
         assert!(has(&app, loaf));
-        assert_eq!(app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value, 0.55);
+        assert_eq!(
+            app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .hunger
+                .value,
+            0.55
+        );
     }
 
     #[test]
@@ -706,11 +946,20 @@ mod tests {
         let (mut app, _) = delve();
         let ring = give(&mut app, item("Ring"));
         let loaf = give(&mut app, item("Bread"));
-        let loose = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        let loose = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Bread"));
         let mut slots = Quickslots::default();
         let inventory = app.world().resource::<Inventory>();
-        assert_eq!(bind_dropped(&mut slots, inventory, ring, 0), Err(Refusal::NotUsable));
-        assert_eq!(bind_dropped(&mut slots, inventory, loose, 0), Err(Refusal::NotCarried));
+        assert_eq!(
+            bind_dropped(&mut slots, inventory, ring, 0),
+            Err(Refusal::NotUsable)
+        );
+        assert_eq!(
+            bind_dropped(&mut slots, inventory, loose, 0),
+            Err(Refusal::NotCarried)
+        );
         assert_eq!(slots, Quickslots::default());
         let said = bind_dropped(&mut slots, inventory, loaf, 4).unwrap();
         assert!(said.ends_with("is bound to slot 5"), "{said}");
@@ -729,26 +978,52 @@ mod tests {
         hover(&mut app, Some(loaf));
         press(&mut app, KeyCode::Digit3);
         assert_eq!(bound(&app, 2), Some(loaf));
-        assert!(toast(&app).ends_with("is bound to slot 3"), "{}", toast(&app));
+        assert!(
+            toast(&app).ends_with("is bound to slot 3"),
+            "{}",
+            toast(&app)
+        );
         assert!(has(&app, loaf), "binding does not eat it");
-        assert_eq!(app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value, 0.55);
+        assert_eq!(
+            app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .hunger
+                .value,
+            0.55
+        );
 
         press(&mut app, KeyCode::Digit0);
-        assert_eq!((bound(&app, 2), bound(&app, 9)), (None, Some(loaf)), "another number moves it");
+        assert_eq!(
+            (bound(&app, 2), bound(&app, 9)),
+            (None, Some(loaf)),
+            "another number moves it"
+        );
         press(&mut app, KeyCode::Digit0);
         assert_eq!(bound(&app, 9), Some(loaf), "its own number leaves it");
 
         hover(&mut app, None);
         press(&mut app, KeyCode::Digit1);
-        assert_eq!(bound(&app, 0), None, "nothing under the mouse, nothing happens");
+        assert_eq!(
+            bound(&app, 0),
+            None,
+            "nothing under the mouse, nothing happens"
+        );
         assert_eq!(bound(&app, 9), Some(loaf));
     }
 
     #[test]
     fn a_number_over_a_worn_or_unusable_item_acts_as_dragging_it_would() {
         let (mut app, _) = delve();
-        let sword = app.world_mut().resource_mut::<Inventory>().add(item("Sword"));
-        app.world_mut().resource_mut::<Inventory>().wear(sword, Slot::Mainhand).unwrap();
+        let sword = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Sword"));
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .wear(sword, Slot::Mainhand)
+            .unwrap();
         let ring = give(&mut app, item("Ring"));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         hover(&mut app, Some(sword));
@@ -757,7 +1032,11 @@ mod tests {
         hover(&mut app, Some(ring));
         press(&mut app, KeyCode::Digit5);
         assert_eq!(bound(&app, 4), None);
-        assert_eq!(toast(&app), Refusal::NotUsable.reason(), "the toast a drag onto the strip gives");
+        assert_eq!(
+            toast(&app),
+            Refusal::NotUsable.reason(),
+            "the toast a drag onto the strip gives"
+        );
     }
 
     fn location(app: &App, id: ItemId) -> Option<Location> {
@@ -767,36 +1046,67 @@ mod tests {
     #[test]
     fn a_number_over_an_underfoot_item_picks_it_up_where_a_pickup_would_and_binds_it() {
         let (mut app, _) = delve();
-        let loaf = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
-        assert_eq!(location(&app, loaf), Some(Location::Loose), "lying underfoot");
+        let loaf = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Bread"));
+        assert_eq!(
+            location(&app, loaf),
+            Some(Location::Loose),
+            "lying underfoot"
+        );
         // Where picking it up would put it.
         let mut picked = app.world().resource::<Inventory>().clone();
         picked.pick_up(loaf).unwrap();
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         hover(&mut app, Some(loaf));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit4);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit4);
         app.update();
-        assert_eq!(app.world().resource::<FloorChanges>().0, vec![FloorChange::Lifted(loaf)], "lifted from the level");
+        assert_eq!(
+            app.world().resource::<FloorChanges>().0,
+            vec![FloorChange::Lifted(loaf)],
+            "lifted from the level"
+        );
         assert_eq!(location(&app, loaf), picked.location(loaf));
         assert!(app.world().resource::<Inventory>().is_carried(loaf));
         assert_eq!(bound(&app, 3), Some(loaf));
-        assert!(toast(&app).ends_with("is picked up and bound to slot 4"), "{}", toast(&app));
+        assert!(
+            toast(&app).ends_with("is picked up and bound to slot 4"),
+            "{}",
+            toast(&app)
+        );
     }
 
     #[test]
     fn with_no_room_or_no_use_an_underfoot_item_stays_where_it_lies_and_nothing_binds() {
         let (mut app, _) = delve();
         // No pack: nowhere to put it.
-        let pack = app.world().resource::<Inventory>().worn(Slot::Back).unwrap();
+        let pack = app
+            .world()
+            .resource::<Inventory>()
+            .worn(Slot::Back)
+            .unwrap();
         app.world_mut().resource_mut::<Inventory>().forget(pack);
-        let loaf = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
-        let ring = app.world_mut().resource_mut::<Inventory>().add(item("Ring"));
+        let loaf = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Bread"));
+        let ring = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Ring"));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         for (id, refusal) in [(loaf, Refusal::NoRoom), (ring, Refusal::NotUsable)] {
             hover(&mut app, Some(id));
             press(&mut app, KeyCode::Digit6);
             assert_eq!(bound(&app, 5), None);
-            assert_eq!(location(&app, id), Some(Location::Loose), "{refusal:?}: still underfoot");
+            assert_eq!(
+                location(&app, id),
+                Some(Location::Loose),
+                "{refusal:?}: still underfoot"
+            );
             assert_eq!(toast(&app), refusal.reason());
         }
         // A ring a slot cannot use is refused before anything is picked up, even with room.
@@ -804,13 +1114,19 @@ mod tests {
         let sack = inventory.add(fb_items::roll_item("Sack", 7).unwrap());
         inventory.wear(sack, Slot::Back).unwrap();
         let mut slots = Quickslots::default();
-        assert_eq!(pick_up_and_bind(&mut slots, &mut inventory, ring, 0), Err(Refusal::NotUsable));
+        assert_eq!(
+            pick_up_and_bind(&mut slots, &mut inventory, ring, 0),
+            Err(Refusal::NotUsable)
+        );
         assert_eq!(inventory.location(ring), Some(Location::Loose));
     }
 
     /// The vitals HUD a view model makes, for the bar to join.
     fn hud(app: &mut App) -> Entity {
-        let hud = app.world_mut().spawn((crate::carry::Hud, VitalsRoot, Visibility::default())).id();
+        let hud = app
+            .world_mut()
+            .spawn((crate::carry::Hud, VitalsRoot, Visibility::default()))
+            .id();
         // The cluster, then what is drawn in it.
         for _ in 0..3 {
             app.update();
@@ -819,8 +1135,13 @@ mod tests {
     }
 
     fn slot_nodes(app: &mut App) -> Vec<(usize, usize)> {
-        let mut query = app.world_mut().query_filtered::<(&QuickSlot, &Children), Without<QuickslotDrop>>();
-        let mut slots: Vec<_> = query.iter(app.world()).map(|(s, c)| (s.0, c.len())).collect();
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(&QuickSlot, &Children), Without<QuickslotDrop>>();
+        let mut slots: Vec<_> = query
+            .iter(app.world())
+            .map(|(s, c)| (s.0, c.len()))
+            .collect();
         slots.sort();
         slots
     }
@@ -831,7 +1152,11 @@ mod tests {
         let (mut app, _) = delve();
         app.add_systems(Update, hide_hud_under_screens);
         let hud = hud(&mut app);
-        assert_eq!(slot_nodes(&mut app), (0..SLOTS).map(|i| (i, 1)).collect::<Vec<_>>(), "each has its number");
+        assert_eq!(
+            slot_nodes(&mut app),
+            (0..SLOTS).map(|i| (i, 1)).collect::<Vec<_>>(),
+            "each has its number"
+        );
         let loaf = give(&mut app, item("Bread"));
         bind(&mut app, 2, loaf);
         app.update();
@@ -847,10 +1172,16 @@ mod tests {
         assert!(app.world().get::<crate::carry::Hud>(hud).is_some());
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         app.update();
-        assert_eq!(*app.world().get::<Visibility>(hud).unwrap(), Visibility::Hidden);
+        assert_eq!(
+            *app.world().get::<Visibility>(hud).unwrap(),
+            Visibility::Hidden
+        );
         app.world_mut().resource_mut::<ScreenOpen>().0 = None;
         app.update();
-        assert_eq!(*app.world().get::<Visibility>(hud).unwrap(), Visibility::Inherited);
+        assert_eq!(
+            *app.world().get::<Visibility>(hud).unwrap(),
+            Visibility::Inherited
+        );
     }
 
     #[test]
@@ -858,7 +1189,9 @@ mod tests {
         let (mut app, _) = delve();
         let loaf = give(&mut app, item("Bread"));
         bind(&mut app, 0, loaf);
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Title);
         app.update();
         assert_eq!(*app.world().resource::<Quickslots>(), Quickslots::default());
     }
@@ -867,15 +1200,25 @@ mod tests {
     fn the_bar_is_laid_out_by_the_cluster_and_fits_the_smallest_window() {
         use crate::combat::orbs::{MARGIN, orb_cluster_layout};
         let layout = cluster_layout();
-        assert!((layout.bar.height() - layout.slot).abs() < 1e-4, "a row of slots");
+        assert!(
+            (layout.bar.height() - layout.slot).abs() < 1e-4,
+            "a row of slots"
+        );
         let row = layout.bar.width();
         let slots = SLOTS as f32;
         assert!((row - (slots * layout.slot + (slots - 1.0) * layout.gap)).abs() < 1e-4);
         // Everything inside 100 units, the height of any window 540 lines or more, and the slots
         // still big enough to read at the half-size floor (5.4 px a unit).
-        assert!(MARGIN + layout.size.x <= 100.0, "{}", MARGIN + layout.size.x);
+        assert!(
+            MARGIN + layout.size.x <= 100.0,
+            "{}",
+            MARGIN + layout.size.x
+        );
         assert!(layout.slot * 5.4 >= 20.0);
         let double = orb_cluster_layout(28.0);
-        assert!((double.slot - layout.slot * 2.0).abs() < 1e-4, "the bar scales with the cluster");
+        assert!(
+            (double.slot - layout.slot * 2.0).abs() < 1e-4,
+            "the bar scales with the cluster"
+        );
     }
 }

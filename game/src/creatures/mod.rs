@@ -28,8 +28,10 @@
 use armory::cond::{Condition, ConditionState};
 use bevy::{app::Propagate, light::NotShadowCaster, prelude::*};
 use fb_body::Placement;
-use fb_creatures::pose::{self, BatPose, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose};
 use fb_creatures::Creature;
+use fb_creatures::pose::{
+    self, BatPose, CentipedePose, JackalopePose, RatPose, SkeletonPose, SnakePose, SpiderPose,
+};
 use fb_creatures::rig::{Capsule, SURFACE_PARTS};
 use fb_level::{CreatureSpot, Level};
 use procgen_rng::Mulberry32;
@@ -45,9 +47,9 @@ pub mod behaviour;
 pub mod skeletons;
 pub mod trolls;
 
-use std::sync::Arc;
 use crate::belongings::Belongings;
 use skeletons::{Rattle, SkeletonKit, WornGear};
+use std::sync::Arc;
 
 pub struct CreaturesPlugin;
 
@@ -56,9 +58,23 @@ impl Plugin for CreaturesPlugin {
         if !app.is_plugin_added::<crate::belongings::BelongingsPlugin>() {
             app.add_plugins(crate::belongings::BelongingsPlugin);
         }
-        app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
-            .init_resource::<Tuning>()
-            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
+        app.add_plugins((
+            behaviour::BehaviourPlugin,
+            skeletons::SkeletonsPlugin,
+            trolls::TrollsPlugin,
+        ))
+        .init_resource::<Tuning>()
+        .add_systems(
+            Update,
+            (
+                spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>),
+                size_creatures,
+                idle,
+                animate,
+            )
+                .chain()
+                .in_set(DelveSystems),
+        );
     }
 }
 
@@ -94,7 +110,14 @@ impl Critter {
             _ => None,
         };
         let radius = kit.as_ref().map_or_else(|| creature.radius(), |k| k.radius);
-        Critter { spot, radius, creature, size: 1.0, kit, arms: None }
+        Critter {
+            spot,
+            radius,
+            creature,
+            size: 1.0,
+            kit,
+            arms: None,
+        }
     }
 
     /// This skeleton in its `kit` of gear.
@@ -119,7 +142,10 @@ impl Critter {
 
     /// [`Critter::armour_class`] with the stat block as `rules` have it (`data/rules.toml`).
     pub fn armour_class_with(&self, rules: &fb_character::rules::Rules) -> i32 {
-        self.kit.as_ref().map_or_else(|| rules.creature(self.spot.species).armour_class, |k| k.armour_class)
+        self.kit.as_ref().map_or_else(
+            || rules.creature(self.spot.species).armour_class,
+            |k| k.armour_class,
+        )
     }
 
     /// What its bite or blow adds to the d20: the stat block's attack bonus, and the `ToHit` of a
@@ -131,13 +157,20 @@ impl Critter {
     /// [`Critter::to_hit`] with the attack bonus as `rules` have it.
     pub fn to_hit_with(&self, rules: &fb_character::rules::Rules) -> fb_character::combat::ToHit {
         let weapon = self.kit.as_ref().map_or(0, |k| k.to_hit);
-        fb_character::combat::ToHit::StatBlock { attack_bonus: rules.creature(self.spot.species).attack_bonus, weapon }
+        fb_character::combat::ToHit::StatBlock {
+            attack_bonus: rules.creature(self.spot.species).attack_bonus,
+            weapon,
+        }
     }
 
     /// Draws it `size` times as large as rolled, covering that much more floor.
     pub fn resize(&mut self, size: f32) {
         self.size = size;
-        self.radius = self.kit.as_ref().map_or_else(|| self.creature.radius(), |k| k.radius) * size;
+        self.radius = self
+            .kit
+            .as_ref()
+            .map_or_else(|| self.creature.radius(), |k| k.radius)
+            * size;
     }
 }
 
@@ -164,7 +197,10 @@ impl HitShape {
     /// it as its length holds radii, so neighbours overlap. Each is its centre and radius in
     /// world units. Our own stand-in for a capsule test.
     pub fn spheres(&self, at: &GlobalTransform) -> impl Iterator<Item = (Vec3, f32)> + use<> {
-        let (a, b) = (at.transform_point(Vec3::from_array(self.0.a)), at.transform_point(Vec3::from_array(self.0.b)));
+        let (a, b) = (
+            at.transform_point(Vec3::from_array(self.0.a)),
+            at.transform_point(Vec3::from_array(self.0.b)),
+        );
         let radius = self.0.radius * at.scale().max_element();
         let count = ((a.distance(b) / radius.max(1e-3)).ceil() as usize).clamp(1, 32);
         (0..=count).map(move |i| (a.lerp(b, i as f32 / count as f32), radius))
@@ -266,12 +302,33 @@ pub enum Wing {
 impl Flight {
     /// A bat of `rig` hanging from the ceiling `ceiling` over its root (world units): its
     /// reaches flying and roosting, and how it lies when it falls, measured from its rig.
-    pub fn roosting(bat: &fb_creatures::BatState, rig: &fb_creatures::Rig, ceiling: f32, seed: u32) -> Flight {
+    pub fn roosting(
+        bat: &fb_creatures::BatState,
+        rig: &fb_creatures::Rig,
+        ceiling: f32,
+        seed: u32,
+    ) -> Flight {
         let (below, above) = bat.flight_extent(rig);
         let roost_above = bat.roost_extent(rig).1;
         // Lying on its back with its wings folded: how far its lowest point is under its middle.
-        let lying = pose::bat(bat, &BatPose { bank: std::f32::consts::PI, tuck: 1.0, ..default() });
-        let lowest = rig.world(&lying).iter().zip(&rig.bones).flat_map(|(place, bone)| bone.mesh.parts.iter().flat_map(move |part| part.positions.iter().map(move |&p| place.point(p)[1]))).fold(f32::MAX, f32::min);
+        let lying = pose::bat(
+            bat,
+            &BatPose {
+                bank: std::f32::consts::PI,
+                tuck: 1.0,
+                ..default()
+            },
+        );
+        let lowest =
+            rig.world(&lying)
+                .iter()
+                .zip(&rig.bones)
+                .flat_map(|(place, bone)| {
+                    bone.mesh.parts.iter().flat_map(move |part| {
+                        part.positions.iter().map(move |&p| place.point(p)[1])
+                    })
+                })
+                .fold(f32::MAX, f32::min);
         Flight {
             altitude: ceiling - roost_above,
             climb: 0.0,
@@ -291,8 +348,19 @@ impl Flight {
     /// The wings and body it holds this moment, beating its wings as hard as `power`.
     pub fn wings(&self, power: f32) -> Wings {
         let roosting = self.phase == Wing::Roosting;
-        let pitch = if roosting { 0.0 } else { (self.climb * 0.08).clamp(-0.7, 0.5) };
-        Wings { altitude: self.altitude, roost: if roosting { 1.0 } else { 0.0 }, power, pitch, bank: (self.turning * 0.12).clamp(-0.6, 0.6), tuck: if roosting { 1.0 } else { 0.0 } }
+        let pitch = if roosting {
+            0.0
+        } else {
+            (self.climb * 0.08).clamp(-0.7, 0.5)
+        };
+        Wings {
+            altitude: self.altitude,
+            roost: if roosting { 1.0 } else { 0.0 },
+            power,
+            pitch,
+            bank: (self.turning * 0.12).clamp(-0.6, 0.6),
+            tuck: if roosting { 1.0 } else { 0.0 },
+        }
     }
 }
 
@@ -358,7 +426,11 @@ impl Trail {
 /// The [`SnakePose::bend`] that lays a snake's body along its trail: each knot takes the
 /// trail's heading that far behind the head, turned into the root's frame, or the last heading
 /// the trail has where it runs out (straight on, with no trail yet).
-pub fn trail_bend(snake: &fb_creatures::SnakeState, trail: &Trail, root: &Transform) -> [f32; pose::BEND_KNOTS] {
+pub fn trail_bend(
+    snake: &fb_creatures::SnakeState,
+    trail: &Trail,
+    root: &Transform,
+) -> [f32; pose::BEND_KNOTS] {
     // As long as it is drawn.
     let body = snake.dims().body_length * root.scale.x;
     let at = root.translation.xz();
@@ -399,14 +471,24 @@ const GRIME: (f32, f32) = (0.15, 0.4);
 pub fn stand_at(level: &Level, spot: &CreatureSpot) -> Transform {
     let [x, _, z] = Level::world(spot.x, spot.y);
     let y = Relief::new(level).floor_height(x, z);
-    Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
+    Transform::from_xyz(x, y, z)
+        .with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 
 /// A rig placement as a transform.
 pub fn transform_of(place: &Placement) -> Transform {
     let [x, y, z] = place.rotation.cols;
-    let rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from_array(x), Vec3::from_array(y), Vec3::from_array(z))).normalize();
-    Transform { translation: Vec3::from_array(place.origin), rotation, scale: Vec3::ONE }
+    let rotation = Quat::from_mat3(&Mat3::from_cols(
+        Vec3::from_array(x),
+        Vec3::from_array(y),
+        Vec3::from_array(z),
+    ))
+    .normalize();
+    Transform {
+        translation: Vec3::from_array(place.origin),
+        rotation,
+        scale: Vec3::ONE,
+    }
 }
 
 /// Spawns every creature of the level once, and again only if the spots change.
@@ -426,23 +508,53 @@ fn spawn_creatures(
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    debug!("spawning creatures: {:?}", level.0.creatures.iter().map(|c| c.species).collect::<Vec<_>>());
+    debug!(
+        "spawning creatures: {:?}",
+        level
+            .0
+            .creatures
+            .iter()
+            .map(|c| c.species)
+            .collect::<Vec<_>>()
+    );
     // On a level that was left, each creature is as it was left (`crate::record`).
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     // A skeleton takes some hundred milliseconds to roll and fit, so the level's are built side by
     // side before any is spawned, or ahead of time (`crate::staged`).
-    let built = staged.as_mut().and_then(|s| s.take_creatures(&level.0)).unwrap_or_else(|| build_creatures(&level.0.creatures, level.0.depth));
+    let built = staged
+        .as_mut()
+        .and_then(|s| s.take_creatures(&level.0))
+        .unwrap_or_else(|| build_creatures(&level.0.creatures, level.0.depth));
     for (index, (spot, built)) in level.0.creatures.iter().zip(built).enumerate() {
         let left = saved.and_then(|l| l.creatures.get(&index));
         // A body from the record lies bare: what it wore was set down where it fell, and is on
         // the floor (or gone) as the record has it.
-        let root = spawn_built(&mut commands, &mut spawner, &level.0, spot, built, left.is_some_and(|l| l.dead));
+        let root = spawn_built(
+            &mut commands,
+            &mut spawner,
+            &level.0,
+            spot,
+            built,
+            left.is_some_and(|l| l.dead),
+        );
         if let Some(left) = left {
             let at = left.transform();
-            commands.entity(root).insert((Health { hp: left.hp, max: left.max }, at));
+            commands.entity(root).insert((
+                Health {
+                    hp: left.hp,
+                    max: left.max,
+                },
+                at,
+            ));
             if left.dead {
                 // Long fallen: lying as it lies once it has collapsed.
-                commands.entity(root).insert((Corpse { since: LONG_FALLEN, fell: at }, skeletons::Looted));
+                commands.entity(root).insert((
+                    Corpse {
+                        since: LONG_FALLEN,
+                        fell: at,
+                    },
+                    skeletons::Looted,
+                ));
             }
         }
     }
@@ -457,7 +569,9 @@ fn spawn_creatures(
 /// or `centipede`, or `skeleton:<seed>[,<seed>...]` (`skeleton` alone is seed 1207), each [`DEV_AHEAD`] cells
 /// ahead of the level's start and spread across the way, facing the start. None when unset.
 pub fn dev_spots(level: &Level) -> Vec<CreatureSpot> {
-    let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else { return Vec::new() };
+    let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
     dev_spots_for(level, &spec)
 }
 
@@ -479,15 +593,23 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
         "jackalope" => fb_creatures::Species::Jackalope,
         "centipede" => fb_creatures::Species::GiantCentipede,
         other => {
-            warn!("FB_SPAWN: no creature called {other:?} (try skeleton, troll, bat, giant_bat, jackalope or centipede)");
+            warn!(
+                "FB_SPAWN: no creature called {other:?} (try skeleton, troll, bat, giant_bat, jackalope or centipede)"
+            );
             return Vec::new();
         }
     };
-    let seeds: Vec<u32> = seeds.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    let seeds: Vec<u32> = seeds
+        .split(',')
+        .filter_map(|n| n.trim().parse().ok())
+        .collect();
     let seeds = if seeds.is_empty() { vec![1207] } else { seeds };
     let (sx, sy, facing) = level.start();
     let yaw = facing.yaw();
-    info!("FB_SPAWN: the start is cell ({sx}, {sy}) facing {:.0} degrees", yaw.to_degrees());
+    info!(
+        "FB_SPAWN: the start is cell ({sx}, {sy}) facing {:.0} degrees",
+        yaw.to_degrees()
+    );
     // The way the start faces, in cells (yaw 0 faces -y, positive turns toward -x), and across.
     let ahead = Vec2::new(-yaw.sin(), -yaw.cos());
     let across = Vec2::new(-ahead.y, ahead.x);
@@ -496,8 +618,17 @@ pub fn dev_spots_for(level: &Level, spec: &str) -> Vec<CreatureSpot> {
         .into_iter()
         .enumerate()
         .map(|(i, seed)| {
-            let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5) + ahead * DEV_AHEAD + across * (i as f32 - 0.5 * (count - 1.0)) * 1.2;
-            CreatureSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, species, seed, pack: 0 }
+            let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5)
+                + ahead * DEV_AHEAD
+                + across * (i as f32 - 0.5 * (count - 1.0)) * 1.2;
+            CreatureSpot {
+                x: at.x,
+                y: at.y,
+                yaw: yaw + std::f32::consts::PI,
+                species,
+                seed,
+                pack: 0,
+            }
         })
         .collect()
 }
@@ -516,7 +647,9 @@ fn parse_trade_word(word: &str) -> Option<TradeWord> {
     let profession = if name == "guard" {
         Profession::Guard
     } else {
-        Profession::TRADES.into_iter().find(|p| p.label().replace(' ', "") == name || p.label().split(' ').next() == Some(name))?
+        Profession::TRADES.into_iter().find(|p| {
+            p.label().replace(' ', "") == name || p.label().split(' ').next() == Some(name)
+        })?
     };
     Some((tier, profession))
 }
@@ -530,7 +663,9 @@ const FOLK_AHEAD: f32 = 1.0;
 /// it holds one, otherwise a place in that list (wrapping). A trade may follow, `folk:3:weaponsmith`
 /// or `folk:master-alchemist` or `folk:guard` (see [`parse_trade_word`]). None when unset or not about folk.
 pub fn dev_folk(level: &Level) -> Vec<fb_level::FolkSpot> {
-    let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else { return Vec::new() };
+    let Some(spec) = std::env::var("FB_SPAWN").ok().filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
     dev_folk_for(level, &spec)
 }
 
@@ -565,12 +700,18 @@ pub fn dev_folk_for(level: &Level, spec: &str) -> Vec<fb_level::FolkSpot> {
         .enumerate()
         .map(|(i, (pick, word))| {
             let spec = match pick {
-                Some(n) => level.factions.iter().find(|f| f.id.0 as u32 == n).unwrap_or(&level.factions[n as usize % level.factions.len()]),
+                Some(n) => level
+                    .factions
+                    .iter()
+                    .find(|f| f.id.0 as u32 == n)
+                    .unwrap_or(&level.factions[n as usize % level.factions.len()]),
                 None => &level.factions[0],
             };
             // The way out of the start is a corridor a cell wide: several stand in a staggered file.
             let sway = if i % 2 == 0 { -0.2 } else { 0.2 } * (count - 1.0).min(1.0);
-            let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5) + ahead * (FOLK_AHEAD + 0.9 * i as f32) + across * sway;
+            let at = Vec2::new(sx as f32 + 0.5, sy as f32 + 0.5)
+                + ahead * (FOLK_AHEAD + 0.9 * i as f32)
+                + across * sway;
             let mut rng = procgen_rng::Mulberry32::new(1207 + i as u32);
             let (folk, denizen) = match spec.member_body(&mut rng) {
                 Some(body) => (fb_body::Folk::Human, Some(body)),
@@ -580,12 +721,24 @@ pub fn dev_folk_for(level: &Level, spec: &str) -> Vec<fb_level::FolkSpot> {
                 profession,
                 tier,
                 style: match profession {
-                    fb_faction::Profession::Armorer => Some(fb_faction::Style::of_lean(spec.armour)),
+                    fb_faction::Profession::Armorer => {
+                        Some(fb_faction::Style::of_lean(spec.armour))
+                    }
                     fb_faction::Profession::Weaponsmith => Some(fb_faction::Style::Blades),
                     _ => None,
                 },
             });
-            fb_level::FolkSpot { x: at.x, y: at.y, yaw: yaw + std::f32::consts::PI, folk, denizen, seed: 1207 + i as u32, sex: spec.member_sex(1207 + i as u32), faction: spec.id, trade }
+            fb_level::FolkSpot {
+                x: at.x,
+                y: at.y,
+                yaw: yaw + std::f32::consts::PI,
+                folk,
+                denizen,
+                seed: 1207 + i as u32,
+                sex: spec.member_sex(1207 + i as u32),
+                faction: spec.id,
+                trade,
+            }
         })
         .collect()
 }
@@ -595,13 +748,31 @@ const LONG_FALLEN: f32 = 60.0;
 
 /// Spawns one creature: a root at its spot and a tree of bones carrying its parts. A skeleton
 /// is drawn in the gear its seed rolls, each piece on the bone it rides ([`WornGear`]).
-pub fn spawn_creature(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot) -> Entity {
+pub fn spawn_creature(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    level: &Level,
+    spot: &CreatureSpot,
+) -> Entity {
     spawn_creature_as(commands, spawner, level, spot, false)
 }
 
 /// [`spawn_creature`], a skeleton `fallen` drawn as bare bones: its gear is not put on it.
-pub fn spawn_creature_as(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, fallen: bool) -> Entity {
-    spawn_built(commands, spawner, level, spot, build_creature(spot, level.depth), fallen)
+pub fn spawn_creature_as(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    level: &Level,
+    spot: &CreatureSpot,
+    fallen: bool,
+) -> Entity {
+    spawn_built(
+        commands,
+        spawner,
+        level,
+        spot,
+        build_creature(spot, level.depth),
+        fallen,
+    )
 }
 
 /// A creature worked out from its spot, ready to spawn: pure data, Bevy-free.
@@ -621,8 +792,14 @@ pub struct Built {
 pub fn build_creature(spot: &CreatureSpot, depth: u32) -> Built {
     let creature = spot.creature();
     let gear = match &creature {
-        Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(skeleton, fb_items::Odds::kit(depth))),
-        Creature::Troll(troll) => Some(fb_creatures::SkeletonGear::roll_troll(troll, fb_items::Odds::kit(depth))),
+        Creature::Skeleton(skeleton) => Some(fb_creatures::SkeletonGear::roll(
+            skeleton,
+            fb_items::Odds::kit(depth),
+        )),
+        Creature::Troll(troll) => Some(fb_creatures::SkeletonGear::roll_troll(
+            troll,
+            fb_items::Odds::kit(depth),
+        )),
         _ => None,
     };
     let kit = match (&creature, &gear) {
@@ -633,27 +810,59 @@ pub fn build_creature(spot: &CreatureSpot, depth: u32) -> Built {
         (Creature::Troll(_), Some(gear)) => trolls::TrollArms::of(gear),
         _ => None,
     };
-    Built { creature, gear, kit, arms }
+    Built {
+        creature,
+        gear,
+        kit,
+        arms,
+    }
 }
 
 /// [`build_creature`] for every spot, on as many threads as there are cores.
 pub fn build_creatures(spots: &[CreatureSpot], depth: u32) -> Vec<Built> {
     if spots.len() < 2 {
-        return spots.iter().map(|spot| build_creature(spot, depth)).collect();
+        return spots
+            .iter()
+            .map(|spot| build_creature(spot, depth))
+            .collect();
     }
     std::thread::scope(|scope| {
-        let jobs: Vec<_> = spots.iter().map(|spot| scope.spawn(move || build_creature(spot, depth))).collect();
-        jobs.into_iter().map(|job| job.join().expect("a creature builds")).collect()
+        let jobs: Vec<_> = spots
+            .iter()
+            .map(|spot| scope.spawn(move || build_creature(spot, depth)))
+            .collect();
+        jobs.into_iter()
+            .map(|job| job.join().expect("a creature builds"))
+            .collect()
     })
 }
 
 /// Spawns `built`, the creature of `spot` ([`spawn_creature_as`]).
-pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &Level, spot: &CreatureSpot, built: Built, fallen: bool) -> Entity {
-    let Built { creature, gear, kit, arms } = built;
-    let rig = gear.as_ref().map_or_else(|| creature.rig(), |g| g.rig.clone());
-    let (root, bones) = spawn_creature_with(commands, level, spot, &rig, kit, arms.filter(|_| !fallen));
+pub fn spawn_built(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    level: &Level,
+    spot: &CreatureSpot,
+    built: Built,
+    fallen: bool,
+) -> Entity {
+    let Built {
+        creature,
+        gear,
+        kit,
+        arms,
+    } = built;
+    let rig = gear
+        .as_ref()
+        .map_or_else(|| creature.rig(), |g| g.rig.clone());
+    let (root, bones) =
+        spawn_creature_with(commands, level, spot, &rig, kit, arms.filter(|_| !fallen));
     let appearance = ItemAppearance {
-        condition: Condition { state: ConditionState::Custom, wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1), ..Condition::default() },
+        condition: Condition {
+            state: ConditionState::Custom,
+            wear: Mulberry32::new(spot.seed ^ GRIME_SALT).range_f32(GRIME.0, GRIME.1),
+            ..Condition::default()
+        },
         seed: spot.seed,
         ..default()
     };
@@ -661,7 +870,12 @@ pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &L
         // Only a bone's main surface casts a shadow: eyes, whiskers, claws, teeth, markings
         // and bellies inside its shadow add nothing to it but draw into every nearby light's
         // shadow maps (a snake has three parts to a segment).
-        let (casts, details): (Vec<_>, Vec<_>) = bone.mesh.parts.iter().cloned().partition(|p| SURFACE_PARTS.contains(&p.name));
+        let (casts, details): (Vec<_>, Vec<_>) = bone
+            .mesh
+            .parts
+            .iter()
+            .cloned()
+            .partition(|p| SURFACE_PARTS.contains(&p.name));
         for (parts, shadow) in [(casts, true), (details, false)] {
             if parts.is_empty() {
                 continue;
@@ -675,7 +889,13 @@ pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &L
     }
     if let Some(gear) = gear.as_ref().filter(|_| !fallen) {
         for piece in &gear.pieces {
-            spawner.spawn(&piece.mesh, &crate::carry::appearance_of(&piece.item)).insert((Name::new(piece.name.clone()), WornGear, ChildOf(bones[piece.bone])));
+            spawner
+                .spawn(&piece.mesh, &crate::carry::appearance_of(&piece.item))
+                .insert((
+                    Name::new(piece.name.clone()),
+                    WornGear,
+                    ChildOf(bones[piece.bone]),
+                ));
         }
     }
     root
@@ -690,17 +910,35 @@ const GRIME_SALT: u32 = 0x6121_3E00;
 
 /// Spawns a creature's root at its spot and one entity per bone of `rig` on its parent, with
 /// no parts on them: everything but the drawing. Returns the root and the bones.
-pub fn spawn_skeleton(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig) -> (Entity, Vec<Entity>) {
+pub fn spawn_skeleton(
+    commands: &mut Commands,
+    level: &Level,
+    spot: &CreatureSpot,
+    rig: &fb_creatures::Rig,
+) -> (Entity, Vec<Entity>) {
     spawn_skeleton_with(commands, level, spot, rig, None)
 }
 
 /// [`spawn_skeleton`] for a skeleton in `kit` (a skeleton given none has nothing worn or held).
-pub fn spawn_skeleton_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>) -> (Entity, Vec<Entity>) {
+pub fn spawn_skeleton_with(
+    commands: &mut Commands,
+    level: &Level,
+    spot: &CreatureSpot,
+    rig: &fb_creatures::Rig,
+    kit: Option<SkeletonKit>,
+) -> (Entity, Vec<Entity>) {
     spawn_creature_with(commands, level, spot, rig, kit, None)
 }
 
 /// [`spawn_skeleton_with`] for a troll holding `arms`.
-pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &CreatureSpot, rig: &fb_creatures::Rig, kit: Option<SkeletonKit>, arms: Option<trolls::TrollArms>) -> (Entity, Vec<Entity>) {
+pub fn spawn_creature_with(
+    commands: &mut Commands,
+    level: &Level,
+    spot: &CreatureSpot,
+    rig: &fb_creatures::Rig,
+    kit: Option<SkeletonKit>,
+    arms: Option<trolls::TrollArms>,
+) -> (Entity, Vec<Entity>) {
     let creature = spot.creature();
     let mut critter = Critter::new(*spot, creature.clone());
     if let Some(kit) = kit {
@@ -712,12 +950,17 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
     let belongings = Belongings::of(&critter, level.depth);
     let mut rng = Mulberry32::new(spot.seed ^ 0x1D1E);
     let snake = spot.species.is_snake();
-    let mut rest = Intent { coil: if snake { 1.0 } else { 0.0 }, rear: if snake { 0.45 } else { 0.0 }, ..default() };
+    let mut rest = Intent {
+        coil: if snake { 1.0 } else { 0.0 },
+        rear: if snake { 0.45 } else { 0.0 },
+        ..default()
+    };
     // A bat starts hanging from the ceiling over its spot.
     let flight = if let Creature::Bat(bat) = &creature {
         let [x, _, z] = Level::world(spot.x, spot.y);
         let relief = Relief::new(level);
-        let vaults = (level.style == fb_level::LevelStyle::StoneHalls).then(|| crate::level::geometry::stone::Vaults::new(level));
+        let vaults = (level.style == fb_level::LevelStyle::StoneHalls)
+            .then(|| crate::level::geometry::stone::Vaults::new(level));
         let ceiling = behaviour::ceiling_over(level, vaults.as_ref(), &relief, Vec2::new(x, z));
         let flight = Flight::roosting(bat, rig, ceiling, spot.seed);
         rest.wings = flight.wings(0.0);
@@ -732,14 +975,25 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
             stand_at(level, spot),
             Visibility::default(),
             rest,
-            Motion { now: rest, ..default() },
-            Idle { phase: rng.range_f32(0.0, std::f32::consts::TAU), rate: rng.range_f32(0.8, 1.25) },
+            Motion {
+                now: rest,
+                ..default()
+            },
+            Idle {
+                phase: rng.range_f32(0.0, std::f32::consts::TAU),
+                rate: rng.range_f32(0.8, 1.25),
+            },
         ))
         .id();
     let mut bones: Vec<Entity> = Vec::with_capacity(rig.bones.len());
     for bone in &rig.bones {
         let parent = bone.parent.map_or(root, |p| bones[p]);
-        let mut entity = commands.spawn((Name::new(bone.name.clone()), transform_of(&bone.rest), Visibility::default(), ChildOf(parent)));
+        let mut entity = commands.spawn((
+            Name::new(bone.name.clone()),
+            transform_of(&bone.rest),
+            Visibility::default(),
+            ChildOf(parent),
+        ));
         if let Some(hit) = bone.hit() {
             entity.insert(HitShape(hit));
         }
@@ -797,11 +1051,24 @@ pub struct Driven;
 /// A snake's tongue at `t` seconds: two quick flicks every three seconds or so, in between.
 pub fn tongue_flick(t: f32) -> f32 {
     let cycle = (t / 3.1).fract() * 3.1;
-    if cycle < 0.5 { (cycle / 0.25 * std::f32::consts::PI).sin().abs() } else { 0.0 }
+    if cycle < 0.5 {
+        (cycle / 0.25 * std::f32::consts::PI).sin().abs()
+    } else {
+        0.0
+    }
 }
 
 /// What [`animate`] reads and writes on each creature.
-type Posed = (&'static Critter, &'static Transform, &'static Intent, &'static mut Motion, &'static Bones, Option<&'static mut Trail>, Has<crate::combat::feedback::Corpse>, Option<&'static trolls::Troll>);
+type Posed = (
+    &'static Critter,
+    &'static Transform,
+    &'static Intent,
+    &'static mut Motion,
+    &'static Bones,
+    Option<&'static mut Trail>,
+    Has<crate::combat::feedback::Corpse>,
+    Option<&'static trolls::Troll>,
+);
 
 /// Poses every creature for this frame from how it moved and what it means to do.
 pub fn animate(
@@ -854,20 +1121,56 @@ pub fn animate(
         let now = motion.now;
         let places = match &critter.creature {
             Creature::Rat(rat) => {
-                motion.cycle = (motion.cycle + strode / pose::rat_stride(rat) * std::f32::consts::TAU) % std::f32::consts::TAU;
-                pose::rat(rat, &RatPose { stride: motion.cycle, pace: motion.pace, time: motion.time, bite: now.strike, look: now.look })
+                motion.cycle = (motion.cycle
+                    + strode / pose::rat_stride(rat) * std::f32::consts::TAU)
+                    % std::f32::consts::TAU;
+                pose::rat(
+                    rat,
+                    &RatPose {
+                        stride: motion.cycle,
+                        pace: motion.pace,
+                        time: motion.time,
+                        bite: now.strike,
+                        look: now.look,
+                    },
+                )
             }
             Creature::Jackalope(jackalope) => {
-                motion.cycle = (motion.cycle + strode / pose::jackalope_stride(jackalope) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                motion.cycle = (motion.cycle
+                    + strode / pose::jackalope_stride(jackalope) * std::f32::consts::TAU)
+                    % std::f32::consts::TAU;
                 // Rearing sits it up; a strike gores.
-                pose::jackalope(jackalope, &JackalopePose { stride: motion.cycle, pace: motion.pace, time: motion.time, sit: now.rear, gore: now.strike, look: now.look })
+                pose::jackalope(
+                    jackalope,
+                    &JackalopePose {
+                        stride: motion.cycle,
+                        pace: motion.pace,
+                        time: motion.time,
+                        sit: now.rear,
+                        gore: now.strike,
+                        look: now.look,
+                    },
+                )
             }
             Creature::Snake(snake) => {
-                motion.cycle += strode / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
-                let bend = trail.as_deref().map_or([0.0; pose::BEND_KNOTS], |trail| trail_bend(snake, trail, root));
+                motion.cycle +=
+                    strode / (pose::WAVELENGTH * snake.dims().body_length) * std::f32::consts::TAU;
+                let bend = trail.as_deref().map_or([0.0; pose::BEND_KNOTS], |trail| {
+                    trail_bend(snake, trail, root)
+                });
                 let mut places = pose::snake(
                     snake,
-                    &SnakePose { phase: motion.cycle, pace: motion.pace.min(1.0), coil: now.coil, rear: now.rear, strike: now.strike, jaw: now.jaw, tongue: now.tongue, look: now.look, bend },
+                    &SnakePose {
+                        phase: motion.cycle,
+                        pace: motion.pace.min(1.0),
+                        coil: now.coil,
+                        rear: now.rear,
+                        strike: now.strike,
+                        jaw: now.jaw,
+                        tongue: now.tongue,
+                        look: now.look,
+                        bend,
+                    },
                 );
                 // Each segment, and the head, rests on the floor under it rather than the floor
                 // at the root.
@@ -875,7 +1178,8 @@ pub fn animate(
                 for i in std::iter::once(HEAD).chain(SPINE..places.len()) {
                     let place = &mut places[i];
                     let world = root.transform_point(Vec3::from_array(place.origin));
-                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y) / root.scale.y.max(1e-3);
+                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y)
+                        / root.scale.y.max(1e-3);
                 }
                 places
             }
@@ -892,14 +1196,39 @@ pub fn animate(
                 if intent.fallen > 0.0 {
                     pose::skeleton_heap(dims, skeleton.seed, intent.fallen)
                 } else {
-                    motion.cycle = (motion.cycle + strode / pose::skeleton_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
-                    pose::skeleton_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
+                    motion.cycle = (motion.cycle
+                        + strode / pose::skeleton_stride(dims) * std::f32::consts::TAU)
+                        % std::f32::consts::TAU;
+                    pose::skeleton_armed(
+                        dims,
+                        &SkeletonPose {
+                            stride: motion.cycle,
+                            pace: motion.pace.min(1.0),
+                            time: motion.time,
+                            look: now.look,
+                            jaw: now.jaw,
+                            swing: intent.swing,
+                        },
+                        &stance,
+                    )
                 }
             }
             Creature::Spider(spider) => {
-                motion.cycle = (motion.cycle + strode / pose::spider_stride(spider) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                motion.cycle = (motion.cycle
+                    + strode / pose::spider_stride(spider) * std::f32::consts::TAU)
+                    % std::f32::consts::TAU;
                 // A fallen spider's legs draw in under it as it is turned over ([`Intent::fallen`]).
-                pose::spider(spider, &SpiderPose { stride: motion.cycle, pace: motion.pace.min(2.0), time: motion.time, rear: now.rear, bite: now.strike, curl: intent.fallen })
+                pose::spider(
+                    spider,
+                    &SpiderPose {
+                        stride: motion.cycle,
+                        pace: motion.pace.min(2.0),
+                        time: motion.time,
+                        rear: now.rear,
+                        bite: now.strike,
+                        curl: intent.fallen,
+                    },
+                )
             }
             Creature::Troll(troll) => {
                 // Measured once, when it appeared.
@@ -914,32 +1243,74 @@ pub fn animate(
                 if intent.fallen > 0.0 {
                     pose::troll_fallen(dims, intent.fallen)
                 } else {
-                    motion.cycle = (motion.cycle + strode / pose::troll_stride(dims) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                    motion.cycle = (motion.cycle
+                        + strode / pose::troll_stride(dims) * std::f32::consts::TAU)
+                        % std::f32::consts::TAU;
                     let stance = critter.arms.as_ref().map_or([None, None], |a| a.stance);
-                    pose::troll_armed(dims, &SkeletonPose { stride: motion.cycle, pace: motion.pace.min(1.0), time: motion.time, look: now.look, jaw: now.jaw, swing: intent.swing }, &stance)
+                    pose::troll_armed(
+                        dims,
+                        &SkeletonPose {
+                            stride: motion.cycle,
+                            pace: motion.pace.min(1.0),
+                            time: motion.time,
+                            look: now.look,
+                            jaw: now.jaw,
+                            swing: intent.swing,
+                        },
+                        &stance,
+                    )
                 }
             }
             Creature::Centipede(centipede) => {
                 // The legs step once a stride, and the body's wave goes with them.
-                motion.cycle = (motion.cycle + strode / pose::centipede_stride(centipede) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                motion.cycle = (motion.cycle
+                    + strode / pose::centipede_stride(centipede) * std::f32::consts::TAU)
+                    % std::f32::consts::TAU;
                 let mut places = pose::centipede(
                     centipede,
-                    &CentipedePose { stride: motion.cycle, pace: motion.pace, time: motion.time, rear: now.rear, bite: now.strike, jaw: now.jaw, look: now.look, curl: intent.fallen },
+                    &CentipedePose {
+                        stride: motion.cycle,
+                        pace: motion.pace,
+                        time: motion.time,
+                        rear: now.rear,
+                        bite: now.strike,
+                        jaw: now.jaw,
+                        look: now.look,
+                        curl: intent.fallen,
+                    },
                 );
                 // A felled one curls up ([`Intent::fallen`]). Each plate, and the head, rests on the floor under it; the legs hang from the
                 // plates and go with them.
-                for i in std::iter::once(fb_creatures::centipede::bone::HEAD).chain((0..centipede.segments).map(|k| centipede.segment_bone(k))) {
+                for i in std::iter::once(fb_creatures::centipede::bone::HEAD)
+                    .chain((0..centipede.segments).map(|k| centipede.segment_bone(k)))
+                {
                     let place = &mut places[i];
                     let world = root.transform_point(Vec3::from_array(place.origin));
-                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y) / root.scale.y.max(1e-3);
+                    place.origin[1] += (relief.floor_height(world.x, world.z) - root.translation.y)
+                        / root.scale.y.max(1e-3);
                 }
                 places
             }
             // Roosting, wheeling, gliding or fallen, at the height its flight puts it.
             Creature::Bat(bat) => {
-                let flap = (motion.time * pose::bat_beat_hz(bat) * std::f32::consts::TAU) % std::f32::consts::TAU;
+                let flap = (motion.time * pose::bat_beat_hz(bat) * std::f32::consts::TAU)
+                    % std::f32::consts::TAU;
                 let w = now.wings;
-                pose::bat(bat, &BatPose { flap, power: w.power, roost: w.roost, tuck: w.tuck, height: w.altitude, pitch: w.pitch, bank: w.bank, bite: now.strike, look: now.look, time: motion.time })
+                pose::bat(
+                    bat,
+                    &BatPose {
+                        flap,
+                        power: w.power,
+                        roost: w.roost,
+                        tuck: w.tuck,
+                        height: w.altitude,
+                        pitch: w.pitch,
+                        bank: w.bank,
+                        bite: now.strike,
+                        look: now.look,
+                        time: motion.time,
+                    },
+                )
             }
         };
         for (entity, place) in bones.0.iter().zip(&places) {
@@ -954,10 +1325,14 @@ pub fn animate(
 /// placed on a real level, so it does not hang on what one seed holds.
 #[cfg(test)]
 pub fn seed_holding(species: &[fb_creatures::Species]) -> u32 {
-    (1..=500).find(|&s| {
-        let level = fb_level::generate(s, 1);
-        species.iter().all(|&k| level.creatures.iter().any(|c| c.species == k))
-    }).expect("some first level holds them all")
+    (1..=500)
+        .find(|&s| {
+            let level = fb_level::generate(s, 1);
+            species
+                .iter()
+                .all(|&k| level.creatures.iter().any(|c| c.species == k))
+        })
+        .expect("some first level holds them all")
 }
 
 #[cfg(test)]
@@ -966,10 +1341,16 @@ mod tests {
 
     #[test]
     fn placements_become_transforms() {
-        let place = Placement { rotation: fb_creatures::shape::spine_to_creature(), origin: [1.0, 2.0, 3.0] };
+        let place = Placement {
+            rotation: fb_creatures::shape::spine_to_creature(),
+            origin: [1.0, 2.0, 3.0],
+        };
         let t = transform_of(&place);
         assert_eq!(t.translation, Vec3::new(1.0, 2.0, 3.0));
-        assert!((t.rotation * Vec3::Y).abs_diff_eq(Vec3::Z, 1e-5), "the spine frame's forward is the creature's");
+        assert!(
+            (t.rotation * Vec3::Y).abs_diff_eq(Vec3::Z, 1e-5),
+            "the spine frame's forward is the creature's"
+        );
         assert!((t.rotation * Vec3::Z).abs_diff_eq(Vec3::Y, 1e-5));
     }
 
@@ -977,7 +1358,10 @@ mod tests {
     fn the_tongue_flicks_now_and_then() {
         let samples: Vec<f32> = (0..310).map(|i| tongue_flick(i as f32 * 0.01)).collect();
         assert!(samples.iter().any(|&t| t > 0.9));
-        assert!(samples.iter().filter(|&&t| t == 0.0).count() > 200, "mostly in");
+        assert!(
+            samples.iter().filter(|&&t| t == 0.0).count() > 200,
+            "mostly in"
+        );
     }
 
     /// An app with every creature of seed 1207 spawned as bones (no drawing), idling and
@@ -990,13 +1374,19 @@ mod tests {
         use bevy::time::TimeUpdateStrategy;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
-            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 60.0),
+            ))
             .add_systems(Update, (idle, animate).chain());
         let level = fb_level::generate(seed, depth);
         app.insert_resource(CurrentLevel(level.clone()));
         let roots = {
             let mut commands = app.world_mut().commands();
-            level.creatures.iter().map(|spot| spawn_skeleton(&mut commands, &level, spot, &spot.creature().rig()).0).collect()
+            level
+                .creatures
+                .iter()
+                .map(|spot| spawn_skeleton(&mut commands, &level, spot, &spot.creature().rig()).0)
+                .collect()
         };
         app.world_mut().flush();
         (app, roots)
@@ -1004,7 +1394,10 @@ mod tests {
 
     fn bone_transforms(app: &App, root: Entity) -> Vec<Transform> {
         let bones = &app.world().get::<Bones>(root).unwrap().0;
-        bones.iter().map(|&b| *app.world().get::<Transform>(b).unwrap()).collect()
+        bones
+            .iter()
+            .map(|&b| *app.world().get::<Transform>(b).unwrap())
+            .collect()
     }
 
     /// Each newer species spawns and animates without a panic on a level that holds it: the first
@@ -1012,10 +1405,28 @@ mod tests {
     #[test]
     fn each_newer_species_spawns_and_animates_on_a_level_that_holds_it() {
         use fb_creatures::Species::*;
-        for (species, depth) in [(GiantCentipede, 2), (Bat, 1), (Jackalope, 1), (GiantSpider, 3), (GiantBat, 4), (Troll, 7)] {
-            let seed = (1..=60).find(|&s| fb_level::generate(s, depth).creatures.iter().any(|c| c.species == species)).unwrap_or_else(|| panic!("no level holds {species:?} at depth {depth}"));
+        for (species, depth) in [
+            (GiantCentipede, 2),
+            (Bat, 1),
+            (Jackalope, 1),
+            (GiantSpider, 3),
+            (GiantBat, 4),
+            (Troll, 7),
+        ] {
+            let seed = (1..=60)
+                .find(|&s| {
+                    fb_level::generate(s, depth)
+                        .creatures
+                        .iter()
+                        .any(|c| c.species == species)
+                })
+                .unwrap_or_else(|| panic!("no level holds {species:?} at depth {depth}"));
             let (mut app, roots) = level_app_of(seed, depth);
-            assert!(roots.iter().any(|&r| app.world().get::<Critter>(r).unwrap().spot.species == species));
+            assert!(
+                roots
+                    .iter()
+                    .any(|&r| app.world().get::<Critter>(r).unwrap().spot.species == species)
+            );
             for _ in 0..30 {
                 app.update();
             }
@@ -1036,8 +1447,15 @@ mod tests {
         }
         for (i, &root) in roots.iter().enumerate() {
             let after = bone_transforms(&app, root);
-            let moved = before[i].iter().zip(&after).any(|(a, b)| !a.translation.abs_diff_eq(b.translation, 1e-4) || !a.rotation.abs_diff_eq(b.rotation, 1e-4));
-            assert!(moved, "{:?} stands frozen", app.world().get::<Critter>(root).unwrap().spot.species);
+            let moved = before[i].iter().zip(&after).any(|(a, b)| {
+                !a.translation.abs_diff_eq(b.translation, 1e-4)
+                    || !a.rotation.abs_diff_eq(b.rotation, 1e-4)
+            });
+            assert!(
+                moved,
+                "{:?} stands frozen",
+                app.world().get::<Critter>(root).unwrap().spot.species
+            );
         }
     }
 
@@ -1046,12 +1464,21 @@ mod tests {
         let (mut app, roots) = level_app();
         let level = fb_level::generate(1207, 1);
         let relief = Relief::new(&level);
-        let rigs: Vec<fb_creatures::Rig> = roots.iter().map(|&r| app.world().get::<Critter>(r).unwrap().creature.rig()).collect();
+        let rigs: Vec<fb_creatures::Rig> = roots
+            .iter()
+            .map(|&r| app.world().get::<Critter>(r).unwrap().creature.rig())
+            .collect();
         for frame in 0..150 {
             // Standing for a second, then everyone moves off forward at its walking speed.
             if frame >= 60 {
                 for &root in &roots {
-                    let speed = app.world().get::<Critter>(root).unwrap().spot.species.speed();
+                    let speed = app
+                        .world()
+                        .get::<Critter>(root)
+                        .unwrap()
+                        .spot
+                        .species
+                        .speed();
                     let mut t = app.world_mut().get_mut::<Transform>(root).unwrap();
                     // Creatures face +Z.
                     let ahead = t.rotation * Vec3::Z;
@@ -1094,8 +1521,16 @@ mod tests {
                 }
                 // The floor's relief moves under a long body a little: within 4% of its size.
                 let tolerance = 0.04 * size + 0.03;
-                assert!(deepest < tolerance, "{:?} sinks {deepest} at frame {frame}", critter.spot.species);
-                assert!(nearest < tolerance, "{:?} floats {nearest} at frame {frame}", critter.spot.species);
+                assert!(
+                    deepest < tolerance,
+                    "{:?} sinks {deepest} at frame {frame}",
+                    critter.spot.species
+                );
+                assert!(
+                    nearest < tolerance,
+                    "{:?} floats {nearest} at frame {frame}",
+                    critter.spot.species
+                );
             }
         }
     }
@@ -1107,48 +1542,89 @@ mod tests {
         let skeleton = dev_spots_for(&level, "skeleton:5").remove(0);
         assert_eq!(skeleton.species, fb_creatures::Species::Skeleton);
         let snakes = fb_level::generate(seed_holding(&[fb_creatures::Species::PoisonousSnake]), 1);
-        let snake = *snakes.creatures.iter().find(|c| c.species.is_snake()).unwrap();
+        let snake = *snakes
+            .creatures
+            .iter()
+            .find(|c| c.species.is_snake())
+            .unwrap();
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
-            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 60.0),
+            ))
             .add_systems(Update, idle);
         let (skeleton, snake) = {
             let mut commands = app.world_mut().commands();
-            (spawn_skeleton(&mut commands, &level, &skeleton, &skeleton.creature().rig()).0, spawn_skeleton(&mut commands, &snakes, &snake, &snake.creature().rig()).0)
+            (
+                spawn_skeleton(&mut commands, &level, &skeleton, &skeleton.creature().rig()).0,
+                spawn_skeleton(&mut commands, &snakes, &snake, &snake.creature().rig()).0,
+            )
         };
         app.world_mut().flush();
         for _ in 0..90 {
             app.update();
         }
         let intent = |e| *app.world().get::<Intent>(e).unwrap();
-        assert_eq!(intent(skeleton), Intent::default(), "a skeleton neither coils, rears nor flicks a tongue");
-        assert!(intent(snake).coil > 0.9 && intent(snake).tongue >= 0.0 && intent(snake).rear > 0.2, "while a snake does");
+        assert_eq!(
+            intent(skeleton),
+            Intent::default(),
+            "a skeleton neither coils, rears nor flicks a tongue"
+        );
+        assert!(
+            intent(snake).coil > 0.9 && intent(snake).tongue >= 0.0 && intent(snake).rear > 0.2,
+            "while a snake does"
+        );
     }
 
     #[test]
     fn a_skeletons_bones_are_measured_once_and_its_dev_spot_asks_by_name() {
         let level = fb_level::generate(1207, 1);
         assert!(dev_spots_for(&level, "unicorn").is_empty());
-        assert!(dev_spots_for(&level, "folk:3").is_empty(), "folk are not creatures");
+        assert!(
+            dev_spots_for(&level, "folk:3").is_empty(),
+            "folk are not creatures"
+        );
         let folk = dev_folk_for(&level, "folk:3,folk");
         assert_eq!(folk.len(), 2);
         assert!(level.factions.iter().any(|f| f.id == folk[0].faction));
         assert_eq!(folk[1].faction, level.factions[0].id);
         assert!(dev_folk_for(&level, "skeleton").is_empty());
-        let trades: Vec<_> = dev_folk_for(&level, "folk:3:weaponsmith,folk::master-alchemist,folk:guard,folk").iter().map(|f| f.trade.map(|t| t.label())).collect();
-        assert_eq!(trades, [Some("Apprentice weaponsmith (blades)".to_string()), Some("Master alchemist".to_string()), Some("Guard".to_string()), None]);
+        let trades: Vec<_> = dev_folk_for(
+            &level,
+            "folk:3:weaponsmith,folk::master-alchemist,folk:guard,folk",
+        )
+        .iter()
+        .map(|f| f.trade.map(|t| t.label()))
+        .collect();
+        assert_eq!(
+            trades,
+            [
+                Some("Apprentice weaponsmith (blades)".to_string()),
+                Some("Master alchemist".to_string()),
+                Some("Guard".to_string()),
+                None
+            ]
+        );
         let spots = dev_spots_for(&level, "skeleton:1,2,3");
-        assert_eq!(spots.iter().map(|s| s.seed).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            spots.iter().map(|s| s.seed).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
         let spot = spots[0];
         let creature = spot.creature();
         let critter = Critter::new(spot, creature);
         let kit = critter.kit.as_ref().unwrap();
-        let Creature::Skeleton(state) = &critter.creature else { unreachable!() };
+        let Creature::Skeleton(state) = &critter.creature else {
+            unreachable!()
+        };
         assert_eq!(kit.height, state.height());
         // The kit stays put as the creature is resized: nothing is measured again.
         let mut big = critter.clone();
         big.resize(2.0);
-        assert!(std::sync::Arc::ptr_eq(big.kit.as_ref().unwrap(), critter.kit.as_ref().unwrap()));
+        assert!(std::sync::Arc::ptr_eq(
+            big.kit.as_ref().unwrap(),
+            critter.kit.as_ref().unwrap()
+        ));
         assert_eq!(big.radius, 2.0 * critter.radius);
     }
 
@@ -1158,7 +1634,10 @@ mod tests {
         let relief = Relief::new(&level);
         for spot in &level.creatures {
             let t = stand_at(&level, spot);
-            assert!((t.translation.y - relief.floor_height(t.translation.x, t.translation.z)).abs() < 1e-5);
+            assert!(
+                (t.translation.y - relief.floor_height(t.translation.x, t.translation.z)).abs()
+                    < 1e-5
+            );
         }
     }
 }

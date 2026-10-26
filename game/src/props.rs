@@ -26,21 +26,23 @@
 //! `FB_OPEN_CONTAINER=<n>` opens the level's `n`th container (0 the first, in `print_level`'s
 //! order) a few frames in, for captures.
 
+use armory::families::banner::BannerState;
 use armory::{Item, build::scenery::Scenery, cond::ConditionState};
 use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
 use fb_items::footprint::Footprint;
-use armory::families::banner::BannerState;
 use fb_level::{BannerSite, BannerSpot, CELL, Level, Prop, PropSpot, chest_state};
 
 use crate::carry::{Aimed, appearance_of, item_points};
-use crate::inventory::{Inventory, ItemId, OpenContainer};
 use crate::interact::{CrosshairPrompt, Delver, Lock, Target, key_line, verbs_for};
+use crate::inventory::{Inventory, ItemId, OpenContainer};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::level::{LevelPiece, fixture_appearance, geometry::Relief};
-use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, Screen, ScreenOpen, level_has_focus, show_screen};
+use crate::play::{
+    BlocksTheWay, CurrentLevel, DelveSystems, Screen, ScreenOpen, level_has_focus, show_screen,
+};
 use crate::record::{WorldRecord, restore_contents};
 use crate::render::ItemSpawner;
 use crate::tuning::Tuning;
@@ -94,7 +96,11 @@ pub struct Container {
 const SINK: f32 = 0.05;
 
 /// The prop's mesh and look. A container is shut until `opened`.
-pub fn prop_mesh(spot: &PropSpot, level: &Level, opened: bool) -> (armory::ItemMesh, crate::render::ItemAppearance) {
+pub fn prop_mesh(
+    spot: &PropSpot,
+    level: &Level,
+    opened: bool,
+) -> (armory::ItemMesh, crate::render::ItemAppearance) {
     match spot.prop {
         Prop::Container { style, seed, .. } => {
             let item = Item::Chests(chest_state(style, seed, opened));
@@ -105,9 +111,16 @@ pub fn prop_mesh(spot: &PropSpot, level: &Level, opened: bool) -> (armory::ItemM
             (item.build(), appearance_of(&item))
         }
         Prop::Scenery { kind, seed } => {
-            let state = if kind == Scenery::Bones { ConditionState::Neglected } else { ConditionState::BattleWorn };
+            let state = if kind == Scenery::Bones {
+                ConditionState::Neglected
+            } else {
+                ConditionState::BattleWorn
+            };
             let [x, _, z] = Level::world(spot.x, spot.y);
-            (kind.build(seed, crate::level::geometry::stone::ceiling_at(level, x, z)), fixture_appearance(seed, state))
+            (
+                kind.build(seed, crate::level::geometry::stone::ceiling_at(level, x, z)),
+                fixture_appearance(seed, state),
+            )
         }
     }
 }
@@ -115,14 +128,22 @@ pub fn prop_mesh(spot: &PropSpot, level: &Level, opened: bool) -> (armory::ItemM
 /// How much larger than its own size `prop` is drawn: a container at the tuning's
 /// `container_scale`, scenery as built.
 pub fn prop_scale(prop: Prop, tuning: &Tuning) -> f32 {
-    if prop.is_container() { tuning.view.container_scale } else { 1.0 }
+    if prop.is_container() {
+        tuning.view.container_scale
+    } else {
+        1.0
+    }
 }
 
 /// The floor `prop` blocks drawn `scale` times its size ([`prop_scale`]). `fb_level` sizes a
 /// container's shape for [`fb_level::CONTAINER_SCALE`]; another scale grows or shrinks it.
 pub fn prop_floor_shape(prop: Prop, scale: f32) -> fb_level::FloorShape {
     let shape = prop.floor_shape();
-    if prop.is_container() { shape.scaled(scale / fb_level::CONTAINER_SCALE) } else { shape }
+    if prop.is_container() {
+        shape.scaled(scale / fb_level::CONTAINER_SCALE)
+    } else {
+        shape
+    }
 }
 
 /// Where a prop whose item-space lowest point is `low` stands at `spot`, drawn `scale` times
@@ -133,7 +154,9 @@ pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> T
     let centre = Vec3::from_array(Level::world(spot.x, spot.y));
     let reach = prop_floor_shape(spot.prop, scale).radius();
     let floor = std::iter::once(Vec2::ZERO)
-        .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
+        .chain(
+            (0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8),
+        )
         .map(|offset| relief.floor_height(centre.x + offset.x, centre.z + offset.y))
         .fold(f32::INFINITY, f32::min);
     Transform::from_translation(Vec3::new(centre.x, floor - low * scale - SINK, centre.z))
@@ -143,17 +166,32 @@ pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> T
 
 /// Spawns prop `index` of the level, shut or `opened`, at the tuning's scale ([`prop_scale`]),
 /// and returns its commands to insert on. `None` for a prop with no vertices.
-pub fn spawn_prop<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, opened: bool, tuning: &Tuning) -> Option<EntityCommands<'a>> {
+pub fn spawn_prop<'a>(
+    spawner: &'a mut ItemSpawner,
+    level: &Level,
+    index: usize,
+    opened: bool,
+    tuning: &Tuning,
+) -> Option<EntityCommands<'a>> {
     let spot = *level.props.get(index)?;
     let (mesh, appearance) = prop_mesh(&spot, level, opened);
     spawn_prop_shaped(spawner, level, index, &mesh, &appearance, tuning)
 }
 
 /// [`spawn_prop`] for a prop whose `mesh` and `appearance` are made already (`crate::staged`).
-pub fn spawn_prop_shaped<'a>(spawner: &'a mut ItemSpawner, level: &Level, index: usize, mesh: &armory::ItemMesh, appearance: &crate::render::ItemAppearance, tuning: &Tuning) -> Option<EntityCommands<'a>> {
+pub fn spawn_prop_shaped<'a>(
+    spawner: &'a mut ItemSpawner,
+    level: &Level,
+    index: usize,
+    mesh: &armory::ItemMesh,
+    appearance: &crate::render::ItemAppearance,
+    tuning: &Tuning,
+) -> Option<EntityCommands<'a>> {
     let spot = *level.props.get(index)?;
     let points = item_points(mesh);
-    let (min, max) = points.iter().fold(None, |acc: Option<(Vec3, Vec3)>, &p| Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p)))))?;
+    let (min, max) = points.iter().fold(None, |acc: Option<(Vec3, Vec3)>, &p| {
+        Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))))
+    })?;
     let scale = prop_scale(spot.prop, tuning);
     let transform = prop_transform(level, &spot, min.y, scale);
     let name = match spot.prop {
@@ -162,13 +200,28 @@ pub fn spawn_prop_shaped<'a>(spawner: &'a mut ItemSpawner, level: &Level, index:
         Prop::Campfire { .. } => "Campfire".to_string(),
     };
     let mut root = spawner.spawn(mesh, appearance);
-    root.insert((LevelPiece, Name::new(name), transform, PropPiece { index, spot, min, max }, BlocksTheWay(prop_floor_shape(spot.prop, scale))));
+    root.insert((
+        LevelPiece,
+        Name::new(name),
+        transform,
+        PropPiece {
+            index,
+            spot,
+            min,
+            max,
+        },
+        BlocksTheWay(prop_floor_shape(spot.prop, scale)),
+    ));
     Some(root)
 }
 
 /// Redraws every prop at the tuning's scale when it changes, standing where it stood, with the
 /// floor it blocks to match.
-fn rescale_props(tuning: Res<Tuning>, level: Res<CurrentLevel>, mut props: Query<(&PropPiece, &mut Transform, &mut BlocksTheWay)>) {
+fn rescale_props(
+    tuning: Res<Tuning>,
+    level: Res<CurrentLevel>,
+    mut props: Query<(&PropPiece, &mut Transform, &mut BlocksTheWay)>,
+) {
     for (piece, mut transform, mut blocks) in &mut props {
         let scale = prop_scale(piece.spot.prop, &tuning);
         if transform.scale.x != scale {
@@ -203,7 +256,11 @@ const LINTEL_FOOT: f32 = crate::level::geometry::DOOR_HEIGHT + 1.5;
 pub fn banner_hang(spot: &BannerSpot, level: &Level) -> (BannerState, f32) {
     let faction = level.faction(spot.faction);
     let lintel = spot.site == BannerSite::Lintel;
-    let mut state = if lintel { faction.banner_sized((5.0, 7.0), (5.0, 8.0)) } else { faction.banner() };
+    let mut state = if lintel {
+        faction.banner_sized((5.0, 7.0), (5.0, 8.0))
+    } else {
+        faction.banner()
+    };
     let [x, _, z] = Level::world(spot.x, spot.y);
     let highest = crate::level::geometry::stone::ceiling_at(level, x, z) - BANNER_BELOW_CEILING;
     let length = state.cloth.length;
@@ -221,11 +278,17 @@ pub fn banner_hang(spot: &BannerSpot, level: &Level) -> (BannerState, f32) {
 /// Where a banner's rod hangs: at its spot, `top` up, facing out from the wall.
 pub fn banner_transform(spot: &BannerSpot, top: f32) -> Transform {
     let centre = Vec3::from_array(Level::world(spot.x, spot.y));
-    Transform::from_translation(Vec3::new(centre.x, top, centre.z)).with_rotation(Quat::from_rotation_y(spot.yaw))
+    Transform::from_translation(Vec3::new(centre.x, top, centre.z))
+        .with_rotation(Quat::from_rotation_y(spot.yaw))
 }
 
 /// Spawns (or respawns, when the level changes) the level's banners.
-fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<BannerPiece>>, mut spawner: ItemSpawner) {
+fn lay_out_banners(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    old: Query<Entity, With<BannerPiece>>,
+    mut spawner: ItemSpawner,
+) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
@@ -234,26 +297,47 @@ fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<
         let item = Item::Banner(state);
         let (mesh, appearance) = (item.build(), appearance_of(&item));
         let name = format!("Banner of {}", level.0.faction(spot.faction).name);
-        spawner.spawn(&mesh, &appearance).insert((LevelPiece, Name::new(name), banner_transform(spot, top), BannerPiece { index }));
+        spawner.spawn(&mesh, &appearance).insert((
+            LevelPiece,
+            Name::new(name),
+            banner_transform(spot, top),
+            BannerPiece { index },
+        ));
     }
 }
 
 /// Keeps track of a container prop in `inventory`, loose, holding what its loot rolls against
 /// `odds`: each thing at its first free spot, upright first and then turned, and anything with
 /// no room left out. `None` for scenery. A container set out empty ([`fb_level::NO_LOOT`]) holds nothing.
-pub fn stock_container(inventory: &mut Inventory, spot: &PropSpot, odds: fb_items::Odds, level: &fb_level::Level, lore: &fb_items::notes::Lore) -> Option<ItemId> {
+pub fn stock_container(
+    inventory: &mut Inventory,
+    spot: &PropSpot,
+    odds: fb_items::Odds,
+    level: &fb_level::Level,
+    lore: &fb_items::notes::Lore,
+) -> Option<ItemId> {
     let contents = level.container_contents(spot, odds, lore);
     stock_container_with(inventory, spot.prop, contents)
 }
 
 /// [`stock_container`] with the `contents` it rolled already (`crate::staged`).
-pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec<fb_items::Item>) -> Option<ItemId> {
-    let Prop::Container { style, seed, .. } = prop else { return None };
+pub fn stock_container_with(
+    inventory: &mut Inventory,
+    prop: Prop,
+    contents: Vec<fb_items::Item>,
+) -> Option<ItemId> {
+    let Prop::Container { style, seed, .. } = prop else {
+        return None;
+    };
     let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
     for item in contents {
         let id = inventory.add(item);
-        let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
-        let at = inventory.grid(container).and_then(|g| g.first_free(footprint));
+        let footprint = inventory
+            .footprint(id)
+            .unwrap_or(Footprint { cols: 1, rows: 1 });
+        let at = inventory
+            .grid(container)
+            .and_then(|g| g.first_free(footprint));
         if at.is_none_or(|at| inventory.put(id, container, at).is_err()) {
             inventory.forget(id);
         }
@@ -279,7 +363,10 @@ fn lay_out_props(
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     // Chests hold what rolls for the luck the delver wears as they come to the level.
     let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
-    let mut ahead = staged.as_mut().and_then(|s| s.take_props(&level.0, odds)).map(Vec::into_iter);
+    let mut ahead = staged
+        .as_mut()
+        .and_then(|s| s.take_props(&level.0, odds))
+        .map(Vec::into_iter);
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     let lore = level.0.lore();
     for (entity, container) in &old {
@@ -295,18 +382,28 @@ fn lay_out_props(
         let left = saved.and_then(|l| l.containers.get(&index));
         let stocked = match (left, spot.prop) {
             (Some(left), Prop::Container { style, seed, .. }) => {
-                let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
+                let container =
+                    inventory.add(fb_items::container_item(chest_state(style, seed, false)));
                 restore_contents(&mut inventory, container, &left.contents);
                 Some(container)
             }
             _ => match &ahead {
-                Some(ahead) => stock_container_with(&mut inventory, spot.prop, ahead.contents.clone()),
+                Some(ahead) => {
+                    stock_container_with(&mut inventory, spot.prop, ahead.contents.clone())
+                }
                 None => stock_container(&mut inventory, spot, odds, &level.0, &lore),
             },
         };
         let opened = left.is_some_and(|c| c.opened);
         let root = match &ahead {
-            Some(ahead) if !opened => spawn_prop_shaped(&mut spawner, &level.0, index, &ahead.mesh, &ahead.appearance, &tuning),
+            Some(ahead) if !opened => spawn_prop_shaped(
+                &mut spawner,
+                &level.0,
+                index,
+                &ahead.mesh,
+                &ahead.appearance,
+                &tuning,
+            ),
             _ => spawn_prop(&mut spawner, &level.0, index, opened, &tuning),
         };
         if let Some(mut root) = root
@@ -339,7 +436,10 @@ pub fn open_container(
     }
     commands.entity(entity).despawn();
     if let Some(mut root) = spawn_prop(spawner, level, piece.index, true, tuning) {
-        root.insert(Container { opened: true, ..container });
+        root.insert(Container {
+            opened: true,
+            ..container
+        });
     }
 }
 
@@ -361,11 +461,24 @@ fn open_aimed_container(
         return;
     }
     let Some(entity) = aimed.0 else { return };
-    let Ok((piece, &container)) = containers.get(entity) else { return };
+    let Ok((piece, &container)) = containers.get(entity) else {
+        return;
+    };
     aimed.0 = None;
     let cursor = cursor.as_deref_mut().map(|c| &mut **c);
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-    open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor, &tuning);
+    open_container(
+        &mut commands,
+        &mut spawner,
+        &level.0,
+        entity,
+        piece,
+        container,
+        &mut open,
+        &mut showing,
+        cursor,
+        &tuning,
+    );
 }
 
 /// Says what the aimed container's verbs are over the crosshair. Containers have no locks yet,
@@ -377,10 +490,16 @@ pub(crate) fn prompt_aimed_container(
     mut prompt: ResMut<CrosshairPrompt>,
     mut said: Local<Option<String>>,
 ) {
-    let line = aimed.0.and_then(|entity| containers.get(entity).ok()).map(|container| {
-        let target = Target::Container { open: container.opened, lock: Lock::NONE };
-        key_line(&keymap, &verbs_for(&target, &Delver::default()))
-    });
+    let line = aimed
+        .0
+        .and_then(|entity| containers.get(entity).ok())
+        .map(|container| {
+            let target = Target::Container {
+                open: container.opened,
+                lock: Lock::NONE,
+            };
+            key_line(&keymap, &verbs_for(&target, &Delver::default()))
+        });
     let line = line.filter(|line| !line.is_empty());
     // Clear only what this system set: other aimed things (folk) have their own say.
     if line.is_some() || said.is_some() {
@@ -408,13 +527,29 @@ fn open_for_capture(
     if *frames != 4 {
         return;
     }
-    let n: usize = std::env::var("FB_OPEN_CONTAINER").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let n: usize = std::env::var("FB_OPEN_CONTAINER")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let mut all: Vec<(Entity, &PropPiece, &Container)> = containers.iter().collect();
     all.sort_by_key(|(_, piece, _)| piece.index);
-    let Some(&(entity, piece, &container)) = all.get(n) else { return };
+    let Some(&(entity, piece, &container)) = all.get(n) else {
+        return;
+    };
     let cursor = cursor.as_deref_mut().map(|c| &mut **c);
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-    open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut open, &mut showing, cursor, &tuning);
+    open_container(
+        &mut commands,
+        &mut spawner,
+        &level.0,
+        entity,
+        piece,
+        container,
+        &mut open,
+        &mut showing,
+        cursor,
+        &tuning,
+    );
 }
 
 /// A prop's centre on the floor plane (world `(x, z)`).
@@ -426,9 +561,9 @@ pub fn floor_centre(spot: &PropSpot) -> Vec2 {
 mod tests {
     use super::*;
     use crate::play::{Obstacle, Obstacles, gather_obstacles};
-    use fb_level::FloorShape;
-    use armory::families::banner::BannerMount;
     use crate::player::{blocked_by, slide_around};
+    use armory::families::banner::BannerMount;
+    use fb_level::FloorShape;
     /// The player's body radius as shipped.
     const BODY_RADIUS: f32 = 3.5;
 
@@ -444,7 +579,10 @@ mod tests {
             .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
             .init_resource::<crate::render::OutlineMaterials>()
             .add_plugins(PropsPlugin)
-            .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate));
+            .add_systems(
+                PostUpdate,
+                gather_obstacles.after(TransformSystems::Propagate),
+            );
         app.update();
         app
     }
@@ -452,11 +590,22 @@ mod tests {
     /// The first chest on 1207 (`print_level 1207`): its entity and its container.
     fn chest(app: &mut App) -> (Entity, Container) {
         let mut chests = app.world_mut().query::<(Entity, &PropPiece, &Container)>();
-        let mut all: Vec<(Entity, PropPiece, Container)> = chests.iter(app.world()).map(|(e, p, c)| (e, *p, *c)).collect();
+        let mut all: Vec<(Entity, PropPiece, Container)> = chests
+            .iter(app.world())
+            .map(|(e, p, c)| (e, *p, *c))
+            .collect();
         all.sort_by_key(|(_, p, _)| p.index);
         all.into_iter()
             // The first chest that holds loot: a market's stalls are set out empty.
-            .find(|(_, p, _)| matches!(p.spot.prop, Prop::Container { style: armory::families::chests::ChestStyle::Chest, .. }) && p.spot.prop.holds_loot())
+            .find(|(_, p, _)| {
+                matches!(
+                    p.spot.prop,
+                    Prop::Container {
+                        style: armory::families::chests::ChestStyle::Chest,
+                        ..
+                    }
+                ) && p.spot.prop.holds_loot()
+            })
             .map(|(e, _, c)| (e, c))
             .expect("a chest with loot on 1207")
     }
@@ -464,7 +613,9 @@ mod tests {
     /// Looks at `entity` and presses the pick-up key for a frame.
     fn press_pick_up_on(app: &mut App, entity: Entity) {
         app.world_mut().resource_mut::<Aimed>().0 = Some(entity);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyF);
         app.update();
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(KeyCode::KeyF);
@@ -473,7 +624,13 @@ mod tests {
 
     fn contents(app: &App, container: ItemId) -> Vec<(ItemId, String)> {
         let inventory = app.world().resource::<Inventory>();
-        inventory.grid(container).unwrap().entries().iter().map(|e| (e.id, inventory.item(e.id).unwrap().title().to_string())).collect()
+        inventory
+            .grid(container)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|e| (e.id, inventory.item(e.id).unwrap().title().to_string()))
+            .collect()
     }
 
     #[test]
@@ -483,16 +640,33 @@ mod tests {
         assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);
         app.world_mut().resource_mut::<Aimed>().0 = Some(entity);
         app.update();
-        assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("F Open"));
+        assert_eq!(
+            app.world().resource::<CrosshairPrompt>().0.as_deref(),
+            Some("F Open")
+        );
         // Rebound, the prompt follows.
         let mut keymap = app.world_mut().resource_mut::<Keymap>();
-        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
+        keymap
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::Primary)
+            .unwrap()
+            .inputs = vec![crate::keymap::Input::Key(KeyCode::KeyE)];
         app.update();
-        assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("E Open"));
+        assert_eq!(
+            app.world().resource::<CrosshairPrompt>().0.as_deref(),
+            Some("E Open")
+        );
         // Standing open, the same key looks in it again; looking away clears the line.
-        app.world_mut().entity_mut(entity).insert(Container { opened: true, ..container });
+        app.world_mut().entity_mut(entity).insert(Container {
+            opened: true,
+            ..container
+        });
         app.update();
-        assert_eq!(app.world().resource::<CrosshairPrompt>().0.as_deref(), Some("E Look in"));
+        assert_eq!(
+            app.world().resource::<CrosshairPrompt>().0.as_deref(),
+            Some("E Look in")
+        );
         app.world_mut().resource_mut::<Aimed>().0 = None;
         app.update();
         assert_eq!(app.world().resource::<CrosshairPrompt>().0, None);
@@ -513,20 +687,50 @@ mod tests {
         assert!(!container.opened);
         let loot = contents(&app, container.id);
         assert!(!loot.is_empty(), "an empty chest on 1207");
-        let (cols, rows, _) = fb_items::profile::chest_grid(armory::families::chests::ChestStyle::Chest);
-        let grid = app.world().resource::<Inventory>().grid(container.id).unwrap().clone();
+        let (cols, rows, _) =
+            fb_items::profile::chest_grid(armory::families::chests::ChestStyle::Chest);
+        let grid = app
+            .world()
+            .resource::<Inventory>()
+            .grid(container.id)
+            .unwrap()
+            .clone();
         assert_eq!((grid.cols, grid.rows), (cols, rows));
 
         // F on it: the inventory opens with its grid, and it stands open in the level.
         press_pick_up_on(&mut app, entity);
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
-        assert_eq!(app.world().resource::<OpenContainer>().0, Some(container.id));
-        assert!(app.world().get_entity(entity).is_err(), "redrawn standing open");
+        assert_eq!(
+            app.world().resource::<OpenContainer>().0,
+            Some(container.id)
+        );
+        assert!(
+            app.world().get_entity(entity).is_err(),
+            "redrawn standing open"
+        );
         let (opened_entity, opened) = chest(&mut app);
-        assert_eq!(opened, Container { id: container.id, opened: true });
+        assert_eq!(
+            opened,
+            Container {
+                id: container.id,
+                opened: true
+            }
+        );
         let piece = *app.world().get::<PropPiece>(opened_entity).unwrap();
-        let shut = prop_mesh(&piece.spot, &app.world().resource::<CurrentLevel>().0, false).0.bounds().unwrap();
-        assert!(piece.max.y > shut.1[1] + 1.0, "the lid stands raised: {} over {}", piece.max.y, shut.1[1]);
+        let shut = prop_mesh(
+            &piece.spot,
+            &app.world().resource::<CurrentLevel>().0,
+            false,
+        )
+        .0
+        .bounds()
+        .unwrap();
+        assert!(
+            piece.max.y > shut.1[1] + 1.0,
+            "the lid stands raised: {} over {}",
+            piece.max.y,
+            shut.1[1]
+        );
 
         // Dragging the first thing out onto the pack's grid puts it in the pack, and changes
         // nothing in the level.
@@ -535,11 +739,34 @@ mod tests {
             use crate::inventory::{Drag, GridView, Target, drop_at, underfoot::UNDERFOOT_COLS};
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let size = inventory.footprint(taken).unwrap();
-            let drag = Drag { id: taken, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
-            let changes = drop_at(&mut inventory, &drag, Target::Cell { view: GridView::Container(pack), cell: IVec2::ZERO }, UNDERFOOT_COLS).unwrap();
+            let drag = Drag {
+                id: taken,
+                grab: IVec2::ZERO,
+                size,
+                turned: false,
+                press: Vec2::ZERO,
+                active: true,
+                target: None,
+            };
+            let changes = drop_at(
+                &mut inventory,
+                &drag,
+                Target::Cell {
+                    view: GridView::Container(pack),
+                    cell: IVec2::ZERO,
+                },
+                UNDERFOOT_COLS,
+            )
+            .unwrap();
             assert!(changes.is_empty());
             assert!(inventory.is_carried(taken));
-            assert_eq!(inventory.location(taken), Some(crate::inventory::Location::In { container: pack, at: crate::inventory::Placement::new(0, 0, false) }));
+            assert_eq!(
+                inventory.location(taken),
+                Some(crate::inventory::Location::In {
+                    container: pack,
+                    at: crate::inventory::Placement::new(0, 0, false)
+                })
+            );
         }
 
         // Closed and opened again: the same chest, the same contents less what was taken, and
@@ -547,8 +774,14 @@ mod tests {
         app.world_mut().resource_mut::<ScreenOpen>().0 = None;
         app.world_mut().resource_mut::<OpenContainer>().0 = None;
         press_pick_up_on(&mut app, opened_entity);
-        assert_eq!(app.world().resource::<OpenContainer>().0, Some(container.id));
-        assert!(app.world().get_entity(opened_entity).is_ok(), "an open chest is not redrawn");
+        assert_eq!(
+            app.world().resource::<OpenContainer>().0,
+            Some(container.id)
+        );
+        assert!(
+            app.world().get_entity(opened_entity).is_ok(),
+            "an open chest is not redrawn"
+        );
         assert_eq!(contents(&app, container.id), loot[1..].to_vec());
         assert_eq!(chest(&mut app).1, opened);
     }
@@ -581,10 +814,21 @@ mod tests {
         // The level was laid out by `props_app`'s first frame; items and folk need it changed.
         app.world_mut().resource_mut::<CurrentLevel>().set_changed();
         app.update();
-        type Roots<'w> = (Entity, &'w Transform, Has<FloorItem>, Has<PropPiece>, Has<Denizen>);
+        type Roots<'w> = (
+            Entity,
+            &'w Transform,
+            Has<FloorItem>,
+            Has<PropPiece>,
+            Has<Denizen>,
+        );
         let snapshot = |app: &mut App| {
-            let mut roots = app.world_mut().query_filtered::<Roots, Or<(With<FloorItem>, With<PropPiece>, With<Denizen>)>>();
-            let mut all: Vec<(Entity, Transform, bool, bool, bool)> = roots.iter(app.world()).map(|(e, t, f, p, d)| (e, *t, f, p, d)).collect();
+            let mut roots = app
+                .world_mut()
+                .query_filtered::<Roots, Or<(With<FloorItem>, With<PropPiece>, With<Denizen>)>>();
+            let mut all: Vec<(Entity, Transform, bool, bool, bool)> = roots
+                .iter(app.world())
+                .map(|(e, t, f, p, d)| (e, *t, f, p, d))
+                .collect();
             all.sort_by_key(|r| r.0);
             all
         };
@@ -596,7 +840,11 @@ mod tests {
         for _ in 0..120 {
             app.update();
         }
-        assert_eq!(snapshot(&mut app), first, "something in the level was respawned or moved");
+        assert_eq!(
+            snapshot(&mut app),
+            first,
+            "something in the level was respawned or moved"
+        );
     }
 
     #[test]
@@ -605,20 +853,43 @@ mod tests {
         let mut app = props_app();
         app.init_resource::<ButtonInput<KeyCode>>();
         let mut containers = app.world_mut().query::<(Entity, &PropPiece, &Container)>();
-        let all: Vec<(Entity, Prop)> = containers.iter(app.world()).map(|(e, p, _)| (e, p.spot.prop)).collect();
+        let all: Vec<(Entity, Prop)> = containers
+            .iter(app.world())
+            .map(|(e, p, _)| (e, p.spot.prop))
+            .collect();
         for (entity, prop) in all {
             app.world_mut().resource_mut::<OpenContainer>().0 = None;
             app.world_mut().resource_mut::<ScreenOpen>().0 = None;
             press_pick_up_on(&mut app, entity);
             let id = app.world().resource::<OpenContainer>().0.expect("opened");
-            let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
+            let item = app
+                .world()
+                .resource::<Inventory>()
+                .item(id)
+                .unwrap()
+                .clone();
             assert!(stands_upright(&item), "{prop:?}");
-            let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let points: Vec<Vec3> = item
+                .shape
+                .build()
+                .parts
+                .iter()
+                .flat_map(|p| &p.positions)
+                .map(|&p| Vec3::from_array(p))
+                .collect();
             let (rotation, ..) = icon_pose(&points, stands_upright(&item), false).unwrap();
             // Up stays up and the front faces the viewer, give or take the view's small turn
             // and tilt.
-            assert!((rotation * Vec3::Y).y > 0.9, "{prop:?}: up is {}", rotation * Vec3::Y);
-            assert!((rotation * Vec3::Z).z > 0.9, "{prop:?}: front is {}", rotation * Vec3::Z);
+            assert!(
+                (rotation * Vec3::Y).y > 0.9,
+                "{prop:?}: up is {}",
+                rotation * Vec3::Y
+            );
+            assert!(
+                (rotation * Vec3::Z).z > 0.9,
+                "{prop:?}: front is {}",
+                rotation * Vec3::Z
+            );
         }
     }
 
@@ -628,19 +899,34 @@ mod tests {
         let level = fb_level::generate(1207, 1);
         let inventory = app.world().resource::<Inventory>();
         for spot in &level.props {
-            let Prop::Container { style, loot, .. } = spot.prop else { continue };
+            let Prop::Container { style, loot, .. } = spot.prop else {
+                continue;
+            };
             if !spot.prop.holds_loot() {
                 continue;
             }
-            let rolled = level.container_contents(spot, fb_items::Odds::loot(level.depth), &level.lore());
+            let rolled =
+                level.container_contents(spot, fb_items::Odds::loot(level.depth), &level.lore());
             assert!(!rolled.is_empty());
             // Some container in the inventory holds exactly these, by title, in roll order.
             let titles: Vec<String> = rolled.iter().map(|i| i.title().to_string()).collect();
-            let held = inventory.ids().filter(|&id| inventory.grid(id).is_some() && inventory.location(id) == Some(crate::inventory::Location::Loose)).any(|id| {
-                let mut held: Vec<String> = inventory.grid(id).unwrap().entries().iter().map(|e| inventory.item(e.id).unwrap().title().to_string()).collect();
-                held.truncate(titles.len());
-                held == titles
-            });
+            let held = inventory
+                .ids()
+                .filter(|&id| {
+                    inventory.grid(id).is_some()
+                        && inventory.location(id) == Some(crate::inventory::Location::Loose)
+                })
+                .any(|id| {
+                    let mut held: Vec<String> = inventory
+                        .grid(id)
+                        .unwrap()
+                        .entries()
+                        .iter()
+                        .map(|e| inventory.item(e.id).unwrap().title().to_string())
+                        .collect();
+                    held.truncate(titles.len());
+                    held == titles
+                });
             assert!(held, "{style:?} {loot}: {titles:?}");
         }
     }
@@ -650,7 +936,10 @@ mod tests {
         let mut app = props_app();
         let level = fb_level::generate(1207, 1);
         let mut pieces = app.world_mut().query::<(&PropPiece, &Children)>();
-        let drawn: Vec<(usize, usize)> = pieces.iter(app.world()).map(|(p, children)| (p.index, children.len())).collect();
+        let drawn: Vec<(usize, usize)> = pieces
+            .iter(app.world())
+            .map(|(p, children)| (p.index, children.len()))
+            .collect();
         assert_eq!(drawn.len(), level.props.len());
         assert!(drawn.iter().all(|&(_, parts)| parts > 0), "{drawn:?}");
         let mut meshes = app.world_mut().query::<&Mesh3d>();
@@ -666,15 +955,31 @@ mod tests {
             let (mesh, _) = prop_mesh(spot, &level, true);
             let (lo, hi) = mesh.bounds().unwrap();
             let (lo, hi) = (Vec3::from_array(lo) * scale, Vec3::from_array(hi) * scale);
-            if let Prop::Container { style: armory::families::chests::ChestStyle::Chest, .. } = spot.prop {
+            if let Prop::Container {
+                style: armory::families::chests::ChestStyle::Chest,
+                ..
+            } = spot.prop
+            {
                 let width = hi.x - lo.x;
                 assert!((8.5..=12.0).contains(&width), "a chest {width} wide");
             }
             match prop_floor_shape(spot.prop, scale) {
-                FloorShape::Round(r) => assert!(lo.x.abs().max(hi.x).max(lo.z.abs()).max(hi.z) <= r, "{spot:?}"),
-                FloorShape::Square { half_width, half_depth } => {
+                FloorShape::Round(r) => assert!(
+                    lo.x.abs().max(hi.x).max(lo.z.abs()).max(hi.z) <= r,
+                    "{spot:?}"
+                ),
+                FloorShape::Square {
+                    half_width,
+                    half_depth,
+                } => {
                     let behind = spot.prop.room_behind() * scale / fb_level::CONTAINER_SCALE;
-                    assert!(lo.x >= -half_width && hi.x <= half_width && hi.z <= half_depth && lo.z >= -half_depth - behind, "{spot:?}: {lo} {hi}");
+                    assert!(
+                        lo.x >= -half_width
+                            && hi.x <= half_width
+                            && hi.z <= half_depth
+                            && lo.z >= -half_depth - behind,
+                        "{spot:?}: {lo} {hi}"
+                    );
                 }
             }
         }
@@ -688,13 +993,23 @@ mod tests {
         let (entity, _) = chest(&mut app);
         let before = *app.world().get::<Transform>(entity).unwrap();
         assert_eq!(before.scale, Vec3::splat(fb_level::CONTAINER_SCALE));
-        app.world_mut().resource_mut::<Tuning>().view.container_scale = 1.0;
+        app.world_mut()
+            .resource_mut::<Tuning>()
+            .view
+            .container_scale = 1.0;
         app.update();
         let after = *app.world().get::<Transform>(entity).unwrap();
         assert_eq!(after.scale, Vec3::ONE);
         assert_eq!(after.translation.xz(), before.translation.xz());
         let blocks = app.world().get::<BlocksTheWay>(entity).unwrap().0;
-        assert!(blocks.radius() < prop_floor_shape(app.world().get::<PropPiece>(entity).unwrap().spot.prop, fb_level::CONTAINER_SCALE).radius());
+        assert!(
+            blocks.radius()
+                < prop_floor_shape(
+                    app.world().get::<PropPiece>(entity).unwrap().spot.prop,
+                    fb_level::CONTAINER_SCALE
+                )
+                .radius()
+        );
     }
 
     #[test]
@@ -705,11 +1020,21 @@ mod tests {
             let (mesh, _) = prop_mesh(spot, &level, false);
             let points = item_points(&mesh);
             let low = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-            let transform = prop_transform(&level, spot, low, prop_scale(spot.prop, &Tuning::default()));
-            let bottom = points.iter().map(|&p| transform.transform_point(p).y).fold(f32::INFINITY, f32::min);
+            let transform =
+                prop_transform(&level, spot, low, prop_scale(spot.prop, &Tuning::default()));
+            let bottom = points
+                .iter()
+                .map(|&p| transform.transform_point(p).y)
+                .fold(f32::INFINITY, f32::min);
             let floor = relief.floor_height(transform.translation.x, transform.translation.z);
-            assert!(bottom <= floor + 1e-3, "prop {index} floats: base {bottom}, floor {floor}");
-            assert!(bottom > floor - 0.4, "prop {index} sinks: base {bottom}, floor {floor}");
+            assert!(
+                bottom <= floor + 1e-3,
+                "prop {index} floats: base {bottom}, floor {floor}"
+            );
+            assert!(
+                bottom > floor - 0.4,
+                "prop {index} sinks: base {bottom}, floor {floor}"
+            );
         }
     }
 
@@ -723,20 +1048,42 @@ mod tests {
         for spot in &level.props {
             let centre = floor_centre(spot);
             let at = |o: &&Obstacle| match o {
-                Obstacle::Circle { centre: c, .. } | Obstacle::Rect { centre: c, .. } => c.abs_diff_eq(centre, 1e-3),
+                Obstacle::Circle { centre: c, .. } | Obstacle::Rect { centre: c, .. } => {
+                    c.abs_diff_eq(centre, 1e-3)
+                }
             };
-            let obstacle = obstacles.iter().find(at).unwrap_or_else(|| panic!("{spot:?} blocks nothing"));
-            match (prop_floor_shape(spot.prop, prop_scale(spot.prop, &Tuning::default())), obstacle) {
-                (FloorShape::Round(r), Obstacle::Circle { centre: c, radius }) => assert!(c.abs_diff_eq(centre, 1e-3) && *radius == r),
-                (FloorShape::Square { .. }, Obstacle::Rect { centre: c, .. }) => assert!(c.abs_diff_eq(centre, 1e-3)),
+            let obstacle = obstacles
+                .iter()
+                .find(at)
+                .unwrap_or_else(|| panic!("{spot:?} blocks nothing"));
+            match (
+                prop_floor_shape(spot.prop, prop_scale(spot.prop, &Tuning::default())),
+                obstacle,
+            ) {
+                (FloorShape::Round(r), Obstacle::Circle { centre: c, radius }) => {
+                    assert!(c.abs_diff_eq(centre, 1e-3) && *radius == r)
+                }
+                (FloorShape::Square { .. }, Obstacle::Rect { centre: c, .. }) => {
+                    assert!(c.abs_diff_eq(centre, 1e-3))
+                }
                 other => panic!("{other:?}"),
             }
             // Walking straight at it from a step into the room: stopped short, never inside.
             let into_room = Vec2::new(spot.yaw.sin(), spot.yaw.cos());
-            let mut at = centre + into_room * (spot.prop.floor_shape().radius() + BODY_RADIUS + 4.0);
+            let mut at =
+                centre + into_room * (spot.prop.floor_shape().radius() + BODY_RADIUS + 4.0);
             for _ in 0..120 {
-                at = slide_around(at, at - into_room * 0.5, BODY_RADIUS, blocked_by(&level, &blocked), &obstacles);
-                assert!(!obstacle.overlaps(at, BODY_RADIUS), "{spot:?}: walked into it at {at}");
+                at = slide_around(
+                    at,
+                    at - into_room * 0.5,
+                    BODY_RADIUS,
+                    blocked_by(&level, &blocked),
+                    &obstacles,
+                );
+                assert!(
+                    !obstacle.overlaps(at, BODY_RADIUS),
+                    "{spot:?}: walked into it at {at}"
+                );
             }
         }
     }
@@ -749,18 +1096,39 @@ mod tests {
             for spot in &level.banners {
                 seen += 1;
                 let (state, top) = banner_hang(spot, &level);
-                assert_eq!(state.field, level.faction(spot.faction).field, "seed {seed}: {spot:?}");
+                assert_eq!(
+                    state.field,
+                    level.faction(spot.faction).field,
+                    "seed {seed}: {spot:?}"
+                );
                 assert_eq!(state.hanging.mount, BannerMount::Rod);
-                let ceiling = crate::level::geometry::stone::ceiling_at(&level, spot.x * CELL, spot.y * CELL);
-                assert!(top <= ceiling - 1.9 && top - state.cloth.length >= BANNER_OFF_FLOOR - 1e-3, "{spot:?}: top {top}, length {}", state.cloth.length);
+                let ceiling =
+                    crate::level::geometry::stone::ceiling_at(&level, spot.x * CELL, spot.y * CELL);
+                assert!(
+                    top <= ceiling - 1.9 && top - state.cloth.length >= BANNER_OFF_FLOOR - 1e-3,
+                    "{spot:?}: top {top}, length {}",
+                    state.cloth.length
+                );
                 let middle = top - state.cloth.length / 2.0;
                 if spot.site == BannerSite::Lintel {
-                    assert!(top - state.cloth.length >= LINTEL_FOOT - 1e-3 && state.cloth.width >= 5.0, "{spot:?}: {:?}", state.cloth);
+                    assert!(
+                        top - state.cloth.length >= LINTEL_FOOT - 1e-3 && state.cloth.width >= 5.0,
+                        "{spot:?}: {:?}",
+                        state.cloth
+                    );
                 } else {
-                    assert!(state.cloth.length >= 14.0 && state.cloth.width >= 5.0, "{spot:?}: {:?}", state.cloth);
+                    assert!(
+                        state.cloth.length >= 14.0 && state.cloth.width >= 5.0,
+                        "{spot:?}: {:?}",
+                        state.cloth
+                    );
                     assert!((17.0..=21.0).contains(&middle), "{spot:?}: middle {middle}");
                 }
-                assert_eq!(state, banner_hang(spot, &level).0, "the same seed hangs the same banner");
+                assert_eq!(
+                    state,
+                    banner_hang(spot, &level).0,
+                    "the same seed hangs the same banner"
+                );
             }
         }
         assert!(seen > 0);
@@ -769,7 +1137,17 @@ mod tests {
     #[test]
     fn a_faction_hangs_one_banner_shape_everywhere() {
         // A banner's shape, apart from the length a low ceiling cuts it to and the size over a door.
-        let shape = |b: &BannerState| (b.cloth.end, b.cloth.end_depth, b.hem, b.fringe.on, b.hanging.stuff, b.hanging.finial, b.palette);
+        let shape = |b: &BannerState| {
+            (
+                b.cloth.end,
+                b.cloth.end_depth,
+                b.hem,
+                b.fringe.on,
+                b.hanging.stuff,
+                b.hanging.finial,
+                b.palette,
+            )
+        };
         let mut compared = 0;
         for seed in [1207, 3, 9, 7, 12] {
             let level = fb_level::generate(seed, 1);
@@ -790,9 +1168,15 @@ mod tests {
     fn banners_are_drawn_and_block_nothing() {
         let mut app = props_app();
         let level = fb_level::generate(1207, 1);
-        let mut banners = app.world_mut().query_filtered::<(&BannerPiece, &Children), Without<BlocksTheWay>>();
+        let mut banners = app
+            .world_mut()
+            .query_filtered::<(&BannerPiece, &Children), Without<BlocksTheWay>>();
         assert_eq!(banners.iter(app.world()).count(), level.banners.len());
         assert!(!level.banners.is_empty());
-        assert!(banners.iter(app.world()).all(|(_, parts)| !parts.is_empty()));
+        assert!(
+            banners
+                .iter(app.world())
+                .all(|(_, parts)| !parts.is_empty())
+        );
     }
 }

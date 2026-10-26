@@ -37,7 +37,9 @@ use crate::level::{StonePiece, fixture_appearance};
 use crate::light::StudioLight;
 use crate::render::ItemSpawner;
 use crate::turntable::{Orbit, PLATE, PLATE_INK, framing_distance};
-use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body};
+use crate::tweak_panel::{
+    PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body,
+};
 use crate::ui::{BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
 
 /// Width of the panel on the right, in logical pixels.
@@ -55,7 +57,11 @@ impl Plugin for DoorViewPlugin {
         app.init_resource::<DoorLab>()
             .init_resource::<UiFonts>()
             .init_resource::<Pose>()
-            .insert_resource(StageOrbit(Orbit { yaw: -0.6, pitch: 0.1, zoom: 0.9 }))
+            .insert_resource(StageOrbit(Orbit {
+                yaw: -0.6,
+                pitch: 0.1,
+                zoom: 0.9,
+            }))
             .add_plugins(TweakPanelPlugin::<DoorLab>::default())
             .insert_resource(ClearColor(PLATE))
             .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
@@ -64,7 +70,15 @@ impl Plugin for DoorViewPlugin {
                 Update,
                 (
                     (keys, press_controls).before(TweakPanelSystems),
-                    (orbit_and_zoom, show.run_if(resource_changed::<DoorLab>), refresh_header.run_if(resource_changed::<DoorLab>), animate, frame_camera).chain().after(TweakPanelSystems),
+                    (
+                        orbit_and_zoom,
+                        show.run_if(resource_changed::<DoorLab>),
+                        refresh_header.run_if(resource_changed::<DoorLab>),
+                        animate,
+                        frame_camera,
+                    )
+                        .chain()
+                        .after(TweakPanelSystems),
                 ),
             );
     }
@@ -85,13 +99,33 @@ pub struct DoorLab {
 
 impl Default for DoorLab {
     fn default() -> Self {
-        DoorLab::new(DoorKind::Wood, DoorStyle::Timber, LevelStyle::RoughRock, SwitchKind::Lever, DEFAULT_SEED)
+        DoorLab::new(
+            DoorKind::Wood,
+            DoorStyle::Timber,
+            LevelStyle::RoughRock,
+            SwitchKind::Lever,
+            DEFAULT_SEED,
+        )
     }
 }
 
 impl DoorLab {
-    pub fn new(kind: DoorKind, doorway: DoorStyle, level: LevelStyle, switch: SwitchKind, seed: u32) -> Self {
-        DoorLab { seed, doorway, level, switch, spec: DoorSpec::rolled(kind, doorway, level, seed), start_open: false, structure: 0 }
+    pub fn new(
+        kind: DoorKind,
+        doorway: DoorStyle,
+        level: LevelStyle,
+        switch: SwitchKind,
+        seed: u32,
+    ) -> Self {
+        DoorLab {
+            seed,
+            doorway,
+            level,
+            switch,
+            spec: DoorSpec::rolled(kind, doorway, level, seed),
+            start_open: false,
+            structure: 0,
+        }
     }
 
     pub fn kind(&self) -> DoorKind {
@@ -102,14 +136,26 @@ impl DoorLab {
     /// `--flag=value`); `--doors` itself is skipped. `args` excludes the program name.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<DoorLab, String> {
         let mut lab = DoorLab::default();
-        let (mut kind, mut doorway, mut level, mut switch, mut seed, mut open) = (lab.kind(), lab.doorway, lab.level, lab.switch, lab.seed, false);
+        let (mut kind, mut doorway, mut level, mut switch, mut seed, mut open) = (
+            lab.kind(),
+            lab.doorway,
+            lab.level,
+            lab.switch,
+            lab.seed,
+            false,
+        );
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             let (flag, inline) = match arg.split_once('=') {
                 Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
                 None => (arg, None),
             };
-            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| args.next())
+                    .ok_or(format!("{flag} needs a value"))
+            };
             match flag.as_str() {
                 "--doors" => {}
                 "--open" => open = true,
@@ -119,7 +165,9 @@ impl DoorLab {
                 "--switch" => switch = option(&SWITCHES, &value()?, "--switch")?,
                 "--seed" => {
                     let text = value()?;
-                    seed = text.parse().map_err(|_| format!("--seed: {text:?} is not a u32"))?;
+                    seed = text
+                        .parse()
+                        .map_err(|_| format!("--seed: {text:?} is not a u32"))?;
                 }
                 other => return Err(format!("unknown argument {other:?}")),
             }
@@ -146,31 +194,68 @@ impl DoorLab {
     }
 }
 
-const DOOR_KINDS: [(&str, DoorKind); 3] = [("wood", DoorKind::Wood), ("steel", DoorKind::Steel), ("portcullis", DoorKind::Portcullis)];
-const DOORWAYS: [(&str, DoorStyle); 4] =
-    [("timber", DoorStyle::Timber), ("round_arch", DoorStyle::RoundArch), ("pointed_arch", DoorStyle::PointedArch), ("rock_cut", DoorStyle::RockCut)];
-const LEVELS: [(&str, LevelStyle); 2] = [("rough_rock", LevelStyle::RoughRock), ("stone_halls", LevelStyle::StoneHalls)];
-const SWITCHES: [(&str, SwitchKind); 2] = [("lever", SwitchKind::Lever), ("chain", SwitchKind::Chain)];
+const DOOR_KINDS: [(&str, DoorKind); 3] = [
+    ("wood", DoorKind::Wood),
+    ("steel", DoorKind::Steel),
+    ("portcullis", DoorKind::Portcullis),
+];
+const DOORWAYS: [(&str, DoorStyle); 4] = [
+    ("timber", DoorStyle::Timber),
+    ("round_arch", DoorStyle::RoundArch),
+    ("pointed_arch", DoorStyle::PointedArch),
+    ("rock_cut", DoorStyle::RockCut),
+];
+const LEVELS: [(&str, LevelStyle); 2] = [
+    ("rough_rock", LevelStyle::RoughRock),
+    ("stone_halls", LevelStyle::StoneHalls),
+];
+const SWITCHES: [(&str, SwitchKind); 2] =
+    [("lever", SwitchKind::Lever), ("chain", SwitchKind::Chain)];
 
 fn option<T: Copy>(table: &[(&str, T)], text: &str, flag: &str) -> Result<T, String> {
-    table.iter().find(|(name, _)| *name == text).map(|&(_, v)| v).ok_or_else(|| format!("{flag}: {text:?} is not one of {}", table.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")))
+    table
+        .iter()
+        .find(|(name, _)| *name == text)
+        .map(|&(_, v)| v)
+        .ok_or_else(|| {
+            format!(
+                "{flag}: {text:?} is not one of {}",
+                table.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+            )
+        })
 }
 
 fn name_of<T: Copy + PartialEq>(table: &[(&'static str, T)], value: T) -> &'static str {
-    table.iter().find(|(_, v)| *v == value).map_or("", |&(n, _)| n)
+    table
+        .iter()
+        .find(|(_, v)| *v == value)
+        .map_or("", |&(n, _)| n)
 }
 
-fn choice<T: Copy + PartialEq>(section: &str, name: &str, table: &[(&'static str, T)], value: T) -> Field {
+fn choice<T: Copy + PartialEq>(
+    section: &str,
+    name: &str,
+    table: &[(&'static str, T)],
+    value: T,
+) -> Field {
     Field {
         path: format!("{section}.{name}"),
         section: section.to_string(),
         name: name.to_string(),
-        kind: FieldKind::Choice { value: name_of(table, value).to_string(), options: table.iter().map(|(n, _)| n.to_string()).collect() },
+        kind: FieldKind::Choice {
+            value: name_of(table, value).to_string(),
+            options: table.iter().map(|(n, _)| n.to_string()).collect(),
+        },
     }
 }
 
 fn slider(section: &str, name: &str, value: f32, range: Slider) -> Field {
-    Field { path: format!("{section}.{name}"), section: section.to_string(), name: name.to_string(), kind: FieldKind::Slider { value, range } }
+    Field {
+        path: format!("{section}.{name}"),
+        section: section.to_string(),
+        name: name.to_string(),
+        kind: FieldKind::Slider { value, range },
+    }
 }
 
 /// The next option of `table` `by` steps on from `value`, wrapping.
@@ -190,23 +275,63 @@ impl Tweak for DoorLab {
         ];
         match s.kind {
             DoorKind::Wood => fields.extend([
-                slider("wood", "boards", s.boards as f32, Slider::new(3.0, 10.0, 1.0)),
-                slider("wood", "straps", s.straps as f32, Slider::new(2.0, 4.0, 1.0)),
-                slider("wood", "thickness", s.thickness, Slider::new(0.6, 1.6, 0.05)),
+                slider(
+                    "wood",
+                    "boards",
+                    s.boards as f32,
+                    Slider::new(3.0, 10.0, 1.0),
+                ),
+                slider(
+                    "wood",
+                    "straps",
+                    s.straps as f32,
+                    Slider::new(2.0, 4.0, 1.0),
+                ),
+                slider(
+                    "wood",
+                    "thickness",
+                    s.thickness,
+                    Slider::new(0.6, 1.6, 0.05),
+                ),
             ]),
             DoorKind::Steel => fields.extend([
                 slider("steel", "bands", s.bands as f32, Slider::new(2.0, 6.0, 1.0)),
                 slider("steel", "ribs", s.ribs as f32, Slider::new(0.0, 2.0, 1.0)),
-                slider("steel", "rivet_gap", s.rivet_gap, Slider::new(0.8, 3.0, 0.1)),
-                slider("steel", "thickness", s.thickness, Slider::new(0.8, 1.6, 0.05)),
+                slider(
+                    "steel",
+                    "rivet_gap",
+                    s.rivet_gap,
+                    Slider::new(0.8, 3.0, 0.1),
+                ),
+                slider(
+                    "steel",
+                    "thickness",
+                    s.thickness,
+                    Slider::new(0.8, 1.6, 0.05),
+                ),
             ]),
             DoorKind::Portcullis => {
                 fields.extend([
-                    slider("portcullis", "bars", s.bars as f32, Slider::new(3.0, 14.0, 1.0)),
-                    slider("portcullis", "rails", s.rails as f32, Slider::new(2.0, 9.0, 1.0)),
+                    slider(
+                        "portcullis",
+                        "bars",
+                        s.bars as f32,
+                        Slider::new(3.0, 14.0, 1.0),
+                    ),
+                    slider(
+                        "portcullis",
+                        "rails",
+                        s.rails as f32,
+                        Slider::new(2.0, 9.0, 1.0),
+                    ),
                     slider("portcullis", "bar", s.bar, Slider::new(0.15, 0.6, 0.01)),
                 ]);
-                fields.push(Field { path: "portcullis.timber".into(), section: "portcullis".into(), name: "timber".into(), kind: FieldKind::Toggle { value: s.timber } });
+                fields.push(Field {
+                    path: "portcullis.timber".into(),
+                    section: "portcullis".into(),
+                    name: "timber".into(),
+                    kind: FieldKind::Toggle { value: s.timber },
+                });
             }
         }
         fields
@@ -295,10 +420,22 @@ enum Readout {
     Seed,
 }
 
-fn setup_stage(mut commands: Commands, fonts: Res<UiFonts>, lab: Res<DoorLab>, mut pose: ResMut<Pose>) {
+fn setup_stage(
+    mut commands: Commands,
+    fonts: Res<UiFonts>,
+    lab: Res<DoorLab>,
+    mut pose: ResMut<Pose>,
+) {
     let exposure = Exposure::INDOOR;
     commands
-        .spawn((StageCamera, Camera3d::default(), exposure, Tonemapping::Linear, IsDefaultUiCamera, Transform::from_xyz(0.0, 12.0, 60.0)))
+        .spawn((
+            StageCamera,
+            Camera3d::default(),
+            exposure,
+            Tonemapping::Linear,
+            IsDefaultUiCamera,
+            Transform::from_xyz(0.0, 12.0, 60.0),
+        ))
         .with_child(StudioLight::ARMORY.key_light(&exposure));
     commands.spawn((
         Hint,
@@ -307,7 +444,11 @@ fn setup_stage(mut commands: Commands, fonts: Res<UiFonts>, lab: Res<DoorLab>, m
         Node { position_type: PositionType::Absolute, left: px(20), bottom: px(16), ..default() },
     ));
     if lab.start_open {
-        *pose = Pose { open: true, swing: 1.0, pull: 1.0 };
+        *pose = Pose {
+            open: true,
+            swing: 1.0,
+            pull: 1.0,
+        };
     }
 }
 
@@ -329,21 +470,67 @@ fn setup_panel(mut commands: Commands, fonts: Res<UiFonts>) {
         ))
         .with_children(|panel| {
             panel
-                .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(9), padding: UiRect::all(px(14)), border: UiRect::bottom(px(1)), ..default() }, BorderColor::all(FAINT)))
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(9),
+                        padding: UiRect::all(px(14)),
+                        border: UiRect::bottom(px(1)),
+                        ..default()
+                    },
+                    BorderColor::all(FAINT),
+                ))
                 .with_children(|header| {
-                    header.spawn((Text::new("The Doors"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                    header.spawn((Readout::Noun, Text::new(""), UiFonts::style(&fonts.display, 20.0, BRIGHT)));
-                    header.spawn(Node { align_items: AlignItems::Center, flex_wrap: FlexWrap::Wrap, column_gap: px(6), row_gap: px(5), ..default() }).with_children(|row| {
-                        chip(row, &fonts, "Open / close", Control::Toggle);
-                        chip(row, &fonts, "Pull switch", Control::Pull);
-                    });
-                    header.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|row| {
-                        row.spawn((Text::new("Seed"), UiFonts::style(&fonts.body, 17.0, MUTED), Node { margin: UiRect::right(px(4)), ..default() }));
-                        chip(row, &fonts, "-", Control::SeedStep(-1));
-                        row.spawn((Readout::Seed, Text::new(""), UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT), TextLayout::justify(Justify::Center), Node { min_width: px(92), ..default() }));
-                        chip(row, &fonts, "+", Control::SeedStep(1));
-                        chip(row, &fonts, "New", Control::New);
-                    });
+                    header.spawn((
+                        Text::new("The Doors"),
+                        UiFonts::style(&fonts.display_bold, 28.0, INK),
+                    ));
+                    header.spawn((
+                        Readout::Noun,
+                        Text::new(""),
+                        UiFonts::style(&fonts.display, 20.0, BRIGHT),
+                    ));
+                    header
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: px(6),
+                            row_gap: px(5),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            chip(row, &fonts, "Open / close", Control::Toggle);
+                            chip(row, &fonts, "Pull switch", Control::Pull);
+                        });
+                    header
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Seed"),
+                                UiFonts::style(&fonts.body, 17.0, MUTED),
+                                Node {
+                                    margin: UiRect::right(px(4)),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "-", Control::SeedStep(-1));
+                            row.spawn((
+                                Readout::Seed,
+                                Text::new(""),
+                                UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                                TextLayout::justify(Justify::Center),
+                                Node {
+                                    min_width: px(92),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "+", Control::SeedStep(1));
+                            chip(row, &fonts, "New", Control::New);
+                        });
                 });
             panel_body(panel);
         });
@@ -372,7 +559,9 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut lab: ResMut<DoorLab>, mut pose: Res
 }
 
 fn clock() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
 }
 
 fn press_controls(
@@ -385,8 +574,15 @@ fn press_controls(
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
-    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    let Some(point) = window.and_then(|w| w.cursor_position()) else {
+        return;
+    };
+    let Some((control, ..)) = controls
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    else {
+        return;
+    };
     match control.clone() {
         Control::Toggle | Control::Pull => pose.open = !pose.open,
         Control::SeedStep(by) => {
@@ -407,7 +603,9 @@ fn orbit_and_zoom(
     mut dragging_stage: Local<bool>,
 ) {
     let Some(window) = window else { return };
-    let over_panel = window.cursor_position().is_some_and(|c| c.x >= window.width() - PANEL_WIDTH);
+    let over_panel = window
+        .cursor_position()
+        .is_some_and(|c| c.x >= window.width() - PANEL_WIDTH);
     if buttons.just_pressed(MouseButton::Left) {
         *dragging_stage = !over_panel;
     }
@@ -421,7 +619,8 @@ fn orbit_and_zoom(
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    if lines == 0.0 || window.cursor_position().is_none() || over_panel || over_body(&window, &body) {
+    if lines == 0.0 || window.cursor_position().is_none() || over_panel || over_body(&window, &body)
+    {
         return;
     }
     orbit.0.zoom_by(lines);
@@ -447,21 +646,37 @@ fn slab(size: [f32; 3], at: [f32; 3]) -> ItemMesh {
 /// The stone beside the doorway the switch is mounted on, and the floor.
 fn surroundings() -> [ItemMesh; 2] {
     // The cell's side wall at +X (its face at x = 10), running through the doorway's depth.
-    [slab([4.0, 30.0, 24.0], [12.0, 15.0, 0.0]), slab([30.0, 1.0, 26.0], [0.0, -0.5, 4.0])]
+    [
+        slab([4.0, 30.0, 24.0], [12.0, 15.0, 0.0]),
+        slab([30.0, 1.0, 26.0], [0.0, -0.5, 4.0]),
+    ]
 }
 
 /// Rebuilds the doorway, the door and its switch for the current state.
-fn show(mut commands: Commands, lab: Res<DoorLab>, pose: Res<Pose>, old: Query<Entity, With<Shown>>, mut spawner: ItemSpawner) {
+fn show(
+    mut commands: Commands,
+    lab: Res<DoorLab>,
+    pose: Res<Pose>,
+    old: Query<Entity, With<Shown>>,
+    mut spawner: ItemSpawner,
+) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
     let seed = lab.seed;
     let mut frame = geometry::door_frame(ceiling_of(lab.level), lab.doorway, seed);
-    for part in frame.parts.iter_mut().filter(|p| p.material == Some(MaterialKind::Stone)) {
+    for part in frame
+        .parts
+        .iter_mut()
+        .filter(|p| p.material == Some(MaterialKind::Stone))
+    {
         part.uvs_b = vec![[0.2, 0.0]; part.positions.len()];
     }
     let stone = |spawner: &mut ItemSpawner, mesh: &ItemMesh, state| {
-        spawner.spawn(mesh, &fixture_appearance(seed, state)).insert((Shown, StonePiece)).id()
+        spawner
+            .spawn(mesh, &fixture_appearance(seed, state))
+            .insert((Shown, StonePiece))
+            .id()
     };
     stone(&mut spawner, &frame, ConditionState::BattleWorn);
     for mesh in surroundings() {
@@ -473,27 +688,96 @@ fn show(mut commands: Commands, lab: Res<DoorLab>, pose: Res<Pose>, old: Query<E
     }
     let fit = geometry::door::claim_leaf(&lab.spec);
     stone(&mut spawner, &fit.fixed, ConditionState::BattleWorn);
-    let leaf = DoorLeaf { cell: (0, 0), shut: Quat::IDENTITY, hinge: Vec3::from(fit.hinge), lift: fit.lift, squash: fit.squash_for(ceiling_of(lab.level)) };
-    spawner.spawn(&fit.leaf, &fixture_appearance(seed, ConditionState::Serviceable)).insert((Shown, Name::new("door leaf"), leaf, leaf.transform(pose.swing)));
+    let leaf = DoorLeaf {
+        cell: (0, 0),
+        shut: Quat::IDENTITY,
+        hinge: Vec3::from(fit.hinge),
+        lift: fit.lift,
+        squash: fit.squash_for(ceiling_of(lab.level)),
+    };
+    spawner
+        .spawn(
+            &fit.leaf,
+            &fixture_appearance(seed, ConditionState::Serviceable),
+        )
+        .insert((
+            Shown,
+            Name::new("door leaf"),
+            leaf,
+            leaf.transform(pose.swing),
+        ));
 
     // The switch on the side wall, on the +Z side, as the game mounts it.
     let at_door = Transform::IDENTITY;
-    let Some(mount) = switch_mount(&at_door, None, lab.level, lab.switch, Vec2::new(0.0, 1.0), Vec2::new(0.0, 1.0)) else { return };
-    let (fixture, moving) = match lab.switch {
-        SwitchKind::Lever => (geometry::door::lever_plate(seed), geometry::door::lever_handle()),
-        SwitchKind::Chain => (geometry::door::chain_housing(seed), geometry::door::chain_pull(seed)),
+    let Some(mount) = switch_mount(
+        &at_door,
+        None,
+        lab.level,
+        lab.switch,
+        Vec2::new(0.0, 1.0),
+        Vec2::new(0.0, 1.0),
+    ) else {
+        return;
     };
-    spawner.spawn(&fixture, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((Shown, Name::new("switch"), mount));
+    let (fixture, moving) = match lab.switch {
+        SwitchKind::Lever => (
+            geometry::door::lever_plate(seed),
+            geometry::door::lever_handle(),
+        ),
+        SwitchKind::Chain => (
+            geometry::door::chain_housing(seed),
+            geometry::door::chain_pull(seed),
+        ),
+    };
+    spawner
+        .spawn(
+            &fixture,
+            &fixture_appearance(seed, ConditionState::BattleWorn),
+        )
+        .insert((Shown, Name::new("switch"), mount));
     match lab.switch {
         SwitchKind::Lever => {
-            let pivot = mount.mul_transform(Transform::from_translation(Vec3::new(0.0, 0.0, geometry::door::LEVER_PIVOT)));
-            let handle = LeverHandle { cell: (0, 0), rest: mount.rotation, pull: pose.pull };
-            spawner.spawn(&moving, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((Shown, Name::new("lever handle"), handle, pivot.with_rotation(handle.rotation(pose.pull))));
+            let pivot = mount.mul_transform(Transform::from_translation(Vec3::new(
+                0.0,
+                0.0,
+                geometry::door::LEVER_PIVOT,
+            )));
+            let handle = LeverHandle {
+                cell: (0, 0),
+                rest: mount.rotation,
+                pull: pose.pull,
+            };
+            spawner
+                .spawn(
+                    &moving,
+                    &fixture_appearance(seed, ConditionState::BattleWorn),
+                )
+                .insert((
+                    Shown,
+                    Name::new("lever handle"),
+                    handle,
+                    pivot.with_rotation(handle.rotation(pose.pull)),
+                ));
         }
         SwitchKind::Chain => {
             let rest = mount.transform_point(Vec3::from(geometry::door::chain_exit()));
-            let chain = ChainPull { cell: (0, 0), rest, down: mount.rotation * Vec3::NEG_Y };
-            spawner.spawn(&moving, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((Shown, Name::new("chain"), chain, Transform::from_translation(chain.translation(pose.swing)).with_rotation(mount.rotation)));
+            let chain = ChainPull {
+                cell: (0, 0),
+                rest,
+                down: mount.rotation * Vec3::NEG_Y,
+            };
+            spawner
+                .spawn(
+                    &moving,
+                    &fixture_appearance(seed, ConditionState::BattleWorn),
+                )
+                .insert((
+                    Shown,
+                    Name::new("chain"),
+                    chain,
+                    Transform::from_translation(chain.translation(pose.swing))
+                        .with_rotation(mount.rotation),
+                ));
         }
     }
 }
@@ -529,13 +813,21 @@ fn animate(
 }
 
 fn move_toward(from: f32, to: f32, step: f32) -> f32 {
-    if from < to { (from + step).min(to) } else { (from - step).max(to) }
+    if from < to {
+        (from + step).min(to)
+    } else {
+        (from - step).max(to)
+    }
 }
 
 fn refresh_header(lab: Res<DoorLab>, mut readouts: Query<(&Readout, &mut Text)>) {
     for (readout, mut text) in &mut readouts {
         let line = match readout {
-            Readout::Noun => format!("{} door, {} switch", name_of(&DOOR_KINDS, lab.kind()), name_of(&SWITCHES, lab.switch)),
+            Readout::Noun => format!(
+                "{} door, {} switch",
+                name_of(&DOOR_KINDS, lab.kind()),
+                name_of(&SWITCHES, lab.switch)
+            ),
             Readout::Seed => lab.seed.to_string(),
         };
         if text.0 != line {
@@ -546,16 +838,29 @@ fn refresh_header(lab: Res<DoorLab>, mut readouts: Query<(&Readout, &mut Text)>)
 
 /// Orbits the camera round the doorway, shifted so it sits in the middle of the space the
 /// panel leaves.
-fn frame_camera(orbit: Res<StageOrbit>, mut cameras: Query<(&Camera, &Projection, &mut Transform), With<StageCamera>>) {
+fn frame_camera(
+    orbit: Res<StageOrbit>,
+    mut cameras: Query<(&Camera, &Projection, &mut Transform), With<StageCamera>>,
+) {
     let centre = Vec3::new(3.0, 11.0, 2.0);
     for (camera, projection, mut transform) in &mut cameras {
-        let Projection::Perspective(perspective) = projection else { continue };
-        let width = camera.logical_viewport_size().map_or(1280.0, |s| s.x).max(1.0);
+        let Projection::Perspective(perspective) = projection else {
+            continue;
+        };
+        let width = camera
+            .logical_viewport_size()
+            .map_or(1280.0, |s| s.x)
+            .max(1.0);
         let panel = (PANEL_WIDTH / width).clamp(0.0, 0.8);
-        let visible = PerspectiveProjection { aspect_ratio: perspective.aspect_ratio * (1.0 - panel), ..*perspective };
+        let visible = PerspectiveProjection {
+            aspect_ratio: perspective.aspect_ratio * (1.0 - panel),
+            ..*perspective
+        };
         let distance = framing_distance(Vec3::new(30.0, 26.0, 6.0), &visible, FILL);
-        let mut target = Transform::from_translation(centre + orbit.0.offset(distance)).looking_at(centre, Vec3::Y);
-        let half_width = distance * orbit.0.zoom * (perspective.fov * 0.5).tan() * perspective.aspect_ratio;
+        let mut target = Transform::from_translation(centre + orbit.0.offset(distance))
+            .looking_at(centre, Vec3::Y);
+        let half_width =
+            distance * orbit.0.zoom * (perspective.fov * 0.5).tan() * perspective.aspect_ratio;
         target.translation += *target.right() * half_width * panel;
         if *transform != target {
             *transform = target;
@@ -574,8 +879,33 @@ mod tests {
     #[test]
     fn parses_the_command_line() {
         let lab = DoorLab::from_args(args("--doors --kind steel --doorway round_arch --level stone_halls --switch chain --seed 9 --open")).unwrap();
-        assert_eq!((lab.kind(), lab.doorway, lab.level, lab.switch, lab.seed, lab.start_open), (DoorKind::Steel, DoorStyle::RoundArch, LevelStyle::StoneHalls, SwitchKind::Chain, 9, true));
-        assert_eq!(lab.spec, DoorSpec::rolled(DoorKind::Steel, DoorStyle::RoundArch, LevelStyle::StoneHalls, 9));
+        assert_eq!(
+            (
+                lab.kind(),
+                lab.doorway,
+                lab.level,
+                lab.switch,
+                lab.seed,
+                lab.start_open
+            ),
+            (
+                DoorKind::Steel,
+                DoorStyle::RoundArch,
+                LevelStyle::StoneHalls,
+                SwitchKind::Chain,
+                9,
+                true
+            )
+        );
+        assert_eq!(
+            lab.spec,
+            DoorSpec::rolled(
+                DoorKind::Steel,
+                DoorStyle::RoundArch,
+                LevelStyle::StoneHalls,
+                9
+            )
+        );
         assert!(DoorLab::from_args(args("--kind brass")).is_err());
         assert!(DoorLab::from_args(args("--switch")).is_err());
         assert!(DoorLab::from_args(args("--wat")).is_err());
@@ -584,9 +914,22 @@ mod tests {
     #[test]
     fn every_kind_has_sliders_and_the_choices_cycle_every_option() {
         for (_, kind) in DOOR_KINDS {
-            let lab = DoorLab::new(kind, DoorStyle::Timber, LevelStyle::RoughRock, SwitchKind::Lever, 3);
+            let lab = DoorLab::new(
+                kind,
+                DoorStyle::Timber,
+                LevelStyle::RoughRock,
+                SwitchKind::Lever,
+                3,
+            );
             let fields = lab.fields();
-            assert!(fields.iter().filter(|f| matches!(f.kind, FieldKind::Slider { .. })).count() >= 3, "{kind:?}");
+            assert!(
+                fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::Slider { .. }))
+                    .count()
+                    >= 3,
+                "{kind:?}"
+            );
             assert_eq!(fields.iter().filter(|f| f.section == "door").count(), 4);
         }
         let mut lab = DoorLab::default();
@@ -606,7 +949,13 @@ mod tests {
 
     #[test]
     fn dragging_a_slider_rebuilds_the_door_and_reset_goes_back() {
-        let mut lab = DoorLab::new(DoorKind::Portcullis, DoorStyle::PointedArch, LevelStyle::StoneHalls, SwitchKind::Chain, 5);
+        let mut lab = DoorLab::new(
+            DoorKind::Portcullis,
+            DoorStyle::PointedArch,
+            LevelStyle::StoneHalls,
+            SwitchKind::Chain,
+            5,
+        );
         let rolled = lab.clone();
         let before = geometry::door::claim_leaf(&lab.spec);
         lab.set_slider("portcullis.bars", 12.0);

@@ -21,7 +21,11 @@ pub const ATTRIBUTE_OUTLINE_NORMAL: MeshVertexAttribute =
     MeshVertexAttribute::new("OutlineNormal", 2_315_870_419, VertexFormat::Float32x3);
 
 /// The Armory's ink, `#1a1f22`.
-pub const ARMORY_INK: Color = Color::srgb(0x1a as f32 / 255.0, 0x1f as f32 / 255.0, 0x22 as f32 / 255.0);
+pub const ARMORY_INK: Color = Color::srgb(
+    0x1a as f32 / 255.0,
+    0x1f as f32 / 255.0,
+    0x22 as f32 / 255.0,
+);
 
 /// Flat ink drawn on the back faces of a pushed-out copy of the mesh.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy, PartialEq)]
@@ -43,7 +47,12 @@ impl Default for OutlineMaterial {
     /// About 2 px of Armory ink, never thicker than 7 mm (0.07 units), the prototype's
     /// largest outline (`0.032 * 2.2`).
     fn default() -> Self {
-        OutlineMaterial { color: ARMORY_INK.into(), width_px: 2.0, max_width: 0.07, see_through: false }
+        OutlineMaterial {
+            color: ARMORY_INK.into(),
+            width_px: 2.0,
+            max_width: 0.07,
+            see_through: false,
+        }
     }
 }
 
@@ -61,7 +70,11 @@ impl Material for OutlineMaterial {
     /// instead, sorted just after the glass (which writes depth, `ToonExtension::specialize`),
     /// so only the ring outside the glass passes the depth test.
     fn alpha_mode(&self) -> AlphaMode {
-        if self.see_through { AlphaMode::Blend } else { AlphaMode::Opaque }
+        if self.see_through {
+            AlphaMode::Blend
+        } else {
+            AlphaMode::Opaque
+        }
     }
 
     /// Sorts a see-through hull after its part: both share a mesh, so they sit at the same
@@ -86,11 +99,16 @@ impl Material for OutlineMaterial {
         layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let mut attributes = vec![Mesh::ATTRIBUTE_POSITION.at_shader_location(0), ATTRIBUTE_OUTLINE_NORMAL.at_shader_location(1)];
+        let mut attributes = vec![
+            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+            ATTRIBUTE_OUTLINE_NORMAL.at_shader_location(1),
+        ];
         // A skinned hull (a folk's) moves with the joints, as Bevy's own pipeline lays out the
         // joints (`bevy_pbr::render::mesh::setup_morph_and_skinning_defs`, 6 and 7 without
         // vertex colours or tangents past that, which this layout leaves out).
-        if layout.0.contains(Mesh::ATTRIBUTE_JOINT_INDEX) && layout.0.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT) {
+        if layout.0.contains(Mesh::ATTRIBUTE_JOINT_INDEX)
+            && layout.0.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT)
+        {
             attributes.push(Mesh::ATTRIBUTE_JOINT_INDEX.at_shader_location(6));
             attributes.push(Mesh::ATTRIBUTE_JOINT_WEIGHT.at_shader_location(7));
         }

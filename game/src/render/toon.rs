@@ -9,9 +9,14 @@ use armory::{
 };
 use bevy::{
     mesh::MeshVertexBufferLayoutRef,
-    pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MeshPipelineKey},
+    pbr::{
+        ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
+        MeshPipelineKey,
+    },
     prelude::*,
-    render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError},
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    },
     shader::ShaderRef,
 };
 
@@ -36,17 +41,28 @@ impl ToonBands {
         let count = count.clamp(1, Self::MAX);
         let mut values = [1.0; Self::MAX];
         for (i, value) in values.iter_mut().take(count).enumerate() {
-            *value = if count == 1 { 1.0 } else { floor + (1.0 - floor) * i as f32 / (count - 1) as f32 };
+            *value = if count == 1 {
+                1.0
+            } else {
+                floor + (1.0 - floor) * i as f32 / (count - 1) as f32
+            };
         }
-        ToonBands { values, count: count as u32 }
+        ToonBands {
+            values,
+            count: count as u32,
+        }
     }
 
     /// Explicit band values, darkest first. Extra values beyond [`Self::MAX`] are ignored.
     pub fn from_values(values: &[f32]) -> Self {
         let count = values.len().clamp(1, Self::MAX);
         let mut packed = [1.0; Self::MAX];
-        packed[..values.len().min(Self::MAX)].copy_from_slice(&values[..values.len().min(Self::MAX)]);
-        ToonBands { values: packed, count: count as u32 }
+        packed[..values.len().min(Self::MAX)]
+            .copy_from_slice(&values[..values.len().min(Self::MAX)]);
+        ToonBands {
+            values: packed,
+            count: count as u32,
+        }
     }
 
     pub fn values(&self) -> &[f32] {
@@ -76,7 +92,12 @@ pub struct Decay {
 
 impl Default for Decay {
     fn default() -> Self {
-        Decay { kind: 0, amount: 0.0, scale: 1.6, seed: 0.0 }
+        Decay {
+            kind: 0,
+            amount: 0.0,
+            scale: 1.6,
+            seed: 0.0,
+        }
     }
 }
 
@@ -225,7 +246,10 @@ impl Shimmer {
     /// A shimmer of `color` at `strength`.
     pub fn new(color: Color, strength: f32) -> Self {
         let [r, g, b, _] = color.to_srgba().to_f32_array();
-        Shimmer { color: Vec3::new(r, g, b), strength }
+        Shimmer {
+            color: Vec3::new(r, g, b),
+            strength,
+        }
     }
 }
 
@@ -305,7 +329,9 @@ impl From<&ToonExtension> for ToonUniform {
             pattern_around: pattern.around,
             pattern_mirrored: pattern.mirrored as u32,
             pattern_length: pattern.length,
-            pattern_profile: std::array::from_fn(|i| Vec4::from_slice(&pattern.profile[i * 4..i * 4 + 4])),
+            pattern_profile: std::array::from_fn(|i| {
+                Vec4::from_slice(&pattern.profile[i * 4..i * 4 + 4])
+            }),
             etch_color: toon.etch.color,
             etch_id: toon.etch.id,
             etch_scale: toon.etch.scale,
@@ -317,7 +343,10 @@ impl From<&ToonExtension> for ToonUniform {
             shimmer_color: toon.shimmer.color,
             shimmer_strength: toon.shimmer.strength,
             gloss: toon.gloss,
-            band_values: [Vec4::new(v[0], v[1], v[2], v[3]), Vec4::new(v[4], v[5], v[6], v[7])],
+            band_values: [
+                Vec4::new(v[0], v[1], v[2], v[3]),
+                Vec4::new(v[4], v[5], v[6], v[7]),
+            ],
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,
             decay_amount: toon.decay.amount,
@@ -350,7 +379,10 @@ impl MaterialExtension for ToonExtension {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        let blended = key.mesh_key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS) == MeshPipelineKey::BLEND_ALPHA;
+        let blended = key
+            .mesh_key
+            .intersection(MeshPipelineKey::BLEND_RESERVED_BITS)
+            == MeshPipelineKey::BLEND_ALPHA;
         if blended && let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = Some(true);
         }
@@ -382,6 +414,9 @@ mod tests {
 
     #[test]
     fn explicit_bands_are_kept_in_order() {
-        assert_eq!(ToonBands::from_values(&[0.16, 0.58, 1.0]).values(), &[0.16, 0.58, 1.0]);
+        assert_eq!(
+            ToonBands::from_values(&[0.16, 0.58, 1.0]).values(),
+            &[0.16, 0.58, 1.0]
+        );
     }
 }

@@ -32,7 +32,10 @@ use bevy::{
 /// Draws every view directly ([`draw_directly`]) once Bevy has read the device's support.
 pub(super) fn add(app: &mut App) {
     if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-        render_app.add_systems(RenderStartup, draw_directly.after(init_gpu_resource::<GpuPreprocessingSupport>));
+        render_app.add_systems(
+            RenderStartup,
+            draw_directly.after(init_gpu_resource::<GpuPreprocessingSupport>),
+        );
     }
 }
 
@@ -56,7 +59,10 @@ mod tests {
     #[test]
     fn culling_is_capped_and_lesser_modes_kept() {
         assert!(capped(GpuPreprocessingMode::Culling) == GpuPreprocessingMode::PreprocessingOnly);
-        assert!(capped(GpuPreprocessingMode::PreprocessingOnly) == GpuPreprocessingMode::PreprocessingOnly);
+        assert!(
+            capped(GpuPreprocessingMode::PreprocessingOnly)
+                == GpuPreprocessingMode::PreprocessingOnly
+        );
         assert!(capped(GpuPreprocessingMode::None) == GpuPreprocessingMode::None);
     }
 }

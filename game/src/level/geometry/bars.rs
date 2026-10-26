@@ -18,11 +18,11 @@
 
 use armory::{
     ItemMesh, MaterialKind, Rgb,
-    cond::{Condition, ConditionState},
     build::{
         parts::{Look, Parts},
         plank::plank,
     },
+    cond::{Condition, ConditionState},
     geom::{MeshBuilder, Shading, SweepOptions, V3, cylinder, tube},
 };
 use fb_level::{
@@ -99,7 +99,10 @@ pub fn bars(level: &Level) -> Vec<BarsSpot> {
     for y in 0..level.height as i32 {
         for x in 0..level.width as i32 {
             if level.cell(x, y) == Cell::Bars {
-                out.push(BarsSpot { cell: (x, y), arms: arms_of(level, x, y) });
+                out.push(BarsSpot {
+                    cell: (x, y),
+                    arms: arms_of(level, x, y),
+                });
             }
         }
     }
@@ -109,15 +112,36 @@ pub fn bars(level: &Level) -> Vec<BarsSpot> {
 /// The gate at `(x, y)`: which way its bars run and which side is the cell.
 pub fn gate_at(level: &Level, x: i32, y: i32) -> GateSpot {
     let along_x = barred(level.cell(x - 1, y)) || barred(level.cell(x + 1, y));
-    let sides: [(i32, i32); 2] = if along_x { [(0, -1), (0, 1)] } else { [(-1, 0), (1, 0)] };
+    let sides: [(i32, i32); 2] = if along_x {
+        [(0, -1), (0, 1)]
+    } else {
+        [(-1, 0), (1, 0)]
+    };
     // The cell side is the one whose row, a step over, runs into a partition.
     let enclosed = |s: (i32, i32)| {
         let (rx, ry) = (x + s.0, y + s.1);
-        let run: [(i32, i32); 2] = if along_x { [(-1, 0), (1, 0)] } else { [(0, -1), (0, 1)] };
-        run.iter().any(|d| (1..=4).map(|k| level.cell(rx + d.0 * k, ry + d.1 * k)).find(|c| *c != Cell::Floor) == Some(Cell::Bars))
+        let run: [(i32, i32); 2] = if along_x {
+            [(-1, 0), (1, 0)]
+        } else {
+            [(0, -1), (0, 1)]
+        };
+        run.iter().any(|d| {
+            (1..=4)
+                .map(|k| level.cell(rx + d.0 * k, ry + d.1 * k))
+                .find(|c| *c != Cell::Floor)
+                == Some(Cell::Bars)
+        })
     };
-    let into = if enclosed(sides[0]) && !enclosed(sides[1]) { sides[0] } else { sides[1] };
-    GateSpot { cell: (x, y), along_x, into }
+    let into = if enclosed(sides[0]) && !enclosed(sides[1]) {
+        sides[0]
+    } else {
+        sides[1]
+    };
+    GateSpot {
+        cell: (x, y),
+        along_x,
+        into,
+    }
 }
 
 /// Every Gate cell of the level.
@@ -143,7 +167,11 @@ pub struct Ceiling<'a> {
 impl<'a> Ceiling<'a> {
     pub fn new(level: &'a Level) -> Self {
         let vaults = (level.style == LevelStyle::StoneHalls).then(|| Vaults::new(level));
-        Ceiling { vaults, flat: level.ceiling, _level: std::marker::PhantomData }
+        Ceiling {
+            vaults,
+            flat: level.ceiling,
+            _level: std::marker::PhantomData,
+        }
     }
 
     pub fn at(&self, x: f32, z: f32) -> f32 {
@@ -153,12 +181,18 @@ impl<'a> Ceiling<'a> {
     /// The lowest the ceiling comes over a post of bar radius at `(x, z)`.
     fn over_post(&self, x: f32, z: f32) -> f32 {
         let r = BAR_RADIUS;
-        [(0.0, 0.0), (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r)].iter().map(|&(dx, dz)| self.at(x + dx, z + dz)).fold(f32::MAX, f32::min)
+        [(0.0, 0.0), (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r)]
+            .iter()
+            .map(|&(dx, dz)| self.at(x + dx, z + dz))
+            .fold(f32::MAX, f32::min)
     }
 }
 
 fn hash(cell: (i32, i32), seed: u32, salt: u32) -> u32 {
-    (cell.0 as u32).wrapping_mul(73_856_093) ^ (cell.1 as u32).wrapping_mul(19_349_663) ^ seed ^ salt
+    (cell.0 as u32).wrapping_mul(73_856_093)
+        ^ (cell.1 as u32).wrapping_mul(19_349_663)
+        ^ seed
+        ^ salt
 }
 
 /// How well a cell block's iron has kept, the same for every bar and gate of the block.
@@ -178,7 +212,8 @@ impl Keep {
     /// the rest rusted.
     pub fn of(level: &Level, cell: (i32, i32)) -> Keep {
         let room = level.room_at(cell.0, cell.1).map_or(u32::MAX, |r| r as u32);
-        let roll = Mulberry32::new(level.seed ^ room.wrapping_mul(0x9e37_79b9) ^ 0x1c07_ee90).range_f32(0.0, 1.0);
+        let roll = Mulberry32::new(level.seed ^ room.wrapping_mul(0x9e37_79b9) ^ 0x1c07_ee90)
+            .range_f32(0.0, 1.0);
         if roll < 0.4 {
             Keep::Kept
         } else if roll < 0.75 {
@@ -192,9 +227,19 @@ impl Keep {
     /// block stops short of neglect, so rust stays a tone on the iron.
     pub fn condition(self) -> Condition {
         match self {
-            Keep::Kept => Condition { wear: 0.1, rust: 0.5, ..Condition::of(ConditionState::Serviceable) },
-            Keep::Weathered => Condition { wear: 0.3, ..Condition::of(ConditionState::Serviceable) },
-            Keep::Rusted => Condition { wear: 0.5, ..Condition::of(ConditionState::BattleWorn) },
+            Keep::Kept => Condition {
+                wear: 0.1,
+                rust: 0.5,
+                ..Condition::of(ConditionState::Serviceable)
+            },
+            Keep::Weathered => Condition {
+                wear: 0.3,
+                ..Condition::of(ConditionState::Serviceable)
+            },
+            Keep::Rusted => Condition {
+                wear: 0.5,
+                ..Condition::of(ConditionState::BattleWorn)
+            },
         }
     }
 
@@ -270,7 +315,8 @@ fn rail(from: (f32, f32), to: (f32, f32), y: f32) -> MeshBuilder {
     let (dx, dz) = (to.0 - from.0, to.1 - from.1);
     let len = dx.hypot(dz);
     let mut r = plank(len, RAIL_HEIGHT, RAIL_THICK, 0.15);
-    r.rotate_y((-dz).atan2(dx)).translate([(from.0 + to.0) * 0.5, y, (from.1 + to.1) * 0.5]);
+    r.rotate_y((-dz).atan2(dx))
+        .translate([(from.0 + to.0) * 0.5, y, (from.1 + to.1) * 0.5]);
     r
 }
 
@@ -285,14 +331,31 @@ struct Builder {
 
 impl Builder {
     fn new(keep: Keep) -> Self {
-        Builder { sound: MeshBuilder::new(), rusty: MeshBuilder::new(), rails: MeshBuilder::new(), iron: keep.iron() }
+        Builder {
+            sound: MeshBuilder::new(),
+            rusty: MeshBuilder::new(),
+            rails: MeshBuilder::new(),
+            iron: keep.iron(),
+        }
     }
 
     fn finish(self) -> ItemMesh {
         let mut parts = Parts::new();
-        parts.add_look("bars", self.sound, Look::of(MaterialKind::Iron).tinted(self.iron));
-        parts.add_look("rusted bars", self.rusty, Look::of(MaterialKind::Iron).tinted(RUST));
-        parts.add_look("rails", self.rails, Look::of(MaterialKind::Iron).tinted(self.iron));
+        parts.add_look(
+            "bars",
+            self.sound,
+            Look::of(MaterialKind::Iron).tinted(self.iron),
+        );
+        parts.add_look(
+            "rusted bars",
+            self.rusty,
+            Look::of(MaterialKind::Iron).tinted(RUST),
+        );
+        parts.add_look(
+            "rails",
+            self.rails,
+            Look::of(MaterialKind::Iron).tinted(self.iron),
+        );
         parts.finish()
     }
 
@@ -306,10 +369,16 @@ impl Builder {
 
 /// The bars of one Bars cell, on the cell's centre at floor height.
 pub fn bars_mesh(spot: &BarsSpot, level: &Level, ceiling: &Ceiling) -> ItemMesh {
-    let (cx, cz) = ((spot.cell.0 as f32 + 0.5) * CELL, (spot.cell.1 as f32 + 0.5) * CELL);
+    let (cx, cz) = (
+        (spot.cell.0 as f32 + 0.5) * CELL,
+        (spot.cell.1 as f32 + 0.5) * CELL,
+    );
     let half = CELL * 0.5;
     let keep = Keep::of(level, spot.cell);
-    let mut wear = Wear { rng: Mulberry32::new(hash(spot.cell, level.seed, 0xba25_0001)), keep };
+    let mut wear = Wear {
+        rng: Mulberry32::new(hash(spot.cell, level.seed, 0xba25_0001)),
+        keep,
+    };
     let mut out = Builder::new(keep);
     let count = spot.arms.iter().filter(|&&a| a).count();
     let straight = count <= 2 && (spot.arms[0] == spot.arms[2]) && (spot.arms[1] == spot.arms[3]);
@@ -346,8 +415,10 @@ pub fn bars_mesh(spot: &BarsSpot, level: &Level, ceiling: &Ceiling) -> ItemMesh 
             }
         }
         let high_rail = min_ceiling - HEADROOM - 3.0;
-        out.rails.append(&rail((0.0, 0.0), (ux * reach, uz * reach), low_rail));
-        out.rails.append(&rail((0.0, 0.0), (ux * reach, uz * reach), high_rail));
+        out.rails
+            .append(&rail((0.0, 0.0), (ux * reach, uz * reach), low_rail));
+        out.rails
+            .append(&rail((0.0, 0.0), (ux * reach, uz * reach), high_rail));
     }
     out.finish()
 }
@@ -363,12 +434,24 @@ pub struct GateMesh {
 }
 
 pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh {
-    let (cx, cz) = ((spot.cell.0 as f32 + 0.5) * CELL, (spot.cell.1 as f32 + 0.5) * CELL);
+    let (cx, cz) = (
+        (spot.cell.0 as f32 + 0.5) * CELL,
+        (spot.cell.1 as f32 + 0.5) * CELL,
+    );
     // World offsets of local (x, z) from the cell centre: a gate along z is turned a quarter.
-    let world = |x: f32, z: f32| if spot.along_x { (cx + x, cz + z) } else { (cx + z, cz - x) };
+    let world = |x: f32, z: f32| {
+        if spot.along_x {
+            (cx + x, cz + z)
+        } else {
+            (cx + z, cz - x)
+        }
+    };
     let half = CELL * 0.5;
     let iron_keep = Keep::of(level, spot.cell);
-    let mut wear = Wear { rng: Mulberry32::new(hash(spot.cell, level.seed, 0x6a7e_0002)), keep: iron_keep };
+    let mut wear = Wear {
+        rng: Mulberry32::new(hash(spot.cell, level.seed, 0x6a7e_0002)),
+        keep: iron_keep,
+    };
     let mut fixed = Builder::new(iron_keep);
     let (mut pins, mut lock) = (MeshBuilder::new(), MeshBuilder::new());
     let mut min_ceiling = f32::MAX;
@@ -390,7 +473,9 @@ pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh 
         let x = side * (half - PITCH * 0.5);
         let kind = Post::Sound;
         fixed.put(post(x, 0.0, tops(x), 0.0, [0.0, 0.0, 1.0]), &kind);
-        fixed.rails.append(&rail((side * jamb, 0.0), (side * half, 0.0), 3.0));
+        fixed
+            .rails
+            .append(&rail((side * jamb, 0.0), (side * half, 0.0), 3.0));
         if side < 0.0 {
             // Hinge pins, standing off the jamb.
             for y in [4.0, opening - 4.0] {
@@ -414,7 +499,9 @@ pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh 
         }
         x += PITCH;
     }
-    fixed.rails.append(&rail((-half, 0.0), (half, 0.0), opening + 0.6));
+    fixed
+        .rails
+        .append(&rail((-half, 0.0), (half, 0.0), opening + 0.6));
     let high = min_ceiling - HEADROOM - 3.0;
     if high > opening + 3.0 {
         fixed.rails.append(&rail((-half, 0.0), (half, 0.0), high));
@@ -448,23 +535,43 @@ pub fn gate_mesh(spot: &GateSpot, level: &Level, ceiling: &Ceiling) -> GateMesh 
     boxed.translate([width - 2.0, 9.5, 0.0]);
     lock.append(&boxed);
     let mut keep = cylinder(0.35, 2.2, 8, Shading::SMOOTH);
-    keep.rotate_x(std::f32::consts::FRAC_PI_2).translate([width - 2.0, 9.5, -1.1]);
+    keep.rotate_x(std::f32::consts::FRAC_PI_2)
+        .translate([width - 2.0, 9.5, -1.1]);
     lock.append(&keep);
 
     let mut frame = fixed.finish();
     let mut extra = Parts::new();
-    extra.add_look("hinge pins", pins, Look::of(MaterialKind::Iron).tinted(iron_keep.iron()).without_outline());
+    extra.add_look(
+        "hinge pins",
+        pins,
+        Look::of(MaterialKind::Iron)
+            .tinted(iron_keep.iron())
+            .without_outline(),
+    );
     frame.parts.extend(extra.finish().parts);
     let mut leaf_mesh = leaf.finish();
     let mut extra = Parts::new();
-    extra.add_look("lock box", lock, Look::of(MaterialKind::Iron).tinted(iron_keep.iron()));
+    extra.add_look(
+        "lock box",
+        lock,
+        Look::of(MaterialKind::Iron).tinted(iron_keep.iron()),
+    );
     leaf_mesh.parts.extend(extra.finish().parts);
-    GateMesh { frame, leaf: leaf_mesh, hinge: [GATE_HINGE, 0.0, 0.0], opening }
+    GateMesh {
+        frame,
+        leaf: leaf_mesh,
+        hinge: [GATE_HINGE, 0.0, 0.0],
+        opening,
+    }
 }
 
 /// The grid-axis turn about `y` that carries a gate's local `x` onto the cell's run.
 pub fn gate_turn(spot: &GateSpot) -> f32 {
-    if spot.along_x { 0.0 } else { std::f32::consts::FRAC_PI_2 }
+    if spot.along_x {
+        0.0
+    } else {
+        std::f32::consts::FRAC_PI_2
+    }
 }
 
 /// The leaf's turn about its hinge, so it stands ajar toward the cell it opens into: radians
@@ -482,7 +589,10 @@ mod tests {
     use super::*;
 
     fn block_levels() -> Vec<Level> {
-        [2u32, 3, 5].iter().map(|&s| fb_level::generate(s, 2)).collect()
+        [2u32, 3, 5]
+            .iter()
+            .map(|&s| fb_level::generate(s, 2))
+            .collect()
     }
 
     #[test]
@@ -491,9 +601,16 @@ mod tests {
         for level in (1..=40).flat_map(|s| [2, 4].map(|d| fb_level::generate(s, d))) {
             for r in level.rooms_for(fb_level::Purpose::CellBlock) {
                 let room = level.rooms[r];
-                let cells: Vec<(i32, i32)> = (room.y..room.y + room.h).flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as i32, y as i32))).filter(|&(x, y)| matches!(level.cell(x, y), Cell::Bars | Cell::Gate)).collect();
+                let cells: Vec<(i32, i32)> = (room.y..room.y + room.h)
+                    .flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as i32, y as i32)))
+                    .filter(|&(x, y)| matches!(level.cell(x, y), Cell::Bars | Cell::Gate))
+                    .collect();
                 let keep = Keep::of(&level, cells[0]);
-                assert!(cells.iter().all(|&c| Keep::of(&level, c) == keep), "seed {}: a block of mixed iron", level.seed);
+                assert!(
+                    cells.iter().all(|&c| Keep::of(&level, c) == keep),
+                    "seed {}: a block of mixed iron",
+                    level.seed
+                );
                 seen.insert(keep);
             }
         }
@@ -517,12 +634,28 @@ mod tests {
             let ceiling = Ceiling::new(&level);
             for spot in bars(&level) {
                 let mesh = bars_mesh(&spot, &level, &ceiling);
-                let (cx, cz) = ((spot.cell.0 as f32 + 0.5) * CELL, (spot.cell.1 as f32 + 0.5) * CELL);
-                assert!(!mesh.parts.iter().all(|p| p.positions.is_empty()), "bars at {:?}", spot.cell);
+                let (cx, cz) = (
+                    (spot.cell.0 as f32 + 0.5) * CELL,
+                    (spot.cell.1 as f32 + 0.5) * CELL,
+                );
+                assert!(
+                    !mesh.parts.iter().all(|p| p.positions.is_empty()),
+                    "bars at {:?}",
+                    spot.cell
+                );
                 for part in &mesh.parts {
                     for p in &part.positions {
-                        assert!((p[0] - 0.0).abs() <= CELL * 0.5 + 0.5 && (p[2]).abs() <= CELL * 0.5 + 0.5, "{:?} {p:?}", spot.cell);
-                        assert!(p[1] >= -0.05 && p[1] <= ceiling.at(cx + p[0], cz + p[2]) + 0.01, "{:?} {p:?}", spot.cell);
+                        assert!(
+                            (p[0] - 0.0).abs() <= CELL * 0.5 + 0.5
+                                && (p[2]).abs() <= CELL * 0.5 + 0.5,
+                            "{:?} {p:?}",
+                            spot.cell
+                        );
+                        assert!(
+                            p[1] >= -0.05 && p[1] <= ceiling.at(cx + p[0], cz + p[2]) + 0.01,
+                            "{:?} {p:?}",
+                            spot.cell
+                        );
                     }
                 }
             }
@@ -536,7 +669,11 @@ mod tests {
         for spot in bars(&level) {
             let mesh = bars_mesh(&spot, &level, &ceiling);
             for (k, &(dx, dz)) in ARMS.iter().enumerate() {
-                let reaches = mesh.parts.iter().flat_map(|p| &p.positions).any(|p| p[0] * dx as f32 + p[2] * dz as f32 > CELL * 0.5 - 0.5);
+                let reaches = mesh
+                    .parts
+                    .iter()
+                    .flat_map(|p| &p.positions)
+                    .any(|p| p[0] * dx as f32 + p[2] * dz as f32 > CELL * 0.5 - 0.5);
                 assert_eq!(reaches, spot.arms[k], "arm {k} of {:?}", spot.cell);
             }
         }
@@ -548,14 +685,25 @@ mod tests {
             let ceiling = Ceiling::new(&level);
             for spot in gates(&level) {
                 let g = gate_mesh(&spot, &level, &ceiling);
-                assert!(g.frame.parts.iter().chain(&g.leaf.parts).all(|p| !p.positions.is_empty()));
+                assert!(
+                    g.frame
+                        .parts
+                        .iter()
+                        .chain(&g.leaf.parts)
+                        .all(|p| !p.positions.is_empty())
+                );
                 let a = leaf_swing(&spot);
                 // The leaf's free end, turned about the hinge.
-                let end = [GATE_HINGE + (DOOR_WIDTH - 0.8) * a.cos(), -(DOOR_WIDTH - 0.8) * a.sin()];
+                let end = [
+                    GATE_HINGE + (DOOR_WIDTH - 0.8) * a.cos(),
+                    -(DOOR_WIDTH - 0.8) * a.sin(),
+                ];
                 let local_z = if spot.along_x { (0, 1) } else { (1, 0) };
                 let toward = if spot.into == local_z { 1.0 } else { -1.0 };
                 assert!(end[1] * toward > 0.0, "the leaf swings into the cell");
-                assert!(level.cell(spot.cell.0 + spot.into.0, spot.cell.1 + spot.into.1) == Cell::Floor);
+                assert!(
+                    level.cell(spot.cell.0 + spot.into.0, spot.cell.1 + spot.into.1) == Cell::Floor
+                );
             }
         }
     }
@@ -565,10 +713,20 @@ mod tests {
         for level in block_levels() {
             let view = super::super::CellView::new(&level);
             let mesh = super::super::level_mesh(&view, view.bounds());
-            let walls = mesh.surfaces.parts.iter().find(|p| p.name == "walls").expect("walls");
+            let walls = mesh
+                .surfaces
+                .parts
+                .iter()
+                .find(|p| p.name == "walls")
+                .expect("walls");
             for spot in bars(&level) {
                 let (x0, z0) = (spot.cell.0 as f32 * CELL, spot.cell.1 as f32 * CELL);
-                let inside = walls.positions.iter().any(|p| p[0] > x0 + 1.2 && p[0] < x0 + CELL - 1.2 && p[2] > z0 + 1.2 && p[2] < z0 + CELL - 1.2);
+                let inside = walls.positions.iter().any(|p| {
+                    p[0] > x0 + 1.2
+                        && p[0] < x0 + CELL - 1.2
+                        && p[2] > z0 + 1.2
+                        && p[2] < z0 + CELL - 1.2
+                });
                 assert!(!inside, "a wall inside the bars cell {:?}", spot.cell);
             }
         }

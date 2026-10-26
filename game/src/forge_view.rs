@@ -30,8 +30,12 @@ use bevy::{
 
 use crate::light::StudioLight;
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, item_bounds};
-use crate::turntable::{Orbit, PLATE, PLATE_INK, SPIN_SPEED, framing_distance, parse_family, wear_name};
-use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body};
+use crate::turntable::{
+    Orbit, PLATE, PLATE_INK, SPIN_SPEED, framing_distance, parse_family, wear_name,
+};
+use crate::tweak_panel::{
+    PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body,
+};
 use crate::ui::{BG, BRIGHT, CELL, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
 
 /// Width of the panel on the right, in logical pixels.
@@ -40,8 +44,13 @@ pub const PANEL_WIDTH: f32 = 430.0;
 const FILL: f32 = 0.8;
 const DEFAULT_SEED: u32 = 1207;
 /// The condition presets, newest to oldest.
-const WEAR_PRESETS: [ConditionState; 5] =
-    [ConditionState::Pristine, ConditionState::Serviceable, ConditionState::BattleWorn, ConditionState::Neglected, ConditionState::GraveFind];
+const WEAR_PRESETS: [ConditionState; 5] = [
+    ConditionState::Pristine,
+    ConditionState::Serviceable,
+    ConditionState::BattleWorn,
+    ConditionState::Neglected,
+    ConditionState::GraveFind,
+];
 
 pub struct ForgeViewPlugin;
 
@@ -59,7 +68,15 @@ impl Plugin for ForgeViewPlugin {
                 Update,
                 (
                     (keys, press_controls).before(TweakPanelSystems),
-                    (orbit_and_zoom, show_item.run_if(resource_changed::<Forge>), refresh_header.run_if(resource_changed::<Forge>), spin, frame_camera).chain().after(TweakPanelSystems),
+                    (
+                        orbit_and_zoom,
+                        show_item.run_if(resource_changed::<Forge>),
+                        refresh_header.run_if(resource_changed::<Forge>),
+                        spin,
+                        frame_camera,
+                    )
+                        .chain()
+                        .after(TweakPanelSystems),
                 ),
             );
     }
@@ -85,7 +102,12 @@ impl Default for Forge {
 impl Forge {
     /// The item `family` rolls from `seed`, or `None` for a family that is not ported yet.
     pub fn new(family: Family, seed: u32) -> Option<Forge> {
-        Some(Forge { family, seed, item: Item::roll(family, seed)?, structure: 0 })
+        Some(Forge {
+            family,
+            seed,
+            item: Item::roll(family, seed)?,
+            structure: 0,
+        })
     }
 
     /// Parses `--family <key>` and `--seed <n>` (also `--flag=value`); `--forge` itself is
@@ -98,13 +120,20 @@ impl Forge {
                 Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
                 None => (arg, None),
             };
-            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| args.next())
+                    .ok_or(format!("{flag} needs a value"))
+            };
             match flag.as_str() {
                 "--forge" => {}
                 "--family" => family = parse_family(&value()?)?,
                 "--seed" => {
                     let text = value()?;
-                    seed = text.parse().map_err(|_| format!("--seed: {text:?} is not a u32"))?;
+                    seed = text
+                        .parse()
+                        .map_err(|_| format!("--seed: {text:?} is not a u32"))?;
                 }
                 other => return Err(format!("unknown argument {other:?}")),
             }
@@ -157,7 +186,10 @@ impl Forge {
     /// How the item looks on the stage: its own palette, wear pattern and etching.
     pub fn appearance(&self) -> ItemAppearance {
         ItemAppearance {
-            palette: ItemPalette { materials: self.item.palette(), ..ItemPalette::ARMORY },
+            palette: ItemPalette {
+                materials: self.item.palette(),
+                ..ItemPalette::ARMORY
+            },
             condition: self.item.condition(),
             seed: self.item.seed(),
             etching: self.item.etching(),
@@ -169,7 +201,11 @@ impl Forge {
 impl Tweak for Forge {
     /// Every field but the condition's preset, which the wear buttons set.
     fn fields(&self) -> Vec<Field> {
-        self.item.fields().into_iter().filter(|f| f.path != "cond.state").collect()
+        self.item
+            .fields()
+            .into_iter()
+            .filter(|f| f.path != "cond.state")
+            .collect()
     }
 
     fn set_slider(&mut self, path: &str, value: f32) {
@@ -208,7 +244,10 @@ pub fn fresh_seed(entropy: u64) -> u32 {
 
 /// `condition` set to the named preset's sliders, keeping the pattern scale it had.
 pub fn wear_preset(condition: Condition, state: ConditionState) -> Condition {
-    Condition { scale: condition.scale, ..Condition::of(state) }
+    Condition {
+        scale: condition.scale,
+        ..Condition::of(state)
+    }
 }
 
 /// Spin angle of the stage's turntable.
@@ -280,7 +319,12 @@ fn setup_stage(mut commands: Commands, fonts: Res<UiFonts>) {
         Hint,
         Text::new("Drag orbit   Scroll zoom   Tab family   N forge new   R reset   Space pause"),
         UiFonts::style(&fonts.body_medium, 17.0, PLATE_INK),
-        Node { position_type: PositionType::Absolute, left: px(20), bottom: px(16), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(20),
+            bottom: px(16),
+            ..default()
+        },
     ));
 }
 
@@ -303,39 +347,90 @@ fn setup_panel(mut commands: Commands, fonts: Res<UiFonts>) {
         .with_children(|panel| {
             panel
                 .spawn((
-                    Node { flex_direction: FlexDirection::Column, row_gap: px(9), padding: UiRect::all(px(14)), border: UiRect::bottom(px(1)), ..default() },
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(9),
+                        padding: UiRect::all(px(14)),
+                        border: UiRect::bottom(px(1)),
+                        ..default()
+                    },
                     BorderColor::all(FAINT),
                 ))
                 .with_children(|header| {
-                    header.spawn((Text::new("The Forge"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                    header.spawn((Readout::Noun, Text::new(""), UiFonts::style(&fonts.display, 20.0, BRIGHT)));
+                    header.spawn((
+                        Text::new("The Forge"),
+                        UiFonts::style(&fonts.display_bold, 28.0, INK),
+                    ));
+                    header.spawn((
+                        Readout::Noun,
+                        Text::new(""),
+                        UiFonts::style(&fonts.display, 20.0, BRIGHT),
+                    ));
                     header
-                        .spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(5), row_gap: px(5), ..default() })
+                        .spawn(Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: px(5),
+                            row_gap: px(5),
+                            ..default()
+                        })
                         .with_children(|row| {
                             for family in Item::PORTED {
-                                chip(row, &fonts, family.key(), Control::Family(*family)).insert(Chip::Family(*family));
+                                chip(row, &fonts, family.key(), Control::Family(*family))
+                                    .insert(Chip::Family(*family));
                             }
                         });
-                    header.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|row| {
-                        row.spawn((Text::new("Seed"), UiFonts::style(&fonts.body, 17.0, MUTED), Node { margin: UiRect::right(px(4)), ..default() }));
-                        chip(row, &fonts, "-", Control::SeedStep(-1));
-                        row.spawn((
-                            Readout::Seed,
-                            Text::new(""),
-                            UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
-                            TextLayout::justify(Justify::Center),
-                            Node { min_width: px(92), ..default() },
-                        ));
-                        chip(row, &fonts, "+", Control::SeedStep(1));
-                        chip(row, &fonts, "Forge new", Control::ForgeNew);
-                        chip(row, &fonts, "Reset", Control::Reset);
-                    });
-                    header.spawn(Node { align_items: AlignItems::Center, flex_wrap: FlexWrap::Wrap, column_gap: px(5), row_gap: px(5), ..default() }).with_children(|row| {
-                        row.spawn((Text::new("Wear"), UiFonts::style(&fonts.body, 17.0, MUTED), Node { margin: UiRect::right(px(4)), ..default() }));
-                        for state in WEAR_PRESETS {
-                            chip(row, &fonts, wear_name(state), Control::Wear(state)).insert(Chip::Wear(state));
-                        }
-                    });
+                    header
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Seed"),
+                                UiFonts::style(&fonts.body, 17.0, MUTED),
+                                Node {
+                                    margin: UiRect::right(px(4)),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "-", Control::SeedStep(-1));
+                            row.spawn((
+                                Readout::Seed,
+                                Text::new(""),
+                                UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                                TextLayout::justify(Justify::Center),
+                                Node {
+                                    min_width: px(92),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "+", Control::SeedStep(1));
+                            chip(row, &fonts, "Forge new", Control::ForgeNew);
+                            chip(row, &fonts, "Reset", Control::Reset);
+                        });
+                    header
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: px(5),
+                            row_gap: px(5),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Wear"),
+                                UiFonts::style(&fonts.body, 17.0, MUTED),
+                                Node {
+                                    margin: UiRect::right(px(4)),
+                                    ..default()
+                                },
+                            ));
+                            for state in WEAR_PRESETS {
+                                chip(row, &fonts, wear_name(state), Control::Wear(state))
+                                    .insert(Chip::Wear(state));
+                            }
+                        });
                 });
             panel_body(panel);
         });
@@ -367,16 +462,30 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut forge: ResMut<Forge>, mut spin: Res
 }
 
 fn clock() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
 }
 
 /// A click on a header button does what it says.
-fn press_controls(buttons: Res<ButtonInput<MouseButton>>, window: Option<Single<&Window, With<PrimaryWindow>>>, controls: Query<(&Control, &ComputedNode, &UiGlobalTransform)>, mut forge: ResMut<Forge>) {
+fn press_controls(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    controls: Query<(&Control, &ComputedNode, &UiGlobalTransform)>,
+    mut forge: ResMut<Forge>,
+) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
-    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    let Some(point) = window.and_then(|w| w.cursor_position()) else {
+        return;
+    };
+    let Some((control, ..)) = controls
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    else {
+        return;
+    };
     match control.clone() {
         Control::Family(family) => forge.set_family(family),
         Control::ForgeNew => forge.forge_new(clock()),
@@ -400,7 +509,9 @@ fn orbit_and_zoom(
     mut dragging_stage: Local<bool>,
 ) {
     let Some(window) = window else { return };
-    let over_panel = window.cursor_position().is_some_and(|c| c.x >= window.width() - PANEL_WIDTH);
+    let over_panel = window
+        .cursor_position()
+        .is_some_and(|c| c.x >= window.width() - PANEL_WIDTH);
     if buttons.just_pressed(MouseButton::Left) {
         *dragging_stage = !over_panel;
     }
@@ -414,7 +525,8 @@ fn orbit_and_zoom(
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    if lines == 0.0 || window.cursor_position().is_none() || over_panel || over_body(&window, &body) {
+    if lines == 0.0 || window.cursor_position().is_none() || over_panel || over_body(&window, &body)
+    {
         return;
     }
     spin.orbit.zoom_by(lines);
@@ -440,13 +552,21 @@ fn show_item(
         stage.centre = Vec3::from(bounds.center());
         stage.structure = Some(forge.structure);
     }
-    let pivot = commands.spawn((Pivot, Transform::default(), Visibility::default())).id();
+    let pivot = commands
+        .spawn((Pivot, Transform::default(), Visibility::default()))
+        .id();
     let centre = stage.centre;
-    spawner.spawn(&mesh, &forge.appearance()).insert((Transform::from_translation(-centre), ChildOf(pivot)));
+    spawner
+        .spawn(&mesh, &forge.appearance())
+        .insert((Transform::from_translation(-centre), ChildOf(pivot)));
 }
 
 /// Keeps the header's name, seed and lit buttons showing the current state.
-fn refresh_header(forge: Res<Forge>, mut readouts: Query<(&Readout, &mut Text)>, mut chips: Query<(&Chip, &mut BackgroundColor)>) {
+fn refresh_header(
+    forge: Res<Forge>,
+    mut readouts: Query<(&Readout, &mut Text)>,
+    mut chips: Query<(&Chip, &mut BackgroundColor)>,
+) {
     for (readout, mut text) in &mut readouts {
         let line = match readout {
             Readout::Noun => forge.item.noun(),
@@ -477,20 +597,34 @@ fn spin(time: Res<Time>, mut state: ResMut<Spin>, mut pivots: Query<&mut Transfo
 
 /// Orbits the camera round the pivot at the framing distance, shifted so the item sits in the
 /// middle of the space the panel leaves.
-fn frame_camera(stage: Res<Stage>, spin: Res<Spin>, mut cameras: Query<(&Camera, &Projection, &mut Transform), With<StageCamera>>) {
+fn frame_camera(
+    stage: Res<Stage>,
+    spin: Res<Spin>,
+    mut cameras: Query<(&Camera, &Projection, &mut Transform), With<StageCamera>>,
+) {
     for (camera, projection, mut transform) in &mut cameras {
-        let Projection::Perspective(perspective) = projection else { continue };
+        let Projection::Perspective(perspective) = projection else {
+            continue;
+        };
         if stage.size == Vec3::ZERO {
             continue;
         }
-        let width = camera.logical_viewport_size().map_or(1280.0, |s| s.x).max(1.0);
+        let width = camera
+            .logical_viewport_size()
+            .map_or(1280.0, |s| s.x)
+            .max(1.0);
         let panel = (PANEL_WIDTH / width).clamp(0.0, 0.8);
         // Fit the item to the part of the view the panel leaves.
-        let visible = PerspectiveProjection { aspect_ratio: perspective.aspect_ratio * (1.0 - panel), ..*perspective };
+        let visible = PerspectiveProjection {
+            aspect_ratio: perspective.aspect_ratio * (1.0 - panel),
+            ..*perspective
+        };
         let distance = framing_distance(stage.size, &visible, FILL);
-        let mut target = Transform::from_translation(spin.orbit.offset(distance)).looking_at(Vec3::ZERO, Vec3::Y);
+        let mut target = Transform::from_translation(spin.orbit.offset(distance))
+            .looking_at(Vec3::ZERO, Vec3::Y);
         // Slide the camera sideways so the item lands at the middle of the free part.
-        let half_width = distance * spin.orbit.zoom * (perspective.fov * 0.5).tan() * perspective.aspect_ratio;
+        let half_width =
+            distance * spin.orbit.zoom * (perspective.fov * 0.5).tan() * perspective.aspect_ratio;
         target.translation += *target.right() * half_width * panel;
         if *transform != target {
             *transform = target;
@@ -559,17 +693,32 @@ mod tests {
 
     #[test]
     fn wear_presets_keep_the_pattern_scale() {
-        let own = Condition { scale: 2.5, ..Condition::default() };
+        let own = Condition {
+            scale: 2.5,
+            ..Condition::default()
+        };
         let worn = wear_preset(own, ConditionState::BattleWorn);
-        assert_eq!((worn.scale, worn.wear, worn.state), (2.5, 0.45, ConditionState::BattleWorn));
+        assert_eq!(
+            (worn.scale, worn.wear, worn.state),
+            (2.5, 0.45, ConditionState::BattleWorn)
+        );
     }
 
     #[test]
     fn every_ported_family_forges_and_has_a_panel() {
         for &family in Item::PORTED {
             let forge = Forge::new(family, 7).unwrap();
-            assert!(forge.fields().iter().any(|f| matches!(f.kind, armory::reflect::FieldKind::Slider { .. })), "{family:?}");
-            assert!(forge.fields().iter().all(|f| f.path != "cond.state"), "the wear buttons set the preset");
+            assert!(
+                forge
+                    .fields()
+                    .iter()
+                    .any(|f| matches!(f.kind, armory::reflect::FieldKind::Slider { .. })),
+                "{family:?}"
+            );
+            assert!(
+                forge.fields().iter().all(|f| f.path != "cond.state"),
+                "the wear buttons set the preset"
+            );
         }
     }
 }

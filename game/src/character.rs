@@ -8,7 +8,10 @@ use bevy::prelude::*;
 use fb_body::{BodyShape, BodySpec, Folk};
 use fb_character::explain::{Explained, Loadout, armour_class_with};
 use fb_character::rules::Rules;
-use fb_character::{AbilityBonus, Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn, modifier as ability_modifier};
+use fb_character::{
+    AbilityBonus, Activity, Attributes, CarriedLight, Casting, Gear, LoadBand, Mana, Worn,
+    modifier as ability_modifier,
+};
 use procgen_rng::Mulberry32;
 
 use crate::carry::carried_lights;
@@ -141,7 +144,10 @@ pub struct Character {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reading {
     /// They learned from it: `stat` is now `score`.
-    Learned { stat: fb_items::stats::Stat, score: i32 },
+    Learned {
+        stat: fb_items::stats::Stat,
+        score: i32,
+    },
     /// They have read it before, and it has nothing more to teach them.
     AlreadyRead,
     /// It is not a book.
@@ -183,20 +189,41 @@ impl Character {
         let nudges = Character::roll_nudges(rng);
         let attributes = Character::scores_from(folk, nudges);
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default(), learned: AbilityBonus::default(), books_read: Vec::new() }
+        Character {
+            folk,
+            body_seed,
+            shape: None,
+            sex: None,
+            name,
+            class,
+            attributes,
+            dirt,
+            worn: AbilityBonus::default(),
+            learned: AbilityBonus::default(),
+            books_read: Vec::new(),
+        }
     }
 
     /// Five nudges to the folk's ability scores, in order strength, dexterity, constitution,
     /// intelligence, wisdom: each `round((r + r + r - 1.5) * 3)`, so -5 to 4, mostly near 0.
     pub fn roll_nudges(rng: &mut Mulberry32) -> [i32; 5] {
-        std::array::from_fn(|_| ((rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * 3.0).round() as i32)
+        std::array::from_fn(|_| {
+            ((rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * 3.0).round() as i32
+        })
     }
 
     /// The ability scores `nudges` give one of `folk`: its scores in `data/races.json`, each
     /// moved by its nudge and held within 3 to 18.
     pub fn scores_from(folk: Folk, nudges: [i32; 5]) -> Attributes {
-        let [strength, dexterity, constitution, intelligence, wisdom] = std::array::from_fn(|i| (folk.race().stats[i] + nudges[i]).clamp(3, 18));
-        Attributes { strength, dexterity, constitution, intelligence, wisdom }
+        let [strength, dexterity, constitution, intelligence, wisdom] =
+            std::array::from_fn(|i| (folk.race().stats[i] + nudges[i]).clamp(3, 18));
+        Attributes {
+            strength,
+            dexterity,
+            constitution,
+            intelligence,
+            wisdom,
+        }
     }
 
     /// Their body's spec.
@@ -215,7 +242,11 @@ impl Character {
 
     /// The warmth the delver needs from their gear: 6, or 8 for the cold-blooded lizardfolk.
     pub fn warmth_need(&self) -> f32 {
-        if self.folk == Folk::Lizardfolk { 8.0 } else { 6.0 }
+        if self.folk == Folk::Lizardfolk {
+            8.0
+        } else {
+            6.0
+        }
     }
 
     /// Their ability scores as they stand: the rolled ones with what they have learned and what
@@ -229,7 +260,9 @@ impl Character {
     /// [`fb_items::lesson::LESSON_POINTS`] for good, unless they have read this book before.
     pub fn read(&mut self, book: &fb_items::Item) -> Reading {
         use fb_items::stats::Stat;
-        let Some(stat) = book.lesson() else { return Reading::NothingToLearn };
+        let Some(stat) = book.lesson() else {
+            return Reading::NothingToLearn;
+        };
         if self.books_read.contains(&book.seed) {
             return Reading::AlreadyRead;
         }
@@ -331,8 +364,14 @@ pub struct Derived {
 /// The odds the loot of a level `depth` down rolls against for the delver: the level's, with the
 /// luck `character` wears in `inventory` ([`fb_items::Odds::with_luck`]); the level's alone
 /// with no character.
-pub fn loot_odds(character: Option<&Character>, inventory: Option<&Inventory>, depth: u32) -> fb_items::Odds {
-    let luck = character.zip(inventory).map_or(0.0, |(c, i)| c.gear(i).luck);
+pub fn loot_odds(
+    character: Option<&Character>,
+    inventory: Option<&Inventory>,
+    depth: u32,
+) -> fb_items::Odds {
+    let luck = character
+        .zip(inventory)
+        .map_or(0.0, |(c, i)| c.gear(i).luck);
     fb_items::Odds::loot(depth).with_luck(luck as f32)
 }
 
@@ -348,7 +387,10 @@ impl Character {
     /// [`Character::gear`] with each item's name, so the numbers it sums can be explained
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
-        let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
+        let mut loadout = Loadout::new(
+            self.folk.race().label.to_string(),
+            self.folk.race().dv as f64,
+        );
         let equipped = inventory.equipped();
         // Block chance counts only with a shield held in the off hand: the gloves and charms that
         // add to it do nothing alone.
@@ -356,22 +398,71 @@ impl Character {
         for (slot, item) in equipped {
             let s = &item.profile.stats;
             // Only the main hand strikes, so only its weapon heals on a kill.
-            let heal_on_kill = if slot == fb_items::Slot::Mainhand { s.heal_on_kill as f64 } else { 0.0 };
+            let heal_on_kill = if slot == fb_items::Slot::Mainhand {
+                s.heal_on_kill as f64
+            } else {
+                0.0
+            };
             let block_chance = if shielded { s.block_chance as f64 } else { 0.0 };
             // A weapon's own to hit is on the roll already ([`crate::combat::Weapon::of_stats`]), so
             // only the worn gear's adds to it; the ranged part counts whatever it is on.
-            let to_hit = if slot == fb_items::Slot::Mainhand || s.is_weapon() { 0.0 } else { s.to_hit as f64 };
+            let to_hit = if slot == fb_items::Slot::Mainhand || s.is_weapon() {
+                0.0
+            } else {
+                s.to_hit as f64
+            };
             // Only the weapon in hand and the gloves quicken a swing; a torch or a cloak does not.
-            let attack_rate = if matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Hands) { s.attack_rate as f64 } else { 1.0 };
+            let attack_rate = if matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Hands) {
+                s.attack_rate as f64
+            } else {
+                1.0
+            };
             let point = |v: f32| v.round() as i32;
-            let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
+            let abilities = AbilityBonus {
+                strength: point(s.strength),
+                dexterity: point(s.dexterity),
+                constitution: point(s.constitution),
+                intelligence: point(s.intelligence),
+                wisdom: point(s.wisdom),
+            };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
+                Worn {
+                    carry: s.carry as f64,
+                    darkvision: s.darkvision as f64,
+                    hunger_rate: s.hunger_rate as f64,
+                    sleepiness_rate: s.sleepiness_rate as f64,
+                    stealth: s.stealth as f64,
+                    warmth: s.warmth as f64,
+                    heal_on_kill,
+                    speed: s.speed as f64,
+                    block_chance,
+                    abilities,
+                    disease_risk: s.disease_risk as f64,
+                    luck: s.luck as f64,
+                    recovery: s.recovery as f64,
+                    poison_resistance: s.poison_resistance as f64,
+                    to_hit,
+                    ranged_to_hit: s.ranged_to_hit as f64,
+                    attack_rate,
+                    stamina_refill: s.stamina_refill as f64,
+                    stamina_cost: s.stamina_cost as f64,
+                    ward: s.ward.map(f64::from),
+                    shun: s.shun.map(f64::from),
+                },
             );
         }
-        for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
-            loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
+        for item in carried_lights(inventory)
+            .into_iter()
+            .filter_map(|(_, id)| inventory.item(id))
+        {
+            loadout = loadout.carrying(
+                &item.name,
+                CarriedLight {
+                    reach: item.profile.stats.light as f64,
+                    burn_time: item.profile.stats.burn_time as f64,
+                },
+            );
         }
         loadout
     }
@@ -383,24 +474,43 @@ impl Character {
 
     /// [`Character::armour_class`] under `rules`.
     pub fn armour_class_with(&self, rules: &Rules, inventory: &Inventory) -> Explained {
-        armour_class_with(rules, self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
+        armour_class_with(
+            rules,
+            self.dexterity(),
+            inventory
+                .equipped()
+                .iter()
+                .map(|(_, item)| (item.name.clone(), item.profile.stats.armour)),
+        )
     }
 
     /// Pounds worn and carried with their terms: a term for each worn item's weight and one for
     /// what a worn container holds, counted through every bag in it.
     pub fn load_explained(&self, inventory: &Inventory) -> Explained {
         let mut e = Explained::new("Load", "lb");
-        let add = |e: Explained, label: String, pounds: f64| if e.terms().is_empty() { e.base(label, pounds) } else { e.add(label, pounds) };
+        let add = |e: Explained, label: String, pounds: f64| {
+            if e.terms().is_empty() {
+                e.base(label, pounds)
+            } else {
+                e.add(label, pounds)
+            }
+        };
         for (slot, item) in inventory.equipped() {
             if item.profile.stats.weight != 0.0 {
                 e = add(e, item.name.clone(), item.profile.stats.weight as f64);
             }
-            let contents = inventory.worn(slot).map_or(0.0, |id| inventory.contents_weight(id));
+            let contents = inventory
+                .worn(slot)
+                .map_or(0.0, |id| inventory.contents_weight(id));
             if contents != 0.0 {
                 e = add(e, format!("{} contents", item.name), contents as f64);
             }
         }
-        if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
+        if e.terms().is_empty() {
+            e.base("nothing worn", 0.0)
+        } else {
+            e
+        }
     }
 
     /// Where the load's numbers come from, one line each, for the sheet's tooltip on the Load
@@ -426,46 +536,113 @@ impl Character {
             .equipped()
             .iter()
             .filter(|(_, item)| item.profile.stats.strength.round() != 0.0)
-            .map(|(_, item)| format!("{} ({:+})", item.name, item.profile.stats.strength.round() as i32))
+            .map(|(_, item)| {
+                format!(
+                    "{} ({:+})",
+                    item.name,
+                    item.profile.stats.strength.round() as i32
+                )
+            })
             .collect();
         if self.learned.strength != 0 {
             raised.push(format!("lessons ({:+})", self.learned.strength));
         }
         if !raised.is_empty() {
-            lines.push(format!("STR {strength}: {} base + {}", self.attributes.strength, raised.join(" + ")));
+            lines.push(format!(
+                "STR {strength}: {} base + {}",
+                self.attributes.strength,
+                raised.join(" + ")
+            ));
         }
         let loadout = self.loadout(inventory);
         let capacity = loadout.capacity_with(rules, strength).value();
         let per = rules.load.capacity_per_strength;
         // Weights are to one decimal and signed with a plus where they add, throughout.
-        let carries: Vec<(&String, f64)> = loadout.worn.iter().filter(|(_, w)| w.carry != 0.0).map(|(label, w)| (label, w.carry)).collect();
-        let added: String = carries.iter().map(|(label, carry)| format!(" + {label} ({carry:+.1})")).collect();
-        lines.push(format!("Capacity: STR {strength} \u{d7} {}{added} = {} lb", number(per), number(capacity)));
-        let moved_by = carries.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ");
-        for (word, multiple, edge) in [("Burdened", rules.load.burdened_multiple, rules.load.burdened_edge(capacity)), ("Encumbered", rules.load.encumbered_multiple, rules.load.encumbered_edge(capacity))] {
+        let carries: Vec<(&String, f64)> = loadout
+            .worn
+            .iter()
+            .filter(|(_, w)| w.carry != 0.0)
+            .map(|(label, w)| (label, w.carry))
+            .collect();
+        let added: String = carries
+            .iter()
+            .map(|(label, carry)| format!(" + {label} ({carry:+.1})"))
+            .collect();
+        lines.push(format!(
+            "Capacity: STR {strength} \u{d7} {}{added} = {} lb",
+            number(per),
+            number(capacity)
+        ));
+        let moved_by = carries
+            .iter()
+            .map(|(label, _)| label.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        for (word, multiple, edge) in [
+            (
+                "Burdened",
+                rules.load.burdened_multiple,
+                rules.load.burdened_edge(capacity),
+            ),
+            (
+                "Encumbered",
+                rules.load.encumbered_multiple,
+                rules.load.encumbered_edge(capacity),
+            ),
+        ] {
             let edge = number((edge * 10.0).round() / 10.0);
             lines.push(if carries.is_empty() {
-                format!("{word} past STR {strength} \u{d7} {} = {edge} lb", number(multiple))
+                format!(
+                    "{word} past STR {strength} \u{d7} {} = {edge} lb",
+                    number(multiple)
+                )
             } else {
                 // The edges are shares of the whole capacity, so what adds to it moves them.
-                format!("{word} past capacity {} lb \u{d7} {}/{} = {edge} lb (moved by {moved_by})", number(capacity), number(multiple), number(per))
+                format!(
+                    "{word} past capacity {} lb \u{d7} {}/{} = {edge} lb (moved by {moved_by})",
+                    number(capacity),
+                    number(multiple),
+                    number(per)
+                )
             });
         }
         let carried = self.load_explained(inventory);
-        lines.push(format!("Carried: {} lb", number((carried.value() * 10.0).round() / 10.0)));
+        lines.push(format!(
+            "Carried: {} lb",
+            number((carried.value() * 10.0).round() / 10.0)
+        ));
         for (slot, item) in inventory.equipped() {
-            lines.push(format!("  {}  {:.1} lb", item.name, item.profile.stats.weight));
-            let Some(container) = inventory.worn(slot) else { continue };
-            for entry in inventory.grid(container).map(|g| g.entries()).unwrap_or_default() {
-                let Some(inside) = inventory.item(entry.id) else { continue };
+            lines.push(format!(
+                "  {}  {:.1} lb",
+                item.name, item.profile.stats.weight
+            ));
+            let Some(container) = inventory.worn(slot) else {
+                continue;
+            };
+            for entry in inventory
+                .grid(container)
+                .map(|g| g.entries())
+                .unwrap_or_default()
+            {
+                let Some(inside) = inventory.item(entry.id) else {
+                    continue;
+                };
                 // What a bag inside the bag holds counts with it.
-                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight + inventory.contents_weight(entry.id)));
+                lines.push(format!(
+                    "    {}  {:.1} lb",
+                    inside.name,
+                    inside.profile.stats.weight + inventory.contents_weight(entry.id)
+                ));
             }
         }
         let band = LoadBand::from_load_with(rules, carried.value(), capacity);
         lines.push(format!("{} now", band.word()));
-        let pace = fb_character::Burden::new(carried.value(), capacity).walk_multiplier_with(rules) as f64;
-        lines.push(format!("Pace now: {}", fb_character::conditions::pace_percent(pace)));
+        let pace =
+            fb_character::Burden::new(carried.value(), capacity).walk_multiplier_with(rules) as f64;
+        lines.push(format!(
+            "Pace now: {}",
+            fb_character::conditions::pace_percent(pace)
+        ));
         lines
     }
 
@@ -480,7 +657,12 @@ impl Character {
     pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
-        let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
+        let sum = |f: fn(&fb_items::stats::Stats) -> f32| {
+            equipped
+                .iter()
+                .map(|(_, item)| f(&item.profile.stats))
+                .fold(0.0, |a, b| a + b)
+        };
         let load = self.load_explained(inventory).value() as f32;
         let gear = self.gear(inventory);
         let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
@@ -520,7 +702,9 @@ pub fn is_shield(slot: fb_items::Slot, item: &fb_items::Item) -> bool {
 /// Keeps [`Character::worn`] to what the worn items add to the ability scores, changing the
 /// character only when it differs, so every rule that reads a score sees it.
 pub fn wear_abilities(inventory: Option<Res<Inventory>>, character: Option<ResMut<Character>>) {
-    let (Some(inventory), Some(mut character)) = (inventory, character) else { return };
+    let (Some(inventory), Some(mut character)) = (inventory, character) else {
+        return;
+    };
     if !inventory.is_changed() && !character.is_added() {
         return;
     }
@@ -543,7 +727,11 @@ pub fn character_for(seed: u32) -> Character {
         None => Character::roll(seed),
     };
     // `FB_CLASS=ranger` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
-    if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| Class::ALL.into_iter().find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))) {
+    if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| {
+        Class::ALL
+            .into_iter()
+            .find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))
+    }) {
         character.class = class;
     }
     character
@@ -560,7 +748,10 @@ pub struct Load(#[reflect(remote = crate::inspect::remote::BurdenDef)] pub fb_ch
 impl Load {
     /// Carrying `load_lb` of a capacity of `capacity_lb`.
     pub fn of(load_lb: f32, capacity_lb: f32) -> Load {
-        Load(fb_character::Burden::new(load_lb as f64, capacity_lb as f64))
+        Load(fb_character::Burden::new(
+            load_lb as f64,
+            capacity_lb as f64,
+        ))
     }
 
     /// A load in `band`, for captures and tests: a typical weight for a capacity of 165 lb.
@@ -589,7 +780,10 @@ pub struct GearStamina {
 
 impl Default for GearStamina {
     fn default() -> Self {
-        GearStamina { refill: 1.0, cost: 1.0 }
+        GearStamina {
+            refill: 1.0,
+            cost: 1.0,
+        }
     }
 }
 
@@ -598,14 +792,18 @@ impl Default for GearStamina {
 /// clock steps it in #229.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component)]
-pub struct DelverNeeds(#[reflect(remote = crate::inspect::remote::NeedsDef)] pub fb_character::Needs);
+pub struct DelverNeeds(
+    #[reflect(remote = crate::inspect::remote::NeedsDef)] pub fb_character::Needs,
+);
 
 /// The delver's stamina, on the [`Player`](crate::play::Player) from their spawn, so a new delve
 /// starts with a full pool. Sprinting and swinging drain it, and it refills in seconds
 /// (`crate::simulate::step_stamina`).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component)]
-pub struct DelverStamina(#[reflect(remote = crate::inspect::remote::StaminaDef)] pub fb_character::Stamina);
+pub struct DelverStamina(
+    #[reflect(remote = crate::inspect::remote::StaminaDef)] pub fb_character::Stamina,
+);
 
 /// The delver's mana, on the [`Player`](crate::play::Player) from their spawn. The pool's size
 /// is set from the character when the delver is new and again whenever the character changes,
@@ -625,14 +823,27 @@ pub struct DelverEffects(pub fb_character::effect::Effects);
 
 impl DelverEffects {
     /// How the delver's attack rolls are thrown under `rules`, with or without effects on them.
-    pub fn attack_odds(effects: Option<&DelverEffects>, rules: &fb_character::rules::Rules) -> fb_character::combat::Odds {
-        effects.map_or(fb_character::combat::Odds::Even, |e| e.0.attack_odds(&rules.effects))
+    pub fn attack_odds(
+        effects: Option<&DelverEffects>,
+        rules: &fb_character::rules::Rules,
+    ) -> fb_character::combat::Odds {
+        effects.map_or(fb_character::combat::Odds::Even, |e| {
+            e.0.attack_odds(&rules.effects)
+        })
     }
 
     /// Poisoned for `hours`, as venom poisons (for the status debug override and tests).
     pub fn poisoned_for(rules: &fb_character::rules::Rules, hours: f64) -> DelverEffects {
         let mut effects = fb_character::effect::Effects::default();
-        effects.add(&rules.effects, "poisoned", 1.0, None, fb_character::effect::Source::Bite { by: "venom".to_string() });
+        effects.add(
+            &rules.effects,
+            "poisoned",
+            1.0,
+            None,
+            fb_character::effect::Source::Bite {
+                by: "venom".to_string(),
+            },
+        );
         if let Some(poisoned) = effects.active.first_mut() {
             poisoned.hours_left = Some(hours);
         }
@@ -641,7 +852,9 @@ impl DelverEffects {
 
     /// Game hours the poison has left, while it works.
     pub fn poisoned_hours(&self) -> Option<f64> {
-        self.0.get("poisoned", None).and_then(|poisoned| poisoned.hours_left)
+        self.0
+            .get("poisoned", None)
+            .and_then(|poisoned| poisoned.hours_left)
     }
 }
 
@@ -662,7 +875,12 @@ pub struct DelverVisibility(pub f32);
 /// Moving while Burdened or Encumbered counts as Exerting. An Overloaded delver cannot move
 /// (`player::walk`), so wanting to move while Overloaded is reported as Resting, as is
 /// standing still.
-pub fn activity_for(moving: bool, sprinting: bool, swinging: bool, load_band: LoadBand) -> Activity {
+pub fn activity_for(
+    moving: bool,
+    sprinting: bool,
+    swinging: bool,
+    load_band: LoadBand,
+) -> Activity {
     match (moving, sprinting, swinging) {
         (false, _, _) => Activity::Resting,
         (true, _, true) => Activity::Exerting,
@@ -685,8 +903,17 @@ mod tests {
     /// A STR 11 delver wearing mail of `weight` lb (no carry of its own), and a ring of +2 STR
     /// besides when `ring`.
     fn laden_str_11(weight: f32, ring: bool) -> (Character, Inventory) {
-        let attributes = fb_character::Attributes { strength: 11, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        let delver = Character { attributes, ..Character::roll(4) };
+        let attributes = fb_character::Attributes {
+            strength: 11,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        let delver = Character {
+            attributes,
+            ..Character::roll(4)
+        };
         let mut inventory = Inventory::default();
         let mut mail = fb_items::roll_item("Mail", 1).unwrap();
         mail.profile.stats.weight = weight;
@@ -730,13 +957,34 @@ mod tests {
         // The game keeps what is worn on the character as `sync_worn` does (`wear_abilities`).
         delver.worn = delver.gear(&inventory).abilities;
         let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
-        let ring = inventory.equipped().iter().find(|(slot, _)| *slot == fb_items::Slot::Ring1).unwrap().1.name.clone();
+        let ring = inventory
+            .equipped()
+            .iter()
+            .find(|(slot, _)| *slot == fb_items::Slot::Ring1)
+            .unwrap()
+            .1
+            .name
+            .clone();
         assert_eq!(lines[0], format!("STR 13: 11 base + {ring} (+2)"));
-        assert_eq!(&lines[1..4], ["Capacity: STR 13 \u{d7} 15 = 195 lb", "Burdened past STR 13 \u{d7} 5 = 65 lb", "Encumbered past STR 13 \u{d7} 10 = 130 lb"]);
-        assert_eq!(&lines[lines.len() - 2..], ["Light now", "Pace now: 100%"], "65 lb is the new Burdened edge, so full pace");
+        assert_eq!(
+            &lines[1..4],
+            [
+                "Capacity: STR 13 \u{d7} 15 = 195 lb",
+                "Burdened past STR 13 \u{d7} 5 = 65 lb",
+                "Encumbered past STR 13 \u{d7} 10 = 130 lb"
+            ]
+        );
+        assert_eq!(
+            &lines[lines.len() - 2..],
+            ["Light now", "Pace now: 100%"],
+            "65 lb is the new Burdened edge, so full pace"
+        );
         // The game's own derivation agrees with the breakdown.
         let derived = delver.derive(&inventory);
-        assert_eq!((derived.capacity, derived.load_band), (195.0, fb_character::LoadBand::Light));
+        assert_eq!(
+            (derived.capacity, derived.load_band),
+            (195.0, fb_character::LoadBand::Light)
+        );
     }
 
     #[test]
@@ -746,7 +994,18 @@ mod tests {
             let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
             lines[lines.len() - 2].clone()
         };
-        assert_eq!([40.0, 55.0, 65.0, 110.0, 137.5, 165.0, 172.0].map(now), ["Light now", "Light now", "Burdened now", "Burdened now", "Encumbered now", "Encumbered now", "Overloaded now"]);
+        assert_eq!(
+            [40.0, 55.0, 65.0, 110.0, 137.5, 165.0, 172.0].map(now),
+            [
+                "Light now",
+                "Light now",
+                "Burdened now",
+                "Burdened now",
+                "Encumbered now",
+                "Encumbered now",
+                "Overloaded now"
+            ]
+        );
     }
 
     #[test]
@@ -762,11 +1021,20 @@ mod tests {
         dagger.profile.stats.weight = 3.25;
         let dagger_name = dagger.name.clone();
         let dagger = inventory.add(dagger);
-        inventory.put(dagger, pack, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        inventory
+            .put(dagger, pack, crate::inventory::Placement::new(0, 0, false))
+            .unwrap();
         let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
         assert!(lines.contains(&"Carried: 15.3 lb".to_string()), "{lines:?}");
-        let at = lines.iter().position(|l| l == &format!("  {pack_name}  2.0 lb")).unwrap_or_else(|| panic!("{lines:?}"));
-        assert_eq!(lines[at + 1], format!("    {dagger_name}  3.2 lb"), "contents sit under their bag, one step in");
+        let at = lines
+            .iter()
+            .position(|l| l == &format!("  {pack_name}  2.0 lb"))
+            .unwrap_or_else(|| panic!("{lines:?}"));
+        assert_eq!(
+            lines[at + 1],
+            format!("    {dagger_name}  3.2 lb"),
+            "contents sit under their bag, one step in"
+        );
         // A belt that adds capacity moves both edges and the lines say so.
         let mut belt = fb_items::roll_item("Belt", 2).unwrap();
         belt.profile.stats.weight = 0.0;
@@ -775,9 +1043,18 @@ mod tests {
         let belt = inventory.add(belt);
         inventory.wear(belt, fb_items::Slot::Belt).unwrap();
         let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
-        assert_eq!(lines[0], format!("Capacity: STR 11 \u{d7} 15 + {belt_name} (+30.0) = 195 lb"));
-        assert_eq!(lines[1], format!("Burdened past capacity 195 lb \u{d7} 5/15 = 65 lb (moved by {belt_name})"));
-        assert_eq!(lines[2], format!("Encumbered past capacity 195 lb \u{d7} 10/15 = 130 lb (moved by {belt_name})"));
+        assert_eq!(
+            lines[0],
+            format!("Capacity: STR 11 \u{d7} 15 + {belt_name} (+30.0) = 195 lb")
+        );
+        assert_eq!(
+            lines[1],
+            format!("Burdened past capacity 195 lb \u{d7} 5/15 = 65 lb (moved by {belt_name})")
+        );
+        assert_eq!(
+            lines[2],
+            format!("Encumbered past capacity 195 lb \u{d7} 10/15 = 130 lb (moved by {belt_name})")
+        );
     }
 
     #[test]
@@ -786,7 +1063,13 @@ mod tests {
         let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
         assert_eq!(lines.last().unwrap(), "Pace now: 80%");
         let (delver, inventory) = laden_str_11(172.0, false);
-        assert_eq!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).last().unwrap(), "Pace now: 0%");
+        assert_eq!(
+            delver
+                .load_breakdown(fb_character::rules::defaults(), &inventory)
+                .last()
+                .unwrap(),
+            "Pace now: 0%"
+        );
     }
 
     #[test]
@@ -794,13 +1077,20 @@ mod tests {
         for seed in [1, 7, 1207] {
             let delver = Character::roll(seed);
             assert_eq!(delver, Character::roll(seed));
-            for attr in [delver.attributes.strength, delver.attributes.dexterity, delver.attributes.constitution, delver.attributes.intelligence, delver.attributes.wisdom] {
+            for attr in [
+                delver.attributes.strength,
+                delver.attributes.dexterity,
+                delver.attributes.constitution,
+                delver.attributes.intelligence,
+                delver.attributes.wisdom,
+            ] {
                 assert!((3..=18).contains(&attr));
             }
             assert!((0.3..0.5).contains(&delver.dirt));
             assert!(!delver.name.is_empty());
         }
-        let folk: std::collections::HashSet<Folk> = (0..60).map(|s| Character::roll(s).folk).collect();
+        let folk: std::collections::HashSet<Folk> =
+            (0..60).map(|s| Character::roll(s).folk).collect();
         assert_eq!(folk.len(), Folk::ALL.len(), "every folk turns up");
     }
 
@@ -808,9 +1098,17 @@ mod tests {
     fn every_folk_has_five_attributes() {
         for folk in Folk::ALL {
             let race = folk.race();
-            assert_eq!(race.stats.len(), 5, "folk {folk:?} has stat array of length {}", race.stats.len());
+            assert_eq!(
+                race.stats.len(),
+                5,
+                "folk {folk:?} has stat array of length {}",
+                race.stats.len()
+            );
             for stat in race.stats {
-                assert!((3..=18).contains(&stat), "folk {folk:?} stat {stat} out of range");
+                assert!(
+                    (3..=18).contains(&stat),
+                    "folk {folk:?} stat {stat} out of range"
+                );
             }
         }
     }
@@ -820,9 +1118,25 @@ mod tests {
         // Pinning the first four scores ensures WIS is drawn last: existing seeds give the
         // same STR, DEX, CON, INT but different WIS and dirt (shifted by the WIS roll).
         let delver1 = Character::roll(1);
-        assert_eq!((delver1.attributes.strength, delver1.attributes.dexterity, delver1.attributes.constitution, delver1.attributes.intelligence), (7, 12, 16, 7));
+        assert_eq!(
+            (
+                delver1.attributes.strength,
+                delver1.attributes.dexterity,
+                delver1.attributes.constitution,
+                delver1.attributes.intelligence
+            ),
+            (7, 12, 16, 7)
+        );
         let delver7 = Character::roll(7);
-        assert_eq!((delver7.attributes.strength, delver7.attributes.dexterity, delver7.attributes.constitution, delver7.attributes.intelligence), (12, 9, 8, 12));
+        assert_eq!(
+            (
+                delver7.attributes.strength,
+                delver7.attributes.dexterity,
+                delver7.attributes.constitution,
+                delver7.attributes.intelligence
+            ),
+            (12, 9, 8, 12)
+        );
     }
 
     #[test]
@@ -835,12 +1149,28 @@ mod tests {
     #[test]
     fn equipped_stats_add_to_the_delver() {
         use fb_items::Slot;
-        let test_attrs = Attributes { strength: 11, dexterity: 12, constitution: 10, intelligence: 10, wisdom: 10 };
-        let delver = Character { attributes: test_attrs, folk: Folk::Human, ..Character::roll(4) };
+        let test_attrs = Attributes {
+            strength: 11,
+            dexterity: 12,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        let delver = Character {
+            attributes: test_attrs,
+            folk: Folk::Human,
+            ..Character::roll(4)
+        };
         let mut inventory = Inventory::default();
         let bare = delver.derive(&inventory);
-        assert_eq!((bare.armour_class, bare.load, bare.capacity, bare.light), (11, 0.0, 165.0, 0.0));
-        let mail = (1..300).filter_map(|s| fb_items::roll_item("Mail", s)).find(|i| i.profile.stats.armour > 0.0).unwrap();
+        assert_eq!(
+            (bare.armour_class, bare.load, bare.capacity, bare.light),
+            (11, 0.0, 165.0, 0.0)
+        );
+        let mail = (1..300)
+            .filter_map(|s| fb_items::roll_item("Mail", s))
+            .find(|i| i.profile.stats.armour > 0.0)
+            .unwrap();
         let (armour, weight) = (mail.profile.stats.armour, mail.profile.stats.weight);
         let id = inventory.add(mail);
         inventory.wear(id, Slot::Body).unwrap();
@@ -858,7 +1188,10 @@ mod tests {
         let mut inventory = Inventory::default();
         let belt = inventory.add(fb_items::roll_item("Belt", 2).unwrap());
         inventory.wear(belt, Slot::Belt).unwrap();
-        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| crate::carry::item_light(&i.shape).is_some()).unwrap();
+        let lantern = (1..200)
+            .filter_map(|s| fb_items::roll_item("Lantern", s))
+            .find(|i| crate::carry::item_light(&i.shape).is_some())
+            .unwrap();
         let reach = lantern.profile.stats.light;
         let lantern = inventory.add(lantern);
         inventory.wear(lantern, Slot::Hip).unwrap();
@@ -868,13 +1201,19 @@ mod tests {
             inventory.wear(id, slot).unwrap();
         }
         assert_eq!(delver.derive(&inventory).light, reach);
-        assert_eq!(crate::carry::carried_light(&inventory), Some((Slot::Hip, lantern)));
+        assert_eq!(
+            crate::carry::carried_light(&inventory),
+            Some((Slot::Hip, lantern))
+        );
         // A lit torch in hand is carried before it.
         let dagger = inventory.worn(Slot::Offhand).unwrap();
         inventory.take_out(dagger);
         let torch = inventory.add(crate::carry::lit_torch(2));
         inventory.wear(torch, Slot::Offhand).unwrap();
-        assert_eq!(crate::carry::carried_light(&inventory).map(|(slot, _)| slot), Some(Slot::Offhand));
+        assert_eq!(
+            crate::carry::carried_light(&inventory).map(|(slot, _)| slot),
+            Some(Slot::Offhand)
+        );
     }
 
     /// A rolled `base` with the real affix `name` applied to its stats.
@@ -883,7 +1222,10 @@ mod tests {
     }
 
     fn with_affix_to(mut item: fb_items::Item, name: &str) -> fb_items::Item {
-        let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+        let affix = fb_items::tables::affixes()
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap();
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
         item
@@ -892,26 +1234,47 @@ mod tests {
     #[test]
     fn a_belt_of_the_ox_lifts_a_human_to_175_lb() {
         use fb_items::Slot;
-        let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        let human = Character { folk: Folk::Human, attributes, ..Character::roll(4) };
+        let attributes = Attributes {
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        let human = Character {
+            folk: Folk::Human,
+            attributes,
+            ..Character::roll(4)
+        };
         let mut inventory = Inventory::default();
         let belt = inventory.add(with_affix("Belt", 2, "of the Ox"));
         inventory.wear(belt, Slot::Belt).unwrap();
         let derived = human.derive(&inventory);
         assert_eq!(derived.capacity, 175.0);
-        assert_eq!(derived.capacity as f64, human.gear(&inventory).capacity_lb(10), "one source");
+        assert_eq!(
+            derived.capacity as f64,
+            human.gear(&inventory).capacity_lb(10),
+            "one source"
+        );
     }
 
     #[test]
     fn the_mole_gives_a_human_10_ft_of_darkvision_and_a_goblin_60() {
         use fb_items::Slot;
         for (folk, feet) in [(Folk::Human, 10.0), (Folk::Goblin, 60.0)] {
-            let delver = Character { folk, ..Character::roll(4) };
+            let delver = Character {
+                folk,
+                ..Character::roll(4)
+            };
             let mut inventory = Inventory::default();
             assert_eq!(delver.derive(&inventory).darkvision, folk.race().dv as f32);
             let belt = inventory.add(with_affix("Belt", 2, "of the Mole"));
             inventory.wear(belt, Slot::Belt).unwrap();
-            assert_eq!(delver.derive(&inventory).darkvision, feet, "{folk:?}: the best, not the sum");
+            assert_eq!(
+                delver.derive(&inventory).darkvision,
+                feet,
+                "{folk:?}: the best, not the sum"
+            );
         }
     }
 
@@ -925,7 +1288,10 @@ mod tests {
         let ring = inventory.add(with_affix("Ring", 4, "of Wakefulness"));
         inventory.wear(ring, Slot::Ring1).unwrap();
         let gear = delver.gear(&inventory);
-        assert!((gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6, "{gear:?}");
+        assert!(
+            (gear.hunger_rate - 0.85).abs() < 1e-6 && (gear.sleepiness_rate - 0.85).abs() < 1e-6,
+            "{gear:?}"
+        );
         let mut needs = fb_character::Needs::default();
         gear.apply_to(&mut needs);
         needs.step(8.0 / 0.85 - 0.001, Activity::Walking);
@@ -942,7 +1308,11 @@ mod tests {
         assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0);
         let sword = inventory.add(with_affix("Sword", 5, "of the Leech"));
         inventory.wear(sword, Slot::Offhand).unwrap();
-        assert_eq!(delver.derive(&inventory).heal_on_kill, 0.0, "the off hand does not strike");
+        assert_eq!(
+            delver.derive(&inventory).heal_on_kill,
+            0.0,
+            "the off hand does not strike"
+        );
         inventory.take_out(sword);
         inventory.wear(sword, Slot::Mainhand).unwrap();
         assert_eq!(delver.derive(&inventory).heal_on_kill, 1.0);
@@ -952,14 +1322,35 @@ mod tests {
     #[test]
     fn a_ring_of_the_giant_raises_strength_and_its_modifier() {
         use fb_items::Slot;
-        let attributes = Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        let mut delver = Character { attributes, ..Character::roll(4) };
+        let attributes = Attributes {
+            strength: 13,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        let mut delver = Character {
+            attributes,
+            ..Character::roll(4)
+        };
         let mut inventory = Inventory::default();
         let ring = inventory.add(with_affix("Ring", 4, "of the Giant"));
         inventory.wear(ring, Slot::Ring2).unwrap();
         delver.worn = delver.gear(&inventory).abilities;
-        assert_eq!((delver.attributes.strength, delver.strength(), modifier(delver.strength())), (13, 15, 2), "+1 to +2");
-        assert_eq!(delver.derive(&inventory).capacity, 15.0 * 15.0, "capacity follows");
+        assert_eq!(
+            (
+                delver.attributes.strength,
+                delver.strength(),
+                modifier(delver.strength())
+            ),
+            (13, 15, 2),
+            "+1 to +2"
+        );
+        assert_eq!(
+            delver.derive(&inventory).capacity,
+            15.0 * 15.0,
+            "capacity follows"
+        );
         let frail = inventory.add(with_affix("Amulet", 4, "Frail"));
         inventory.wear(frail, Slot::Neck).unwrap();
         delver.worn = delver.gear(&inventory).abilities;
@@ -978,8 +1369,15 @@ mod tests {
         inventory.wear(charm, Slot::Charm).unwrap();
         assert_eq!(delver.derive(&inventory).luck, 3.0);
         assert_eq!(loot_odds(Some(&delver), Some(&inventory), 3), Odds::loot(6));
-        assert_eq!(loot_odds(Some(&delver), Some(&inventory), 1).cap, Rarity::Rare);
-        assert_eq!(loot_odds(None, Some(&inventory), 3), Odds::loot(3), "no character, no luck");
+        assert_eq!(
+            loot_odds(Some(&delver), Some(&inventory), 1).cap,
+            Rarity::Rare
+        );
+        assert_eq!(
+            loot_odds(None, Some(&inventory), 3),
+            Odds::loot(3),
+            "no character, no luck"
+        );
     }
 
     #[test]
@@ -1013,8 +1411,18 @@ mod tests {
         let gloves = inventory.add(with_affix("Gloves", 4, "of the Duellist"));
         inventory.wear(gloves, Slot::Hands).unwrap();
         let derived = delver.derive(&inventory);
-        assert!((derived.attack_rate - 1.155).abs() < 1e-6, "{}", derived.attack_rate);
-        assert!(delver.loadout(&inventory).attack_rate().line().contains("× "));
+        assert!(
+            (derived.attack_rate - 1.155).abs() < 1e-6,
+            "{}",
+            derived.attack_rate
+        );
+        assert!(
+            delver
+                .loadout(&inventory)
+                .attack_rate()
+                .line()
+                .contains("× ")
+        );
         // A torch in the off hand or a ring does nothing for it, whatever it carries.
         let torch = inventory.add(with_affix("Torch", 4, "of Swiftness"));
         inventory.wear(torch, Slot::Offhand).unwrap();
@@ -1030,32 +1438,73 @@ mod tests {
         let mut inventory = Inventory::default();
         let plain = delver.derive(&inventory);
         assert_eq!((plain.stamina_refill, plain.stamina_cost), (1.0, 1.0));
-        for (base, slot, affix) in [("Boots", Slot::Feet, "Tireless"), ("Charm", Slot::Charm, "of Second Wind"), ("Sword", Slot::Mainhand, "Light-handed"), ("Belt", Slot::Belt, "of Endurance")] {
+        for (base, slot, affix) in [
+            ("Boots", Slot::Feet, "Tireless"),
+            ("Charm", Slot::Charm, "of Second Wind"),
+            ("Sword", Slot::Mainhand, "Light-handed"),
+            ("Belt", Slot::Belt, "of Endurance"),
+        ] {
             let id = inventory.add(with_affix(base, 4, affix));
             inventory.wear(id, slot).unwrap();
         }
         let derived = delver.derive(&inventory);
-        assert!((derived.stamina_refill - 1.2 * 1.3).abs() < 1e-6, "{}", derived.stamina_refill);
-        assert!((derived.stamina_cost - 0.75 * 0.8).abs() < 1e-6, "{}", derived.stamina_cost);
-        assert!(delver.loadout(&inventory).stamina_cost().line().contains("× "));
+        assert!(
+            (derived.stamina_refill - 1.2 * 1.3).abs() < 1e-6,
+            "{}",
+            derived.stamina_refill
+        );
+        assert!(
+            (derived.stamina_cost - 0.75 * 0.8).abs() < 1e-6,
+            "{}",
+            derived.stamina_cost
+        );
+        assert!(
+            delver
+                .loadout(&inventory)
+                .stamina_cost()
+                .line()
+                .contains("× ")
+        );
     }
 
     #[test]
     fn gloves_and_charms_add_to_a_held_shields_block_up_to_90_percent() {
         use fb_items::Slot;
         let delver = Character::roll(4);
-        let of_chance = |chance: f32| (1..).map(|s| fb_items::roll_item("Shield", s).unwrap()).find(|i| i.profile.stats.block_chance == chance).unwrap();
+        let of_chance = |chance: f32| {
+            (1..)
+                .map(|s| fb_items::roll_item("Shield", s).unwrap())
+                .find(|i| i.profile.stats.block_chance == chance)
+                .unwrap()
+        };
         let mut inventory = Inventory::default();
         let gloves = inventory.add(with_affix("Gloves", 4, "of Deflection"));
         inventory.wear(gloves, Slot::Hands).unwrap();
-        assert_eq!(delver.derive(&inventory).block_chance, 0.0, "gloves alone block nothing");
+        assert_eq!(
+            delver.derive(&inventory).block_chance,
+            0.0,
+            "gloves alone block nothing"
+        );
         assert_eq!(delver.loadout(&inventory).block_chance().value(), 0.0);
         let buckler = inventory.add(of_chance(0.3));
         inventory.wear(buckler, Slot::Offhand).unwrap();
-        assert!((delver.derive(&inventory).block_chance - 0.4).abs() < 1e-6, "a buckler's 30% and 10% more");
-        assert!(delver.loadout(&inventory).block_chance().line().contains("(+0.1)"));
+        assert!(
+            (delver.derive(&inventory).block_chance - 0.4).abs() < 1e-6,
+            "a buckler's 30% and 10% more"
+        );
+        assert!(
+            delver
+                .loadout(&inventory)
+                .block_chance()
+                .line()
+                .contains("(+0.1)")
+        );
         inventory.take_out(buckler);
-        assert_eq!(delver.derive(&inventory).block_chance, 0.0, "the shield put away, the gloves block nothing again");
+        assert_eq!(
+            delver.derive(&inventory).block_chance,
+            0.0,
+            "the shield put away, the gloves block nothing again"
+        );
         let tower = inventory.add(with_affix_to(of_chance(0.6), "of the Rampart"));
         inventory.wear(tower, Slot::Offhand).unwrap();
         let charm = inventory.add(with_affix("Charm", 4, "of the Rampart"));
@@ -1063,7 +1512,10 @@ mod tests {
         let rampart = inventory.add(with_affix("Gauntlets", 4, "of the Rampart"));
         inventory.take_out(gloves);
         inventory.wear(rampart, Slot::Hands).unwrap();
-        assert!((delver.derive(&inventory).block_chance - 0.9).abs() < 1e-6, "60% and three 20%s stop at 90%");
+        assert!(
+            (delver.derive(&inventory).block_chance - 0.9).abs() < 1e-6,
+            "60% and three 20%s stop at 90%"
+        );
     }
 
     #[test]
@@ -1073,7 +1525,10 @@ mod tests {
         let reach_with = |affix: Option<&str>| {
             let mut torch = crate::carry::lit_torch(2);
             if let Some(name) = affix {
-                let a = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+                let a = fb_items::tables::affixes()
+                    .iter()
+                    .find(|a| a.name == name)
+                    .unwrap();
                 a.apply_to_stats(&mut torch.profile.stats);
             }
             let mut inventory = Inventory::default();
@@ -1104,22 +1559,55 @@ mod tests {
             delver.derive(&inventory).load
         };
         let (plain, light) = (load(None), load(Some("Featherlight")));
-        assert!(plain > 0.0 && (light - plain * 0.6).abs() < 1e-3, "{light} against {plain}");
+        assert!(
+            plain > 0.0 && (light - plain * 0.6).abs() < 1e-3,
+            "{light} against {plain}"
+        );
     }
 
     #[test]
     fn modifiers_follow_the_srd() {
-        assert_eq!([modifier(3), modifier(9), modifier(10), modifier(11), modifier(18)], [-4, -1, 0, 0, 4]);
+        assert_eq!(
+            [
+                modifier(3),
+                modifier(9),
+                modifier(10),
+                modifier(11),
+                modifier(18)
+            ],
+            [-4, -1, 0, 0, 4]
+        );
     }
 
     #[test]
     fn activity_for_determines_exertion_from_load() {
-        assert_eq!(activity_for(false, false, false, LoadBand::Light), Activity::Resting);
-        assert_eq!(activity_for(true, false, false, LoadBand::Light), Activity::Walking);
-        assert_eq!(activity_for(true, false, false, LoadBand::Burdened), Activity::Exerting);
-        assert_eq!(activity_for(true, false, false, LoadBand::Encumbered), Activity::Exerting);
-        assert_eq!(activity_for(true, false, false, LoadBand::Overloaded), Activity::Resting);
-        assert_eq!(activity_for(true, true, false, LoadBand::Light), Activity::Exerting);
-        assert_eq!(activity_for(true, false, true, LoadBand::Light), Activity::Exerting);
+        assert_eq!(
+            activity_for(false, false, false, LoadBand::Light),
+            Activity::Resting
+        );
+        assert_eq!(
+            activity_for(true, false, false, LoadBand::Light),
+            Activity::Walking
+        );
+        assert_eq!(
+            activity_for(true, false, false, LoadBand::Burdened),
+            Activity::Exerting
+        );
+        assert_eq!(
+            activity_for(true, false, false, LoadBand::Encumbered),
+            Activity::Exerting
+        );
+        assert_eq!(
+            activity_for(true, false, false, LoadBand::Overloaded),
+            Activity::Resting
+        );
+        assert_eq!(
+            activity_for(true, true, false, LoadBand::Light),
+            Activity::Exerting
+        );
+        assert_eq!(
+            activity_for(true, false, true, LoadBand::Light),
+            Activity::Exerting
+        );
     }
 }

@@ -16,7 +16,11 @@ use bevy::{
 
 /// The window's present mode: vsync, or none with `FB_NO_VSYNC` set.
 pub fn present_mode() -> PresentMode {
-    if std::env::var_os("FB_NO_VSYNC").is_some_and(|v| !v.is_empty()) { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync }
+    if std::env::var_os("FB_NO_VSYNC").is_some_and(|v| !v.is_empty()) {
+        PresentMode::AutoNoVsync
+    } else {
+        PresentMode::AutoVsync
+    }
 }
 
 /// Logs the smoothed frame time at [`FrameTimeProbe::frames`] and exits after the last.
@@ -35,7 +39,10 @@ impl FrameTimeProbe {
 
 /// The frames in `value` ("240,270,300"), ascending, or `None` if there are none.
 pub fn parse_frames(value: &str) -> Option<Vec<u32>> {
-    let mut frames: Vec<u32> = value.split(',').filter_map(|f| f.trim().parse().ok()).collect();
+    let mut frames: Vec<u32> = value
+        .split(',')
+        .filter_map(|f| f.trim().parse().ok())
+        .collect();
     frames.sort_unstable();
     (!frames.is_empty()).then_some(frames)
 }
@@ -48,7 +55,8 @@ impl Plugin for FrameTimeProbe {
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
-        app.insert_resource(ProbeFrames(self.frames.clone())).add_systems(Last, report);
+        app.insert_resource(ProbeFrames(self.frames.clone()))
+            .add_systems(Last, report);
     }
 }
 
@@ -67,14 +75,23 @@ fn report(
     if !frames.0.contains(&frame.0) {
         return;
     }
-    let smoothed = store.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.smoothed());
+    let smoothed = store
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed());
     since.sort_by(f32::total_cmp);
     let median = since[since.len() / 2];
     since.clear();
     // What the frame queued, which a vsynced frame time hides: meshes in the player camera's
     // view, and meshes across every face of every point light's shadow map.
-    let drawn: usize = views.iter().map(|v| v.get(TypeId::of::<Mesh3d>()).len()).sum();
-    let shadowed: usize = shadows.iter().flat_map(|faces| faces.iter()).map(|face| face.entities.len()).sum();
+    let drawn: usize = views
+        .iter()
+        .map(|v| v.get(TypeId::of::<Mesh3d>()).len())
+        .sum();
+    let shadowed: usize = shadows
+        .iter()
+        .flat_map(|faces| faces.iter())
+        .map(|face| face.entities.len())
+        .sum();
     println!(
         "frame {}: smoothed frame time {}, median since the last listed frame {median:.1} ms, {drawn} meshes in view, {shadowed} in shadow maps",
         frame.0,

@@ -47,8 +47,12 @@ pub enum Step {
 pub fn effect_ids() -> &'static [&'static str] {
     static IDS: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
         let text = include_str!("../../data/effects.json");
-        let order: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text).expect("data/effects.json parses");
-        order.keys().map(|id| &*Box::leak(id.clone().into_boxed_str())).collect()
+        let order: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(text).expect("data/effects.json parses");
+        order
+            .keys()
+            .map(|id| &*Box::leak(id.clone().into_boxed_str()))
+            .collect()
     });
     &IDS
 }
@@ -105,11 +109,31 @@ impl Timeline {
 }
 
 fn trace(lab: &TimeLab, rules: &Rules) -> Trace {
-    lab.effects.active.iter().map(|a| (a.id.clone(), a.intensity, rules.effects.get(&a.id).is_some_and(|d| a.stage(d).is_some()))).collect()
+    lab.effects
+        .active
+        .iter()
+        .map(|a| {
+            (
+                a.id.clone(),
+                a.intensity,
+                rules
+                    .effects
+                    .get(&a.id)
+                    .is_some_and(|d| a.stage(d).is_some()),
+            )
+        })
+        .collect()
 }
 
 fn sample(lab: &TimeLab) -> Sample {
-    Sample { hours: lab.clock.hours(), hunger: lab.needs.hunger.value, thirst: lab.needs.thirst.value, sleepiness: lab.needs.sleepiness.value, exhaustion: lab.exhaustion.level, hp_lost: lab.hp_lost }
+    Sample {
+        hours: lab.clock.hours(),
+        hunger: lab.needs.hunger.value,
+        thirst: lab.needs.thirst.value,
+        sleepiness: lab.needs.sleepiness.value,
+        exhaustion: lab.exhaustion.level,
+        hp_lost: lab.hp_lost,
+    }
 }
 
 fn reached(goal: Goal, lab: &TimeLab, rules: &Rules) -> bool {
@@ -139,7 +163,9 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
             Step::Until(goal, activity) => {
                 pace.activity = activity;
                 let start = lab.clock.hours();
-                while lab.clock.hours() - start < LONGEST && !reached(goal, &lab, &state.ruleset.rules) {
+                while lab.clock.hours() - start < LONGEST
+                    && !reached(goal, &lab, &state.ruleset.rules)
+                {
                     lab.pass_under(&pace, CHUNK);
                     samples.push(sample(&lab));
                     traces.push(trace(&lab, &state.ruleset.rules));
@@ -148,13 +174,26 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
             Step::Eat(base) | Step::Drink(base) => {
                 let at = lab.clock.hours();
                 lab.consume(base);
-                events.push((at, if matches!(step, Step::Eat(_)) { Event::Eat } else { Event::Drink }));
+                events.push((
+                    at,
+                    if matches!(step, Step::Eat(_)) {
+                        Event::Eat
+                    } else {
+                        Event::Drink
+                    },
+                ));
                 samples.push(sample(&lab));
                 traces.push(trace(&lab, &state.ruleset.rules));
             }
             Step::Apply(id, intensity) => {
                 let at = lab.clock.hours();
-                lab.effects.add(&state.ruleset.rules.effects, id, intensity, None, fb_character::effect::Source::Surroundings);
+                lab.effects.add(
+                    &state.ruleset.rules.effects,
+                    id,
+                    intensity,
+                    None,
+                    fb_character::effect::Source::Surroundings,
+                );
                 events.push((at, Event::Applied));
                 samples.push(sample(&lab));
                 traces.push(trace(&lab, &state.ruleset.rules));
@@ -162,7 +201,14 @@ pub fn run(state: &LabState, steps: &[Step]) -> Timeline {
         }
     }
     let life = crate::combat::first_level_hit_points_with(&state.ruleset.rules, &state.character);
-    Timeline { samples, traces, events, crossings: lab.all.clone(), lab, life }
+    Timeline {
+        samples,
+        traces,
+        events,
+        crossings: lab.all.clone(),
+        lab,
+        life,
+    }
 }
 
 /// A plain answer: what happened, and when.
@@ -178,7 +224,11 @@ pub struct Answer {
 
 /// Game hours as the tiles write them: `8 h`, `2.5 h`, `4 days` from 3 days on.
 pub fn hours_text(hours: f64) -> String {
-    if hours >= 72.0 { format!("{} days", number(hours / 24.0)) } else { format!("{} h", number(hours)) }
+    if hours >= 72.0 {
+        format!("{} days", number(hours / 24.0))
+    } else {
+        format!("{} h", number(hours))
+    }
 }
 
 /// To the minute, which the run steps in.
@@ -202,13 +252,30 @@ pub const DEATH: u32 = fb_character::Exhaustion::DEATH;
 pub fn answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
     let after = |kind: MeterKind| {
         let when = run.first(|c| c.band == Some((kind, HURTS_AT)));
-        Answer { label: format!("{} after", rules.needs.word(kind, HURTS_AT)), value: when.map_or_else(|| "not reached".to_string(), |h| hours_text(to_the_minute(h))), danger: false }
+        Answer {
+            label: format!("{} after", rules.needs.word(kind, HURTS_AT)),
+            value: when.map_or_else(
+                || "not reached".to_string(),
+                |h| hours_text(to_the_minute(h)),
+            ),
+            danger: false,
+        }
     };
     let level = |level: u32, label: &str, danger: bool| {
         let when = run.first(|c| c.level == Some(level));
-        Answer { label: label.to_string(), value: when.map_or_else(|| "not reached".to_string(), day_text), danger }
+        Answer {
+            label: label.to_string(),
+            value: when.map_or_else(|| "not reached".to_string(), day_text),
+            danger,
+        }
     };
-    vec![after(MeterKind::Hunger), after(MeterKind::Thirst), after(MeterKind::Sleepiness), level(1, "Exhaustion 1 on", false), level(DEATH, "Dies on", true)]
+    vec![
+        after(MeterKind::Hunger),
+        after(MeterKind::Thirst),
+        after(MeterKind::Sleepiness),
+        level(1, "Exhaustion 1 on", false),
+        level(DEATH, "Dies on", true),
+    ]
 }
 
 /// The Effects tab's answers: for each effect in the run, in the order it began, when each of
@@ -217,7 +284,9 @@ pub fn effect_answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
     let mut out = vec![];
     for id in effects_seen(run) {
         let id = id.as_str();
-        let Some(def) = rules.effects.get(id) else { continue };
+        let Some(def) = rules.effects.get(id) else {
+            continue;
+        };
         let mut seen: Vec<String> = vec![];
         let mut was_on = false;
         for (sample, trace) in run.samples.iter().zip(&run.traces) {
@@ -226,11 +295,19 @@ pub fn effect_answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
                 let stage = def.stages.iter().rev().find(|s| *intensity + 1e-9 >= s.at);
                 if let Some(stage) = stage.filter(|s| !seen.contains(&s.word)) {
                     seen.push(stage.word.clone());
-                    out.push(Answer { label: format!("{} at", stage.word), value: hours_text(to_the_minute(sample.hours)), danger: stage.severity >= fb_character::conditions::Severity::Serious });
+                    out.push(Answer {
+                        label: format!("{} at", stage.word),
+                        value: hours_text(to_the_minute(sample.hours)),
+                        danger: stage.severity >= fb_character::conditions::Severity::Serious,
+                    });
                 }
             }
             if was_on && now.is_none() {
-                out.push(Answer { label: format!("{} gone at", def.name), value: hours_text(to_the_minute(sample.hours)), danger: false });
+                out.push(Answer {
+                    label: format!("{} gone at", def.name),
+                    value: hours_text(to_the_minute(sample.hours)),
+                    danger: false,
+                });
                 was_on = false;
             }
             was_on |= now.is_some();
@@ -239,10 +316,18 @@ pub fn effect_answers(run: &Timeline, rules: &Rules) -> Vec<Answer> {
     // Nothing mends in the run, so the losses add up; past their life, they are dead.
     if run.lab.hp_lost >= 0.05 {
         let lost = run.lab.hp_lost.min(run.life as f64);
-        out.push(Answer { label: "Hit points lost".to_string(), value: format!("{} of {}", number((lost * 10.0).round() / 10.0), run.life), danger: true });
+        out.push(Answer {
+            label: "Hit points lost".to_string(),
+            value: format!("{} of {}", number((lost * 10.0).round() / 10.0), run.life),
+            danger: true,
+        });
     }
     if let Some(dead) = run.samples.iter().find(|s| s.hp_lost >= run.life as f64) {
-        out.push(Answer { label: "Dies of it on".to_string(), value: day_text(dead.hours), danger: true });
+        out.push(Answer {
+            label: "Dies of it on".to_string(),
+            value: day_text(dead.hours),
+            danger: true,
+        });
     }
     out
 }
@@ -277,7 +362,11 @@ mod tests {
     }
 
     fn value<'a>(answers: &'a [Answer], label: &str) -> &'a str {
-        &answers.iter().find(|a| a.label == label).unwrap_or_else(|| panic!("no {label} in {answers:?}")).value
+        &answers
+            .iter()
+            .find(|a| a.label == label)
+            .unwrap_or_else(|| panic!("no {label} in {answers:?}"))
+            .value
     }
 
     #[test]
@@ -294,9 +383,19 @@ mod tests {
     #[test]
     fn sewer_plague_shows_its_stages_and_its_end_as_answers() {
         let state = bare();
-        let run = run(&state, &[Step::Apply("sewer_plague", 0.1), Step::Pass(4.0 * 24.0, Activity::Resting)]);
+        let run = run(
+            &state,
+            &[
+                Step::Apply("sewer_plague", 0.1),
+                Step::Pass(4.0 * 24.0, Activity::Resting),
+            ],
+        );
         let answers = effect_answers(&run, &state.ruleset.rules);
-        assert_eq!(value(&answers, "Feverish at"), "24 h", "it shows after its day of incubation");
+        assert_eq!(
+            value(&answers, "Feverish at"),
+            "24 h",
+            "it shows after its day of incubation"
+        );
         assert_eq!(value(&answers, "Wasting at"), "64 h");
         assert_eq!(value(&answers, "Sewer plague gone at"), "4 days");
     }
@@ -321,11 +420,29 @@ mod tests {
     fn freezing_shows_as_hit_points_lost_and_a_week_of_effects_equals_seven_days() {
         let mut state = bare();
         state.depth = Some(8);
-        let week = run(&state, &[Step::Apply("sewer_plague", 0.1), Step::Pass(7.0 * 24.0, Activity::Walking)]);
+        let week = run(
+            &state,
+            &[
+                Step::Apply("sewer_plague", 0.1),
+                Step::Pass(7.0 * 24.0, Activity::Walking),
+            ],
+        );
         let answers = effect_answers(&week, &state.ruleset.rules);
-        assert_eq!(value(&answers, "Hit points lost"), format!("{} of {}", week.life, week.life), "never more than their life");
-        assert!(value(&answers, "Dies of it on").starts_with("day 1"), "{answers:?}");
-        let days = run(&state, &std::iter::once(Step::Apply("sewer_plague", 0.1)).chain(std::iter::repeat_n(Step::Pass(24.0, Activity::Walking), 7)).collect::<Vec<_>>());
+        assert_eq!(
+            value(&answers, "Hit points lost"),
+            format!("{} of {}", week.life, week.life),
+            "never more than their life"
+        );
+        assert!(
+            value(&answers, "Dies of it on").starts_with("day 1"),
+            "{answers:?}"
+        );
+        let days = run(
+            &state,
+            &std::iter::once(Step::Apply("sewer_plague", 0.1))
+                .chain(std::iter::repeat_n(Step::Pass(24.0, Activity::Walking), 7))
+                .collect::<Vec<_>>(),
+        );
         assert_eq!(week.lab.effects, days.lab.effects);
         assert!((week.lab.hp_lost - days.lab.hp_lost).abs() < 1e-9);
     }
@@ -333,12 +450,22 @@ mod tests {
     #[test]
     fn sixteen_to_twenty_hours_to_full_moves_hungry_to_10_hours() {
         let mut state = bare();
-        set_leaf(&mut state.ruleset, "needs/hunger_hours_to_full", Leaf::Float(20.0));
+        set_leaf(
+            &mut state.ruleset,
+            "needs/hunger_hours_to_full",
+            Leaf::Float(20.0),
+        );
         let steps = [Step::Pass(24.0, Activity::Walking)];
         let answers = answers(&run(&state, &steps), &state.ruleset.rules);
         assert_eq!(value(&answers, "Hungry after"), "10 h");
         let saved = bare();
-        assert_eq!(value(&crate::lab_timeline::answers(&run(&saved, &steps), &saved.ruleset.rules), "Hungry after"), "8 h");
+        assert_eq!(
+            value(
+                &crate::lab_timeline::answers(&run(&saved, &steps), &saved.ruleset.rules),
+                "Hungry after"
+            ),
+            "8 h"
+        );
     }
 
     #[test]
@@ -347,18 +474,41 @@ mod tests {
         state.character.folk = Folk::Dwarf;
         state.character.attributes.constitution = 13;
         // Hunger alone: thirst and sleep never come.
-        for key in ["needs/thirst_hours_to_full", "needs/sleepiness_hours_to_full"] {
+        for key in [
+            "needs/thirst_hours_to_full",
+            "needs/sleepiness_hours_to_full",
+        ] {
             set_leaf(&mut state.ruleset, key, Leaf::Float(1e15));
         }
         // Eating cannot be skipped to start starving, so wait for it: starving is hunger at full, and
         // the first level comes 3 + CON days after that.
         let run = run(&state, &[Step::Until(Goal::Exhaustion, Activity::Walking)]);
         let answers = answers(&run, &state.ruleset.rules);
-        let when = run.crossings.iter().find(|c| c.level == Some(1)).unwrap().hours;
-        let starving_at = run.crossings.iter().find(|c| c.band == Some((MeterKind::Hunger, 4))).unwrap().hours;
-        assert!((starving_at - 16.0).abs() < 1e-6, "hunger is full after 16 hours walking: {starving_at}");
-        assert!((when - starving_at - 24.0 * 4.0).abs() < 0.1, "3 + 1 days starving: {}", when - starving_at);
-        assert!(value(&answers, "Exhaustion 1 on").starts_with("day 5 ("), "{answers:?}");
+        let when = run
+            .crossings
+            .iter()
+            .find(|c| c.level == Some(1))
+            .unwrap()
+            .hours;
+        let starving_at = run
+            .crossings
+            .iter()
+            .find(|c| c.band == Some((MeterKind::Hunger, 4)))
+            .unwrap()
+            .hours;
+        assert!(
+            (starving_at - 16.0).abs() < 1e-6,
+            "hunger is full after 16 hours walking: {starving_at}"
+        );
+        assert!(
+            (when - starving_at - 24.0 * 4.0).abs() < 0.1,
+            "3 + 1 days starving: {}",
+            when - starving_at
+        );
+        assert!(
+            value(&answers, "Exhaustion 1 on").starts_with("day 5 ("),
+            "{answers:?}"
+        );
     }
 
     #[test]
@@ -368,17 +518,31 @@ mod tests {
         let seven = run(&state, &[Step::Pass(24.0, Activity::Walking); 7]);
         assert_eq!(one, seven);
         assert_eq!(one.end(), 168.0);
-        assert!(one.lab.exhaustion.level > 0, "a week without food or water wears them down");
+        assert!(
+            one.lab.exhaustion.level > 0,
+            "a week without food or water wears them down"
+        );
     }
 
     #[test]
     fn eating_and_drinking_are_events_at_the_end_of_the_run_so_far() {
         let state = bare();
-        let run = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat("Bread"), Step::Drink("Tankard"), Step::Pass(4.0, Activity::Walking)]);
+        let run = run(
+            &state,
+            &[
+                Step::Pass(12.0, Activity::Walking),
+                Step::Eat("Bread"),
+                Step::Drink("Tankard"),
+                Step::Pass(4.0, Activity::Walking),
+            ],
+        );
         assert_eq!(run.events, vec![(12.0, Event::Eat), (12.0, Event::Drink)]);
         let at = run.samples.iter().position(|s| s.hours == 12.0).unwrap();
         let (before, after) = (run.samples[at], run.samples[at + 2]);
-        assert!(after.hunger < before.hunger && after.thirst < before.thirst, "{before:?} {after:?}");
+        assert!(
+            after.hunger < before.hunger && after.thirst < before.thirst,
+            "{before:?} {after:?}"
+        );
         assert_eq!(run.end(), 16.0);
     }
 
@@ -389,10 +553,25 @@ mod tests {
         assert!((8.0..8.5).contains(&hungry.end()), "{}", hungry.end());
         // Resting slowly, nothing is exhausted within the cap.
         let mut slow = bare();
-        set_leaf(&mut slow.ruleset, "exhaustion/starving_first_days", Leaf::Float(1000.0));
-        set_leaf(&mut slow.ruleset, "exhaustion/dehydrated_first_hours", Leaf::Float(100_000.0));
-        set_leaf(&mut slow.ruleset, "exhaustion/spent_first_hours", Leaf::Float(100_000.0));
-        assert_eq!(run(&slow, &[Step::Until(Goal::Exhaustion, Activity::Resting)]).end(), LONGEST);
+        set_leaf(
+            &mut slow.ruleset,
+            "exhaustion/starving_first_days",
+            Leaf::Float(1000.0),
+        );
+        set_leaf(
+            &mut slow.ruleset,
+            "exhaustion/dehydrated_first_hours",
+            Leaf::Float(100_000.0),
+        );
+        set_leaf(
+            &mut slow.ruleset,
+            "exhaustion/spent_first_hours",
+            Leaf::Float(100_000.0),
+        );
+        assert_eq!(
+            run(&slow, &[Step::Until(Goal::Exhaustion, Activity::Resting)]).end(),
+            LONGEST
+        );
     }
 
     #[test]
@@ -401,7 +580,12 @@ mod tests {
         let walking = run(&state, &[Step::Pass(8.0, Activity::Walking)]);
         let resting = run(&state, &[Step::Pass(8.0, Activity::Resting)]);
         assert!(resting.lab.needs.hunger.value < walking.lab.needs.hunger.value);
-        let plenty = (1..3000).find(|&s| fb_items::roll_item("Belt", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "of Plenty"))).unwrap();
+        let plenty = (1..3000)
+            .find(|&s| {
+                fb_items::roll_item("Belt", s)
+                    .is_some_and(|i| i.affixes.iter().any(|a| a.name == "of Plenty"))
+            })
+            .unwrap();
         state.equip(Slot::Belt, "Belt", plenty);
         let fed = run(&state, &[Step::Pass(8.0, Activity::Walking)]);
         assert!(fed.lab.needs.hunger.value < walking.lab.needs.hunger.value);
@@ -409,7 +593,14 @@ mod tests {
 
     #[test]
     fn hours_read_as_hours_then_days() {
-        assert_eq!((hours_text(8.0).as_str(), hours_text(2.5).as_str(), hours_text(96.0).as_str()), ("8 h", "2.5 h", "4 days"));
+        assert_eq!(
+            (
+                hours_text(8.0).as_str(),
+                hours_text(2.5).as_str(),
+                hours_text(96.0).as_str()
+            ),
+            ("8 h", "2.5 h", "4 days")
+        );
     }
 
     #[test]
@@ -420,11 +611,23 @@ mod tests {
         let state = bare();
         let run = run(&state, &[Step::Pass(LONGEST, Activity::Walking)]);
         let answers = answers(&run, &state.ruleset.rules);
-        assert!(value(&answers, "Dies on").starts_with("day "), "{answers:?}");
+        assert!(
+            value(&answers, "Dies on").starts_with("day "),
+            "{answers:?}"
+        );
         assert!(answers.last().unwrap().danger);
         assert!(death(&run).is_some());
         let short = crate::lab_timeline::run(&state, &[Step::Pass(24.0, Activity::Walking)]);
-        assert_eq!((value(&crate::lab_timeline::answers(&short, &state.ruleset.rules), "Dies on"), death(&short)), ("not reached", None));
+        assert_eq!(
+            (
+                value(
+                    &crate::lab_timeline::answers(&short, &state.ruleset.rules),
+                    "Dies on"
+                ),
+                death(&short)
+            ),
+            ("not reached", None)
+        );
     }
 
     #[test]
@@ -434,14 +637,37 @@ mod tests {
         let hungry = run(&state, &[Step::Pass(8.0, Activity::Walking)]);
         assert_eq!(hungry.lab.needs.hunger.word_with(rules), "Hungry");
         let nutrition = fb_items::provision("Bread").unwrap().nutrition;
-        let fed = run(&state, &[Step::Pass(8.0, Activity::Walking), Step::Eat("Bread")]);
-        assert!((fed.lab.needs.hunger.value - (hungry.lab.needs.hunger.value - nutrition)).abs() < 1e-9);
+        let fed = run(
+            &state,
+            &[Step::Pass(8.0, Activity::Walking), Step::Eat("Bread")],
+        );
+        assert!(
+            (fed.lab.needs.hunger.value - (hungry.lab.needs.hunger.value - nutrition)).abs() < 1e-9
+        );
         assert_eq!(fed.lab.needs.hunger.word_with(rules), "Fed");
-        let roast = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat("Roast haunch")]);
-        let bread = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Eat("Bread")]);
-        assert!(roast.lab.needs.hunger.value < bread.lab.needs.hunger.value, "each provision has its own values");
-        let wine = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Drink("Wine")]);
-        let tankard = run(&state, &[Step::Pass(12.0, Activity::Walking), Step::Drink("Tankard")]);
+        let roast = run(
+            &state,
+            &[
+                Step::Pass(12.0, Activity::Walking),
+                Step::Eat("Roast haunch"),
+            ],
+        );
+        let bread = run(
+            &state,
+            &[Step::Pass(12.0, Activity::Walking), Step::Eat("Bread")],
+        );
+        assert!(
+            roast.lab.needs.hunger.value < bread.lab.needs.hunger.value,
+            "each provision has its own values"
+        );
+        let wine = run(
+            &state,
+            &[Step::Pass(12.0, Activity::Walking), Step::Drink("Wine")],
+        );
+        let tankard = run(
+            &state,
+            &[Step::Pass(12.0, Activity::Walking), Step::Drink("Tankard")],
+        );
         assert!(tankard.lab.needs.thirst.value < wine.lab.needs.thirst.value);
     }
 }

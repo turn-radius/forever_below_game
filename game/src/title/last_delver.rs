@@ -61,13 +61,36 @@ pub struct Saved {
 
 impl From<&Character> for Saved {
     fn from(c: &Character) -> Self {
-        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt, learned: c.learned, books_read: c.books_read.clone() }
+        Saved {
+            name: c.name.clone(),
+            folk: c.folk,
+            class: c.class,
+            attributes: c.attributes,
+            body_seed: c.body_seed,
+            shape: c.shape,
+            sex: c.sex,
+            dirt: c.dirt,
+            learned: c.learned,
+            books_read: c.books_read.clone(),
+        }
     }
 }
 
 impl From<Saved> for Character {
     fn from(s: Saved) -> Self {
-        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default(), learned: s.learned, books_read: s.books_read }
+        Character {
+            folk: s.folk,
+            body_seed: s.body_seed,
+            shape: s.shape,
+            sex: s.sex,
+            name: s.name,
+            class: s.class,
+            attributes: s.attributes,
+            dirt: s.dirt.clamp(0.0, 1.0),
+            worn: AbilityBonus::default(),
+            learned: s.learned,
+            books_read: s.books_read,
+        }
     }
 }
 
@@ -78,7 +101,10 @@ pub fn load(path: &Path) -> Option<Character> {
         Ok(saved) if !saved.name.trim().is_empty() => Some(saved.into()),
         Ok(_) => None,
         Err(error) => {
-            warn!("last delver: {} is unreadable ({error}); the title offers none", path.display());
+            warn!(
+                "last delver: {} is unreadable ({error}); the title offers none",
+                path.display()
+            );
             None
         }
     }
@@ -106,19 +132,29 @@ impl Plugin for LastDelverPlugin {
             app.insert_resource(LastDelverFile(LastDelverFile::default_path()));
         }
         let file = app.world().resource::<LastDelverFile>().clone();
-        app.insert_resource(LastDelver(file.0.as_deref().and_then(load))).add_systems(Last, (remember_lessons, save_last_delver).chain());
+        app.insert_resource(LastDelver(file.0.as_deref().and_then(load)))
+            .add_systems(Last, (remember_lessons, save_last_delver).chain());
     }
 }
 
 /// Copies what the delver has learned from books onto the [`LastDelver`] when it is the same
 /// delver (a delve begun by a debug seed is not remembered, so it never overwrites another's).
 pub fn remember_lessons(character: Option<Res<Character>>, last: Option<ResMut<LastDelver>>) {
-    let (Some(character), Some(mut last)) = (character, last) else { return };
+    let (Some(character), Some(mut last)) = (character, last) else {
+        return;
+    };
     if !character.is_changed() {
         return;
     }
-    let same = |d: &Character| d.name == character.name && d.body_seed == character.body_seed && d.folk == character.folk && d.class == character.class;
-    let stale = last.0.as_ref().is_some_and(|d| same(d) && (d.learned != character.learned || d.books_read != character.books_read));
+    let same = |d: &Character| {
+        d.name == character.name
+            && d.body_seed == character.body_seed
+            && d.folk == character.folk
+            && d.class == character.class
+    };
+    let stale = last.0.as_ref().is_some_and(|d| {
+        same(d) && (d.learned != character.learned || d.books_read != character.books_read)
+    });
     if stale && let Some(delver) = last.0.as_mut() {
         delver.learned = character.learned;
         delver.books_read = character.books_read.clone();
@@ -141,7 +177,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let folder = std::env::temp_dir().join(format!("fb-last-delver-{}-{name}", std::process::id()));
+        let folder =
+            std::env::temp_dir().join(format!("fb-last-delver-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         folder.join(FILE_NAME)
     }
@@ -149,11 +186,19 @@ mod tests {
     #[test]
     fn a_saved_delver_comes_back_the_same() {
         let path = scratch("round");
-        let delver = Character { name: "Brakka Stonefist".into(), folk: Folk::Lizardfolk, class: Class::Cleric, ..Character::roll(21) };
+        let delver = Character {
+            name: "Brakka Stonefist".into(),
+            folk: Folk::Lizardfolk,
+            class: Class::Cleric,
+            ..Character::roll(21)
+        };
         save(&path, &delver).unwrap();
         assert_eq!(load(&path), Some(delver));
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"folk\": \"lizard\"") && text.contains("\"class\": \"cleric\""), "{text}");
+        assert!(
+            text.contains("\"folk\": \"lizard\"") && text.contains("\"class\": \"cleric\""),
+            "{text}"
+        );
     }
 
     #[test]
@@ -166,7 +211,10 @@ mod tests {
         assert_eq!(load(&path), Some(delver));
         std::fs::write(&path, r#"{"name":"Olm","folk":"human","class":"mage","attributes":{"strength":10,"dexterity":10,"constitution":10,"intelligence":10,"wisdom":10},"body_seed":1,"dirt":0.4}"#).unwrap();
         let old = load(&path).expect("an older file still loads");
-        assert_eq!((old.learned, old.books_read), (AbilityBonus::default(), vec![]));
+        assert_eq!(
+            (old.learned, old.books_read),
+            (AbilityBonus::default(), vec![])
+        );
     }
 
     #[test]
@@ -174,17 +222,27 @@ mod tests {
         let path = scratch("lesson");
         let mut app = App::new();
         let delver = Character::roll(4);
-        app.insert_resource(LastDelverFile(Some(path.clone()))).add_plugins(LastDelverPlugin);
+        app.insert_resource(LastDelverFile(Some(path.clone())))
+            .add_plugins(LastDelverPlugin);
         app.world_mut().resource_mut::<LastDelver>().0 = Some(delver.clone());
         app.insert_resource(delver.clone());
         app.update();
         app.world_mut().resource_mut::<Character>().learned.strength = 1;
-        app.world_mut().resource_mut::<Character>().books_read.push(5);
+        app.world_mut()
+            .resource_mut::<Character>()
+            .books_read
+            .push(5);
         app.update();
         let saved = load(&path).unwrap();
         assert_eq!((saved.learned.strength, saved.books_read), (1, vec![5]));
         // Someone else delving leaves the last delver alone.
-        app.insert_resource(Character { learned: AbilityBonus { wisdom: 3, ..default() }, ..Character::roll(9) });
+        app.insert_resource(Character {
+            learned: AbilityBonus {
+                wisdom: 3,
+                ..default()
+            },
+            ..Character::roll(9)
+        });
         app.update();
         assert_eq!(load(&path).unwrap().learned.wisdom, 0);
     }
@@ -204,7 +262,8 @@ mod tests {
     fn a_new_last_delver_is_saved_but_the_loaded_one_is_not_rewritten() {
         let path = scratch("plugin");
         let mut app = App::new();
-        app.insert_resource(LastDelverFile(Some(path.clone()))).add_plugins(LastDelverPlugin);
+        app.insert_resource(LastDelverFile(Some(path.clone())))
+            .add_plugins(LastDelverPlugin);
         app.update();
         assert_eq!(app.world().resource::<LastDelver>().0, None);
         assert!(!path.exists());
@@ -214,20 +273,31 @@ mod tests {
         assert_eq!(load(&path), Some(delver.clone()));
         // A fresh run reads it back.
         let mut again = App::new();
-        again.insert_resource(LastDelverFile(Some(path))).add_plugins(LastDelverPlugin);
+        again
+            .insert_resource(LastDelverFile(Some(path)))
+            .add_plugins(LastDelverPlugin);
         assert_eq!(again.world().resource::<LastDelver>().0, Some(delver));
     }
 
     #[test]
     fn a_shaped_delver_comes_back_with_its_body_and_old_files_roll_theirs() {
         let path = scratch("shape");
-        let shape = fb_body::BodySpec::roll(Folk::Human, 5).shape().parse("muscle=0.9,bust=0.7,height=1.08").unwrap();
-        let delver = Character { shape: Some(shape), ..Character::roll(5) };
+        let shape = fb_body::BodySpec::roll(Folk::Human, 5)
+            .shape()
+            .parse("muscle=0.9,bust=0.7,height=1.08")
+            .unwrap();
+        let delver = Character {
+            shape: Some(shape),
+            ..Character::roll(5)
+        };
         save(&path, &delver).unwrap();
         let back = load(&path).unwrap();
         assert_eq!(back.spec(), delver.spec());
         std::fs::write(&path, r#"{"name":"Old","folk":"human","class":"mage","attributes":{"strength":10,"dexterity":10,"constitution":10,"intelligence":10,"wisdom":10},"body_seed":1,"dirt":0.4}"#).unwrap();
         let old = load(&path).unwrap();
-        assert_eq!((old.shape, old.spec()), (None, fb_body::BodySpec::roll(Folk::Human, 1)));
+        assert_eq!(
+            (old.shape, old.spec()),
+            (None, fb_body::BodySpec::roll(Folk::Human, 1))
+        );
     }
 }

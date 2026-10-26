@@ -40,13 +40,25 @@ pub const SHADOW_NORMAL_BIAS: f32 = 1.2;
 /// [`peak_lumens`] at the light's reach, times [`reach_falloff`]. `exposure` is the camera's.
 pub fn level_at(light: &PointLight, distance: f32, exposure: f32) -> f32 {
     let peak = peak_lumens(1.0, light.range, exposure);
-    if peak <= 0.0 { 0.0 } else { light.intensity / peak * reach_falloff(distance, light.range) }
+    if peak <= 0.0 {
+        0.0
+    } else {
+        light.intensity / peak * reach_falloff(distance, light.range)
+    }
 }
 
 /// How lit the point `at` is by `lights` (each a position and its light): their levels
 /// ([`level_at`]) added, at most 1. Walls between are not accounted for.
-pub fn lit_level<'a>(at: Vec3, lights: impl IntoIterator<Item = (Vec3, &'a PointLight)>, exposure: f32) -> f32 {
-    lights.into_iter().map(|(position, light)| level_at(light, position.distance(at), exposure)).sum::<f32>().min(1.0)
+pub fn lit_level<'a>(
+    at: Vec3,
+    lights: impl IntoIterator<Item = (Vec3, &'a PointLight)>,
+    exposure: f32,
+) -> f32 {
+    lights
+        .into_iter()
+        .map(|(position, light)| level_at(light, position.distance(at), exposure))
+        .sum::<f32>()
+        .min(1.0)
 }
 
 /// A point or spot light's falloff at `distance` from it with reach `range`, 1 at the light
@@ -84,7 +96,12 @@ pub fn peak_lumens(level: f32, range: f32, exposure: f32) -> f32 {
 /// A point light in `color`, `peak` times full close up (see [`peak_lumens`]), reaching
 /// `range` units, for a camera with `exposure`.
 pub fn point_light(color: Color, peak: f32, range: f32, exposure: &Exposure) -> PointLight {
-    PointLight { color, intensity: peak_lumens(peak, range, exposure.exposure()), range, ..default() }
+    PointLight {
+        color,
+        intensity: peak_lumens(peak, range, exposure.exposure()),
+        range,
+        ..default()
+    }
 }
 
 /// `light` casting shadows, with biases for this game's units.
@@ -126,7 +143,13 @@ pub const SHADOW_MAP_SIZES: (usize, usize) = (128, 2048);
 /// cast shadows next: the `budget` nearest, a light that already does counting
 /// [`SHADOW_STICKINESS`] nearer. Ties go to the earlier light.
 pub fn shadow_casters(lights: &[(f32, bool)], budget: usize) -> Vec<bool> {
-    let rank = |&(distance, casting): &(f32, bool)| if casting { distance - SHADOW_STICKINESS } else { distance };
+    let rank = |&(distance, casting): &(f32, bool)| {
+        if casting {
+            distance - SHADOW_STICKINESS
+        } else {
+            distance
+        }
+    };
     let mut order: Vec<usize> = (0..lights.len()).collect();
     order.sort_by(|&a, &b| rank(&lights[a]).total_cmp(&rank(&lights[b])));
     let mut casts = vec![false; lights.len()];
@@ -150,9 +173,17 @@ impl Plugin for ShadowBudgetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            budget_shadows.after(TransformSystems::Propagate).before(VisibilitySystems::CheckVisibility).in_set(DelveSystems),
+            budget_shadows
+                .after(TransformSystems::Propagate)
+                .before(VisibilitySystems::CheckVisibility)
+                .in_set(DelveSystems),
         )
-        .add_systems(Update, size_shadow_maps.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
+        .add_systems(
+            Update,
+            size_shadow_maps
+                .run_if(resource_changed::<Tuning>)
+                .in_set(DelveSystems),
+        );
     }
 }
 
@@ -162,16 +193,34 @@ fn budget_shadows(
     cameras: Query<(&Camera, &GlobalTransform), Or<(With<PlayerCamera>, With<DebugCamera>)>>,
     mut lights: Query<(&GlobalTransform, &mut PointLight, Has<GivenLight>)>,
 ) {
-    let Some((_, eye)) = cameras.iter().find(|(camera, _)| camera.is_active) else { return };
+    let Some((_, eye)) = cameras.iter().find(|(camera, _)| camera.is_active) else {
+        return;
+    };
     let eye = eye.translation();
-    let mut shadowable: Vec<_> = lights.iter_mut().filter(|(_, light, _)| is_shadowable(light)).collect();
-    let distances: Vec<f32> = shadowable.iter().map(|(at, _, _)| at.translation().distance(eye)).collect();
+    let mut shadowable: Vec<_> = lights
+        .iter_mut()
+        .filter(|(_, light, _)| is_shadowable(light))
+        .collect();
+    let distances: Vec<f32> = shadowable
+        .iter()
+        .map(|(at, _, _)| at.translation().distance(eye))
+        .collect();
     // The player's own lights always cast; the budget is for the level's.
-    let own: Vec<bool> = shadowable.iter().zip(&distances).map(|((_, _, given), &d)| is_own_light(*given, d)).collect();
+    let own: Vec<bool> = shadowable
+        .iter()
+        .zip(&distances)
+        .map(|((_, _, given), &d)| is_own_light(*given, d))
+        .collect();
     let level: Vec<usize> = (0..shadowable.len()).filter(|&i| !own[i]).collect();
-    let ranked: Vec<(f32, bool)> = level.iter().map(|&i| (distances[i], shadowable[i].1.shadow_maps_enabled)).collect();
+    let ranked: Vec<(f32, bool)> = level
+        .iter()
+        .map(|&i| (distances[i], shadowable[i].1.shadow_maps_enabled))
+        .collect();
     let mut casts = vec![true; shadowable.len()];
-    for (&i, cast) in level.iter().zip(shadow_casters(&ranked, tuning.light.shadowed_lights)) {
+    for (&i, cast) in level
+        .iter()
+        .zip(shadow_casters(&ranked, tuning.light.shadowed_lights))
+    {
         casts[i] = cast;
     }
     for ((_, light, _), cast) in shadowable.iter_mut().zip(casts) {
@@ -183,7 +232,10 @@ fn budget_shadows(
 
 fn size_shadow_maps(tuning: Res<Tuning>, mut map: ResMut<PointLightShadowMap>) {
     // Zero, or a size no device holds, must never reach the GPU.
-    let size = tuning.light.shadow_map_size.clamp(SHADOW_MAP_SIZES.0, SHADOW_MAP_SIZES.1);
+    let size = tuning
+        .light
+        .shadow_map_size
+        .clamp(SHADOW_MAP_SIZES.0, SHADOW_MAP_SIZES.1);
     if map.size != size {
         map.size = size;
     }
@@ -223,7 +275,10 @@ impl Torch {
     /// `light` flickering by up to `depth` of the prototype's curve, as in
     /// `armory::build::light::LightAnchor::flicker`.
     pub fn flickering(light: PointLight, depth: f32) -> PointLight {
-        PointLight { radius: depth.clamp(0.0, 1.0), ..light }
+        PointLight {
+            radius: depth.clamp(0.0, 1.0),
+            ..light
+        }
     }
 
     /// A torch's point light, `peak` times full close up, reaching `range` units.
@@ -260,7 +315,11 @@ impl StudioLight {
         azimuth: -40.0,
         elevation: 42.0,
         ambient: 0.42,
-        ambient_color: Color::srgb(0xdf as f32 / 255.0, 0xe6 as f32 / 255.0, 0xee as f32 / 255.0),
+        ambient_color: Color::srgb(
+            0xdf as f32 / 255.0,
+            0xe6 as f32 / 255.0,
+            0xee as f32 / 255.0,
+        ),
     };
 
     /// The key as a camera child: spawn it with `ChildOf(camera)`. `exposure` is the camera's,
@@ -270,7 +329,11 @@ impl StudioLight {
         // The toon shader divides direct light by PI, as Bevy's Lambert lobe does.
         let illuminance = self.key * std::f32::consts::PI / exposure.exposure();
         (
-            DirectionalLight { color: Color::WHITE, illuminance, ..default() },
+            DirectionalLight {
+                color: Color::WHITE,
+                illuminance,
+                ..default()
+            },
             Transform::from_translation(from * 10.0).looking_at(Vec3::ZERO, Vec3::Y),
         )
     }
@@ -278,12 +341,20 @@ impl StudioLight {
     /// The unit direction the key comes from, in camera space.
     pub fn key_from(&self) -> Vec3 {
         let (azimuth, elevation) = (self.azimuth.to_radians(), self.elevation.to_radians());
-        Vec3::new(azimuth.sin() * elevation.cos(), elevation.sin(), azimuth.cos() * elevation.cos())
+        Vec3::new(
+            azimuth.sin() * elevation.cos(),
+            elevation.sin(),
+            azimuth.cos() * elevation.cos(),
+        )
     }
 
     /// The fill, for the camera's `exposure`.
     pub fn ambient_light(&self, exposure: &Exposure) -> GlobalAmbientLight {
-        GlobalAmbientLight { color: self.ambient_color, brightness: self.ambient / exposure.exposure(), ..default() }
+        GlobalAmbientLight {
+            color: self.ambient_color,
+            brightness: self.ambient / exposure.exposure(),
+            ..default()
+        }
     }
 }
 
@@ -315,7 +386,10 @@ mod tests {
         let torch = Torch::light(1.0, 60.0, &exposure);
         assert_eq!(flicker_depth(&torch), 1.0);
         assert_eq!(flicker_depth(&Torch::flickering(torch, 0.4)), 0.4);
-        assert_eq!(flicker_depth(&point_light(Color::WHITE, 1.0, 60.0, &exposure)), 0.0);
+        assert_eq!(
+            flicker_depth(&point_light(Color::WHITE, 1.0, 60.0, &exposure)),
+            0.0
+        );
         // The intensity is the steady one; the shader does the flickering.
         assert_eq!(torch.intensity, peak_lumens(1.0, 60.0, exposure.exposure()));
         assert_eq!(flicker_depth(&cast_shadows(torch)), 1.0);
@@ -332,7 +406,9 @@ mod tests {
         assert!((reach_falloff(15.0, 60.0) - reach_falloff(30.0, 120.0)).abs() < 1e-6);
         // Softened at the core: at the core distance it is still half, less the window.
         let core = CORE_FRACTION * 60.0;
-        assert!((reach_falloff(core, 60.0) - 0.5 * (1.0 - CORE_FRACTION.powi(4)).powi(2)).abs() < 1e-6);
+        assert!(
+            (reach_falloff(core, 60.0) - 0.5 * (1.0 - CORE_FRACTION.powi(4)).powi(2)).abs() < 1e-6
+        );
     }
 
     #[test]
@@ -352,12 +428,29 @@ mod tests {
         let none = lit_level(at, [], exposure);
         let far = lit_level(at, [(Vec3::new(500.0, 0.0, 0.0), &torch)], exposure);
         let near = lit_level(at, [(Vec3::new(10.0, 0.0, 0.0), &torch)], exposure);
-        let two = lit_level(at, [(Vec3::new(30.0, 0.0, 0.0), &torch), (Vec3::new(-30.0, 0.0, 0.0), &torch)], exposure);
+        let two = lit_level(
+            at,
+            [
+                (Vec3::new(30.0, 0.0, 0.0), &torch),
+                (Vec3::new(-30.0, 0.0, 0.0), &torch),
+            ],
+            exposure,
+        );
         let one = lit_level(at, [(Vec3::new(30.0, 0.0, 0.0), &torch)], exposure);
         assert_eq!((none, far), (0.0, 0.0));
         assert!(near > 0.5 && near <= 1.0, "{near}");
-        assert!((two - 2.0 * one).abs() < 1e-4 || two == 1.0, "lights add: {two} against {one}");
-        assert!(lit_level(at, [(Vec3::ZERO, &Torch::light(5.0, 60.0, &Exposure::INDOOR))], exposure) == 1.0, "never more than full");
+        assert!(
+            (two - 2.0 * one).abs() < 1e-4 || two == 1.0,
+            "lights add: {two} against {one}"
+        );
+        assert!(
+            lit_level(
+                at,
+                [(Vec3::ZERO, &Torch::light(5.0, 60.0, &Exposure::INDOOR))],
+                exposure
+            ) == 1.0,
+            "never more than full"
+        );
     }
 
     #[test]
@@ -370,7 +463,10 @@ mod tests {
         let peak = peak_lumens(0.8, range, exposure);
         let pi = std::f32::consts::PI;
         let level = peak / (4.0 * pi) / (d * d + core * core) / pi * exposure * window;
-        assert!((level - 0.8 * reach_falloff(d, range)).abs() < 1e-4, "{level}");
+        assert!(
+            (level - 0.8 * reach_falloff(d, range)).abs() < 1e-4,
+            "{level}"
+        );
         assert!((lumens(1.0, 20.0, exposure) / lumens(1.0, 10.0, exposure) - 4.0).abs() < 1e-3);
     }
 
@@ -405,7 +501,10 @@ mod tests {
             }
         }
         // But one clearly nearer takes it.
-        assert_eq!(shadow_casters(&[(80.0, true), (20.0, false)], 1), vec![false, true]);
+        assert_eq!(
+            shadow_casters(&[(80.0, true), (20.0, false)], 1),
+            vec![false, true]
+        );
     }
 
     #[test]
@@ -413,22 +512,58 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::transform::TransformPlugin)
             .init_resource::<Tuning>()
-            .add_systems(PostUpdate, budget_shadows.after(TransformSystems::Propagate));
-        app.world_mut().spawn((Camera::default(), PlayerCamera, Transform::default()));
+            .add_systems(
+                PostUpdate,
+                budget_shadows.after(TransformSystems::Propagate),
+            );
+        app.world_mut()
+            .spawn((Camera::default(), PlayerCamera, Transform::default()));
         let light = cast_shadows(point_light(Torch::COLOR, 1.0, 60.0, &Exposure::INDOOR));
         for i in 0..10 {
-            app.world_mut().spawn((light, Transform::from_xyz(20.0 * (i + 1) as f32, 0.0, 0.0)));
+            app.world_mut()
+                .spawn((light, Transform::from_xyz(20.0 * (i + 1) as f32, 0.0, 0.0)));
         }
         // A light without the game's biases is not the budget's to switch.
-        let plain = app.world_mut().spawn((PointLight { shadow_maps_enabled: true, ..default() }, Transform::from_xyz(900.0, 0.0, 0.0))).id();
+        let plain = app
+            .world_mut()
+            .spawn((
+                PointLight {
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                Transform::from_xyz(900.0, 0.0, 0.0),
+            ))
+            .id();
         app.update();
         let mut query = app.world_mut().query::<(&PointLight, &Transform)>();
-        let mut shadowed: Vec<f32> = query.iter(app.world()).filter(|(l, _)| l.shadow_maps_enabled && is_shadowable(l)).map(|(_, t)| t.translation.x).collect();
+        let mut shadowed: Vec<f32> = query
+            .iter(app.world())
+            .filter(|(l, _)| l.shadow_maps_enabled && is_shadowable(l))
+            .map(|(_, t)| t.translation.x)
+            .collect();
         shadowed.sort_by(f32::total_cmp);
         assert_eq!(shadowed, vec![20.0, 40.0, 60.0, 80.0]);
-        assert!(query.iter(app.world()).filter(|(l, _)| is_shadowable(l)).all(|(l, _)| l.shadow_depth_bias == SHADOW_DEPTH_BIAS && l.shadow_normal_bias == SHADOW_NORMAL_BIAS), "biases kept");
-        assert_eq!(query.iter(app.world()).filter(|(l, _)| is_shadowable(l)).count(), 10);
-        assert!(app.world().get::<PointLight>(plain).unwrap().shadow_maps_enabled);
+        assert!(
+            query
+                .iter(app.world())
+                .filter(|(l, _)| is_shadowable(l))
+                .all(|(l, _)| l.shadow_depth_bias == SHADOW_DEPTH_BIAS
+                    && l.shadow_normal_bias == SHADOW_NORMAL_BIAS),
+            "biases kept"
+        );
+        assert_eq!(
+            query
+                .iter(app.world())
+                .filter(|(l, _)| is_shadowable(l))
+                .count(),
+            10
+        );
+        assert!(
+            app.world()
+                .get::<PointLight>(plain)
+                .unwrap()
+                .shadow_maps_enabled
+        );
     }
 
     #[test]
@@ -439,22 +574,37 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::transform::TransformPlugin)
             .init_resource::<Tuning>()
-            .add_systems(PostUpdate, budget_shadows.after(TransformSystems::Propagate));
-        app.world_mut().spawn((Camera::default(), PlayerCamera, Transform::default()));
+            .add_systems(
+                PostUpdate,
+                budget_shadows.after(TransformSystems::Propagate),
+            );
+        app.world_mut()
+            .spawn((Camera::default(), PlayerCamera, Transform::default()));
         let exposure = Exposure::INDOOR;
         let light = cast_shadows(point_light(Torch::COLOR, 1.0, 60.0, &exposure));
         let anchor = crate::carry::item_light(&crate::carry::lit_torch(1207).shape).unwrap();
         // A held torch and a lantern at the hip, and ten braziers further off.
         for x in [2.0, 8.0] {
-            app.world_mut().spawn((crate::carry::given_light(anchor, exposure, &LightTuning::default()), Transform::from_xyz(x, 0.0, 0.0)));
+            app.world_mut().spawn((
+                crate::carry::given_light(anchor, exposure, &LightTuning::default()),
+                Transform::from_xyz(x, 0.0, 0.0),
+            ));
         }
         for i in 0..10 {
-            app.world_mut().spawn((light, Transform::from_xyz(40.0 + 20.0 * i as f32, 0.0, 0.0)));
+            app.world_mut()
+                .spawn((light, Transform::from_xyz(40.0 + 20.0 * i as f32, 0.0, 0.0)));
         }
         app.update();
         let mut query = app.world_mut().query::<(&PointLight, &Transform)>();
-        let near = query.iter(app.world()).filter(|(_, t)| t.translation.x < 20.0 && t.translation.x > 0.0).filter(|(l, _)| l.shadow_maps_enabled).count();
-        let far = query.iter(app.world()).filter(|(l, t)| t.translation.x >= 40.0 && l.shadow_maps_enabled).count();
+        let near = query
+            .iter(app.world())
+            .filter(|(_, t)| t.translation.x < 20.0 && t.translation.x > 0.0)
+            .filter(|(l, _)| l.shadow_maps_enabled)
+            .count();
+        let far = query
+            .iter(app.world())
+            .filter(|(l, t)| t.translation.x >= 40.0 && l.shadow_maps_enabled)
+            .count();
         assert_eq!(near, 2);
         assert_eq!(far, 4);
     }

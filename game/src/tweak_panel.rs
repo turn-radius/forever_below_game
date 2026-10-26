@@ -37,10 +37,13 @@ pub trait Tweak: Resource + Component<Mutability = bevy::ecs::component::Mutable
     fn structure(&self) -> u32;
     /// The slider at `path`'s value now.
     fn slider(&self, path: &str) -> Option<f32> {
-        self.fields().into_iter().find(|f| f.path == path).and_then(|f| match f.kind {
-            FieldKind::Slider { value, .. } => Some(value),
-            _ => None,
-        })
+        self.fields()
+            .into_iter()
+            .find(|f| f.path == path)
+            .and_then(|f| match f.kind {
+                FieldKind::Slider { value, .. } => Some(value),
+                _ => None,
+            })
     }
 }
 
@@ -61,7 +64,13 @@ impl<T: Tweak> Plugin for TweakPanelPlugin<T> {
     fn build(&self, app: &mut App) {
         app.init_resource::<HeldSlider>().add_systems(
             Update,
-            (press_fields::<T>, drag_slider::<T>, scroll_panel, build_sections::<T>.run_if(resource_changed::<T>), refresh_fields::<T>.run_if(resource_changed::<T>))
+            (
+                press_fields::<T>,
+                drag_slider::<T>,
+                scroll_panel,
+                build_sections::<T>.run_if(resource_changed::<T>),
+                refresh_fields::<T>.run_if(resource_changed::<T>),
+            )
                 .chain()
                 .in_set(TweakPanelSystems),
         );
@@ -96,12 +105,19 @@ pub fn section_title(section: &str) -> String {
 
 fn capitalise(text: &str) -> String {
     let mut chars = text.chars();
-    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
 }
 
 /// A slider value with as many decimals as its step has: `0.005` shows three.
 pub fn format_value(value: f32, step: f32) -> String {
-    let decimals = if step >= 1.0 { 0 } else { (-step.log10()).ceil().clamp(0.0, 4.0) as usize };
+    let decimals = if step >= 1.0 {
+        0
+    } else {
+        (-step.log10()).ceil().clamp(0.0, 4.0) as usize
+    };
     format!("{value:.decimals$}")
 }
 
@@ -112,7 +128,11 @@ pub fn value_at(range: &Slider, fraction: f32) -> f32 {
 
 /// How far along its bar `value` sits, 0 to 1.
 pub fn fraction_of(range: &Slider, value: f32) -> f32 {
-    if range.max <= range.min { 0.0 } else { ((value - range.min) / (range.max - range.min)).clamp(0.0, 1.0) }
+    if range.max <= range.min {
+        0.0
+    } else {
+        ((value - range.min) / (range.max - range.min)).clamp(0.0, 1.0)
+    }
 }
 
 /// A choice's option as a label: `pierced_tin` is "pierced tin".
@@ -123,9 +143,17 @@ pub fn option_label(option: &str) -> String {
 /// The dyes a colour field offers as swatches: the faction livery's (a tincture's softer dye),
 /// the garment dyes, and undyed wool, browns, greys and blacks, each once.
 pub fn dye_palette() -> Vec<[f32; 3]> {
-    let mut dyes: Vec<armory::material::Rgb> = armory::heraldry::Tincture::ALL.iter().map(|t| t.dye()).collect();
+    let mut dyes: Vec<armory::material::Rgb> = armory::heraldry::Tincture::ALL
+        .iter()
+        .map(|t| t.dye())
+        .collect();
     dyes.extend(armory::fabric::Fabric::GARMENT_DYES);
-    dyes.extend([0xe9e2cf, 0xb59b72, 0x8a5a2b, 0x6b4a2f, 0x3b2a1e, 0x8a8a86, 0x55524e, 0x1c1b1a].map(armory::material::Rgb::hex));
+    dyes.extend(
+        [
+            0xe9e2cf, 0xb59b72, 0x8a5a2b, 0x6b4a2f, 0x3b2a1e, 0x8a8a86, 0x55524e, 0x1c1b1a,
+        ]
+        .map(armory::material::Rgb::hex),
+    );
     let mut palette: Vec<[f32; 3]> = Vec::new();
     for dye in dyes {
         let rgb = [dye.0, dye.1, dye.2];
@@ -138,7 +166,10 @@ pub fn dye_palette() -> Vec<[f32; 3]> {
 
 /// How far apart two colours are: the largest channel difference.
 pub fn colour_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f32::max)
 }
 
 fn srgb(rgb: [f32; 3]) -> Color {
@@ -194,7 +225,12 @@ struct SliderGraphic {
 struct ToggleMark(String);
 
 /// The ledger button: a cell-dark box ruled in tan, with `marker` (a view's own control) on it.
-pub fn chip<'a>(parent: &'a mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, marker: impl Bundle) -> EntityCommands<'a> {
+pub fn chip<'a>(
+    parent: &'a mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    marker: impl Bundle,
+) -> EntityCommands<'a> {
     let mut chip = parent.spawn((
         marker,
         Node {
@@ -208,7 +244,10 @@ pub fn chip<'a>(parent: &'a mut ChildSpawnerCommands, fonts: &UiFonts, label: &s
         BackgroundColor(CELL),
         BorderColor::all(LINE),
     ));
-    chip.with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 16.0, INK)));
+    chip.with_child((
+        Text::new(label),
+        UiFonts::style(&fonts.body_medium, 16.0, INK),
+    ));
     chip
 }
 
@@ -219,15 +258,36 @@ pub fn panel_body(parent: &mut ChildSpawnerCommands) {
         .spawn((
             PanelBody,
             ScrollPosition::default(),
-            Node { flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, overflow: Overflow::scroll_y(), padding: UiRect::axes(px(14), px(6)), ..default() },
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::scroll_y(),
+                padding: UiRect::axes(px(14), px(6)),
+                ..default()
+            },
         ))
-        .with_child((Sections, Node { flex_direction: FlexDirection::Column, row_gap: px(2), padding: UiRect::bottom(px(30)), ..default() }));
+        .with_child((
+            Sections,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(2),
+                padding: UiRect::bottom(px(30)),
+                ..default()
+            },
+        ));
 }
 
 /// Whether the mouse is over the panel's body.
-pub fn over_body(window: &Window, body: &Query<(&ComputedNode, &UiGlobalTransform), With<PanelBody>>) -> bool {
-    let Some(point) = window.cursor_position() else { return false };
-    body.iter().any(|(node, transform)| node_rect(node, transform).contains(point))
+pub fn over_body(
+    window: &Window,
+    body: &Query<(&ComputedNode, &UiGlobalTransform), With<PanelBody>>,
+) -> bool {
+    let Some(point) = window.cursor_position() else {
+        return false;
+    };
+    body.iter()
+        .any(|(node, transform)| node_rect(node, transform).contains(point))
 }
 
 /// A press on a field does what it says; a slider starts being dragged ([`drag_slider`]).
@@ -248,12 +308,21 @@ fn press_fields<T: Tweak>(
     if !(left || right) {
         return;
     }
-    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else { return };
-    let Ok((node, transform)) = body.single() else { return };
+    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else {
+        return;
+    };
+    let Ok((node, transform)) = body.single() else {
+        return;
+    };
     if !node_rect(node, transform).contains(point) {
         return;
     }
-    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    let Some((control, ..)) = controls
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    else {
+        return;
+    };
     match control.clone() {
         FieldControl::Slider(path, range) if left => held.0 = Some((path, range)),
         FieldControl::Cycle(path) => tweak.cycle(&path, if left { 1 } else { -1 }),
@@ -271,9 +340,18 @@ fn drag_slider<T: Tweak>(
     mut tweak: ResMut<T>,
     ui_scale: Option<Res<UiScale>>,
 ) {
-    let Some((path, range)) = held.0.clone() else { return };
-    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else { return };
-    let Some((_, node, transform)) = controls.iter().find(|(c, ..)| matches!(c, FieldControl::Slider(p, _) if *p == path)) else { return };
+    let Some((path, range)) = held.0.clone() else {
+        return;
+    };
+    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else {
+        return;
+    };
+    let Some((_, node, transform)) = controls
+        .iter()
+        .find(|(c, ..)| matches!(c, FieldControl::Slider(p, _) if *p == path))
+    else {
+        return;
+    };
     let target = value_at(&range, fraction_along(node_rect(node, transform), point.x));
     let snapped = if target >= range.max {
         range.max
@@ -289,12 +367,19 @@ fn drag_slider<T: Tweak>(
 }
 
 /// Scrolling over the body moves it.
-fn scroll_panel(scroll: Res<AccumulatedMouseScroll>, window: Option<Single<&Window, With<PrimaryWindow>>>, mut body: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<PanelBody>>, ui_scale: Option<Res<UiScale>>) {
+fn scroll_panel(
+    scroll: Res<AccumulatedMouseScroll>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    mut body: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<PanelBody>>,
+    ui_scale: Option<Res<UiScale>>,
+) {
     let lines = match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else { return };
+    let Some(point) = window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())) else {
+        return;
+    };
     if lines == 0.0 {
         return;
     }
@@ -302,7 +387,9 @@ fn scroll_panel(scroll: Res<AccumulatedMouseScroll>, window: Option<Single<&Wind
         if !node_rect(node, transform).contains(point) {
             continue;
         }
-        let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+        let max = ((node.content_size() - node.size()) * node.inverse_scale_factor)
+            .y
+            .max(0.0);
         position.y = (position.y - lines * SCROLL_LINE).clamp(0.0, max);
     }
 }
@@ -342,15 +429,34 @@ fn section_heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, section: 
     parent.spawn((
         Text::new(section_title(section)),
         UiFonts::style(&fonts.display, 20.0, INK),
-        Node { margin: UiRect::top(px(14)), padding: UiRect::bottom(px(3)), border: UiRect::bottom(px(1)), width: percent(100), ..default() },
+        Node {
+            margin: UiRect::top(px(14)),
+            padding: UiRect::bottom(px(3)),
+            border: UiRect::bottom(px(1)),
+            width: percent(100),
+            ..default()
+        },
         BorderColor::all(GOLD),
     ));
 }
 
 fn field_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &Field) {
-    let row = Node { align_items: AlignItems::Center, column_gap: px(8), min_height: px(26), ..default() };
+    let row = Node {
+        align_items: AlignItems::Center,
+        column_gap: px(8),
+        min_height: px(26),
+        ..default()
+    };
     parent.spawn(row).with_children(|row| {
-        row.spawn((Text::new(field_label(&field.name)), UiFonts::style(&fonts.body, 17.0, MUTED), Node { width: px(LABEL_WIDTH), flex_shrink: 0.0, ..default() }));
+        row.spawn((
+            Text::new(field_label(&field.name)),
+            UiFonts::style(&fonts.body, 17.0, MUTED),
+            Node {
+                width: px(LABEL_WIDTH),
+                flex_shrink: 0.0,
+                ..default()
+            },
+        ));
         match &field.kind {
             FieldKind::Slider { value, range } => {
                 slider_bar(row, &field.path, *range, fraction_of(range, *value));
@@ -359,7 +465,11 @@ fn field_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &Field) 
                     Text::new(format_value(*value, range.step)),
                     UiFonts::style(&fonts.mono, 15.0, BRIGHT),
                     TextLayout::justify(Justify::Right),
-                    Node { width: px(VALUE_WIDTH), flex_shrink: 0.0, ..default() },
+                    Node {
+                        width: px(VALUE_WIDTH),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
                 ));
             }
             FieldKind::Choice { value, .. } => {
@@ -376,27 +486,58 @@ fn field_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &Field) 
                     BackgroundColor(CELL),
                     BorderColor::all(LINE),
                 ))
-                .with_child((FieldReadout::Choice(field.path.clone()), Text::new(option_label(value)), UiFonts::style(&fonts.body_medium, 16.0, INK)));
+                .with_child((
+                    FieldReadout::Choice(field.path.clone()),
+                    Text::new(option_label(value)),
+                    UiFonts::style(&fonts.body_medium, 16.0, INK),
+                ));
             }
             FieldKind::Colour { value } => {
-                row.spawn(Node { flex_grow: 1.0, flex_wrap: FlexWrap::Wrap, column_gap: px(3), row_gap: px(3), align_items: AlignItems::Center, padding: UiRect::vertical(px(3)), ..default() })
-                    .with_children(|swatches| {
+                row.spawn(Node {
+                    flex_grow: 1.0,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: px(3),
+                    row_gap: px(3),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::vertical(px(3)),
+                    ..default()
+                })
+                .with_children(|swatches| {
+                    swatches.spawn((
+                        SwatchMark {
+                            path: field.path.clone(),
+                            rgb: None,
+                        },
+                        Node {
+                            width: px(26),
+                            height: px(26),
+                            margin: UiRect::right(px(5)),
+                            border: UiRect::all(px(2)),
+                            border_radius: BorderRadius::all(px(4)),
+                            ..default()
+                        },
+                        BackgroundColor(srgb(*value)),
+                        BorderColor::all(INK),
+                    ));
+                    for rgb in dye_palette() {
                         swatches.spawn((
-                            SwatchMark { path: field.path.clone(), rgb: None },
-                            Node { width: px(26), height: px(26), margin: UiRect::right(px(5)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(4)), ..default() },
-                            BackgroundColor(srgb(*value)),
-                            BorderColor::all(INK),
+                            FieldControl::Swatch(field.path.clone(), rgb),
+                            SwatchMark {
+                                path: field.path.clone(),
+                                rgb: Some(rgb),
+                            },
+                            Node {
+                                width: px(18),
+                                height: px(18),
+                                border: UiRect::all(px(2)),
+                                border_radius: BorderRadius::all(px(3)),
+                                ..default()
+                            },
+                            BackgroundColor(srgb(rgb)),
+                            BorderColor::all(LINE),
                         ));
-                        for rgb in dye_palette() {
-                            swatches.spawn((
-                                FieldControl::Swatch(field.path.clone(), rgb),
-                                SwatchMark { path: field.path.clone(), rgb: Some(rgb) },
-                                Node { width: px(18), height: px(18), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(3)), ..default() },
-                                BackgroundColor(srgb(rgb)),
-                                BorderColor::all(LINE),
-                            ));
-                        }
-                    });
+                    }
+                });
             }
             FieldKind::Toggle { value } => {
                 row.spawn((
@@ -415,9 +556,18 @@ fn field_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &Field) 
                 ))
                 .with_child((
                     ToggleMark(field.path.clone()),
-                    Node { width: px(10), height: px(10), border_radius: BorderRadius::all(px(2)), ..default() },
+                    Node {
+                        width: px(10),
+                        height: px(10),
+                        border_radius: BorderRadius::all(px(2)),
+                        ..default()
+                    },
                     BackgroundColor(INK),
-                    if *value { Visibility::Inherited } else { Visibility::Hidden },
+                    if *value {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    },
                 ));
             }
         }
@@ -427,34 +577,61 @@ fn field_row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, field: &Field) 
 /// A slider in the ledger's colours, as the settings page draws them: a ruled bar filled in
 /// muted tan with a cream knob, in a taller node that is easy to catch.
 fn slider_bar(row: &mut ChildSpawnerCommands, path: &str, range: Slider, fraction: f32) {
-    row.spawn((FieldControl::Slider(path.to_string(), range), Node { flex_grow: 1.0, height: px(22), align_items: AlignItems::Center, ..default() }))
-        .with_children(|bar| {
-            bar.spawn((
-                Node { width: percent(100), height: px(6), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() },
-                BackgroundColor(CELL),
-                BorderColor::all(LINE),
-            ))
-            .with_child((
-                SliderGraphic { path: path.to_string(), range, knob: false },
-                Node { width: percent(fraction * 100.0), height: percent(100), border_radius: BorderRadius::all(px(3)), ..default() },
-                BackgroundColor(MUTED),
-            ));
-            bar.spawn((
-                SliderGraphic { path: path.to_string(), range, knob: true },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: percent(fraction * 100.0),
-                    width: px(14),
-                    height: px(14),
-                    margin: UiRect::left(px(-7)),
-                    border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                BackgroundColor(INK),
-                BorderColor::all(BG),
-            ));
-        });
+    row.spawn((
+        FieldControl::Slider(path.to_string(), range),
+        Node {
+            flex_grow: 1.0,
+            height: px(22),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+    ))
+    .with_children(|bar| {
+        bar.spawn((
+            Node {
+                width: percent(100),
+                height: px(6),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
+            BackgroundColor(CELL),
+            BorderColor::all(LINE),
+        ))
+        .with_child((
+            SliderGraphic {
+                path: path.to_string(),
+                range,
+                knob: false,
+            },
+            Node {
+                width: percent(fraction * 100.0),
+                height: percent(100),
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
+            BackgroundColor(MUTED),
+        ));
+        bar.spawn((
+            SliderGraphic {
+                path: path.to_string(),
+                range,
+                knob: true,
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(fraction * 100.0),
+                width: px(14),
+                height: px(14),
+                margin: UiRect::left(px(-7)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BackgroundColor(INK),
+            BorderColor::all(BG),
+        ));
+    });
 }
 
 /// Keeps every value, slider and toggle showing the current state.
@@ -483,7 +660,9 @@ fn refresh_fields<T: Tweak>(
         }
     }
     for (graphic, mut node) in &mut graphics {
-        let Some(FieldKind::Slider { value, .. }) = find(&graphic.path) else { continue };
+        let Some(FieldKind::Slider { value, .. }) = find(&graphic.path) else {
+            continue;
+        };
         let at = percent(fraction_of(&graphic.range, *value) * 100.0);
         if graphic.knob {
             node.left = at;
@@ -492,16 +671,28 @@ fn refresh_fields<T: Tweak>(
         }
     }
     for (swatch, mut background, mut border) in &mut swatches {
-        let Some(FieldKind::Colour { value }) = find(&swatch.path) else { continue };
+        let Some(FieldKind::Colour { value }) = find(&swatch.path) else {
+            continue;
+        };
         match swatch.rgb {
             // The field's own colour.
             None => background.0 = srgb(*value),
-            Some(rgb) => *border = BorderColor::all(if colour_distance(rgb, *value) < 0.01 { INK } else { LINE }),
+            Some(rgb) => {
+                *border = BorderColor::all(if colour_distance(rgb, *value) < 0.01 {
+                    INK
+                } else {
+                    LINE
+                })
+            }
         }
     }
     for (mark, mut visibility) in &mut marks {
         if let Some(FieldKind::Toggle { value }) = find(&mark.0) {
-            *visibility = if *value { Visibility::Inherited } else { Visibility::Hidden };
+            *visibility = if *value {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
     }
 }
@@ -533,7 +724,13 @@ mod tests {
         let palette = dye_palette();
         assert!(palette.len() >= 18, "{}", palette.len());
         let gules = armory::heraldry::Tincture::Gules.dye();
-        assert_eq!(palette.iter().filter(|p| colour_distance(**p, [gules.0, gules.1, gules.2]) < 0.01).count(), 1);
+        assert_eq!(
+            palette
+                .iter()
+                .filter(|p| colour_distance(**p, [gules.0, gules.1, gules.2]) < 0.01)
+                .count(),
+            1
+        );
     }
 
     #[test]

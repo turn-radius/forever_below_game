@@ -29,10 +29,19 @@ impl Flame {
         if !low.is_finite() {
             return None;
         }
-        let height = positions.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max) - low;
-        let lowest: Vec<Vec3> = positions.iter().map(|&p| Vec3::from_array(p)).filter(|p| p.y <= low + height * 0.1).collect();
+        let height = positions
+            .iter()
+            .map(|p| p[1])
+            .fold(f32::NEG_INFINITY, f32::max)
+            - low;
+        let lowest: Vec<Vec3> = positions
+            .iter()
+            .map(|&p| Vec3::from_array(p))
+            .filter(|p| p.y <= low + height * 0.1)
+            .collect();
         let base = lowest.iter().sum::<Vec3>() / lowest.len() as f32;
-        let phase = (base.x * 12.9898 + base.z * 78.233).sin().fract().abs() * std::f32::consts::TAU;
+        let phase =
+            (base.x * 12.9898 + base.z * 78.233).sin().fract().abs() * std::f32::consts::TAU;
         Some(Flame { base, phase })
     }
 
@@ -52,11 +61,16 @@ impl Flame {
         let lean_z = LEAN * (0.7 * wave(2.6, 3.3) + 0.3 * wave(9.4, 0.8));
         let up = up.normalize_or(Vec3::Y);
         let upright = Quat::from_rotation_arc(Vec3::Y, up);
-        let upright = yaw_towards(up, upright * Vec3::Z, facing).unwrap_or(Quat::IDENTITY) * upright;
+        let upright =
+            yaw_towards(up, upright * Vec3::Z, facing).unwrap_or(Quat::IDENTITY) * upright;
         let rotation = upright * Quat::from_euler(EulerRot::XYZ, lean_x, 0.0, lean_z);
         let scale = Vec3::new(width, stretch, width);
         // Turned and scaled about the base: p -> base + R S (p - base).
-        Transform { translation: self.base - rotation * (scale * self.base), rotation, scale }
+        Transform {
+            translation: self.base - rotation * (scale * self.base),
+            rotation,
+            scale,
+        }
     }
 }
 
@@ -68,7 +82,10 @@ pub fn yaw_towards(up: Vec3, forward: Vec3, facing: Option<Vec3>) -> Option<Quat
         (v.length() > 1e-4).then(|| v.normalize())
     };
     let (from, to) = (flat(forward)?, flat(facing?)?);
-    Some(Quat::from_axis_angle(up, up.dot(from.cross(to)).atan2(from.dot(to))))
+    Some(Quat::from_axis_angle(
+        up,
+        up.dot(from.cross(to)).atan2(from.dot(to)),
+    ))
 }
 
 /// Share of a held flame's lean that points outward, toward the screen edge its hand is on;
@@ -111,11 +128,28 @@ pub fn flame_alpha(layer: FlameLayer, t: f32) -> f32 {
 /// deep red-orange at its tip. The shader reddens the veil's edges further (`toon.wesl`). Our
 /// own palette.
 pub fn flame_colour(layer: FlameLayer, t: f32) -> [f32; 3] {
-    const VEIL: [(f32, [f32; 3]); 4] = [(0.0, [1.0, 0.78, 0.30]), (0.35, [1.0, 0.55, 0.12]), (0.7, [0.95, 0.33, 0.07]), (1.0, [0.72, 0.14, 0.04])];
-    const CORE: [(f32, [f32; 3]); 3] = [(0.0, [1.0, 0.97, 0.78]), (0.5, [1.0, 0.88, 0.45]), (1.0, [1.0, 0.72, 0.25])];
-    let stops: &[(f32, [f32; 3])] = if layer == FlameLayer::Core { &CORE } else { &VEIL };
+    const VEIL: [(f32, [f32; 3]); 4] = [
+        (0.0, [1.0, 0.78, 0.30]),
+        (0.35, [1.0, 0.55, 0.12]),
+        (0.7, [0.95, 0.33, 0.07]),
+        (1.0, [0.72, 0.14, 0.04]),
+    ];
+    const CORE: [(f32, [f32; 3]); 3] = [
+        (0.0, [1.0, 0.97, 0.78]),
+        (0.5, [1.0, 0.88, 0.45]),
+        (1.0, [1.0, 0.72, 0.25]),
+    ];
+    let stops: &[(f32, [f32; 3])] = if layer == FlameLayer::Core {
+        &CORE
+    } else {
+        &VEIL
+    };
     let t = t.clamp(0.0, 1.0);
-    let upper = stops.iter().position(|s| s.0 >= t).unwrap_or(stops.len() - 1).max(1);
+    let upper = stops
+        .iter()
+        .position(|s| s.0 >= t)
+        .unwrap_or(stops.len() - 1)
+        .max(1);
     let (a, b) = (stops[upper - 1], stops[upper]);
     let k = ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);
     std::array::from_fn(|i| a.1[i] + (b.1[i] - a.1[i]) * k)
@@ -126,7 +160,10 @@ pub fn flame_colour(layer: FlameLayer, t: f32) -> [f32; 3] {
 /// flame's colours.
 pub fn flame_vertex_colours(positions: &[[f32; 3]], layer: FlameLayer) -> Vec<[f32; 4]> {
     let low = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
-    let high = positions.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
+    let high = positions
+        .iter()
+        .map(|p| p[1])
+        .fold(f32::NEG_INFINITY, f32::max);
     let span = (high - low).max(1e-6);
     positions
         .iter()
@@ -172,7 +209,10 @@ pub fn flicker_flames(
     let t = time.elapsed_secs();
     for (flame, parent, mut transform) in &mut flames {
         let (up, facing) = match items.get(parent.parent()) {
-            Ok((at, up, facing)) => (upright_in(at, up.copied().unwrap_or_default()), facing.map(|f| item_space(at, f.0))),
+            Ok((at, up, facing)) => (
+                upright_in(at, up.copied().unwrap_or_default()),
+                facing.map(|f| item_space(at, f.0)),
+            ),
             Err(_) => (Vec3::Y, None),
         };
         *transform = flame.pose(t, up, facing);
@@ -195,10 +235,12 @@ mod tests {
     use super::*;
 
     fn cone() -> Vec<[f32; 3]> {
-        let mut points: Vec<[f32; 3]> = (0..8).map(|i| {
-            let a = i as f32 * std::f32::consts::TAU / 8.0;
-            [2.0 + 0.3 * a.cos(), 5.0, 0.3 * a.sin()]
-        }).collect();
+        let mut points: Vec<[f32; 3]> = (0..8)
+            .map(|i| {
+                let a = i as f32 * std::f32::consts::TAU / 8.0;
+                [2.0 + 0.3 * a.cos(), 5.0, 0.3 * a.sin()]
+            })
+            .collect();
         points.push([2.0, 6.5, 0.0]);
         points
     }
@@ -206,13 +248,20 @@ mod tests {
     #[test]
     fn a_flame_moves_about_its_base_and_only_a_little() {
         let flame = Flame::of(&cone()).unwrap();
-        assert!(flame.base.abs_diff_eq(Vec3::new(2.0, 5.0, 0.0), 1e-4), "{}", flame.base);
+        assert!(
+            flame.base.abs_diff_eq(Vec3::new(2.0, 5.0, 0.0), 1e-4),
+            "{}",
+            flame.base
+        );
         let tip = Vec3::new(2.0, 6.5, 0.0);
         let mut moved = 0.0f32;
         for i in 0..200 {
             let pose = flame.pose(i as f32 * 0.037, Vec3::Y, None);
             // The base stays put; the tip wanders, but only a little.
-            assert!(pose.transform_point(flame.base).abs_diff_eq(flame.base, 1e-4));
+            assert!(
+                pose.transform_point(flame.base)
+                    .abs_diff_eq(flame.base, 1e-4)
+            );
             let d = pose.transform_point(tip).distance(tip);
             assert!(d < 1.5 * (STRETCH + LEAN) * 1.5 + 0.05, "{d}");
             moved = moved.max(d);
@@ -225,21 +274,35 @@ mod tests {
         let flame = Flame::of(&cone()).unwrap();
         let tip = Vec3::new(2.0, 6.5, 0.0);
         // A torch laid on its side, its own up pointing east.
-        let lying = GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)));
+        let lying = GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_z(
+            -std::f32::consts::FRAC_PI_2,
+        )));
         let up = upright_in(&lying, FlameUp::default());
         let pose = flame.pose(0.0, up, None);
-        let (base_world, tip_world) = (lying.transform_point(pose.transform_point(flame.base)), lying.transform_point(pose.transform_point(tip)));
-        assert!(pose.transform_point(flame.base).abs_diff_eq(flame.base, 1e-4), "the base stays on the wick");
+        let (base_world, tip_world) = (
+            lying.transform_point(pose.transform_point(flame.base)),
+            lying.transform_point(pose.transform_point(tip)),
+        );
+        assert!(
+            pose.transform_point(flame.base)
+                .abs_diff_eq(flame.base, 1e-4),
+            "the base stays on the wick"
+        );
         let rise = (tip_world - base_world).normalize();
         assert!(rise.y > 0.95, "the tip is above the base: {rise}");
         // Upright already, it stands as built.
-        assert!(upright_in(&GlobalTransform::IDENTITY, FlameUp::default()).abs_diff_eq(Vec3::Y, 1e-6));
+        assert!(
+            upright_in(&GlobalTransform::IDENTITY, FlameUp::default()).abs_diff_eq(Vec3::Y, 1e-6)
+        );
     }
 
     #[test]
     fn flames_side_by_side_move_apart() {
         let a = Flame::of(&cone()).unwrap();
-        let shifted: Vec<[f32; 3]> = cone().iter().map(|p| [p[0] + 3.0, p[1], p[2] + 1.0]).collect();
+        let shifted: Vec<[f32; 3]> = cone()
+            .iter()
+            .map(|p| [p[0] + 3.0, p[1], p[2] + 1.0])
+            .collect();
         let b = Flame::of(&shifted).unwrap();
         assert_ne!(a.phase, b.phase);
     }
@@ -251,7 +314,10 @@ mod tests {
             for up in [Vec3::Y, Vec3::new(1.0, 1.0, 0.0), Vec3::NEG_X] {
                 for i in 0..100 {
                     let pose = flame.pose(i as f32 * 0.11, up, facing);
-                    assert!(pose.transform_point(flame.base).abs_diff_eq(flame.base, 1e-4));
+                    assert!(
+                        pose.transform_point(flame.base)
+                            .abs_diff_eq(flame.base, 1e-4)
+                    );
                 }
             }
         }
@@ -281,7 +347,10 @@ mod tests {
         // World forward is -Z, right is +X.
         let main = held_facing(Vec3::NEG_Z, Vec3::X, 1.0);
         let off = held_facing(Vec3::NEG_Z, Vec3::X, -1.0);
-        assert!(main.x > 0.9 && main.z > 0.1 && (main.length() - 1.0).abs() < 1e-5, "{main}");
+        assert!(
+            main.x > 0.9 && main.z > 0.1 && (main.length() - 1.0).abs() < 1e-5,
+            "{main}"
+        );
         assert!(off.x < -0.9 && off.z > 0.1, "{off}");
         assert!((main.x + off.x).abs() < 1e-6);
         // The flame yaws to it: leaning right for the main hand, left for the off hand, and a little back.
@@ -297,7 +366,11 @@ mod tests {
         let flame = Flame::of(&cone()).unwrap();
         // The view model's stage is the eye's space: up is tilted by the eye's pitch.
         let pitch = Quat::from_rotation_x(0.6);
-        let pose = flame.pose(0.0, pitch.inverse() * Vec3::Y, Some(pitch.inverse() * Vec3::NEG_Z));
+        let pose = flame.pose(
+            0.0,
+            pitch.inverse() * Vec3::Y,
+            Some(pitch.inverse() * Vec3::NEG_Z),
+        );
         // Seen from the world the lean points along world forward.
         let world = pitch * (pose.rotation * Vec3::Z);
         assert!(world.dot(Vec3::NEG_Z) > 0.99, "{world}");
@@ -306,7 +379,11 @@ mod tests {
     #[test]
     fn a_flame_is_see_through_at_its_base_and_builds_toward_the_core() {
         for layer in [FlameLayer::Veil, FlameLayer::Core] {
-            assert!(flame_alpha(layer, 0.0) < flame_alpha(layer, 0.5) && flame_alpha(layer, 0.5) < flame_alpha(layer, 1.0), "{layer:?}");
+            assert!(
+                flame_alpha(layer, 0.0) < flame_alpha(layer, 0.5)
+                    && flame_alpha(layer, 0.5) < flame_alpha(layer, 1.0),
+                "{layer:?}"
+            );
         }
         // The veil is under half opaque over its lower half, so what burns shows through it
         // tinted; the core is what builds up.
@@ -317,7 +394,10 @@ mod tests {
         assert!((flame_alpha(FlameLayer::Veil, 0.0) - 0.4).abs() < 1e-6);
         assert!(flame_alpha(FlameLayer::Core, 1.0) > 2.0 * flame_alpha(FlameLayer::Veil, 0.0));
         let points = cone();
-        for (c, p) in flame_vertex_colours(&points, FlameLayer::Veil).iter().zip(&points) {
+        for (c, p) in flame_vertex_colours(&points, FlameLayer::Veil)
+            .iter()
+            .zip(&points)
+        {
             let want = if p[1] == 5.0 { 0.4 } else { 0.6 };
             assert!((c[3] - want).abs() < 1e-5, "{c:?}");
         }
@@ -329,17 +409,31 @@ mod tests {
         let core_base = flame_colour(FlameLayer::Core, 0.0);
         let veil_tip = flame_colour(FlameLayer::Veil, 1.0);
         // The core is pale (nearly white) and brightest; the tip is deep red.
-        assert!(core_base[2] > 0.7 && luma(core_base) > luma(veil_tip) + 0.5, "{core_base:?} {veil_tip:?}");
-        assert!(veil_tip[0] > veil_tip[1] * 3.0 && veil_tip[2] < 0.1, "{veil_tip:?}");
+        assert!(
+            core_base[2] > 0.7 && luma(core_base) > luma(veil_tip) + 0.5,
+            "{core_base:?} {veil_tip:?}"
+        );
+        assert!(
+            veil_tip[0] > veil_tip[1] * 3.0 && veil_tip[2] < 0.1,
+            "{veil_tip:?}"
+        );
         // The veil warms steadily: green (and so yellow) drains out going up.
-        let greens: Vec<f32> = (0..=10).map(|i| flame_colour(FlameLayer::Veil, i as f32 / 10.0)[1]).collect();
+        let greens: Vec<f32> = (0..=10)
+            .map(|i| flame_colour(FlameLayer::Veil, i as f32 / 10.0)[1])
+            .collect();
         assert!(greens.windows(2).all(|w| w[1] <= w[0]), "{greens:?}");
         // Yellow low, orange mid, red high.
-        assert!(flame_colour(FlameLayer::Veil, 0.0)[1] > 0.7 && (0.4..0.65).contains(&flame_colour(FlameLayer::Veil, 0.35)[1]));
+        assert!(
+            flame_colour(FlameLayer::Veil, 0.0)[1] > 0.7
+                && (0.4..0.65).contains(&flame_colour(FlameLayer::Veil, 0.35)[1])
+        );
         // The core cools to yellow-orange upward and is paler than the veil at any height.
         for i in 0..=10 {
             let t = i as f32 / 10.0;
-            assert!(luma(flame_colour(FlameLayer::Core, t)) > luma(flame_colour(FlameLayer::Veil, t)), "{t}");
+            assert!(
+                luma(flame_colour(FlameLayer::Core, t)) > luma(flame_colour(FlameLayer::Veil, t)),
+                "{t}"
+            );
         }
     }
 }

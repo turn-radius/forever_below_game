@@ -124,12 +124,25 @@ const PAVING: Kind = Kind {
 /// Appends the cobbles over cell `(x, y)`, and returns each one's half sizes. `base` is the
 /// floor's height at a world `(x, z)`; `wear` is how worn the floor is there, 0 to 1 (high near
 /// walls and where it is damp).
-pub fn cobbles(seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, wear: &impl Fn(f32, f32) -> f32, out: &mut Stones) -> Vec<[f32; 2]> {
+pub fn cobbles(
+    seed: u32,
+    x: i32,
+    y: i32,
+    base: &impl Fn(f32, f32) -> f32,
+    wear: &impl Fn(f32, f32) -> f32,
+    out: &mut Stones,
+) -> Vec<[f32; 2]> {
     lay(&COBBLE, seed ^ 0xc0b8_1e57, x, y, base, wear, out)
 }
 
 /// Appends rough flagstones, laid on the relief, over cell `(x, y)`.
-pub fn paving(seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, out: &mut Stones) -> Vec<[f32; 2]> {
+pub fn paving(
+    seed: u32,
+    x: i32,
+    y: i32,
+    base: &impl Fn(f32, f32) -> f32,
+    out: &mut Stones,
+) -> Vec<[f32; 2]> {
     lay(&PAVING, seed ^ 0x9a71_6000, x, y, base, &|_, _| 0.0, out)
 }
 
@@ -151,7 +164,10 @@ impl Stone {
     /// How far the stone reaches from its centre toward world direction `(dx, dz)` (unit).
     fn reach(&self, dx: f32, dz: f32) -> f32 {
         // Into the stone's own axes.
-        let (u, v) = (dx * self.turn[0] + dz * self.turn[1], -dx * self.turn[1] + dz * self.turn[0]);
+        let (u, v) = (
+            dx * self.turn[0] + dz * self.turn[1],
+            -dx * self.turn[1] + dz * self.turn[0],
+        );
         let e = (u / self.half[0]).powi(2) + (v / self.half[1]).powi(2);
         1.08 * self.wobble.iter().copied().fold(1.0, f32::max) / e.sqrt()
     }
@@ -160,17 +176,34 @@ impl Stone {
     fn point(&self, ring: usize, k: usize, base: &impl Fn(f32, f32) -> f32) -> V3 {
         let sides = self.wobble.len();
         if ring == 0 {
-            return [self.centre[0], base(self.centre[0], self.centre[1]) + self.raise, self.centre[1]];
+            return [
+                self.centre[0],
+                base(self.centre[0], self.centre[1]) + self.raise,
+                self.centre[1],
+            ];
         }
-        let (reach, height) = if ring == 3 { (1.0, 0.0) } else { self.rings[ring - 1] };
+        let (reach, height) = if ring == 3 {
+            (1.0, 0.0)
+        } else {
+            self.rings[ring - 1]
+        };
         let angle = k as f32 / sides as f32 * std::f32::consts::TAU;
         let (c, s) = (angle.cos(), angle.sin());
         let p = self.squareness;
         let fit = (c.abs().powf(p) + s.abs().powf(p)).powf(-1.0 / p) * reach * self.wobble[k];
         let (lx, lz) = (c * fit * self.half[0], s * fit * self.half[1]);
-        let (px, pz) = (self.centre[0] + lx * self.turn[0] - lz * self.turn[1], self.centre[1] + lx * self.turn[1] + lz * self.turn[0]);
+        let (px, pz) = (
+            self.centre[0] + lx * self.turn[0] - lz * self.turn[1],
+            self.centre[1] + lx * self.turn[1] + lz * self.turn[0],
+        );
         // The foot sinks under the floor so it never floats; the rest leans.
-        let rise = if ring == 3 { -SINK } else { self.raise * height + height * (self.lean[0] * (px - self.centre[0]) + self.lean[1] * (pz - self.centre[1])) };
+        let rise = if ring == 3 {
+            -SINK
+        } else {
+            self.raise * height
+                + height
+                    * (self.lean[0] * (px - self.centre[0]) + self.lean[1] * (pz - self.centre[1]))
+        };
         [px, base(px, pz) + rise, pz]
     }
 
@@ -180,12 +213,23 @@ impl Stone {
         for ring in 1..=3 {
             points.extend((0..sides).map(|k| self.point(ring, k, base)));
         }
-        let at = |ring: usize, k: usize| if ring == 0 { 0 } else { 1 + (ring - 1) * sides + k % sides };
+        let at = |ring: usize, k: usize| {
+            if ring == 0 {
+                0
+            } else {
+                1 + (ring - 1) * sides + k % sides
+            }
+        };
         let mut tris = Vec::new();
         for k in 0..sides {
             tris.push([0, at(1, k + 1), at(1, k)]);
             for ring in 1..3 {
-                let (a, b, c, d) = (at(ring, k), at(ring, k + 1), at(ring + 1, k + 1), at(ring + 1, k));
+                let (a, b, c, d) = (
+                    at(ring, k),
+                    at(ring, k + 1),
+                    at(ring + 1, k + 1),
+                    at(ring + 1, k),
+                );
                 tris.push([a, c, d]);
                 tris.push([a, b, c]);
             }
@@ -193,18 +237,29 @@ impl Stone {
         // Smooth normals: each vertex takes the area-weighted normals of its triangles.
         let mut normals = vec![[0.0f32; 3]; points.len()];
         for t in &tris {
-            let n = vec3::cross(vec3::sub(points[t[1]], points[t[0]]), vec3::sub(points[t[2]], points[t[0]]));
+            let n = vec3::cross(
+                vec3::sub(points[t[1]], points[t[0]]),
+                vec3::sub(points[t[2]], points[t[0]]),
+            );
             for &i in t {
                 normals[i] = vec3::add(normals[i], n);
             }
         }
         let first = mesh.vertex_count() as u32;
         for (p, n) in points.iter().zip(&normals) {
-            mesh.push_vertex(*p, vec3::normalize_or(*n, [0.0, 1.0, 0.0]), [p[0] / CELL, p[2] / CELL]);
+            mesh.push_vertex(
+                *p,
+                vec3::normalize_or(*n, [0.0, 1.0, 0.0]),
+                [p[0] / CELL, p[2] / CELL],
+            );
         }
         for t in &tris {
             // Wound counter-clockwise seen from above, so the dome faces up.
-            mesh.push_triangle(first + t[0] as u32, first + t[1] as u32, first + t[2] as u32);
+            mesh.push_triangle(
+                first + t[0] as u32,
+                first + t[1] as u32,
+                first + t[2] as u32,
+            );
         }
     }
 
@@ -219,12 +274,26 @@ const SINK: f32 = 0.25;
 const EDGE: f32 = 0.3;
 
 /// Packs `kind`'s stones into cell `(x, y)` by dart throwing and meshes them.
-fn lay(kind: &Kind, seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, wear: &impl Fn(f32, f32) -> f32, out: &mut Stones) -> Vec<[f32; 2]> {
-    let cell_seed = seed ^ (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca6b);
+fn lay(
+    kind: &Kind,
+    seed: u32,
+    x: i32,
+    y: i32,
+    base: &impl Fn(f32, f32) -> f32,
+    wear: &impl Fn(f32, f32) -> f32,
+    out: &mut Stones,
+) -> Vec<[f32; 2]> {
+    let cell_seed =
+        seed ^ (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca6b);
     let mut rng = Mulberry32::new(cell_seed);
     let origin = [x as f32 * CELL, y as f32 * CELL];
     // Low frequency fields over the world, so a patch of floor is tight, loose or bare as a whole.
-    let field = |px: f32, pz: f32, scale: f32, salt: u32| value_noise3([px / scale, 0.37 * salt as f32, pz / scale], seed ^ salt.wrapping_mul(0x2545_f491));
+    let field = |px: f32, pz: f32, scale: f32, salt: u32| {
+        value_noise3(
+            [px / scale, 0.37 * salt as f32, pz / scale],
+            seed ^ salt.wrapping_mul(0x2545_f491),
+        )
+    };
     let mut placed: Vec<Stone> = Vec::new();
     let mut triangles = 0;
     for &(attempts, r_lo, r_hi) in kind.classes {
@@ -234,7 +303,11 @@ fn lay(kind: &Kind, seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, 
             // pure function of the seed.
             let d: [f32; 14] = std::array::from_fn(|_| rng.range_f32(0.0, 1.0));
             let r = r_lo + (r_hi - r_lo) * d[0];
-            let ratio = if d[1] < kind.long_share { kind.long.0 + (kind.long.1 - kind.long.0) * d[2] } else { kind.plain.0 + (kind.plain.1 - kind.plain.0) * d[2] };
+            let ratio = if d[1] < kind.long_share {
+                kind.long.0 + (kind.long.1 - kind.long.0) * d[2]
+            } else {
+                kind.plain.0 + (kind.plain.1 - kind.plain.0) * d[2]
+            };
             let half = [r * ratio.sqrt(), r / ratio.sqrt()];
             let turn_angle = d[3] * std::f32::consts::PI;
             let ext = half[0].max(half[1]) * (1.0 + kind.wander) * 1.1;
@@ -242,9 +315,18 @@ fn lay(kind: &Kind, seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, 
                 continue;
             }
             let span = CELL - 2.0 * (EDGE + ext);
-            let centre = [origin[0] + EDGE + ext + span * d[4], origin[1] + EDGE + ext + span * d[5]];
+            let centre = [
+                origin[0] + EDGE + ext + span * d[4],
+                origin[1] + EDGE + ext + span * d[5],
+            ];
             // Worn floor, and floor that is damp or by a wall, is bare in patches.
-            let worn = if kind.wears { (wear(centre[0], centre[1]) * 0.8 + (1.0 - field(centre[0], centre[1], 11.0, 1)) * 0.3).clamp(0.0, 1.0) } else { 0.0 };
+            let worn = if kind.wears {
+                (wear(centre[0], centre[1]) * 0.8
+                    + (1.0 - field(centre[0], centre[1], 11.0, 1)) * 0.3)
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             if kind.wears && field(centre[0], centre[1], 4.0, 2) < worn * 0.9 - 0.1 {
                 continue;
             }
@@ -253,11 +335,23 @@ fn lay(kind: &Kind, seed: u32, x: i32, y: i32, base: &impl Fn(f32, f32) -> f32, 
             let squareness = kind.squareness.0 + (kind.squareness.1 - kind.squareness.0) * d[6];
             let flat = d[7] < kind.flat_share;
             let sunk = d[8] < kind.sunk_share;
-            let raise = if sunk { kind.sunk.0 + (kind.sunk.1 - kind.sunk.0) * d[9] } else { kind.raise.0 + (kind.raise.1 - kind.raise.0) * d[9] };
-            let sides = if r < 1.05 { 6 } else if r < 1.8 { 7 } else { 9 };
+            let raise = if sunk {
+                kind.sunk.0 + (kind.sunk.1 - kind.sunk.0) * d[9]
+            } else {
+                kind.raise.0 + (kind.raise.1 - kind.raise.0) * d[9]
+            };
+            let sides = if r < 1.05 {
+                6
+            } else if r < 1.8 {
+                7
+            } else {
+                9
+            };
             let lean_angle = d[10] * std::f32::consts::TAU;
             let lean_size = kind.lean * d[11] * if sunk { 2.0 } else { 1.0 };
-            let wobble: Vec<f32> = (0..sides).map(|_| 1.0 + kind.wander * (rng.range_f32(0.0, 2.0) - 1.0)).collect();
+            let wobble: Vec<f32> = (0..sides)
+                .map(|_| 1.0 + kind.wander * (rng.range_f32(0.0, 2.0) - 1.0))
+                .collect();
             let mut tone = 0;
             let mut pick = d[12] * kind.tones.iter().sum::<f32>();
             for (i, w) in kind.tones.iter().enumerate() {
@@ -329,9 +423,15 @@ mod tests {
         for (p, q) in a.tones.iter().zip(&b.tones) {
             assert_eq!(p.positions, q.positions);
         }
-        assert!((600..=COBBLE.budget).contains(&count(&a)), "{} triangles", count(&a));
+        assert!(
+            (600..=COBBLE.budget).contains(&count(&a)),
+            "{} triangles",
+            count(&a)
+        );
         // Several tones appear over a few cells.
-        let used = (0..6).filter(|&i| (0..6).any(|c| cobbled(7, c, 1, 0.0).tones[i].vertex_count() > 0)).count();
+        let used = (0..6)
+            .filter(|&i| (0..6).any(|c| cobbled(7, c, 1, 0.0).tones[i].vertex_count() > 0))
+            .count();
         assert!(used >= 5, "{used} tones");
     }
 
@@ -345,9 +445,13 @@ mod tests {
     #[test]
     fn stones_vary_widely_in_size() {
         let mut out = Stones::default();
-        let halves: Vec<[f32; 2]> = (0..4).flat_map(|c| cobbles(11, c, 0, &|_, _| 0.0, &|_, _| 0.0, &mut out)).collect();
+        let halves: Vec<[f32; 2]> = (0..4)
+            .flat_map(|c| cobbles(11, c, 0, &|_, _| 0.0, &|_, _| 0.0, &mut out))
+            .collect();
         let widths: Vec<f32> = halves.iter().map(|h| h[0].min(h[1]) * 2.0).collect();
-        let (lo, hi) = widths.iter().fold((f32::MAX, f32::MIN), |(l, h), &w| (l.min(w), h.max(w)));
+        let (lo, hi) = widths
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &w| (l.min(w), h.max(w)));
         assert!(lo < 2.2 && hi > 3.6, "widths {lo} to {hi}");
     }
 
@@ -360,9 +464,15 @@ mod tests {
         assert!(!out.is_empty());
         for mesh in &out.tones {
             for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
-                assert!(p[0] > 2.0 * CELL && p[0] < 3.0 * CELL && p[2] > CELL && p[2] < 2.0 * CELL, "{p:?} leaves its cell");
+                assert!(
+                    p[0] > 2.0 * CELL && p[0] < 3.0 * CELL && p[2] > CELL && p[2] < 2.0 * CELL,
+                    "{p:?} leaves its cell"
+                );
                 assert!(n[1] > 0.0, "normal {n:?} faces down");
-                assert!(p[1] >= slope(p[0], p[2]) - SINK - 1e-4 && p[1] <= slope(p[0], p[2]) + 1.2, "{p:?} floats or sinks");
+                assert!(
+                    p[1] >= slope(p[0], p[2]) - SINK - 1e-4 && p[1] <= slope(p[0], p[2]) + 1.2,
+                    "{p:?} floats or sinks"
+                );
             }
         }
     }

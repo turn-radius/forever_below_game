@@ -57,7 +57,12 @@ pub struct FolkRoutinePlugin;
 
 impl Plugin for FolkRoutinePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<BlockedCells>().init_resource::<Tuning>().add_systems(Update, (begin_routines, walk_routines).chain().in_set(DelveSystems));
+        app.init_resource::<BlockedCells>()
+            .init_resource::<Tuning>()
+            .add_systems(
+                Update,
+                (begin_routines, walk_routines).chain().in_set(DelveSystems),
+            );
     }
 }
 
@@ -137,7 +142,21 @@ impl Routine {
     /// A routine of someone placed at `home` facing `facing`, pausing `first` seconds before
     /// their first walk, drawing from `rng`.
     pub fn placed(home: Vec2, facing: Vec2, first: f32, rng: Mulberry32) -> Self {
-        Routine { phase: Phase::Pause { left: first }, home, facing, chosen: Vec::new(), walks: 0, searches: 0, resume: None, away: 0.0, holds: 0, path: Vec::new(), stuck: 0.0, speed: 0.0, rng }
+        Routine {
+            phase: Phase::Pause { left: first },
+            home,
+            facing,
+            chosen: Vec::new(),
+            walks: 0,
+            searches: 0,
+            resume: None,
+            away: 0.0,
+            holds: 0,
+            path: Vec::new(),
+            stuck: 0.0,
+            speed: 0.0,
+            rng,
+        }
     }
 
     /// Sets the way they are walking (for tests).
@@ -196,7 +215,11 @@ pub fn pace(denizen: &Denizen, walk_speed: f32) -> f32 {
 /// there facing out, turn to watch the delver who comes near (the notice above), and walk back
 /// to the post after anything that moved them.
 pub fn keeps_post(denizen: &Denizen) -> bool {
-    denizen.person.spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard)
+    denizen
+        .person
+        .spot
+        .trade
+        .is_some_and(|t| t.profession == fb_faction::Profession::Guard)
 }
 
 fn grid(p: Vec2) -> (f32, f32) {
@@ -209,7 +232,11 @@ fn cell(p: Vec2) -> (i32, i32) {
 
 /// Gives each new person a routine (a body brought back from the record has none).
 #[allow(clippy::type_complexity)]
-pub(crate) fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>) {
+pub(crate) fn begin_routines(
+    mut commands: Commands,
+    tuning: Res<Tuning>,
+    new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>,
+) {
     for (entity, denizen) in &new {
         let mut rng = Mulberry32::new(denizen.person.spot.seed ^ ROUTINE_SALT);
         let first = rng.range_f32(0.0, tuning.folk.pause_max.max(tuning.folk.pause_min));
@@ -243,7 +270,10 @@ fn standable(level: &Level, p: Vec2, radius: f32, keep_out: &[Obstacle]) -> bool
     for dy in -1..=1 {
         for dx in -1..=1 {
             if !level.is_open(cx + dx, cy + dy) {
-                let (min, max) = (Vec2::new((cx + dx) as f32, (cy + dy) as f32) * CELL, Vec2::new((cx + dx + 1) as f32, (cy + dy + 1) as f32) * CELL);
+                let (min, max) = (
+                    Vec2::new((cx + dx) as f32, (cy + dy) as f32) * CELL,
+                    Vec2::new((cx + dx + 1) as f32, (cy + dy + 1) as f32) * CELL,
+                );
                 if p.distance(p.clamp(min, max)) < radius {
                     return false;
                 }
@@ -256,20 +286,40 @@ fn standable(level: &Level, p: Vec2, radius: f32, keep_out: &[Obstacle]) -> bool
 /// A place for someone from `home` to walk to, or `None` if the draws found none. Everything it
 /// reads is the level's own (rock, rooms, lights, props), so it is a pure function of the
 /// stream.
-fn choose_place(level: &Level, home: Vec2, radius: f32, wander: f32, keep_out: &[Obstacle], rng: &mut Mulberry32) -> Option<Vec2> {
+fn choose_place(
+    level: &Level,
+    home: Vec2,
+    radius: f32,
+    wander: f32,
+    keep_out: &[Obstacle],
+    rng: &mut Mulberry32,
+) -> Option<Vec2> {
     let home_cell = cell(home);
-    let room = level.room_at(home_cell.0, home_cell.1).map(|i| level.rooms[i]);
+    let room = level
+        .room_at(home_cell.0, home_cell.1)
+        .map(|i| level.rooms[i]);
     let margin = radius + 2.0;
     for _ in 0..8 {
-        let place = *rng.weighted(&[(Place::Light, 3), (Place::Wall, 2), (Place::Door, 3), (Place::Floor, 2)]);
+        let place = *rng.weighted(&[
+            (Place::Light, 3),
+            (Place::Wall, 2),
+            (Place::Door, 3),
+            (Place::Floor, 2),
+        ]);
         let at = match (place, room) {
             (Place::Light, _) => {
-                let lights: Vec<Vec2> = level.lights.iter().map(|l| Vec2::new(l.x, l.y) * CELL).filter(|l| l.distance(home) <= wander).collect();
+                let lights: Vec<Vec2> = level
+                    .lights
+                    .iter()
+                    .map(|l| Vec2::new(l.x, l.y) * CELL)
+                    .filter(|l| l.distance(home) <= wander)
+                    .collect();
                 if lights.is_empty() {
                     continue;
                 }
                 let light = *rng.pick(&lights);
-                light + Vec2::from_angle(rng.range_f32(0.0, std::f32::consts::TAU)) * LIGHT_STAND_OFF
+                light
+                    + Vec2::from_angle(rng.range_f32(0.0, std::f32::consts::TAU)) * LIGHT_STAND_OFF
             }
             (_, None) => continue,
             (Place::Wall, Some(room)) => {
@@ -296,7 +346,10 @@ fn choose_place(level: &Level, home: Vec2, radius: f32, wander: f32, keep_out: &
                         }
                         for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
                             if room.contains(x + dx, y + dy) {
-                                doors.push((Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * CELL, Vec2::new(-dx as f32, -dy as f32)));
+                                doors.push((
+                                    Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * CELL,
+                                    Vec2::new(-dx as f32, -dy as f32),
+                                ));
                             }
                         }
                     }
@@ -306,7 +359,11 @@ fn choose_place(level: &Level, home: Vec2, radius: f32, wander: f32, keep_out: &
                 }
                 let &(door, out) = rng.pick(&doors);
                 // As far through as stands clear, else the doorway itself.
-                [THROUGH_THE_DOOR, 1.0, 0.0].into_iter().map(|cells| door + out * cells * CELL).find(|p| standable(level, *p, radius, keep_out)).unwrap_or(door)
+                [THROUGH_THE_DOOR, 1.0, 0.0]
+                    .into_iter()
+                    .map(|cells| door + out * cells * CELL)
+                    .find(|p| standable(level, *p, radius, keep_out))
+                    .unwrap_or(door)
             }
         };
         if at.distance(home) <= wander && standable(level, at, radius, keep_out) {
@@ -318,7 +375,10 @@ fn choose_place(level: &Level, home: Vec2, radius: f32, wander: f32, keep_out: &
 
 /// The corners of `room` in world units, drawn in by `margin` (to its middle if it is narrower).
 fn inset(room: &fb_level::Room, margin: f32) -> (Vec2, Vec2) {
-    let (lo, hi) = (Vec2::new(room.x as f32, room.y as f32) * CELL, Vec2::new((room.x + room.w) as f32, (room.y + room.h) as f32) * CELL);
+    let (lo, hi) = (
+        Vec2::new(room.x as f32, room.y as f32) * CELL,
+        Vec2::new((room.x + room.w) as f32, (room.y + room.h) as f32) * CELL,
+    );
     let m = Vec2::splat(margin).min((hi - lo) * 0.45);
     (lo + m, hi - m)
 }
@@ -336,7 +396,16 @@ pub(crate) fn walk_routines(
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     creatures: Query<(&Critter, &Transform), Without<Denizen>>,
     props: Query<(&BlocksTheWay, &GlobalTransform), Without<Denizen>>,
-    mut folk: Query<(Entity, &Denizen, &mut Routine, &mut Stride, &mut Transform, Option<&Hostility>, Has<crate::folk_regard::Attending>, Has<crate::folk_regard::Assisting>)>,
+    mut folk: Query<(
+        Entity,
+        &Denizen,
+        &mut Routine,
+        &mut Stride,
+        &mut Transform,
+        Option<&Hostility>,
+        Has<crate::folk_regard::Attending>,
+        Has<crate::folk_regard::Assisting>,
+    )>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
@@ -348,10 +417,31 @@ pub(crate) fn walk_routines(
     // What stops a person (rock, and shut doors but their own faction's) is made per person below.
     // What every person keeps out of that stays put: props and braziers. Where they choose to
     // go leaves out the creatures and the player, which move, so the choice stays the seed's.
-    let mut fixed: Vec<Obstacle> = props.iter().map(|(blocks, at)| Obstacle::of(blocks.0, at)).collect();
-    fixed.extend(level.lights.iter().filter(|l| l.kind == LightKind::Brazier).map(|l| Obstacle::Circle { centre: Vec2::new(l.x, l.y) * CELL, radius: BRAZIER_RADIUS }));
-    let mut moving: Vec<Obstacle> = creatures.iter().map(|(c, t)| Obstacle::Circle { centre: t.translation.xz(), radius: body_radius(c) }).collect();
-    moving.extend(player.iter().next().map(|t| Obstacle::Circle { centre: t.translation.xz(), radius: tuning.moving.body_radius }));
+    let mut fixed: Vec<Obstacle> = props
+        .iter()
+        .map(|(blocks, at)| Obstacle::of(blocks.0, at))
+        .collect();
+    fixed.extend(
+        level
+            .lights
+            .iter()
+            .filter(|l| l.kind == LightKind::Brazier)
+            .map(|l| Obstacle::Circle {
+                centre: Vec2::new(l.x, l.y) * CELL,
+                radius: BRAZIER_RADIUS,
+            }),
+    );
+    let mut moving: Vec<Obstacle> = creatures
+        .iter()
+        .map(|(c, t)| Obstacle::Circle {
+            centre: t.translation.xz(),
+            radius: body_radius(c),
+        })
+        .collect();
+    moving.extend(player.iter().next().map(|t| Obstacle::Circle {
+        centre: t.translation.xz(),
+        radius: tuning.moving.body_radius,
+    }));
     // Everything a walker keeps out of, built once: the fixed and moving obstacles, then every
     // person's circle (each walker sets their own aside while they step).
     let mut shared = fixed.clone();
@@ -359,13 +449,36 @@ pub(crate) fn walk_routines(
     let mut body_of: Vec<(Entity, usize)> = Vec::new();
     for (e, d, _, _, t, _, _, _) in folk.iter() {
         body_of.push((e, shared.len()));
-        shared.push(Obstacle::Circle { centre: t.translation.xz(), radius: d.radius });
+        shared.push(Obstacle::Circle {
+            centre: t.translation.xz(),
+            radius: d.radius,
+        });
     }
     let relief = Relief::new(level);
 
-    for (entity, denizen, mut routine, mut stride, mut transform, hostility, attending, assisting) in &mut folk {
-        let blocked = crate::doors::solid_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
-        let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+    for (
+        entity,
+        denizen,
+        mut routine,
+        mut stride,
+        mut transform,
+        hostility,
+        attending,
+        assisting,
+    ) in &mut folk
+    {
+        let blocked = crate::doors::solid_for(
+            level,
+            &blocked_cells,
+            doors.as_deref(),
+            Some(denizen.person.faction.id),
+        );
+        let see = crate::doors::opaque_for(
+            level,
+            &blocked_cells,
+            doors.as_deref(),
+            Some(denizen.person.faction.id),
+        );
         // A hostile folk has left their routine to fight (`crate::folk_combat::fight`), though
         // the others still keep out of where they stand.
         // Likewise an ally who has joined the delver's fight (`crate::folk_regard`).
@@ -377,7 +490,9 @@ pub(crate) fn walk_routines(
         let radius = denizen.radius;
         let mut face: Option<Vec2> = None;
         let mut moved = 0.0;
-        let pause = |rng: &mut Mulberry32| Phase::Pause { left: rng.range_f32(tune.pause_min, tune.pause_max.max(tune.pause_min)) };
+        let pause = |rng: &mut Mulberry32| Phase::Pause {
+            left: rng.range_f32(tune.pause_min, tune.pause_max.max(tune.pause_min)),
+        };
 
         // Notice the player, and let go of them once they are well away.
         let near = player_at.map(|p| (p, p.distance(at)));
@@ -416,7 +531,20 @@ pub(crate) fn walk_routines(
                 } else {
                     // Away from home, the next walk is the way back; at home, somewhere new.
                     // A guard keeps their post: they never choose a place to stroll to.
-                    let goal = if away { Some(routine.home) } else if keeps_post(denizen) { None } else { choose_place(level, routine.home, radius, tune.wander_radius, &fixed, &mut routine.rng) };
+                    let goal = if away {
+                        Some(routine.home)
+                    } else if keeps_post(denizen) {
+                        None
+                    } else {
+                        choose_place(
+                            level,
+                            routine.home,
+                            radius,
+                            tune.wander_radius,
+                            &fixed,
+                            &mut routine.rng,
+                        )
+                    };
                     let way = goal.and_then(|g| {
                         routine.searches += 1;
                         find_path(cell(at), cell(g), 4000, &blocked).map(|path| (g, path))
@@ -442,7 +570,8 @@ pub(crate) fn walk_routines(
                     routine.path.clear();
                     routine.speed = 0.0;
                 } else {
-                    let (x, y) = steer_toward(grid(at), grid(goal), &routine.path, radius / CELL, &blocked);
+                    let (x, y) =
+                        steer_toward(grid(at), grid(goal), &routine.path, radius / CELL, &blocked);
                     let target = Vec2::new(x, y) * CELL;
                     let direction = (target - at).normalize_or_zero();
                     face = Some(target);
@@ -450,19 +579,34 @@ pub(crate) fn walk_routines(
                     let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                     let off = angle_between(yaw, direction.x.atan2(direction.y));
                     if direction != Vec2::ZERO && off.abs() < FACING_ENOUGH {
-                        let wanted = pace(denizen, tune.walk_speed) * (remaining / (0.5 * CELL)).clamp(0.3, 1.0);
+                        let wanted = pace(denizen, tune.walk_speed)
+                            * (remaining / (0.5 * CELL)).clamp(0.3, 1.0);
                         routine.speed += (wanted - routine.speed).clamp(-EASE * dt, EASE * dt);
-                        let step = (direction * routine.speed * dt).clamp_length_max((target - at).length());
+                        let step = (direction * routine.speed * dt)
+                            .clamp_length_max((target - at).length());
                         let own = body_of.iter().find(|(e, _)| *e == entity).map(|&(_, i)| i);
-                        let kept = own.map(|i| std::mem::replace(&mut shared[i], Obstacle::Circle { centre: Vec2::splat(f32::MAX), radius: 0.0 }));
+                        let kept = own.map(|i| {
+                            std::mem::replace(
+                                &mut shared[i],
+                                Obstacle::Circle {
+                                    centre: Vec2::splat(f32::MAX),
+                                    radius: 0.0,
+                                },
+                            )
+                        });
                         let to = slide_around(at, at + step, radius, &blocked, &shared);
                         if let (Some(i), Some(kept)) = (own, kept) {
                             shared[i] = kept;
                         }
                         let made = (to - at).dot(direction);
-                        routine.stuck = if made < 0.25 * routine.speed * dt { routine.stuck + dt } else { 0.0 };
+                        routine.stuck = if made < 0.25 * routine.speed * dt {
+                            routine.stuck + dt
+                        } else {
+                            0.0
+                        };
                         moved = (to - at).length();
-                        transform.translation = Vec3::new(to.x, relief.floor_height(to.x, to.y), to.y);
+                        transform.translation =
+                            Vec3::new(to.x, relief.floor_height(to.x, to.y), to.y);
                     } else {
                         routine.speed = 0.0;
                     }
@@ -477,7 +621,8 @@ pub(crate) fn walk_routines(
             if to.length_squared() > 1e-4 {
                 let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
                 let turn = angle_between(yaw, to.x.atan2(to.y));
-                transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-TURN_RATE * dt, TURN_RATE * dt));
+                transform.rotation =
+                    Quat::from_rotation_y(yaw + turn.clamp(-TURN_RATE * dt, TURN_RATE * dt));
             }
         }
     }
@@ -505,22 +650,42 @@ mod tests {
     fn level_app(player_at: Vec2) -> (App, Vec<Entity>) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
-            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 60.0),
+            ))
             .add_plugins((BehaviourPlugin, FolkRoutinePlugin))
-            .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate));
+            .add_systems(
+                PostUpdate,
+                gather_obstacles.after(TransformSystems::Propagate),
+            );
         let level = fb_level::generate(1207, 1);
         app.insert_resource(CurrentLevel(level.clone()));
-        app.world_mut().spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y)));
+        app.world_mut()
+            .spawn((Player, Transform::from_xyz(player_at.x, 0.0, player_at.y)));
         for p in &level.props {
-            let at = Transform::from_translation(Vec3::from_array(Level::world(p.x, p.y))).with_rotation(Quat::from_rotation_y(p.yaw));
-            app.world_mut().spawn((BlocksTheWay(p.prop.floor_shape()), at));
+            let at = Transform::from_translation(Vec3::from_array(Level::world(p.x, p.y)))
+                .with_rotation(Quat::from_rotation_y(p.yaw));
+            app.world_mut()
+                .spawn((BlocksTheWay(p.prop.floor_shape()), at));
         }
         let folk: Vec<Entity> = level
             .folk
             .iter()
             .map(|spot| {
-                let denizen = Denizen { person: crate::folk::person_1207(spot), radius: FOOTPRINT, min: Vec3::ZERO, max: Vec3::ZERO };
-                app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(FOOTPRINT)), Stride::default(), crate::folk::stand_at(spot))).id()
+                let denizen = Denizen {
+                    person: crate::folk::person_1207(spot),
+                    radius: FOOTPRINT,
+                    min: Vec3::ZERO,
+                    max: Vec3::ZERO,
+                };
+                app.world_mut()
+                    .spawn((
+                        denizen,
+                        BlocksTheWay(fb_level::FloorShape::Round(FOOTPRINT)),
+                        Stride::default(),
+                        crate::folk::stand_at(spot),
+                    ))
+                    .id()
             })
             .collect();
         {
@@ -534,7 +699,11 @@ mod tests {
     }
 
     fn position(app: &App, entity: Entity) -> Vec2 {
-        app.world().get::<Transform>(entity).unwrap().translation.xz()
+        app.world()
+            .get::<Transform>(entity)
+            .unwrap()
+            .translation
+            .xz()
     }
 
     /// Steps a minute and more, calling `each` after every frame.
@@ -558,16 +727,26 @@ mod tests {
             }
         });
         let left = away.iter().filter(|&&d| d > 2.0 * CELL * 0.25).count();
-        assert!(left * 2 > folk.len(), "{left} of {} left their spots: {away:?}", folk.len());
+        assert!(
+            left * 2 > folk.len(),
+            "{left} of {} left their spots: {away:?}",
+            folk.len()
+        );
         let walk = crate::tuning::FolkTuning::default().walk_speed;
-        assert!(fastest > 4.0 && fastest <= walk + 0.5, "fastest pace {fastest}");
+        assert!(
+            fastest > 4.0 && fastest <= walk + 0.5,
+            "fastest pace {fastest}"
+        );
     }
 
     #[test]
     fn guards_keep_their_post_and_the_rest_wander() {
         let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
         let homes: Vec<Vec2> = folk.iter().map(|&f| position(&app, f)).collect();
-        let guard: Vec<bool> = folk.iter().map(|&f| keeps_post(app.world().get::<Denizen>(f).unwrap())).collect();
+        let guard: Vec<bool> = folk
+            .iter()
+            .map(|&f| keeps_post(app.world().get::<Denizen>(f).unwrap()))
+            .collect();
         assert!(guard.iter().any(|&g| g), "seed 1207 has no guard");
         let mut away = vec![0.0f32; folk.len()];
         run(&mut app, 60 * 120, |app, _| {
@@ -581,7 +760,10 @@ mod tests {
                 assert_eq!(app.world().get::<Routine>(f).unwrap().walks, 0);
             }
         }
-        assert!(guard.iter().zip(&away).any(|(&g, &d)| !g && d > CELL * 0.5), "no one else wandered: {away:?}");
+        assert!(
+            guard.iter().zip(&away).any(|(&g, &d)| !g && d > CELL * 0.5),
+            "no one else wandered: {away:?}"
+        );
     }
 
     #[test]
@@ -590,47 +772,89 @@ mod tests {
         let props: Vec<Obstacle> = level
             .props
             .iter()
-            .map(|p| Obstacle::of(p.prop.floor_shape(), &GlobalTransform::from(Transform::from_translation(Vec3::from_array(Level::world(p.x, p.y))).with_rotation(Quat::from_rotation_y(p.yaw)))))
+            .map(|p| {
+                Obstacle::of(
+                    p.prop.floor_shape(),
+                    &GlobalTransform::from(
+                        Transform::from_translation(Vec3::from_array(Level::world(p.x, p.y)))
+                            .with_rotation(Quat::from_rotation_y(p.yaw)),
+                    ),
+                )
+            })
             .collect();
         // The player stands where someone is going: the first place a person chose, found by
         // running the level once without them (the places are the seed's, so they are the same).
         let player = {
             let (mut probe, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
             run(&mut probe, 60 * 30, |_, _| {});
-            folk.iter().find_map(|&f| probe.world().get::<Routine>(f).unwrap().chosen.first().copied()).expect("someone chose a place")
+            folk.iter()
+                .find_map(|&f| {
+                    probe
+                        .world()
+                        .get::<Routine>(f)
+                        .unwrap()
+                        .chosen
+                        .first()
+                        .copied()
+                })
+                .expect("someone chose a place")
         };
         let (mut app, folk) = level_app(player);
         let mut critters = app.world_mut().query::<(&Critter, &Transform)>();
         let mut nearest = f32::MAX;
         run(&mut app, 60 * 60, |app, frame| {
             let at: Vec<Vec2> = folk.iter().map(|&f| position(app, f)).collect();
-            let creatures: Vec<(Vec2, f32)> = critters.iter(app.world()).map(|(c, t)| (t.translation.xz(), body_radius(c))).collect();
+            let creatures: Vec<(Vec2, f32)> = critters
+                .iter(app.world())
+                .map(|(c, t)| (t.translation.xz(), body_radius(c)))
+                .collect();
             for (i, &p) in at.iter().enumerate() {
                 let (gx, gy) = (p.x / CELL, p.y / CELL);
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         let (x, y) = (gx.floor() as i32 + dx, gy.floor() as i32 + dy);
                         if !level.is_open(x, y) {
-                            let (min, max) = (Vec2::new(x as f32, y as f32) * CELL, Vec2::new(x as f32 + 1.0, y as f32 + 1.0) * CELL);
-                            assert!(p.distance(p.clamp(min, max)) >= FOOTPRINT - 0.05, "folk {i} in the wall at {p} (frame {frame})");
+                            let (min, max) = (
+                                Vec2::new(x as f32, y as f32) * CELL,
+                                Vec2::new(x as f32 + 1.0, y as f32 + 1.0) * CELL,
+                            );
+                            assert!(
+                                p.distance(p.clamp(min, max)) >= FOOTPRINT - 0.05,
+                                "folk {i} in the wall at {p} (frame {frame})"
+                            );
                         }
                     }
                 }
                 for o in &props {
-                    assert!(!o.overlaps(p, FOOTPRINT - 0.05), "folk {i} at {p} walks into {o:?} (frame {frame})");
+                    assert!(
+                        !o.overlaps(p, FOOTPRINT - 0.05),
+                        "folk {i} at {p} walks into {o:?} (frame {frame})"
+                    );
                 }
                 for (j, &q) in at.iter().enumerate().skip(i + 1) {
-                    assert!(p.distance(q) >= 2.0 * FOOTPRINT - 0.1, "folk {i} and {j} overlap at {p} (frame {frame})");
+                    assert!(
+                        p.distance(q) >= 2.0 * FOOTPRINT - 0.1,
+                        "folk {i} and {j} overlap at {p} (frame {frame})"
+                    );
                 }
                 for &(c, r) in &creatures {
-                    assert!(p.distance(c) >= FOOTPRINT + r - 0.1, "folk {i} at {p} overlaps a creature at {c} (frame {frame})");
+                    assert!(
+                        p.distance(c) >= FOOTPRINT + r - 0.1,
+                        "folk {i} at {p} overlaps a creature at {c} (frame {frame})"
+                    );
                 }
-                assert!(p.distance(player) >= FOOTPRINT + 3.5 - 0.1, "folk {i} at {p} overlaps the player (frame {frame})");
+                assert!(
+                    p.distance(player) >= FOOTPRINT + 3.5 - 0.1,
+                    "folk {i} at {p} overlaps the player (frame {frame})"
+                );
                 nearest = nearest.min(p.distance(player));
             }
         });
         let notice = crate::tuning::FolkTuning::default().notice_distance;
-        assert!(nearest <= notice + 5.0, "no one came near the player (nearest {nearest})");
+        assert!(
+            nearest <= notice + 5.0,
+            "no one came near the player (nearest {nearest})"
+        );
     }
 
     #[test]
@@ -662,10 +886,23 @@ mod tests {
         let first = |ms: u64| {
             let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
             // A different frame rate changes the timing, not the places.
-            app.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(ms)));
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(ms),
+            ));
             let frames = (60_000 / ms) as usize;
             run(&mut app, frames, |_, _| {});
-            folk.iter().map(|&f| app.world().get::<Routine>(f).unwrap().chosen.iter().take(1).copied().collect::<Vec<_>>()).collect::<Vec<_>>()
+            folk.iter()
+                .map(|&f| {
+                    app.world()
+                        .get::<Routine>(f)
+                        .unwrap()
+                        .chosen
+                        .iter()
+                        .take(1)
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         };
         let a = first(16);
         let b = first(16);
@@ -686,7 +923,12 @@ mod tests {
         for &f in &folk {
             let r = app.world().get::<Routine>(f).unwrap();
             // One search per walk set out on, and the odd choice that found no way.
-            assert!(r.searches <= r.walks + 3, "{} searches for {} walks", r.searches, r.walks);
+            assert!(
+                r.searches <= r.walks + 3,
+                "{} searches for {} walks",
+                r.searches,
+                r.walks
+            );
             assert!(r.searches <= 60, "{} searches in a minute", r.searches);
         }
     }
@@ -708,16 +950,29 @@ mod tests {
         let tall = (1..=8)
             .flat_map(|world| {
                 let level = fb_level::generate(world, 1);
-                level.folk.iter().map(|s| crate::folk::Person::of(s, level.faction(s.faction), 1)).collect::<Vec<_>>()
+                level
+                    .folk
+                    .iter()
+                    .map(|s| crate::folk::Person::of(s, level.faction(s.faction), 1))
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let mk = |p: &crate::folk::Person| Denizen { person: p.clone(), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO };
+        let mk = |p: &crate::folk::Person| Denizen {
+            person: p.clone(),
+            radius: 3.0,
+            min: Vec3::ZERO,
+            max: Vec3::ZERO,
+        };
         for a in &tall {
             for b in &tall {
                 if a.spec.folk.race().h < b.spec.folk.race().h {
                     // Strictly slower unless both are as tall as a human, whose pace is the cap.
                     let capped = a.spec.folk.race().h >= HUMAN_HEIGHT;
-                    assert!(if capped { pace(&mk(a), 11.0) <= pace(&mk(b), 11.0) } else { pace(&mk(a), 11.0) < pace(&mk(b), 11.0) });
+                    assert!(if capped {
+                        pace(&mk(a), 11.0) <= pace(&mk(b), 11.0)
+                    } else {
+                        pace(&mk(a), 11.0) < pace(&mk(b), 11.0)
+                    });
                 }
             }
         }
@@ -725,7 +980,9 @@ mod tests {
     }
 
     fn set_player(app: &mut App, at: Vec2) {
-        let mut q = app.world_mut().query_filtered::<&mut Transform, With<Player>>();
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&mut Transform, With<Player>>();
         for mut t in q.iter_mut(app.world_mut()) {
             t.translation = Vec3::new(at.x, 0.0, at.y);
         }
@@ -736,7 +993,12 @@ mod tests {
     }
 
     fn yaw_to(app: &App, e: Entity, target: Vec2) -> f32 {
-        let (yaw, _, _) = app.world().get::<Transform>(e).unwrap().rotation.to_euler(EulerRot::YXZ);
+        let (yaw, _, _) = app
+            .world()
+            .get::<Transform>(e)
+            .unwrap()
+            .rotation
+            .to_euler(EulerRot::YXZ);
         let to = target - position(app, e);
         angle_between(yaw, to.x.atan2(to.y)).abs()
     }
@@ -753,7 +1015,13 @@ mod tests {
                     let at = position(app, f);
                     for k in 0..16 {
                         let p = at + Vec2::from_angle(k as f32 * 0.39) * distance;
-                        if level.is_open((p.x / CELL) as i32, (p.y / CELL) as i32) && line_of_sight((at.x / CELL, at.y / CELL), (p.x / CELL, p.y / CELL), blocked) {
+                        if level.is_open((p.x / CELL) as i32, (p.y / CELL) as i32)
+                            && line_of_sight(
+                                (at.x / CELL, at.y / CELL),
+                                (p.x / CELL, p.y / CELL),
+                                blocked,
+                            )
+                        {
                             return (f, p);
                         }
                     }
@@ -785,7 +1053,9 @@ mod tests {
     fn a_person_resumes_the_walk_after_the_player_leaves() {
         let (mut app, folk) = level_app(Vec2::new(1.5, 22.5) * CELL);
         let (f, p) = walker_with_player_near(&mut app, &folk, 20.0);
-        let Phase::Walk { goal } = phase(&app, f) else { unreachable!() };
+        let Phase::Walk { goal } = phase(&app, f) else {
+            unreachable!()
+        };
         set_player(&mut app, p);
         run(&mut app, 60, |_, _| {});
         assert_eq!(phase(&app, f), Phase::Held);
@@ -814,8 +1084,20 @@ mod tests {
             let at = position(app, f);
             // 14 units per second, straight at them, as far as the floor is open.
             let next = player + (at - player).normalize_or_zero() * 14.0 / 60.0;
-            let others: Vec<Obstacle> = folk.iter().map(|&g| Obstacle::Circle { centre: position(app, g), radius: FOOTPRINT }).collect();
-            player = slide_around(player, next, 3.5, |x: i32, y: i32| !level.is_open(x, y), &others);
+            let others: Vec<Obstacle> = folk
+                .iter()
+                .map(|&g| Obstacle::Circle {
+                    centre: position(app, g),
+                    radius: FOOTPRINT,
+                })
+                .collect();
+            player = slide_around(
+                player,
+                next,
+                3.5,
+                |x: i32, y: i32| !level.is_open(x, y),
+                &others,
+            );
             set_player(app, player);
             for &g in &folk {
                 closest = closest.min(position(app, g).distance(player));
@@ -834,7 +1116,9 @@ mod tests {
         let wall: bevy::platform::collections::HashSet<(i32, i32)> = [to].into_iter().collect();
         app.insert_resource(BlockedCells(wall));
         set_player(&mut app, p);
-        run(&mut app, 60, |app, _| assert_ne!(phase(app, f), Phase::Held));
+        run(&mut app, 60, |app, _| {
+            assert_ne!(phase(app, f), Phase::Held)
+        });
         // The same spot with the way clear is noticed.
         app.insert_resource(BlockedCells::default());
         let at = position(&app, f);

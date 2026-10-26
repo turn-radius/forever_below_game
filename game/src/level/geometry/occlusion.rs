@@ -13,7 +13,10 @@
 //! along the wall, from reading as creases. Taken at three reaches, so a crease is dark close in
 //! and the dark fades out across a few decimetres. All of it is a pure function of the level.
 
-use std::{collections::HashMap, hash::{BuildHasherDefault, Hasher}};
+use std::{
+    collections::HashMap,
+    hash::{BuildHasherDefault, Hasher},
+};
 
 use armory::{Part, geom::V3};
 use fb_level::{CELL, Level, LevelStyle, StairKind};
@@ -80,7 +83,11 @@ const MARGIN: i32 = 2;
 impl<'a> Enclosure<'a> {
     pub fn new(view: &'a CellView<'a>, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Self {
         let level: &Level = view.level();
-        let (origin, width, height) = ((x0 - MARGIN, y0 - MARGIN), x1 - x0 + 2 * MARGIN, y1 - y0 + 2 * MARGIN);
+        let (origin, width, height) = (
+            (x0 - MARGIN, y0 - MARGIN),
+            x1 - x0 + 2 * MARGIN,
+            y1 - y0 + 2 * MARGIN,
+        );
         let mut open = vec![false; (width * height) as usize];
         for y in 0..height {
             for x in 0..width {
@@ -99,7 +106,14 @@ impl<'a> Enclosure<'a> {
         } else {
             Vec::new()
         };
-        let shafts = |kind| level.stairs.iter().filter(|s| s.kind == kind).map(|s| (s.x as i32, s.y as i32)).collect();
+        let shafts = |kind| {
+            level
+                .stairs
+                .iter()
+                .filter(|s| s.kind == kind)
+                .map(|s| (s.x as i32, s.y as i32))
+                .collect()
+        };
         Enclosure {
             level,
             vaults,
@@ -113,11 +127,21 @@ impl<'a> Enclosure<'a> {
 
     fn is_open(&self, x: i32, y: i32) -> bool {
         let (lx, ly) = (x - self.origin.0, y - self.origin.1);
-        lx >= 0 && lx < self.width && ly >= 0 && self.open.get((ly * self.width + lx) as usize).copied().unwrap_or(false)
+        lx >= 0
+            && lx < self.width
+            && ly >= 0
+            && self
+                .open
+                .get((ly * self.width + lx) as usize)
+                .copied()
+                .unwrap_or(false)
     }
 
     fn ceiling(&self, x: f32, z: f32) -> f32 {
-        let (lx, ly) = ((x / CELL).floor() as i32 - self.origin.0, (z / CELL).floor() as i32 - self.origin.1);
+        let (lx, ly) = (
+            (x / CELL).floor() as i32 - self.origin.0,
+            (z / CELL).floor() as i32 - self.origin.1,
+        );
         match self.vaults.get((ly * self.width + lx) as usize) {
             Some(vaults) if lx >= 0 && lx < self.width && ly >= 0 => vaults.height(x, z),
             _ => self.level.ceiling,
@@ -173,10 +197,18 @@ impl<'a> Enclosure<'a> {
         };
         let grad = [step(0), step(1), step(2)];
         let length = (grad[0] * grad[0] + grad[1] * grad[1] + grad[2] * grad[2]).sqrt();
-        let out = if length > 1e-4 { [grad[0] / length, grad[1] / length, grad[2] / length] } else { normal };
+        let out = if length > 1e-4 {
+            [grad[0] / length, grad[1] / length, grad[2] / length]
+        } else {
+            normal
+        };
         let mut shut = 0.0;
         for (reach, weight) in REACHES {
-            let there = self.distance([p[0] + out[0] * reach, p[1] + out[1] * reach, p[2] + out[2] * reach]);
+            let there = self.distance([
+                p[0] + out[0] * reach,
+                p[1] + out[1] * reach,
+                p[2] + out[2] * reach,
+            ]);
             shut += weight * (1.0 - (there - here) / reach).clamp(0.0, 1.0);
         }
         (1.0 - CORNER_SHADE * shut).clamp(LEAST_OPEN, 1.0)
@@ -190,7 +222,11 @@ impl<'a> Enclosure<'a> {
             .positions
             .iter()
             .zip(&part.normals)
-            .map(|(&p, &n)| *seen.entry(p.map(f32::to_bits)).or_insert_with(|| self.open_at(p, n)))
+            .map(|(&p, &n)| {
+                *seen
+                    .entry(p.map(f32::to_bits))
+                    .or_insert_with(|| self.open_at(p, n))
+            })
             .collect();
     }
 }
@@ -218,25 +254,48 @@ mod tests {
             let a = level_mesh(&view, view.bounds());
             assert_eq!(a, level_mesh(&view, view.bounds()));
             for part in &a.surfaces.parts {
-                assert_eq!(part.occlusion.len(), part.positions.len(), "{}: one value a vertex", part.name);
-                assert!(part.occlusion.iter().all(|o| (LEAST_OPEN..=1.0).contains(o)), "{}: within range", part.name);
+                assert_eq!(
+                    part.occlusion.len(),
+                    part.positions.len(),
+                    "{}: one value a vertex",
+                    part.name
+                );
+                assert!(
+                    part.occlusion
+                        .iter()
+                        .all(|o| (LEAST_OPEN..=1.0).contains(o)),
+                    "{}: within range",
+                    part.name
+                );
             }
             // A stretch of the level is shaded as the whole is: the values are of the place.
             let (x0, y0, x1, y1) = view.bounds();
             let half = level_mesh(&view, (x0, y0, (x0 + x1) / 2, y1));
-            let whole: std::collections::HashMap<[u32; 3], f32> =
-                a.surfaces.parts.iter().flat_map(|p| p.positions.iter().zip(&p.occlusion)).map(|(p, &o)| (key(p), o)).collect();
+            let whole: std::collections::HashMap<[u32; 3], f32> = a
+                .surfaces
+                .parts
+                .iter()
+                .flat_map(|p| p.positions.iter().zip(&p.occlusion))
+                .map(|(p, &o)| (key(p), o))
+                .collect();
             let (mut matched, mut total) = (0, 0);
             for part in &half.surfaces.parts {
                 for (p, o) in part.positions.iter().zip(&part.occlusion) {
                     total += 1;
                     if let Some(same) = whole.get(&key(p)) {
                         matched += 1;
-                        assert_eq!(o, same, "{}: a chunk and the whole agree at {p:?}", part.name);
+                        assert_eq!(
+                            o, same,
+                            "{}: a chunk and the whole agree at {p:?}",
+                            part.name
+                        );
                     }
                 }
             }
-            assert!(total > 0 && matched * 10 >= total * 9, "seed {seed} depth {depth}: {matched} of {total} vertices of the half found in the whole");
+            assert!(
+                total > 0 && matched * 10 >= total * 9,
+                "seed {seed} depth {depth}: {matched} of {total} vertices of the half found in the whole"
+            );
         }
     }
 
@@ -261,8 +320,23 @@ mod tests {
                 crate::thread_cpu_seconds() - start
             };
             let (bare, baked) = (time(false), time(true));
-            let vertices: usize = chunks.iter().map(|&r| level_mesh(&view, r).surfaces.parts.iter().map(|p| p.positions.len()).sum::<usize>()).sum();
-            println!("seed {seed} depth {depth}: {vertices} vertices, bare {:.1} ms, baked {:.1} ms, added {:.1} ms", bare * 1e3, baked * 1e3, (baked - bare) * 1e3);
+            let vertices: usize = chunks
+                .iter()
+                .map(|&r| {
+                    level_mesh(&view, r)
+                        .surfaces
+                        .parts
+                        .iter()
+                        .map(|p| p.positions.len())
+                        .sum::<usize>()
+                })
+                .sum();
+            println!(
+                "seed {seed} depth {depth}: {vertices} vertices, bare {:.1} ms, baked {:.1} ms, added {:.1} ms",
+                bare * 1e3,
+                baked * 1e3,
+                (baked - bare) * 1e3
+            );
         }
     }
 
@@ -272,13 +346,27 @@ mod tests {
             let level = fb_level::generate(1207, depth);
             let view = CellView::new(&level);
             let mesh = level_mesh(&view, view.bounds());
-            let walls = mesh.surfaces.parts.iter().find(|p| p.name == "walls").unwrap();
+            let walls = mesh
+                .surfaces
+                .parts
+                .iter()
+                .find(|p| p.name == "walls")
+                .unwrap();
             let rows = walls.positions.iter().zip(&walls.occlusion);
             let seam = average(rows.clone().filter(|(p, _)| p[1] < 0.6).map(|(_, &o)| o));
             let mid = level.ceiling * 0.5;
-            let middle = average(rows.filter(|(p, _)| (p[1] - mid).abs() < 2.0).map(|(_, &o)| o));
-            assert!(seam < middle - 0.1, "depth {depth}: the seam ({seam}) is darker than mid-wall ({middle})");
-            assert!(middle > 0.9, "depth {depth}: mid-wall is left alone ({middle})");
+            let middle = average(
+                rows.filter(|(p, _)| (p[1] - mid).abs() < 2.0)
+                    .map(|(_, &o)| o),
+            );
+            assert!(
+                seam < middle - 0.1,
+                "depth {depth}: the seam ({seam}) is darker than mid-wall ({middle})"
+            );
+            assert!(
+                middle > 0.9,
+                "depth {depth}: mid-wall is left alone ({middle})"
+            );
         }
     }
 
@@ -293,13 +381,20 @@ mod tests {
         let (cx, cy) = (y0..y1)
             .flat_map(|y| (x0..x1).map(move |x| (x, y)))
             .find(|&(x, y)| {
-                view.is_open(x, y) && view.is_open(x - 1, y) && view.is_open(x, y - 1) && !view.is_open(x + 1, y) && !view.is_open(x, y + 1)
+                view.is_open(x, y)
+                    && view.is_open(x - 1, y)
+                    && view.is_open(x, y - 1)
+                    && !view.is_open(x + 1, y)
+                    && !view.is_open(x, y + 1)
             })
             .expect("a level has an inner corner");
         let height = level.ceiling * 0.5;
         let (east, south) = ((cx + 1) as f32 * CELL, (cy + 1) as f32 * CELL);
         let corner = enclosure.open_at([east - 0.2, height, south - 0.2], [0.0, 0.0, -1.0]);
         let flat = enclosure.open_at([east - 0.2, height, south - CELL * 0.5], [-1.0, 0.0, 0.0]);
-        assert!(corner < flat - 0.05, "the corner ({corner}) is darker than the wall run ({flat})");
+        assert!(
+            corner < flat - 0.05,
+            "the corner ({corner}) is darker than the wall run ({flat})"
+        );
     }
 }

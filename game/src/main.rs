@@ -32,25 +32,25 @@ use bevy::{audio::AudioPlugin, prelude::*};
 use forever_below::{
     capture::FrameCapturePlugin,
     creature_view::{CreatureChoice, CreatureViewPlugin},
-    frame_time::FrameTimeProbe,
-    door_view::{DoorLab, DoorViewPlugin},
     doll_view::{DollChoice, DollMotion, DollSpin, DollViewPlugin},
+    door_view::{DoorLab, DoorViewPlugin},
     forge_view::{Forge, ForgeViewPlugin},
-    level_view::{LevelForge, LevelViewPlugin},
+    frame_time::FrameTimeProbe,
+    keybindings::KeybindingsPlugin,
     lab_figure::LabFigurePlugin,
     lab_view::{LabState, LabViewPlugin},
     launch::{AppState, Launch, env_set},
-    render::ArmoryRenderPlugin,
+    level_view::{LevelForge, LevelViewPlugin},
+    notes_view::{NotesView, NotesViewPlugin},
     play::{CurrentLevel, PlayPlugin},
+    render::ArmoryRenderPlugin,
     rules::RulesPlugin,
-    keybindings::KeybindingsPlugin,
+    scenery_view::{SceneryView, SceneryViewPlugin},
     settings::SettingsPlugin,
     soak::SoakPlugin,
     swing_practice::SwingPracticePlugin,
     title::{NewDelveSeed, TitlePlugin},
     tuning::TuningPlugin,
-    notes_view::{NotesView, NotesViewPlugin},
-    scenery_view::{SceneryView, SceneryViewPlugin},
     turntable::{Focus, Turntable, TurntablePlugin},
 };
 
@@ -74,7 +74,10 @@ fn main() -> AppExit {
     if args.iter().any(|a| a == "--level") {
         return run_level_view(&args);
     }
-    if args.iter().any(|a| a == "--turntable" || a.starts_with("--family")) {
+    if args
+        .iter()
+        .any(|a| a == "--turntable" || a.starts_with("--family"))
+    {
         return run_turntable();
     }
     if args.iter().any(|a| a == "--doll") {
@@ -85,7 +88,10 @@ fn main() -> AppExit {
     }
     let swings = args.iter().any(|a| a == "--swings");
     let inspect = args.iter().any(|a| a == "--inspect");
-    let args: Vec<String> = args.into_iter().filter(|a| a != "--swings" && a != "--inspect").collect();
+    let args: Vec<String> = args
+        .into_iter()
+        .filter(|a| a != "--swings" && a != "--inspect")
+        .collect();
     let launch = match Launch::parse(&args) {
         Ok(launch) => launch,
         Err(error) => {
@@ -93,27 +99,57 @@ fn main() -> AppExit {
             return AppExit::error();
         }
     };
-    let opening = if swings { AppState::Delving } else { launch.opening(env_set) };
+    let opening = if swings {
+        AppState::Delving
+    } else {
+        launch.opening(env_set)
+    };
     let mut app = App::new();
     // `data/rules.toml` is read, and watched, as an asset source of its own.
     forever_below::rules::use_data_folder(&mut app);
     app.add_plugins(
         DefaultPlugins
-            .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), present_mode: forever_below::frame_time::present_mode(), ..default() }), ..default() })
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Forever Below".into(),
+                    present_mode: forever_below::frame_time::present_mode(),
+                    ..default()
+                }),
+                ..default()
+            })
             // Debug builds watch the assets, so saving `assets/tuning.toml` or `data/rules.toml` applies it live.
-            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
+            .set(AssetPlugin {
+                file_path: forever_below::tuning::asset_file_path(),
+                watch_for_changes_override: Some(cfg!(debug_assertions)),
+                ..default()
+            })
             // Spatial audio scale: positions are scaled to metres. 1 world unit is 10 cm = 0.1 m.
-            .set(AudioPlugin { default_spatial_scale: bevy::audio::SpatialScale::new(0.1), ..default() }),
+            .set(AudioPlugin {
+                default_spatial_scale: bevy::audio::SpatialScale::new(0.1),
+                ..default()
+            }),
     )
     .insert_state(opening)
-    .add_plugins((SettingsPlugin, KeybindingsPlugin, TuningPlugin, RulesPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((
+        SettingsPlugin,
+        KeybindingsPlugin,
+        TuningPlugin,
+        RulesPlugin,
+        ArmoryRenderPlugin,
+        PlayPlugin,
+        TitlePlugin,
+    ))
     .insert_resource(NewDelveSeed(launch.seed));
     if opening == AppState::Delving {
         // `FB_DEPTH=2` plays the stone halls: the level's depth picks its style.
-        let depth = std::env::var("FB_DEPTH").ok().and_then(|d| d.parse().ok()).unwrap_or(1);
+        let depth = std::env::var("FB_DEPTH")
+            .ok()
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(1);
         // The level travel builds for that depth of the delve (`Abyss::level_at`).
         let abyss = forever_below::travel::Abyss::new(launch.seed.unwrap_or(Launch::DEFAULT_SEED));
-        app.insert_resource(CurrentLevel(abyss.level_at(depth))).insert_resource(abyss);
+        app.insert_resource(CurrentLevel(abyss.level_at(depth)))
+            .insert_resource(abyss);
     }
     if swings {
         app.add_plugins(SwingPracticePlugin);
@@ -139,8 +175,17 @@ fn main() -> AppExit {
 /// `--level`): a debug build watches the assets, shaders included, and a release build does not.
 fn view_plugins() -> bevy::app::PluginGroupBuilder {
     DefaultPlugins
-        .set(WindowPlugin { primary_window: Some(Window { title: "Forever Below".into(), ..default() }), ..default() })
-        .set(AssetPlugin { watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() })
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Forever Below".into(),
+                ..default()
+            }),
+            ..default()
+        })
+        .set(AssetPlugin {
+            watch_for_changes_override: Some(cfg!(debug_assertions)),
+            ..default()
+        })
 }
 
 fn run_turntable() -> AppExit {
@@ -153,9 +198,9 @@ fn run_turntable() -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins())
-    .add_plugins((ArmoryRenderPlugin, TurntablePlugin))
-    .insert_resource(turntable)
-    .insert_resource(focus);
+        .add_plugins((ArmoryRenderPlugin, TurntablePlugin))
+        .insert_resource(turntable)
+        .insert_resource(focus);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -186,10 +231,10 @@ fn run_doll(args: &[String]) -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins())
-    .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
-    .insert_resource(choice)
-    .insert_resource(motion)
-    .insert_resource(spin);
+        .add_plugins((ArmoryRenderPlugin, DollViewPlugin))
+        .insert_resource(choice)
+        .insert_resource(motion)
+        .insert_resource(spin);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -206,8 +251,8 @@ fn run_creature(args: &[String]) -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins())
-    .add_plugins((ArmoryRenderPlugin, CreatureViewPlugin))
-    .insert_resource(choice);
+        .add_plugins((ArmoryRenderPlugin, CreatureViewPlugin))
+        .insert_resource(choice);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -224,8 +269,8 @@ fn run_forge(args: &[String]) -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins())
-    .add_plugins((ArmoryRenderPlugin, ForgeViewPlugin))
-    .insert_resource(forge);
+        .add_plugins((ArmoryRenderPlugin, ForgeViewPlugin))
+        .insert_resource(forge);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -245,10 +290,22 @@ fn run_lab(args: &[String]) -> AppExit {
     forever_below::rules::use_data_folder(&mut app);
     app.add_plugins(
         DefaultPlugins
-            .set(WindowPlugin { primary_window: Some(forever_below::lab_view::window()), ..default() })
-            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), watch_for_changes_override: Some(cfg!(debug_assertions)), ..default() }),
+            .set(WindowPlugin {
+                primary_window: Some(forever_below::lab_view::window()),
+                ..default()
+            })
+            .set(AssetPlugin {
+                file_path: forever_below::tuning::asset_file_path(),
+                watch_for_changes_override: Some(cfg!(debug_assertions)),
+                ..default()
+            }),
     )
-    .add_plugins((RulesPlugin, ArmoryRenderPlugin, LabFigurePlugin, LabViewPlugin))
+    .add_plugins((
+        RulesPlugin,
+        ArmoryRenderPlugin,
+        LabFigurePlugin,
+        LabViewPlugin,
+    ))
     .insert_resource(lab);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
@@ -265,7 +322,9 @@ fn run_doors(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, DoorViewPlugin)).insert_resource(lab);
+    app.add_plugins(view_plugins())
+        .add_plugins((ArmoryRenderPlugin, DoorViewPlugin))
+        .insert_resource(lab);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -281,7 +340,9 @@ fn run_scenery(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(view_plugins()).add_plugins((ArmoryRenderPlugin, SceneryViewPlugin)).insert_resource(view);
+    app.add_plugins(view_plugins())
+        .add_plugins((ArmoryRenderPlugin, SceneryViewPlugin))
+        .insert_resource(view);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -297,7 +358,9 @@ fn run_notes(args: &[String]) -> AppExit {
         }
     };
     let mut app = App::new();
-    app.add_plugins(view_plugins()).add_plugins(NotesViewPlugin).insert_resource(view);
+    app.add_plugins(view_plugins())
+        .add_plugins(NotesViewPlugin)
+        .insert_resource(view);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -314,8 +377,8 @@ fn run_level_view(args: &[String]) -> AppExit {
     };
     let mut app = App::new();
     app.add_plugins(view_plugins())
-    .add_plugins(LevelViewPlugin)
-    .insert_resource(forge);
+        .add_plugins(LevelViewPlugin)
+        .insert_resource(forge);
     if let Some(capture) = FrameCapturePlugin::from_env() {
         app.add_plugins(capture);
     }
@@ -329,7 +392,9 @@ fn turntable_from_env() -> Result<Turntable, String> {
 
 fn focus_from_env() -> Result<Focus, String> {
     match std::env::var("FB_CLOSEUP") {
-        Ok(slot) if !slot.is_empty() => Focus::close_up_on(&slot).map_err(|e| format!("FB_CLOSEUP: {e}")),
+        Ok(slot) if !slot.is_empty() => {
+            Focus::close_up_on(&slot).map_err(|e| format!("FB_CLOSEUP: {e}"))
+        }
         _ => Ok(Focus::default()),
     }
 }

@@ -29,12 +29,24 @@ pub const MARKER_PX: f32 = 22.0;
 pub const MARKER_CELLS: f32 = 0.75;
 
 pub(super) fn add(app: &mut App) {
-    if let Some(frame) = std::env::var("FB_OPEN_MAP").ok().and_then(|f| f.trim().parse::<u32>().ok()) {
+    if let Some(frame) = std::env::var("FB_OPEN_MAP")
+        .ok()
+        .and_then(|f| f.trim().parse::<u32>().ok())
+    {
         app.add_systems(Update, open_for_capture(frame).in_set(DelveSystems));
     }
     app.init_resource::<MapView>()
         .add_systems(Startup, make_marker)
-        .add_systems(Update, (build_screen, (zoom_and_pan, redraw_plan, place_plan).chain().after(build_screen)).in_set(DelveSystems));
+        .add_systems(
+            Update,
+            (
+                build_screen,
+                (zoom_and_pan, redraw_plan, place_plan)
+                    .chain()
+                    .after(build_screen),
+            )
+                .in_set(DelveSystems),
+        );
 }
 
 /// For captures: `FB_EXPLORE_ALL=1` marks the level seen, `FB_MAP_ZOOM=<px>` opens the map on its middle at that zoom, and `FB_OPEN_MAP=<frame>` opens the map that many frames into the delve, once the
@@ -58,7 +70,10 @@ pub struct MapView {
 
 impl Default for MapView {
     fn default() -> Self {
-        MapView { centre: Vec2::ZERO, scale: OPENING_ZOOM }
+        MapView {
+            centre: Vec2::ZERO,
+            scale: OPENING_ZOOM,
+        }
     }
 }
 
@@ -94,7 +109,9 @@ impl MapView {
     /// The plan picture's rectangle on screen for `level`: its top left corner and size.
     pub fn plan_rect(&self, level: &Level, size: Vec2) -> (Vec2, Vec2) {
         let corner = self.to_screen(Vec2::splat(-MARGIN), size);
-        let extent = (Vec2::new(level.width as f32, level.height as f32) + Vec2::splat(2.0 * MARGIN)) * self.scale;
+        let extent = (Vec2::new(level.width as f32, level.height as f32)
+            + Vec2::splat(2.0 * MARGIN))
+            * self.scale;
         (corner, extent)
     }
 }
@@ -132,7 +149,11 @@ pub struct MarkerImage(pub Handle<Image>);
 
 fn image_of(canvas: &PlanCanvas) -> Image {
     Image::new(
-        Extent3d { width: canvas.width, height: canvas.height, depth_or_array_layers: 1 },
+        Extent3d {
+            width: canvas.width,
+            height: canvas.height,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         canvas.to_rgba8(),
         TextureFormat::Rgba8UnormSrgb,
@@ -144,12 +165,23 @@ fn image_of(canvas: &PlanCanvas) -> Image {
 pub fn marker_canvas(size: u32) -> PlanCanvas {
     let mut canvas = PlanCanvas::new(size, size);
     let s = size as f32;
-    let (tip, left, right, notch) = ([s * 0.5, s * 0.08], [s * 0.18, s * 0.9], [s * 0.82, s * 0.9], [s * 0.5, s * 0.68]);
+    let (tip, left, right, notch) = (
+        [s * 0.5, s * 0.08],
+        [s * 0.18, s * 0.9],
+        [s * 0.82, s * 0.9],
+        [s * 0.5, s * 0.68],
+    );
     // Filled by stacking lines across it, then outlined in the page's dark.
     for k in 0..=24 {
         let t = k as f32 / 24.0;
-        let a = [left[0] + (notch[0] - left[0]) * t, left[1] + (notch[1] - left[1]) * t];
-        let b = [right[0] + (notch[0] - right[0]) * t, right[1] + (notch[1] - right[1]) * t];
+        let a = [
+            left[0] + (notch[0] - left[0]) * t,
+            left[1] + (notch[1] - left[1]) * t,
+        ];
+        let b = [
+            right[0] + (notch[0] - right[0]) * t,
+            right[1] + (notch[1] - right[1]) * t,
+        ];
         canvas.line(tip, a, s * 0.06, [0.886, 0.631, 0.329], 1.0);
         canvas.line(tip, b, s * 0.06, [0.886, 0.631, 0.329], 1.0);
     }
@@ -163,7 +195,10 @@ fn make_marker(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let marker = images.add(image_of(&marker_canvas(64)));
     let plan = images.add(image_of(&PlanCanvas::new(1, 1)));
     commands.insert_resource(MarkerImage(marker));
-    commands.insert_resource(PlanImage { image: plan, drawn: None });
+    commands.insert_resource(PlanImage {
+        image: plan,
+        drawn: None,
+    });
 }
 
 /// Builds the screen when the map opens, centred on the delver, and takes it down when it
@@ -189,58 +224,123 @@ pub(super) fn build_screen(
         }
         return;
     }
-    let (Some(plan), Some(marker)) = (plan, marker) else { return };
+    let (Some(plan), Some(marker)) = (plan, marker) else {
+        return;
+    };
     if existing.is_some() {
         return;
     }
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     let fallback = crate::keymap::Keymap::default();
     let keymap = keymap.as_deref().unwrap_or(&fallback);
     if let Some(eye) = eyes.iter().next() {
         let (x, y) = to_grid(eye.translation());
-        *view = MapView { centre: Vec2::new(x, y), scale: OPENING_ZOOM };
+        *view = MapView {
+            centre: Vec2::new(x, y),
+            scale: OPENING_ZOOM,
+        };
     }
     // For captures: `FB_MAP_ZOOM=<pixels to a cell>` opens on the middle of the level at that zoom.
-    if let (Some(zoom), Some(level)) = (std::env::var("FB_MAP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()), level.as_ref()) {
-        *view = MapView { centre: Vec2::new(level.0.width as f32, level.0.height as f32) * 0.5, scale: zoom.clamp(ZOOM.0, ZOOM.1) };
+    if let (Some(zoom), Some(level)) = (
+        std::env::var("FB_MAP_ZOOM")
+            .ok()
+            .and_then(|z| z.parse::<f32>().ok()),
+        level.as_ref(),
+    ) {
+        *view = MapView {
+            centre: Vec2::new(level.0.width as f32, level.0.height as f32) * 0.5,
+            scale: zoom.clamp(ZOOM.0, ZOOM.1),
+        };
     }
     commands
         .spawn((
             Name::new("Map"),
             MapScreen,
             UiTargetCamera(camera),
-            Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), overflow: Overflow::clip(), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                overflow: Overflow::clip(),
+                ..default()
+            },
             BackgroundColor(BG),
             GlobalZIndex(10),
         ))
         .with_children(|root| {
-            root.spawn((PlanNode, ImageNode::new(plan.image.clone()), Node { position_type: PositionType::Absolute, ..default() })).with_children(|plan| {
+            root.spawn((
+                PlanNode,
+                ImageNode::new(plan.image.clone()),
+                Node {
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+            ))
+            .with_children(|plan| {
                 // The faction marks come first, so the delver's marker draws over them.
-                plan.spawn((Name::new("Crests"), super::crests::CrestLayer::default(), Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }));
+                plan.spawn((
+                    Name::new("Crests"),
+                    super::crests::CrestLayer::default(),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                ));
                 plan.spawn((
                     Marker,
                     ImageNode::new(marker.0.clone()),
-                    Node { position_type: PositionType::Absolute, width: px(MARKER_PX), height: px(MARKER_PX), ..default() },
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: px(MARKER_PX),
+                        height: px(MARKER_PX),
+                        ..default()
+                    },
                     UiTransform::IDENTITY,
                 ));
             });
             root.spawn((
-                Text::new(level.map_or("Map".to_string(), |l| format!("Map \u{b7} Depth {}", l.0.depth))),
+                Text::new(level.map_or("Map".to_string(), |l| {
+                    format!("Map \u{b7} Depth {}", l.0.depth)
+                })),
                 UiFonts::style(&fonts.display, 30.0, crate::ui::INK),
-                Node { position_type: PositionType::Absolute, left: px(28), top: px(18), ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(28),
+                    top: px(18),
+                    ..default()
+                },
             ));
             root.spawn((
-                Text::new(format!("Scroll to zoom \u{b7} drag to pan \u{b7} {} to close", close_keys(keymap))),
+                Text::new(format!(
+                    "Scroll to zoom \u{b7} drag to pan \u{b7} {} to close",
+                    close_keys(keymap)
+                )),
                 UiFonts::style(&fonts.body, 15.0, MUTED),
-                Node { position_type: PositionType::Absolute, left: px(28), bottom: px(18), ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(28),
+                    bottom: px(18),
+                    ..default()
+                },
             ));
         });
 }
 
 /// The keys that close the map: its own and Back's ("M or Esc").
 fn close_keys(keymap: &crate::keymap::Keymap) -> String {
-    let mut keys = keymap.binding(crate::keymap::Action::Map).map(|b| b.labels()).unwrap_or_default();
-    for label in keymap.binding(crate::keymap::Action::Back).map(|b| b.labels()).unwrap_or_default() {
+    let mut keys = keymap
+        .binding(crate::keymap::Action::Map)
+        .map(|b| b.labels())
+        .unwrap_or_default();
+    for label in keymap
+        .binding(crate::keymap::Action::Back)
+        .map(|b| b.labels())
+        .unwrap_or_default()
+    {
         if !keys.contains(&label) {
             keys.push(label);
         }
@@ -261,7 +361,12 @@ fn zoom_and_pan(
     if !open.is(Screen::Map) {
         return;
     }
-    let (Some(window), Some(size)) = (windows.iter().next(), screens.iter().next().map(screen_size)) else { return };
+    let (Some(window), Some(size)) = (
+        windows.iter().next(),
+        screens.iter().next().map(screen_size),
+    ) else {
+        return;
+    };
     // The window's mouse, carried into the screen's own pixels (the same, unless the screen is
     // drawn to an image of another size, as in a capture).
     let to_screen = size / window.size().max(Vec2::ONE);
@@ -270,7 +375,9 @@ fn zoom_and_pan(
             MouseScrollUnit::Line => scroll.delta.y,
             MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
         };
-        let at = window.cursor_position().map_or(size * 0.5, |c| c * to_screen);
+        let at = window
+            .cursor_position()
+            .map_or(size * 0.5, |c| c * to_screen);
         view.zoom_about(1.12f32.powf(lines), at, size);
     }
     if buttons.pressed(MouseButton::Left) && motion.delta != Vec2::ZERO {
@@ -284,11 +391,19 @@ pub(super) fn screen_size(node: &ComputedNode) -> Vec2 {
 }
 
 /// Draws the plan again when more of the level has been seen since it was last drawn.
-fn redraw_plan(open: Res<ScreenOpen>, level: Option<Res<CurrentLevel>>, explored: Res<ExploredLevels>, plan: Option<ResMut<PlanImage>>, mut images: ResMut<Assets<Image>>) {
+fn redraw_plan(
+    open: Res<ScreenOpen>,
+    level: Option<Res<CurrentLevel>>,
+    explored: Res<ExploredLevels>,
+    plan: Option<ResMut<PlanImage>>,
+    mut images: ResMut<Assets<Image>>,
+) {
     if !open.is(Screen::Map) {
         return;
     }
-    let (Some(level), Some(mut plan)) = (level, plan) else { return };
+    let (Some(level), Some(mut plan)) = (level, plan) else {
+        return;
+    };
     let empty = fb_level::sight::Explored::new(&level.0);
     let seen = explored.get(&level.0).unwrap_or(&empty);
     let key = (level.0.seed, seen.count());
@@ -298,7 +413,11 @@ fn redraw_plan(open: Res<ScreenOpen>, level: Option<Res<CurrentLevel>>, explored
     plan.drawn = Some(key);
     // The floors of what has been seen, shaded by their finishes as in the level view.
     let finishes = crate::level::geometry::level_finishes(&level.0);
-    let canvas = draw_plan_with(&level.0, seen, PLAN_PX, |canvas, frame| shade_finishes(canvas, frame, &level.0, &finishes, |x, y| seen.is_seen(x, y)));
+    let canvas = draw_plan_with(&level.0, seen, PLAN_PX, |canvas, frame| {
+        shade_finishes(canvas, frame, &level.0, &finishes, |x, y| {
+            seen.is_seen(x, y)
+        })
+    });
     let _ = images.insert(&plan.image, image_of(&canvas));
 }
 
@@ -316,7 +435,9 @@ fn place_plan(
     if !open.is(Screen::Map) {
         return;
     }
-    let (Some(level), Some(size)) = (level, screens.iter().next().map(screen_size)) else { return };
+    let (Some(level), Some(size)) = (level, screens.iter().next().map(screen_size)) else {
+        return;
+    };
     if size.x <= 0.0 {
         return;
     }
@@ -327,7 +448,9 @@ fn place_plan(
         node.width = px(extent.x);
         node.height = px(extent.y);
     }
-    let Some(eye) = eyes.iter().next() else { return };
+    let Some(eye) = eyes.iter().next() else {
+        return;
+    };
     let (x, y) = to_grid(eye.translation());
     let size = (view.scale * MARKER_CELLS).max(MARKER_PX);
     let at = (Vec2::new(x, y) + Vec2::splat(MARGIN)) * view.scale - Vec2::splat(size * 0.5);
@@ -337,7 +460,8 @@ fn place_plan(
         node.top = px(at.y);
         node.width = px(size);
         node.height = px(size);
-        *turn =UiTransform::from_rotation(Rot2::radians(facing_turn(Vec2::new(forward.x, forward.z))));
+        *turn =
+            UiTransform::from_rotation(Rot2::radians(facing_turn(Vec2::new(forward.x, forward.z))));
     }
 }
 
@@ -355,10 +479,24 @@ mod tests {
     fn the_map_hint_names_its_close_keys_once() {
         let mut keymap = Keymap::default();
         assert_eq!(close_keys(&keymap), "M or Esc");
-        let mut rebind = |action, key| keymap.bindings.iter_mut().find(|b| b.action == action).unwrap().inputs = vec![Input::Key(key)];
+        let mut rebind = |action, key| {
+            keymap
+                .bindings
+                .iter_mut()
+                .find(|b| b.action == action)
+                .unwrap()
+                .inputs = vec![Input::Key(key)]
+        };
         rebind(Action::Map, KeyCode::KeyN);
         assert_eq!(close_keys(&keymap), "N or Esc");
-        let mut rebind = |action, key| keymap.bindings.iter_mut().find(|b| b.action == action).unwrap().inputs = vec![Input::Key(key)];
+        let mut rebind = |action, key| {
+            keymap
+                .bindings
+                .iter_mut()
+                .find(|b| b.action == action)
+                .unwrap()
+                .inputs = vec![Input::Key(key)]
+        };
         rebind(Action::Back, KeyCode::KeyN);
         assert_eq!(close_keys(&keymap), "N");
     }
@@ -366,12 +504,22 @@ mod tests {
     #[test]
     fn the_view_opens_centred_and_zooms_about_the_mouse() {
         let size = Vec2::new(1600.0, 900.0);
-        let mut view = MapView { centre: Vec2::new(10.0, 12.0), scale: OPENING_ZOOM };
-        assert_eq!(view.to_screen(Vec2::new(10.0, 12.0), size), size * 0.5, "the delver's cell in the middle");
+        let mut view = MapView {
+            centre: Vec2::new(10.0, 12.0),
+            scale: OPENING_ZOOM,
+        };
+        assert_eq!(
+            view.to_screen(Vec2::new(10.0, 12.0), size),
+            size * 0.5,
+            "the delver's cell in the middle"
+        );
         let at = Vec2::new(1200.0, 300.0);
         let under = view.to_cell(at, size);
         view.zoom_about(1.5, at, size);
-        assert!(view.to_cell(at, size).abs_diff_eq(under, 1e-4), "the cell under the mouse stays put");
+        assert!(
+            view.to_cell(at, size).abs_diff_eq(under, 1e-4),
+            "the cell under the mouse stays put"
+        );
         assert!((view.scale - OPENING_ZOOM * 1.5).abs() < 1e-4);
         view.zoom_about(100.0, at, size);
         assert_eq!(view.scale, ZOOM.1, "zoom is bounded");
@@ -380,24 +528,39 @@ mod tests {
     #[test]
     fn dragging_moves_the_plan_with_the_mouse() {
         let size = Vec2::new(800.0, 600.0);
-        let mut view = MapView { centre: Vec2::new(5.0, 5.0), scale: 20.0 };
+        let mut view = MapView {
+            centre: Vec2::new(5.0, 5.0),
+            scale: 20.0,
+        };
         let before = view.to_screen(Vec2::new(7.0, 3.0), size);
         view.pan(Vec2::new(40.0, -20.0));
-        assert!(view.to_screen(Vec2::new(7.0, 3.0), size).abs_diff_eq(before + Vec2::new(40.0, -20.0), 1e-4));
+        assert!(
+            view.to_screen(Vec2::new(7.0, 3.0), size)
+                .abs_diff_eq(before + Vec2::new(40.0, -20.0), 1e-4)
+        );
     }
 
     #[test]
     fn the_marker_points_the_way_the_delver_faces() {
         use std::f32::consts::{FRAC_PI_2, PI};
         assert!(facing_turn(Vec2::new(0.0, -1.0)).abs() < 1e-6, "north: up");
-        assert!((facing_turn(Vec2::new(1.0, 0.0)) - FRAC_PI_2).abs() < 1e-6, "east: a quarter turn clockwise");
-        assert!((facing_turn(Vec2::new(0.0, 1.0)).abs() - PI).abs() < 1e-6, "south: down");
+        assert!(
+            (facing_turn(Vec2::new(1.0, 0.0)) - FRAC_PI_2).abs() < 1e-6,
+            "east: a quarter turn clockwise"
+        );
+        assert!(
+            (facing_turn(Vec2::new(0.0, 1.0)).abs() - PI).abs() < 1e-6,
+            "south: down"
+        );
     }
 
     #[test]
     fn the_plan_covers_the_level_and_its_margin() {
         let level = fb_level::generate(1207, 1);
-        let view = MapView { centre: Vec2::new(level.width as f32 * 0.5, level.height as f32 * 0.5), scale: 10.0 };
+        let view = MapView {
+            centre: Vec2::new(level.width as f32 * 0.5, level.height as f32 * 0.5),
+            scale: 10.0,
+        };
         let size = Vec2::new(1000.0, 800.0);
         let (corner, extent) = view.plan_rect(&level, size);
         assert!(corner.abs_diff_eq(view.to_screen(Vec2::splat(-MARGIN), size), 1e-4));
@@ -418,13 +581,25 @@ mod tests {
             .insert_resource(ScreenOpen(Some(Screen::Map)))
             .add_systems(Startup, make_marker)
             .add_systems(Update, (build_screen, redraw_plan, place_plan).chain());
-        app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
-        let eye = app.world_mut().spawn((PlayerCamera, GlobalTransform::from(Transform::from_translation(at).looking_to(look, Vec3::Y)))).id();
+        app.world_mut().spawn(ViewModelCamera {
+            follows: Entity::PLACEHOLDER,
+        });
+        let eye = app
+            .world_mut()
+            .spawn((
+                PlayerCamera,
+                GlobalTransform::from(Transform::from_translation(at).looking_to(look, Vec3::Y)),
+            ))
+            .id();
         app.update();
         // The screen is laid out at 1600 by 900, as the UI would lay it out.
         let mut screens = app.world_mut().query_filtered::<Entity, With<MapScreen>>();
         let screen = screens.iter(app.world()).next().expect("the map is built");
-        app.world_mut().entity_mut(screen).insert(ComputedNode { size: Vec2::new(1600.0, 900.0), inverse_scale_factor: 1.0, ..default() });
+        app.world_mut().entity_mut(screen).insert(ComputedNode {
+            size: Vec2::new(1600.0, 900.0),
+            inverse_scale_factor: 1.0,
+            ..default()
+        });
         app.update();
         (app, level, eye)
     }
@@ -432,29 +607,74 @@ mod tests {
     /// The cell under the marker's middle, and its turn.
     fn marker(app: &mut App) -> (Vec2, f32) {
         let view = *app.world().resource::<MapView>();
-        let mut markers = app.world_mut().query_filtered::<(&Node, &UiTransform), With<Marker>>();
-        let (node, turn) = markers.single(app.world()).map(|(n, t)| (n.clone(), *t)).expect("one marker");
-        let (Val::Px(left), Val::Px(top), Val::Px(size)) = (node.left, node.top, node.width) else { panic!("placed in pixels") };
+        let mut markers = app
+            .world_mut()
+            .query_filtered::<(&Node, &UiTransform), With<Marker>>();
+        let (node, turn) = markers
+            .single(app.world())
+            .map(|(n, t)| (n.clone(), *t))
+            .expect("one marker");
+        let (Val::Px(left), Val::Px(top), Val::Px(size)) = (node.left, node.top, node.width) else {
+            panic!("placed in pixels")
+        };
         let middle = Vec2::new(left, top) + Vec2::splat(size * 0.5);
-        (middle / view.scale - Vec2::splat(MARGIN), turn.rotation.as_radians())
+        (
+            middle / view.scale - Vec2::splat(MARGIN),
+            turn.rotation.as_radians(),
+        )
     }
 
     #[test]
     fn the_marker_follows_the_delver_while_the_map_is_open() {
         let (sx, sy, inward) = fb_level::generate(1207, 1).start();
         let (dx, dy) = inward.step();
-        let cell_at = |k: f32| Vec3::new((sx as f32 + 0.5 + dx as f32 * k) * CELL, 15.0, (sy as f32 + 0.5 + dy as f32 * k) * CELL);
+        let cell_at = |k: f32| {
+            Vec3::new(
+                (sx as f32 + 0.5 + dx as f32 * k) * CELL,
+                15.0,
+                (sy as f32 + 0.5 + dy as f32 * k) * CELL,
+            )
+        };
         let ahead = Vec3::new(dx as f32, 0.0, dy as f32);
         let (mut app, _, eye) = open_map(cell_at(2.0), ahead);
         let (cell, turn) = marker(&mut app);
-        assert!(cell.abs_diff_eq(Vec2::new(sx as f32 + 0.5 + dx as f32 * 2.0, sy as f32 + 0.5 + dy as f32 * 2.0), 1e-3), "on the delver's cell: {cell}");
-        assert!((turn - facing_turn(Vec2::new(dx as f32, dy as f32))).abs() < 1e-4, "facing in");
+        assert!(
+            cell.abs_diff_eq(
+                Vec2::new(
+                    sx as f32 + 0.5 + dx as f32 * 2.0,
+                    sy as f32 + 0.5 + dy as f32 * 2.0
+                ),
+                1e-3
+            ),
+            "on the delver's cell: {cell}"
+        );
+        assert!(
+            (turn - facing_turn(Vec2::new(dx as f32, dy as f32))).abs() < 1e-4,
+            "facing in"
+        );
         // Moved two cells on and turned round, the marker goes with them.
-        *app.world_mut().get_mut::<GlobalTransform>(eye).unwrap() = GlobalTransform::from(Transform::from_translation(cell_at(4.0)).looking_to(-ahead, Vec3::Y));
+        *app.world_mut().get_mut::<GlobalTransform>(eye).unwrap() = GlobalTransform::from(
+            Transform::from_translation(cell_at(4.0)).looking_to(-ahead, Vec3::Y),
+        );
         app.update();
         let (cell, turn) = marker(&mut app);
-        assert!(cell.abs_diff_eq(Vec2::new(sx as f32 + 0.5 + dx as f32 * 4.0, sy as f32 + 0.5 + dy as f32 * 4.0), 1e-3), "{cell}");
-        assert!((Rot2::radians(turn) * Rot2::radians(-facing_turn(Vec2::new(-dx as f32, -dy as f32)))).as_radians().abs() < 1e-4, "facing out");
+        assert!(
+            cell.abs_diff_eq(
+                Vec2::new(
+                    sx as f32 + 0.5 + dx as f32 * 4.0,
+                    sy as f32 + 0.5 + dy as f32 * 4.0
+                ),
+                1e-3
+            ),
+            "{cell}"
+        );
+        assert!(
+            (Rot2::radians(turn) * Rot2::radians(-facing_turn(Vec2::new(-dx as f32, -dy as f32))))
+                .as_radians()
+                .abs()
+                < 1e-4,
+            "facing out"
+        );
     }
 
     #[test]
@@ -465,10 +685,27 @@ mod tests {
         assert_eq!(drawn(&app), Some((level.seed, 0)), "nothing seen yet");
         // Seen while the map is open: drawn at once.
         let room = level.rooms[0];
-        let (cx, cy) = (room.x as f32 + room.w as f32 * 0.5, room.y as f32 + room.h as f32 * 0.5);
-        let eye = fb_level::sight::Eye { x: cx, y: cy, forward: (1.0, 0.0), half_fov: 3.2, range: 30.0 };
-        let lamp = [fb_level::sight::Lamp { x: cx, y: cy, reach: 20.0 }];
-        let seen = app.world_mut().resource_mut::<ExploredLevels>().of(&level).look(&level, &eye, &lamp);
+        let (cx, cy) = (
+            room.x as f32 + room.w as f32 * 0.5,
+            room.y as f32 + room.h as f32 * 0.5,
+        );
+        let eye = fb_level::sight::Eye {
+            x: cx,
+            y: cy,
+            forward: (1.0, 0.0),
+            half_fov: 3.2,
+            range: 30.0,
+        };
+        let lamp = [fb_level::sight::Lamp {
+            x: cx,
+            y: cy,
+            reach: 20.0,
+        }];
+        let seen = app
+            .world_mut()
+            .resource_mut::<ExploredLevels>()
+            .of(&level)
+            .look(&level, &eye, &lamp);
         assert!(seen > 4);
         app.update();
         assert_eq!(drawn(&app), Some((level.seed, seen)));

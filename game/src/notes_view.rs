@@ -22,7 +22,10 @@ impl Plugin for NotesViewPlugin {
             .insert_resource(ClearColor(BG))
             .add_plugins(InterfaceScalePlugin)
             .add_systems(Startup, setup)
-            .add_systems(Update, (keys, show.run_if(resource_changed::<NotesView>)).chain());
+            .add_systems(
+                Update,
+                (keys, show.run_if(resource_changed::<NotesView>)).chain(),
+            );
     }
 }
 
@@ -37,7 +40,11 @@ pub struct NotesView {
 
 impl Default for NotesView {
     fn default() -> Self {
-        NotesView { world: 1207, depth: 1, seed: 1 }
+        NotesView {
+            world: 1207,
+            depth: 1,
+            seed: 1,
+        }
     }
 }
 
@@ -52,8 +59,16 @@ impl NotesView {
                 Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
                 None => (arg, None),
             };
-            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
-            let number = |text: String| text.parse::<u32>().map_err(|_| format!("{flag}: {text:?} is not a number"));
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| args.next())
+                    .ok_or(format!("{flag} needs a value"))
+            };
+            let number = |text: String| {
+                text.parse::<u32>()
+                    .map_err(|_| format!("{flag}: {text:?} is not a number"))
+            };
             match flag.as_str() {
                 "--notes" => {}
                 "--world" => view.world = number(value()?)?,
@@ -67,7 +82,12 @@ impl NotesView {
 
     /// The lore of the level shown.
     pub fn lore(&self) -> Lore {
-        fb_level::generate_in(self.world, self.depth, &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(self.depth))).lore()
+        fb_level::generate_in(
+            self.world,
+            self.depth,
+            &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(self.depth)),
+        )
+        .lore()
     }
 
     /// The seeds of the notes shown.
@@ -84,18 +104,71 @@ impl NotesView {
 
 /// The lore as lines for the left column: a heading and its entries.
 pub fn lore_lines(lore: &Lore) -> Vec<(&'static str, Vec<String>)> {
-    let list = |items: Vec<String>| if items.is_empty() { vec!["none".to_string()] } else { items };
+    let list = |items: Vec<String>| {
+        if items.is_empty() {
+            vec!["none".to_string()]
+        } else {
+            items
+        }
+    };
     vec![
-        ("Level", vec![format!("depth {}{}", lore.depth, lore.past.as_ref().map_or(String::new(), |p| format!(", once a {p}")))]),
+        (
+            "Level",
+            vec![format!(
+                "depth {}{}",
+                lore.depth,
+                lore.past
+                    .as_ref()
+                    .map_or(String::new(), |p| format!(", once a {p}"))
+            )],
+        ),
         ("Factions", list(lore.factions.clone())),
-        ("Hates", list(lore.hates.iter().map(|f| format!("{} \u{2192} {}", f.faction, f.thing.many)).collect())),
-        ("Likes", list(lore.likes.iter().map(|f| format!("{} \u{2192} {}", f.faction, f.thing.many)).collect())),
-        ("Creatures", list(lore.creatures.iter().map(|c| c.many.clone()).collect())),
+        (
+            "Hates",
+            list(
+                lore.hates
+                    .iter()
+                    .map(|f| format!("{} \u{2192} {}", f.faction, f.thing.many))
+                    .collect(),
+            ),
+        ),
+        (
+            "Likes",
+            list(
+                lore.likes
+                    .iter()
+                    .map(|f| format!("{} \u{2192} {}", f.faction, f.thing.many))
+                    .collect(),
+            ),
+        ),
+        (
+            "Creatures",
+            list(lore.creatures.iter().map(|c| c.many.clone()).collect()),
+        ),
         ("Rooms", list(lore.places.clone())),
-        ("Traders", list(lore.traders.iter().map(|t| format!("{}, {} of {}", t.name, t.trade, t.faction)).collect())),
+        (
+            "Traders",
+            list(
+                lore.traders
+                    .iter()
+                    .map(|t| format!("{}, {} of {}", t.name, t.trade, t.faction))
+                    .collect(),
+            ),
+        ),
         (
             "Books",
-            list(lore.books.iter().map(|b| format!("{} in the {}", fb_items::lesson::long_name(b.teaches), b.place.as_deref().unwrap_or("dark"))).collect()),
+            list(
+                lore.books
+                    .iter()
+                    .map(|b| {
+                        format!(
+                            "{} in the {}",
+                            fb_items::lesson::long_name(b.teaches),
+                            b.place.as_deref().unwrap_or("dark")
+                        )
+                    })
+                    .collect(),
+            ),
         ),
     ]
 }
@@ -130,7 +203,12 @@ fn keys(input: Res<ButtonInput<KeyCode>>, mut view: ResMut<NotesView>) {
     }
 }
 
-fn show(mut commands: Commands, view: Res<NotesView>, pages: Query<Entity, With<Page>>, fonts: Res<UiFonts>) {
+fn show(
+    mut commands: Commands,
+    view: Res<NotesView>,
+    pages: Query<Entity, With<Page>>,
+    fonts: Res<UiFonts>,
+) {
     for page in &pages {
         commands.entity(page).despawn();
     }
@@ -139,46 +217,107 @@ fn show(mut commands: Commands, view: Res<NotesView>, pages: Query<Entity, With<
     commands
         .spawn((
             Page,
-            Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, padding: UiRect::all(px(24)), row_gap: px(14), ..default() },
+            Node {
+                width: percent(100),
+                height: percent(100),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(24)),
+                row_gap: px(14),
+                ..default()
+            },
         ))
         .with_children(|page| {
             page.spawn((
-                Text::new(format!("Notes \u{b7} world {} \u{b7} depth {} \u{b7} notes from seed {}", view.world, view.depth, view.seed)),
+                Text::new(format!(
+                    "Notes \u{b7} world {} \u{b7} depth {} \u{b7} notes from seed {}",
+                    view.world, view.depth, view.seed
+                )),
                 UiFonts::style(&fonts.display, 26.0, INK),
             ));
-            page.spawn((Text::new("Up/Down depth \u{b7} Left/Right world \u{b7} R reroll the notes"), UiFonts::style(&fonts.mono, 12.0, MUTED)));
-            page.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(28), flex_grow: 1.0, min_height: px(0), ..default() }).with_children(|columns| {
+            page.spawn((
+                Text::new("Up/Down depth \u{b7} Left/Right world \u{b7} R reroll the notes"),
+                UiFonts::style(&fonts.mono, 12.0, MUTED),
+            ));
+            page.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(28),
+                flex_grow: 1.0,
+                min_height: px(0),
+                ..default()
+            })
+            .with_children(|columns| {
                 columns
-                    .spawn((Node { width: percent(34), flex_direction: FlexDirection::Column, row_gap: px(10), overflow: Overflow::clip(), ..default() },))
+                    .spawn((Node {
+                        width: percent(34),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(10),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },))
                     .with_children(|left| {
                         left.spawn(heading("Lore".into()));
                         for (title, lines) in lore_lines(&lore) {
-                            left.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|section| {
-                                section.spawn((Text::new(title), UiFonts::style(&fonts.body_medium, 14.0, GOLD)));
+                            left.spawn(Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: px(2),
+                                ..default()
+                            })
+                            .with_children(|section| {
+                                section.spawn((
+                                    Text::new(title),
+                                    UiFonts::style(&fonts.body_medium, 14.0, GOLD),
+                                ));
                                 for line in lines {
-                                    section.spawn((Text::new(line), UiFonts::style(&fonts.body, 13.5, INK)));
+                                    section.spawn((
+                                        Text::new(line),
+                                        UiFonts::style(&fonts.body, 13.5, INK),
+                                    ));
                                 }
                             });
                         }
                     });
                 columns
-                    .spawn((Node { flex_grow: 1.0, flex_basis: px(0), flex_direction: FlexDirection::Column, row_gap: px(8), overflow: Overflow::clip(), ..default() },))
+                    .spawn((Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(8),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },))
                     .with_children(|right| {
                         right.spawn(heading("Notes".into()));
                         for seed in view.seeds() {
                             right
                                 .spawn((
-                                    Node { flex_direction: FlexDirection::Row, column_gap: px(10), padding: UiRect::axes(px(10), px(6)), ..default() },
+                                    Node {
+                                        flex_direction: FlexDirection::Row,
+                                        column_gap: px(10),
+                                        padding: UiRect::axes(px(10), px(6)),
+                                        ..default()
+                                    },
                                     BackgroundColor(BG.mix(&GOLD, 0.12)),
                                     BorderColor::all(FAINT),
                                 ))
                                 .with_children(|row| {
                                     row.spawn((
-                                        Node { width: px(70), flex_shrink: 0.0, ..default() },
+                                        Node {
+                                            width: px(70),
+                                            flex_shrink: 0.0,
+                                            ..default()
+                                        },
                                         Text::new(kind_tag(note_kind(seed, &lore))),
                                         UiFonts::style(&fonts.mono, 12.0, MUTED),
                                     ));
-                                    row.spawn((Node { flex_grow: 1.0, flex_basis: px(0), ..default() }, Text::new(write_note(seed, &lore)), UiFonts::style(&fonts.body_italic, 15.0, INK)));
+                                    row.spawn((
+                                        Node {
+                                            flex_grow: 1.0,
+                                            flex_basis: px(0),
+                                            ..default()
+                                        },
+                                        Text::new(write_note(seed, &lore)),
+                                        UiFonts::style(&fonts.body_italic, 15.0, INK),
+                                    ));
                                 });
                         }
                     });
@@ -196,9 +335,23 @@ mod tests {
 
     #[test]
     fn the_command_line_sets_world_depth_and_seed() {
-        assert_eq!(NotesView::from_args(args("--notes")).unwrap(), NotesView::default());
-        assert_eq!(NotesView::from_args(args("--notes --world 9 --depth=3 --seed 40")).unwrap(), NotesView { world: 9, depth: 3, seed: 40 });
-        assert_eq!(NotesView::from_args(args("--depth 0")).unwrap().depth, 1, "the first level is the shallowest");
+        assert_eq!(
+            NotesView::from_args(args("--notes")).unwrap(),
+            NotesView::default()
+        );
+        assert_eq!(
+            NotesView::from_args(args("--notes --world 9 --depth=3 --seed 40")).unwrap(),
+            NotesView {
+                world: 9,
+                depth: 3,
+                seed: 40
+            }
+        );
+        assert_eq!(
+            NotesView::from_args(args("--depth 0")).unwrap().depth,
+            1,
+            "the first level is the shallowest"
+        );
         assert!(NotesView::from_args(args("--depth deep")).is_err());
         assert!(NotesView::from_args(args("--colour red")).is_err());
     }
@@ -217,7 +370,19 @@ mod tests {
     #[test]
     fn the_lore_column_lists_every_heading_with_something_under_it() {
         let lines = lore_lines(&NotesView::default().lore());
-        assert_eq!(lines.iter().map(|(t, _)| *t).collect::<Vec<_>>(), ["Level", "Factions", "Hates", "Likes", "Creatures", "Rooms", "Traders", "Books"]);
+        assert_eq!(
+            lines.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            [
+                "Level",
+                "Factions",
+                "Hates",
+                "Likes",
+                "Creatures",
+                "Rooms",
+                "Traders",
+                "Books"
+            ]
+        );
         assert!(lines.iter().all(|(_, l)| !l.is_empty()));
     }
 }

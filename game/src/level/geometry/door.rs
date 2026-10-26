@@ -40,8 +40,8 @@ use fb_level::{
 };
 use procgen_rng::Mulberry32;
 
-use super::arch::{Arch, prism};
 use super::DOOR_HEIGHT;
+use super::arch::{Arch, prism};
 
 /// The sill plank of a timber frame, which a leaf clears.
 const TIMBER_SILL: f32 = 0.5;
@@ -64,10 +64,20 @@ pub struct Opening {
 impl Opening {
     pub fn of(style: DoorStyle) -> Self {
         match style {
-            DoorStyle::Timber => Opening { arch: None, half_width: fb_level::door::half_width(style), crown: DOOR_HEIGHT, sill: TIMBER_SILL },
+            DoorStyle::Timber => Opening {
+                arch: None,
+                half_width: fb_level::door::half_width(style),
+                crown: DOOR_HEIGHT,
+                sill: TIMBER_SILL,
+            },
             _ => {
                 let arch = Arch::new(style);
-                Opening { arch: Some(arch), half_width: arch.hw, crown: arch.height(0.0, arch.r).unwrap_or(arch.spring + arch.r), sill: 0.0 }
+                Opening {
+                    arch: Some(arch),
+                    half_width: arch.hw,
+                    crown: arch.height(0.0, arch.r).unwrap_or(arch.spring + arch.r),
+                    sill: 0.0,
+                }
             }
         }
     }
@@ -80,29 +90,43 @@ impl Opening {
     /// The clear height of the opening over `x`.
     pub fn top_at(&self, x: f32) -> f32 {
         let x = x.clamp(-self.half_width + 1e-3, self.half_width - 1e-3);
-        self.arch.map_or(self.crown, |a| a.height(x, a.r).unwrap_or(0.0))
+        self.arch
+            .map_or(self.crown, |a| a.height(x, a.r).unwrap_or(0.0))
     }
 
     /// Half the opening's width at height `y`, `0` above the crown.
     pub fn half_width_at(&self, y: f32) -> f32 {
         match self.arch {
-            None => if y <= self.crown { self.half_width } else { 0.0 },
+            None => {
+                if y <= self.crown {
+                    self.half_width
+                } else {
+                    0.0
+                }
+            }
             Some(a) if y <= a.spring => a.hw,
             Some(_) if y >= self.crown => 0.0,
-            Some(a) => ((a.hw - a.r) + (a.r * a.r - (y - a.spring).powi(2)).max(0.0).sqrt()).clamp(0.0, a.hw),
+            Some(a) => ((a.hw - a.r) + (a.r * a.r - (y - a.spring).powi(2)).max(0.0).sqrt())
+                .clamp(0.0, a.hw),
         }
     }
 
     /// The outline of the opening from `a` to `b` across and `bottom` up, its head `inset`
     /// under the frame's, sampled `steps` times: convex, counter-clockwise.
     pub fn outline(&self, a: f32, b: f32, bottom: f32, inset: f32, steps: usize) -> Vec<P2> {
-        let mut xs: Vec<f32> = (0..=steps).map(|k| a + (b - a) * k as f32 / steps as f32).collect();
+        let mut xs: Vec<f32> = (0..=steps)
+            .map(|k| a + (b - a) * k as f32 / steps as f32)
+            .collect();
         if self.arch.is_some() && a < 0.0 && b > 0.0 && !xs.contains(&0.0) {
             xs.push(0.0);
             xs.sort_by(f32::total_cmp);
         }
         let mut out = vec![[a, bottom], [b, bottom]];
-        out.extend(xs.iter().rev().map(|&x| [x, (self.top_at(x) - inset).max(bottom + 0.5)]));
+        out.extend(
+            xs.iter()
+                .rev()
+                .map(|&x| [x, (self.top_at(x) - inset).max(bottom + 0.5)]),
+        );
         out
     }
 }
@@ -178,7 +202,11 @@ impl ClaimLeaf {
     /// The height scale a grate telescopes to as it is fully raised, so that its top stands no
     /// higher than `cap` (the ceiling over the doorway) and nothing of it pokes out of the stone.
     pub fn squash_for(&self, cap: f32) -> f32 {
-        if self.rises() { ((cap - self.lift) / self.height.max(1.0)).clamp(0.08, 1.0) } else { 1.0 }
+        if self.rises() {
+            ((cap - self.lift) / self.height.max(1.0)).clamp(0.08, 1.0)
+        } else {
+            1.0
+        }
     }
 }
 
@@ -203,11 +231,17 @@ fn span(opening: &Opening) -> (f32, f32) {
 fn tiers(opening: &Opening, n: u32) -> Vec<f32> {
     let (lo, hi) = (opening.sill + 3.0, opening.straight() - 2.2);
     let n = n.max(2);
-    (0..n).map(|i| lo + (hi - lo) * i as f32 / (n - 1) as f32).collect()
+    (0..n)
+        .map(|i| lo + (hi - lo) * i as f32 / (n - 1) as f32)
+        .collect()
 }
 
 /// A swinging leaf, built in doorway space by `make` and moved into hinge space.
-fn swinging(spec: &DoorSpec, opening: &Opening, make: fn(&DoorSpec, &Opening, &mut Parts)) -> ClaimLeaf {
+fn swinging(
+    spec: &DoorSpec,
+    opening: &Opening,
+    make: fn(&DoorSpec, &Opening, &mut Parts),
+) -> ClaimLeaf {
     let (x0, _) = span(opening);
     let mut parts = Parts::new();
     make(spec, opening, &mut parts);
@@ -215,7 +249,14 @@ fn swinging(spec: &DoorSpec, opening: &Opening, make: fn(&DoorSpec, &Opening, &m
         mesh.translate([-x0, 0.0, 0.0]);
     }
     // The pintles on the hinge-side jamb, one at the height of each strap or band.
-    let heights = tiers(opening, if spec.kind == DoorKind::Wood { spec.straps } else { spec.bands });
+    let heights = tiers(
+        opening,
+        if spec.kind == DoorKind::Wood {
+            spec.straps
+        } else {
+            spec.bands
+        },
+    );
     let mut pintles = MeshBuilder::new();
     for y in heights {
         let reach = HINGE_SET + 0.15;
@@ -228,7 +269,13 @@ fn swinging(spec: &DoorSpec, opening: &Opening, make: fn(&DoorSpec, &Opening, &m
     }
     let mut fixed = Parts::new();
     fixed.add("pintles", pintles, MaterialKind::Iron);
-    ClaimLeaf { leaf: parts.finish(), fixed: fixed.finish(), hinge: [x0, 0.0, LEAF_Z], lift: 0.0, height: 0.0 }
+    ClaimLeaf {
+        leaf: parts.finish(),
+        fixed: fixed.finish(),
+        hinge: [x0, 0.0, LEAF_Z],
+        lift: 0.0,
+        height: 0.0,
+    }
 }
 
 /// The ring pull and lock plate on each face of a leaf `thickness` thick, at `x`, in `iron`.
@@ -269,7 +316,11 @@ fn wood(spec: &DoorSpec, opening: &Opening, parts: &mut Parts) {
         // Boards end a little short of one another's height, as sawn by hand, never over the head.
         let inset = CLEAR + rng.range_f32(0.0, 0.25);
         let b_bottom = bottom + rng.range_f32(0.0, 0.2);
-        boards.append(&prism(&opening.outline(a, a + width, b_bottom, inset, 1), t, 0.12));
+        boards.append(&prism(
+            &opening.outline(a, a + width, b_bottom, inset, 1),
+            t,
+            0.12,
+        ));
     }
     // The hinge stile is a round post turned on the pin, so it never meets the jamb as it swings.
     let post_top = opening.top_at(x0 - t * 0.5) - 0.3 - bottom;
@@ -303,7 +354,11 @@ fn wood(spec: &DoorSpec, opening: &Opening, parts: &mut Parts) {
         knuckle.translate([x0, y - 0.9, 0.0]);
         iron.append(&knuckle);
     }
-    let pin_top = tiers(opening, spec.straps).last().copied().unwrap_or(opening.straight()) + 1.0;
+    let pin_top = tiers(opening, spec.straps)
+        .last()
+        .copied()
+        .unwrap_or(opening.straight())
+        + 1.0;
     let mut pin = cylinder(0.2, pin_top - bottom, 8, Shading::SMOOTH);
     pin.translate([x0, bottom, 0.0]);
     iron.append(&pin);
@@ -318,10 +373,19 @@ fn steel(spec: &DoorSpec, opening: &Opening, parts: &mut Parts) {
     let bottom = opening.sill + 0.1;
     let mut plate = prism(&opening.outline(x0, x1, bottom, CLEAR, 18), t, 0.2);
     // The hinge edge is a round post turned on the pin, so it never meets the jamb as it swings.
-    let mut post = cylinder(t * 0.5, opening.top_at(x0 - t * 0.5) - 0.3 - bottom, 12, Shading::BANDED);
+    let mut post = cylinder(
+        t * 0.5,
+        opening.top_at(x0 - t * 0.5) - 0.3 - bottom,
+        12,
+        Shading::BANDED,
+    );
     post.translate([x0, bottom, 0.0]);
     plate.append(&post);
-    parts.add_look("plate", plate, Look::of(MaterialKind::Iron).tinted(STEEL_PLATE));
+    parts.add_look(
+        "plate",
+        plate,
+        Look::of(MaterialKind::Iron).tinted(STEEL_PLATE),
+    );
 
     let mut iron = MeshBuilder::new();
     let proud = 0.22;
@@ -369,8 +433,16 @@ fn steel(spec: &DoorSpec, opening: &Opening, parts: &mut Parts) {
         iron.append(&lock_box);
         let forward = [0.0, 0.0, face];
         let (mut keyplate, mut keyhole) = lock_plate(1.5, 2.2, 0.15);
-        keyplate.place_basis([bx, by + 0.4, face * (t * 0.5 + 0.5)], [0.0, 1.0, 0.0], forward);
-        keyhole.place_basis([bx, by + 0.4, face * (t * 0.5 + 0.5)], [0.0, 1.0, 0.0], forward);
+        keyplate.place_basis(
+            [bx, by + 0.4, face * (t * 0.5 + 0.5)],
+            [0.0, 1.0, 0.0],
+            forward,
+        );
+        keyhole.place_basis(
+            [bx, by + 0.4, face * (t * 0.5 + 0.5)],
+            [0.0, 1.0, 0.0],
+            forward,
+        );
         iron.append(&keyplate);
         iron.append(&keyhole);
         let pull_x = x1 - 1.0;
@@ -379,7 +451,11 @@ fn steel(spec: &DoorSpec, opening: &Opening, parts: &mut Parts) {
         iron.append(&bar);
         for dy in [0.5, 3.5] {
             let mut stay = cylinder(0.18, 0.95, 8, Shading::SMOOTH);
-            stay.place_basis([pull_x, by - 2.5 + dy, face * (t * 0.5)], [0.0, 0.0, face], [0.0, 1.0, 0.0]);
+            stay.place_basis(
+                [pull_x, by - 2.5 + dy, face * (t * 0.5)],
+                [0.0, 0.0, face],
+                [0.0, 1.0, 0.0],
+            );
             iron.append(&stay);
         }
     }
@@ -394,7 +470,12 @@ fn steel(spec: &DoorSpec, opening: &Opening, parts: &mut Parts) {
         knuckle.translate([x0, y - 1.0, 0.0]);
         iron.append(&knuckle);
     }
-    let mut pin = cylinder(0.22, heights.last().copied().unwrap_or(10.0) + 1.0 - bottom, 8, Shading::SMOOTH);
+    let mut pin = cylinder(
+        0.22,
+        heights.last().copied().unwrap_or(10.0) + 1.0 - bottom,
+        8,
+        Shading::SMOOTH,
+    );
     pin.translate([x0, bottom, 0.0]);
     iron.append(&pin);
     parts.add("ironwork", iron, MaterialKind::Iron);
@@ -424,7 +505,8 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
         let body = top - (tip + foot);
         let mut bar = if spec.timber {
             let mut beam = plank(body, r * 2.0, r * 2.0, 0.08);
-            beam.rotate_z(FRAC_PI_2).translate([x, tip + foot + body * 0.5, -0.2]);
+            beam.rotate_z(FRAC_PI_2)
+                .translate([x, tip + foot + body * 0.5, -0.2]);
             beam
         } else {
             let mut rod = cylinder(r, body, 8, Shading::SMOOTH);
@@ -432,10 +514,20 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
             rod
         };
         bars.append(&bar);
-        bar = frustum(0.03, if spec.timber { r * 1.5 } else { r }, foot, 8, Shading::SMOOTH);
+        bar = frustum(
+            0.03,
+            if spec.timber { r * 1.5 } else { r },
+            foot,
+            8,
+            Shading::SMOOTH,
+        );
         bar.translate([x, tip, -0.2]);
         // The iron-shod points of a timber grate are iron; a bar's own point is its own metal.
-        if spec.timber { shoes.append(&bar) } else { bars.append(&bar) };
+        if spec.timber {
+            shoes.append(&bar)
+        } else {
+            bars.append(&bar)
+        };
     }
     let mut rails = MeshBuilder::new();
     let mut studs = MeshBuilder::new();
@@ -445,22 +537,36 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
         let len = dx.hypot(dy);
         let seg = if spec.timber {
             let mut beam = plank(len + rail_r, rail_r * 2.0, rail_r * 2.0, 0.08);
-            beam.rotate_z(dy.atan2(dx)).translate([(x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.2]);
+            beam.rotate_z(dy.atan2(dx))
+                .translate([(x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.2]);
             beam
         } else {
-            let mut rod = armory::geom::tube(&[[x0, y0, 0.2], [x1, y1, 0.2]], 8, &armory::geom::SweepOptions::default(), |_| rail_r);
+            let mut rod = armory::geom::tube(
+                &[[x0, y0, 0.2], [x1, y1, 0.2]],
+                8,
+                &armory::geom::SweepOptions::default(),
+                |_| rail_r,
+            );
             rod.translate([0.0, 0.0, 0.0]);
             rod
         };
         rails.append(&seg);
     }
-    let (low, high) = (tip + 3.0, (opening.straight() + (opening.crown - opening.straight()) * 0.55).min(opening.top_at(0.0) - 5.0));
+    let (low, high) = (
+        tip + 3.0,
+        (opening.straight() + (opening.crown - opening.straight()) * 0.55)
+            .min(opening.top_at(0.0) - 5.0),
+    );
     let rails_n = spec.rails.max(2);
     for j in 0..rails_n {
         let y = low + (high - low) * j as f32 / (rails_n - 1) as f32;
         // Where the sides run straight a rail runs on into the guide's channel; under the curve it
         // stops short of the arch.
-        let reach = if y + rail_r + 1.3 <= opening.straight() { hw - 0.2 } else { opening.half_width_at(y + rail_r + 1.3) - 0.5 };
+        let reach = if y + rail_r + 1.3 <= opening.straight() {
+            hw - 0.2
+        } else {
+            opening.half_width_at(y + rail_r + 1.3) - 0.5
+        };
         if reach < 2.0 {
             continue;
         }
@@ -485,7 +591,11 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
         }
     }
     let mut parts = Parts::new();
-    let (post, cross) = if spec.timber { (MaterialKind::Wood, MaterialKind::Wood) } else { (MaterialKind::Iron, MaterialKind::Iron) };
+    let (post, cross) = if spec.timber {
+        (MaterialKind::Wood, MaterialKind::Wood)
+    } else {
+        (MaterialKind::Iron, MaterialKind::Iron)
+    };
     parts.add("uprights", bars, post);
     parts.add("rails", rails, cross);
     parts.add("studs", studs, MaterialKind::Iron);
@@ -496,12 +606,20 @@ fn portcullis(spec: &DoorSpec, opening: &Opening) -> ClaimLeaf {
     let top = opening.straight().min(opening.crown) - 0.4;
     for side in [-1.0f32, 1.0] {
         let mut guide = plank(top - opening.sill, 0.42, 1.1, 0.06);
-        guide.rotate_z(FRAC_PI_2).translate([side * (hw - 0.11), (top + opening.sill) * 0.5, 0.0]);
+        guide
+            .rotate_z(FRAC_PI_2)
+            .translate([side * (hw - 0.11), (top + opening.sill) * 0.5, 0.0]);
         guides.append(&guide);
     }
     let mut fixed = Parts::new();
     fixed.add("guides", guides, MaterialKind::Iron);
-    ClaimLeaf { leaf: parts.finish(), fixed: fixed.finish(), hinge: [0.0; 3], lift: opening.crown + GATE_OVERLIFT, height: opening.crown }
+    ClaimLeaf {
+        leaf: parts.finish(),
+        fixed: fixed.finish(),
+        hinge: [0.0; 3],
+        lift: opening.crown + GATE_OVERLIFT,
+        height: opening.crown,
+    }
 }
 
 /// The turn of a swinging leaf about its pin when it stands `swing` open (0 shut, 1 open): a
@@ -549,10 +667,16 @@ pub fn switch_height(kind: SwitchKind) -> f32 {
 /// across and up (what its plate and what hangs from it cover).
 pub fn switch_aim(kind: SwitchKind) -> ([f32; 2], [f32; 2]) {
     match kind {
-        SwitchKind::Lever => ([0.0, 0.0], [LEVER_PLATE[0] * 0.5, LEVER_ARC.sin() * LEVER_REACH + 0.6]),
+        SwitchKind::Lever => (
+            [0.0, 0.0],
+            [LEVER_PLATE[0] * 0.5, LEVER_ARC.sin() * LEVER_REACH + 0.6],
+        ),
         SwitchKind::Chain => {
             let below = HOUSING[1] * 0.5 + CHAIN_LENGTH + RING_RADIUS * 2.0 + CHAIN_DROP;
-            ([0.0, -(below - HOUSING[1] * 0.5) * 0.5], [RING_RADIUS + 0.3, (below + HOUSING[1] * 0.5) * 0.5])
+            (
+                [0.0, -(below - HOUSING[1] * 0.5) * 0.5],
+                [RING_RADIUS + 0.3, (below + HOUSING[1] * 0.5) * 0.5],
+            )
         }
     }
 }
@@ -576,16 +700,33 @@ pub fn lever_plate(seed: u32) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ 0x1e7e_4b01);
     let [w, h] = LEVER_PLATE;
     let slot = vec![[-0.25, -1.1], [0.25, -1.1], [0.25, 1.1], [-0.25, 1.1]];
-    let mut plate = extrude(&[[-w / 2.0, -h / 2.0], [w / 2.0, -h / 2.0], [w / 2.0, h / 2.0], [-w / 2.0, h / 2.0]], &[slot.clone()], PLATE_FACE - PLATE_BACK);
+    let mut plate = extrude(
+        &[
+            [-w / 2.0, -h / 2.0],
+            [w / 2.0, -h / 2.0],
+            [w / 2.0, h / 2.0],
+            [-w / 2.0, h / 2.0],
+        ],
+        &[slot.clone()],
+        PLATE_FACE - PLATE_BACK,
+    );
     plate.translate([0.0, 0.0, (PLATE_FACE + PLATE_BACK) * 0.5]);
     let mut iron = MeshBuilder::new();
     iron.append(&plate);
     for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        iron.append(&rivet(0.13, [sx * (w * 0.5 - 0.25), sy * (h * 0.5 - 0.25), PLATE_FACE + rng.range_f32(0.0, 0.02)]));
+        iron.append(&rivet(
+            0.13,
+            [
+                sx * (w * 0.5 - 0.25),
+                sy * (h * 0.5 - 0.25),
+                PLATE_FACE + rng.range_f32(0.0, 0.02),
+            ],
+        ));
     }
     // The pivot's bar runs across the slot, behind the handle.
     let mut bar = cylinder(0.14, 0.5, 8, Shading::SMOOTH);
-    bar.rotate_z(FRAC_PI_2).translate([0.25, 0.0, LEVER_PIVOT - 0.15]);
+    bar.rotate_z(FRAC_PI_2)
+        .translate([0.25, 0.0, LEVER_PIVOT - 0.15]);
     iron.append(&bar);
     let mut back = extrude(&slot, &[], 0.1);
     back.translate([0.0, 0.0, PLATE_BACK + 0.15]);
@@ -633,7 +774,14 @@ pub fn chain_housing(seed: u32) -> ItemMesh {
     body.translate([0.0, 0.0, PLATE_BACK + 0.3 + (d - 0.3) * 0.5]);
     iron.append(&body);
     for sy in [-1.0f32, 1.0] {
-        iron.append(&rivet(0.12, [0.0, sy * (h * 0.5 + 0.05), PLATE_BACK + 0.32 + rng.range_f32(0.0, 0.02)]));
+        iron.append(&rivet(
+            0.12,
+            [
+                0.0,
+                sy * (h * 0.5 + 0.05),
+                PLATE_BACK + 0.32 + rng.range_f32(0.0, 0.02),
+            ],
+        ));
     }
     // The eye the chain hangs through.
     let mut eye = torus(0.28, 0.08, 10, 6, Shading::SMOOTH);
@@ -674,8 +822,15 @@ pub fn chain_pull(seed: u32) -> ItemMesh {
         y -= pitch;
         k += 1;
     }
-    let mut ring = torus(RING_RADIUS, 0.14 + rng.range_f32(0.0, 0.02), 16, 8, Shading::SMOOTH);
-    ring.rotate_x(FRAC_PI_2).translate([0.0, -CHAIN_LENGTH - RING_RADIUS + 0.2, 0.0]);
+    let mut ring = torus(
+        RING_RADIUS,
+        0.14 + rng.range_f32(0.0, 0.02),
+        16,
+        8,
+        Shading::SMOOTH,
+    );
+    ring.rotate_x(FRAC_PI_2)
+        .translate([0.0, -CHAIN_LENGTH - RING_RADIUS + 0.2, 0.0]);
     iron.append(&ring);
     let mut parts = Parts::new();
     parts.add("chain", iron, MaterialKind::Iron);
@@ -694,10 +849,24 @@ mod tests {
     use super::*;
     use crate::level::geometry::DOOR_WIDTH;
 
-    const STYLES: [DoorStyle; 4] = [DoorStyle::Timber, DoorStyle::RoundArch, DoorStyle::PointedArch, DoorStyle::RockCut];
+    const STYLES: [DoorStyle; 4] = [
+        DoorStyle::Timber,
+        DoorStyle::RoundArch,
+        DoorStyle::PointedArch,
+        DoorStyle::RockCut,
+    ];
 
     fn spec(kind: DoorKind, style: DoorStyle, seed: u32) -> DoorSpec {
-        DoorSpec::rolled(kind, style, if seed % 2 == 0 { LevelStyle::RoughRock } else { LevelStyle::StoneHalls }, seed)
+        DoorSpec::rolled(
+            kind,
+            style,
+            if seed % 2 == 0 {
+                LevelStyle::RoughRock
+            } else {
+                LevelStyle::StoneHalls
+            },
+            seed,
+        )
     }
 
     fn points(mesh: &ItemMesh) -> impl Iterator<Item = V3> + '_ {
@@ -707,19 +876,32 @@ mod tests {
     #[test]
     fn the_opening_matches_the_frame_it_describes() {
         let timber = Opening::of(DoorStyle::Timber);
-        assert_eq!((timber.half_width, timber.crown), (DOOR_WIDTH * 0.5, DOOR_HEIGHT));
+        assert_eq!(
+            (timber.half_width, timber.crown),
+            (DOOR_WIDTH * 0.5, DOOR_HEIGHT)
+        );
         for style in STYLES {
             let o = Opening::of(style);
             assert!((o.half_width - DOOR_WIDTH * 0.5).abs() < 1e-4);
-            assert!(o.crown >= DOOR_HEIGHT - 1e-3, "{style:?}: the head is lower than a timber door's");
+            assert!(
+                o.crown >= DOOR_HEIGHT - 1e-3,
+                "{style:?}: the head is lower than a timber door's"
+            );
             // The head only falls away from the middle, and the sides are straight up to the spring.
             assert!((o.top_at(0.0) - o.crown).abs() < 1e-3);
             assert!(o.top_at(3.0) >= o.top_at(5.0) - 1e-3);
             assert!((o.half_width_at(o.straight() - 0.1) - o.half_width).abs() < 1e-4);
-            assert!(o.half_width_at(o.crown + 0.1) == 0.0 && (style == DoorStyle::Timber || o.half_width_at(o.crown - 0.2) < o.half_width));
+            assert!(
+                o.half_width_at(o.crown + 0.1) == 0.0
+                    && (style == DoorStyle::Timber
+                        || o.half_width_at(o.crown - 0.2) < o.half_width)
+            );
         }
         // A pointed head is higher than a round one.
-        assert!(Opening::of(DoorStyle::PointedArch).crown > Opening::of(DoorStyle::RoundArch).crown + 2.0);
+        assert!(
+            Opening::of(DoorStyle::PointedArch).crown
+                > Opening::of(DoorStyle::RoundArch).crown + 2.0
+        );
     }
 
     #[test]
@@ -731,21 +913,43 @@ mod tests {
                     let s = spec(kind, style, seed);
                     let built = claim_leaf(&s);
                     for part in built.leaf.parts.iter().chain(&built.fixed.parts) {
-                        part.validate().unwrap_or_else(|e| panic!("{kind:?} {style:?}: {e}"));
-                        assert!(part.positions.iter().all(|p| p.iter().all(|c| c.is_finite())));
+                        part.validate()
+                            .unwrap_or_else(|e| panic!("{kind:?} {style:?}: {e}"));
+                        assert!(
+                            part.positions
+                                .iter()
+                                .all(|p| p.iter().all(|c| c.is_finite()))
+                        );
                     }
                     for p in points(&built.leaf) {
                         // Into doorway space.
                         let (x, y, z) = (p[0] + built.hinge[0], p[1], p[2] + built.hinge[2]);
-                        assert!(x.abs() <= o.half_width + 1e-3, "{kind:?} {style:?} seed {seed}: x {x} outside the jambs");
-                        assert!(y >= o.sill - 1e-3, "{kind:?} {style:?}: y {y} under the sill");
-                        assert!(y <= o.top_at(x) + 0.02, "{kind:?} {style:?} seed {seed}: ({x}, {y}) over the head {}", o.top_at(x));
+                        assert!(
+                            x.abs() <= o.half_width + 1e-3,
+                            "{kind:?} {style:?} seed {seed}: x {x} outside the jambs"
+                        );
+                        assert!(
+                            y >= o.sill - 1e-3,
+                            "{kind:?} {style:?}: y {y} under the sill"
+                        );
+                        assert!(
+                            y <= o.top_at(x) + 0.02,
+                            "{kind:?} {style:?} seed {seed}: ({x}, {y}) over the head {}",
+                            o.top_at(x)
+                        );
                         // Within the thinnest reveal (a timber frame's), with the leaf set back from its face.
-                        assert!(z.abs() <= super::super::FRAME_DEPTH * 0.5 + 0.7, "{kind:?} {style:?}: z {z} out of the reveal");
+                        assert!(
+                            z.abs() <= super::super::FRAME_DEPTH * 0.5 + 0.7,
+                            "{kind:?} {style:?}: z {z} out of the reveal"
+                        );
                     }
                     // The pintles and guides are let into the jambs (a hair), and no more.
                     for p in points(&built.fixed) {
-                        assert!(p[0].abs() <= o.half_width + 0.16, "{kind:?} {style:?}: fixed part at x {}", p[0]);
+                        assert!(
+                            p[0].abs() <= o.half_width + 0.16,
+                            "{kind:?} {style:?}: fixed part at x {}",
+                            p[0]
+                        );
                         assert!(p[1] <= o.crown + 1e-3 && p[1] >= o.sill - 1e-3);
                     }
                 }
@@ -761,12 +965,23 @@ mod tests {
                 let built = claim_leaf(&spec(kind, style, 3));
                 assert!(!built.rises());
                 let xs: Vec<f32> = points(&built.leaf).map(|p| p[0] + built.hinge[0]).collect();
-                let (lo, hi) = xs.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+                let (lo, hi) = xs
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
                 // The pin is set off the hinge jamb, and the latch edge clears its own by a hair.
-                assert!(lo > -o.half_width + HINGE_SET - 0.7 && lo < -o.half_width + HINGE_SET + 0.1, "{kind:?} {style:?}: lo {lo}");
-                assert!(hi > o.half_width - 0.5 && hi <= o.half_width, "{kind:?} {style:?}: hi {hi}");
+                assert!(
+                    lo > -o.half_width + HINGE_SET - 0.7 && lo < -o.half_width + HINGE_SET + 0.1,
+                    "{kind:?} {style:?}: lo {lo}"
+                );
+                assert!(
+                    hi > o.half_width - 0.5 && hi <= o.half_width,
+                    "{kind:?} {style:?}: hi {hi}"
+                );
                 let top = points(&built.leaf).map(|p| p[1]).fold(f32::MIN, f32::max);
-                assert!(top > o.straight() - 0.5, "{kind:?} {style:?}: the leaf is only {top} high");
+                assert!(
+                    top > o.straight() - 0.5,
+                    "{kind:?} {style:?}: the leaf is only {top} high"
+                );
                 // The hinge stands inside the opening, on the frame side.
                 assert!(built.hinge[0] < -o.half_width + 1.5 && built.hinge[0] > -o.half_width);
             }
@@ -788,7 +1003,10 @@ mod tests {
                         let z = built.hinge[2] - p[0] * s + p[2] * c;
                         // Only what is still within the frame's depth can meet the jamb.
                         if z.abs() < 2.1 {
-                            assert!(x >= -o.half_width - 0.02, "{kind:?} {style:?}: swung to x {x} from {p:?} at {angle}");
+                            assert!(
+                                x >= -o.half_width - 0.02,
+                                "{kind:?} {style:?}: swung to x {x} from {p:?} at {angle}"
+                            );
                         }
                     }
                 }
@@ -807,11 +1025,27 @@ mod tests {
                 let built = claim_leaf(&s);
                 assert!(built.rises());
                 let low = points(&built.leaf).map(|p| p[1]).fold(f32::MAX, f32::min);
-                assert!(low >= o.sill && low < o.sill + 0.2, "{style:?}: the feet are at {low}");
-                assert!(low + built.lift > o.crown, "{style:?}: raised, its feet at {} still hang in the opening", low + built.lift);
+                assert!(
+                    low >= o.sill && low < o.sill + 0.2,
+                    "{style:?}: the feet are at {low}"
+                );
+                assert!(
+                    low + built.lift > o.crown,
+                    "{style:?}: raised, its feet at {} still hang in the opening",
+                    low + built.lift
+                );
                 // The grate is a grate: bars with gaps between, not a plate.
-                let uprights = built.leaf.parts.iter().find(|p| p.name == "uprights").unwrap();
-                let xs: std::collections::BTreeSet<i32> = uprights.positions.iter().map(|p| (p[0] * 4.0).round() as i32).collect();
+                let uprights = built
+                    .leaf
+                    .parts
+                    .iter()
+                    .find(|p| p.name == "uprights")
+                    .unwrap();
+                let xs: std::collections::BTreeSet<i32> = uprights
+                    .positions
+                    .iter()
+                    .map(|p| (p[0] * 4.0).round() as i32)
+                    .collect();
                 assert!(xs.len() > 12);
                 assert_eq!(built.hinge, [0.0; 3]);
             }
@@ -820,7 +1054,11 @@ mod tests {
 
     #[test]
     fn a_portcullis_follows_the_arch_and_no_bar_ends_outside_it() {
-        for style in [DoorStyle::RoundArch, DoorStyle::PointedArch, DoorStyle::RockCut] {
+        for style in [
+            DoorStyle::RoundArch,
+            DoorStyle::PointedArch,
+            DoorStyle::RockCut,
+        ] {
             let o = Opening::of(style);
             for timber in [false, true] {
                 for seed in 0..6 {
@@ -828,21 +1066,53 @@ mod tests {
                     s.timber = timber;
                     s.bar = if timber { 0.42 } else { 0.28 };
                     let built = claim_leaf(&s);
-                    let uprights = built.leaf.parts.iter().find(|p| p.name == "uprights").unwrap();
+                    let uprights = built
+                        .leaf
+                        .parts
+                        .iter()
+                        .find(|p| p.name == "uprights")
+                        .unwrap();
                     let rails = built.leaf.parts.iter().find(|p| p.name == "rails").unwrap();
                     // Every point of every bar, and of the head rail, lies inside the profile with room to spare.
                     for p in uprights.positions.iter().chain(&rails.positions) {
-                        assert!(p[1] <= o.top_at(p[0]) - 0.3, "{style:?} timber {timber}: ({}, {}) over the head {}", p[0], p[1], o.top_at(p[0]));
+                        assert!(
+                            p[1] <= o.top_at(p[0]) - 0.3,
+                            "{style:?} timber {timber}: ({}, {}) over the head {}",
+                            p[0],
+                            p[1],
+                            o.top_at(p[0])
+                        );
                     }
                     // Each upright's top is held by the head rail: it reaches the rail's height there.
-                    let xs: std::collections::BTreeSet<i32> = uprights.positions.iter().map(|p| (p[0] * 100.0).round() as i32).collect();
+                    let xs: std::collections::BTreeSet<i32> = uprights
+                        .positions
+                        .iter()
+                        .map(|p| (p[0] * 100.0).round() as i32)
+                        .collect();
                     assert!(xs.len() > 6);
-                    let rail_top = |x: f32| rails.positions.iter().filter(|p| (p[0] - x).abs() < 1.6).map(|p| p[1]).fold(f32::MIN, f32::max);
+                    let rail_top = |x: f32| {
+                        rails
+                            .positions
+                            .iter()
+                            .filter(|p| (p[0] - x).abs() < 1.6)
+                            .map(|p| p[1])
+                            .fold(f32::MIN, f32::max)
+                    };
                     for p in uprights.positions.iter().filter(|p| p[1] > o.straight()) {
-                        assert!(p[1] <= rail_top(p[0]) + 0.1, "{style:?}: a bar ends at {} over its rail {}", p[1], rail_top(p[0]));
+                        assert!(
+                            p[1] <= rail_top(p[0]) + 0.1,
+                            "{style:?}: a bar ends at {} over its rail {}",
+                            p[1],
+                            rail_top(p[0])
+                        );
                     }
                     // The rail rises toward the crown, as the arch does.
-                    assert!(rail_top(0.0) > rail_top(5.0) + 0.4, "{style:?} timber {timber} seed {seed}: the head rail is flat {} {}", rail_top(0.0), rail_top(5.0));
+                    assert!(
+                        rail_top(0.0) > rail_top(5.0) + 0.4,
+                        "{style:?} timber {timber} seed {seed}: the head rail is flat {} {}",
+                        rail_top(0.0),
+                        rail_top(5.0)
+                    );
                 }
             }
         }
@@ -859,11 +1129,20 @@ mod tests {
                 // Fully raised: the top is no higher than the cap (unless the floor of the squash was hit),
                 // and the feet are above the opening.
                 let top = built.lift + built.height * squash;
-                assert!(top <= cap + 1e-3 || squash <= 0.0801, "{style:?} cap {cap}: top {top}");
-                assert!(built.lift > o.crown, "the feet rise past the head of the opening");
+                assert!(
+                    top <= cap + 1e-3 || squash <= 0.0801,
+                    "{style:?} cap {cap}: top {top}"
+                );
+                assert!(
+                    built.lift > o.crown,
+                    "the feet rise past the head of the opening"
+                );
             }
             // A swinging leaf is never squashed.
-            assert_eq!(claim_leaf(&spec(DoorKind::Wood, style, 2)).squash_for(30.0), 1.0);
+            assert_eq!(
+                claim_leaf(&spec(DoorKind::Wood, style, 2)).squash_for(30.0),
+                1.0
+            );
         }
     }
 
@@ -872,21 +1151,52 @@ mod tests {
         let o = Opening::of(DoorStyle::Timber);
         let built = claim_leaf(&spec(DoorKind::Portcullis, DoorStyle::Timber, 4));
         let rails = built.leaf.parts.iter().find(|p| p.name == "rails").unwrap();
-        let reach = rails.positions.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
-        let guide_inner = built.fixed.parts.iter().flat_map(|p| p.positions.iter()).filter(|p| p[0] > 0.0).map(|p| p[0]).fold(f32::MAX, f32::min);
-        assert!(reach > guide_inner, "the rails stop {} short of the guides' channel", guide_inner - reach);
+        let reach = rails
+            .positions
+            .iter()
+            .map(|p| p[0])
+            .fold(f32::MIN, f32::max);
+        let guide_inner = built
+            .fixed
+            .parts
+            .iter()
+            .flat_map(|p| p.positions.iter())
+            .filter(|p| p[0] > 0.0)
+            .map(|p| p[0])
+            .fold(f32::MAX, f32::min);
+        assert!(
+            reach > guide_inner,
+            "the rails stop {} short of the guides' channel",
+            guide_inner - reach
+        );
         assert!(reach <= o.half_width, "and no further than the jamb");
     }
 
     #[test]
     fn the_doors_are_deterministic_and_the_kinds_differ() {
         for kind in DoorKind::ALL {
-            assert_eq!(claim_leaf(&spec(kind, DoorStyle::RoundArch, 9)), claim_leaf(&spec(kind, DoorStyle::RoundArch, 9)));
+            assert_eq!(
+                claim_leaf(&spec(kind, DoorStyle::RoundArch, 9)),
+                claim_leaf(&spec(kind, DoorStyle::RoundArch, 9))
+            );
         }
-        let weight = |kind| claim_leaf(&spec(kind, DoorStyle::Timber, 9)).leaf.parts.iter().map(|p| p.positions.len()).sum::<usize>();
-        assert!(weight(DoorKind::Steel) != weight(DoorKind::Wood) && weight(DoorKind::Portcullis) != weight(DoorKind::Wood));
+        let weight = |kind| {
+            claim_leaf(&spec(kind, DoorStyle::Timber, 9))
+                .leaf
+                .parts
+                .iter()
+                .map(|p| p.positions.len())
+                .sum::<usize>()
+        };
+        assert!(
+            weight(DoorKind::Steel) != weight(DoorKind::Wood)
+                && weight(DoorKind::Portcullis) != weight(DoorKind::Wood)
+        );
         // A steel door is a thicker leaf than a wooden one.
-        assert!(spec(DoorKind::Steel, DoorStyle::Timber, 1).thickness > spec(DoorKind::Wood, DoorStyle::Timber, 1).thickness);
+        assert!(
+            spec(DoorKind::Steel, DoorStyle::Timber, 1).thickness
+                > spec(DoorKind::Wood, DoorStyle::Timber, 1).thickness
+        );
     }
 
     #[test]
@@ -900,7 +1210,10 @@ mod tests {
                 hi[k] = hi[k].max(p[k]);
             }
         }
-        assert!(hi[0] - lo[0] <= 1.5 && hi[1] - lo[1] <= 3.0 + 1e-3, "{lo:?} {hi:?}");
+        assert!(
+            hi[0] - lo[0] <= 1.5 && hi[1] - lo[1] <= 3.0 + 1e-3,
+            "{lo:?} {hi:?}"
+        );
         assert!(lo[2] >= PLATE_BACK - 1e-3 && hi[2] <= 0.5, "{lo:?} {hi:?}");
         // The housing too, at the same footprint.
         let housing = chain_housing(3);
@@ -911,20 +1224,27 @@ mod tests {
                 hi[k] = hi[k].max(p[k]);
             }
         }
-        assert!(hi[0] - lo[0] <= 1.7 && hi[1] - lo[1] <= 2.3, "{lo:?} {hi:?}");
+        assert!(
+            hi[0] - lo[0] <= 1.7 && hi[1] - lo[1] <= 2.3,
+            "{lo:?} {hi:?}"
+        );
         for mesh in [&plate, &housing, &lever_handle(), &chain_pull(3)] {
             for part in &mesh.parts {
                 part.validate().unwrap();
             }
         }
         // Hanging at hand height, the ring reaches down to where a hand can take it.
-        let ring_bottom = CHAIN_HEIGHT + chain_exit()[1] - CHAIN_LENGTH - RING_RADIUS * 2.0 - CHAIN_DROP;
+        let ring_bottom =
+            CHAIN_HEIGHT + chain_exit()[1] - CHAIN_LENGTH - RING_RADIUS * 2.0 - CHAIN_DROP;
         assert!((6.0..12.0).contains(&ring_bottom), "{ring_bottom}");
     }
 
     #[test]
     fn the_lever_throws_up_and_down_and_the_chain_springs_back() {
-        assert!((lever_swing(0.0) + LEVER_ARC).abs() < 1e-5 && (lever_swing(1.0) - LEVER_ARC).abs() < 1e-5);
+        assert!(
+            (lever_swing(0.0) + LEVER_ARC).abs() < 1e-5
+                && (lever_swing(1.0) - LEVER_ARC).abs() < 1e-5
+        );
         assert!(lever_swing(0.5).abs() < 1e-5);
         // Turned about X, the arm (along +Z) rises at pull 0 and falls at pull 1.
         let up = glam_rotate_x(lever_swing(0.0));

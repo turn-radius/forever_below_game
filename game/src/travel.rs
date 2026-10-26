@@ -50,20 +50,23 @@ use bevy::{
 use fb_level::{CELL, Level, Stair, StairKind};
 
 use crate::carry::Aimed;
+use crate::combat::vitals::{Dying, Fallen};
 use crate::figure::Figure;
 use crate::fitting::Fitting;
 use crate::folk::{AimedFolk, FolkFigures, Person, build_figures};
 use crate::interact::{CrosshairPrompt, Delver, Target, key_line, verbs_for};
-use crate::keymap::{Action, ActionInput, Keymap};
-use crate::level::{PreparedStone, geometry::LevelMesh, stone_chunks};
-use crate::staged::{Staged, Staging};
-use crate::launch::AppState;
-use crate::combat::vitals::{Dying, Fallen};
 use crate::inventory::OpenContainer;
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Player, PlayerCamera, ScreenOpen, level_has_focus, show_screen};
-use crate::player::Locomotion;
 use crate::inventory::underfoot::apply_floor_changes;
+use crate::keymap::{Action, ActionInput, Keymap};
+use crate::launch::AppState;
+use crate::level::{PreparedStone, geometry::LevelMesh, stone_chunks};
+use crate::play::{
+    BlockedCells, CurrentLevel, DelveSystems, Player, PlayerCamera, ScreenOpen, level_has_focus,
+    show_screen,
+};
+use crate::player::Locomotion;
 use crate::record::{WorldRecord, record_level_left};
+use crate::staged::{Staged, Staging};
 use crate::ui::{BG, INK, UiFonts};
 
 /// Seconds the screen takes to fade to black, and to fade back in on the new level.
@@ -104,19 +107,30 @@ pub struct Abyss {
 
 impl Default for Abyss {
     fn default() -> Self {
-        Abyss { run_seed: 0, depth: 1, arrival: Arrival::Entered }
+        Abyss {
+            run_seed: 0,
+            depth: 1,
+            arrival: Arrival::Entered,
+        }
     }
 }
 
 impl Abyss {
     pub fn new(run_seed: u32) -> Self {
-        Abyss { run_seed, ..default() }
+        Abyss {
+            run_seed,
+            ..default()
+        }
     }
 
     /// The level at `depth`: the same level every time it is asked for. The place to apply what
     /// was recorded on a level (#285) is on the level this returns.
     pub fn level_at(&self, depth: u32) -> Level {
-        fb_level::generate_in(self.run_seed, depth, &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(depth)))
+        fb_level::generate_in(
+            self.run_seed,
+            depth,
+            &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(depth)),
+        )
     }
 }
 
@@ -138,7 +152,12 @@ impl Prepared {
         let stone = stone_chunks(&level);
         let folk = build_figures(&level.folk, &level.factions, depth);
         let staging = Staging::make(&level, odds);
-        Prepared { level, stone, folk, staging }
+        Prepared {
+            level,
+            stone,
+            folk,
+            staging,
+        }
     }
 }
 
@@ -242,38 +261,86 @@ impl Plugin for TravelPlugin {
             .add_systems(OnExit(AppState::Delving), end_the_run)
             .init_resource::<WorldRecord>()
             .init_resource::<crate::enchanting::Enchanting>()
-            .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
-            .add_systems(Update, record_level_left.after(apply_floor_changes).in_set(LeavingLevel))
+            .configure_sets(
+                Update,
+                LeavingLevel
+                    .run_if(journey_is_leaving)
+                    .before(step_journey)
+                    .in_set(DelveSystems),
+            )
             .add_systems(
                 Update,
-                (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title, prefetch_below.run_if(resource_exists::<CurrentLevel>)).chain().in_set(DelveSystems),
+                record_level_left
+                    .after(apply_floor_changes)
+                    .in_set(LeavingLevel),
             )
-            .add_systems(Update, prompt_stair.after(crate::props::prompt_aimed_container).in_set(DelveSystems));
+            .add_systems(
+                Update,
+                (
+                    take_stair.run_if(level_has_focus),
+                    begin_journey,
+                    step_journey,
+                    fade_depth_title,
+                    prefetch_below.run_if(resource_exists::<CurrentLevel>),
+                )
+                    .chain()
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                prompt_stair
+                    .after(crate::props::prompt_aimed_container)
+                    .in_set(DelveSystems),
+            );
     }
 }
 
 /// A new delve is a new abyss, from the seed of the level it opens on.
-pub(crate) fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<Res<crate::character::Character>>, mut abyss: ResMut<Abyss>, mut record: ResMut<WorldRecord>, mut enchanting: ResMut<crate::enchanting::Enchanting>, mut dev_used: Local<bool>) {
+pub(crate) fn begin_the_run(
+    level: Option<Res<CurrentLevel>>,
+    character: Option<Res<crate::character::Character>>,
+    mut abyss: ResMut<Abyss>,
+    mut record: ResMut<WorldRecord>,
+    mut enchanting: ResMut<crate::enchanting::Enchanting>,
+    mut dev_used: Local<bool>,
+) {
     // What was scrapped lasts one delve.
     *enchanting = default();
     // `FB_DEPTH` starts below the first level, whose seed is not the run's: the run keeps the
     // seed `main` made the level from, so the world the sheet and standings read is the level's.
     // Only the first run: a new delve after a death is a new world.
-    let dev_run = crate::launch::env_set("FB_DEPTH") && abyss.run_seed != 0 && !std::mem::replace(&mut *dev_used, true);
-    *abyss = level.map_or_else(Abyss::default, |level| Abyss { depth: level.0.depth, ..Abyss::new(if dev_run { abyss.run_seed } else { level.0.seed }) });
+    let dev_run = crate::launch::env_set("FB_DEPTH")
+        && abyss.run_seed != 0
+        && !std::mem::replace(&mut *dev_used, true);
+    *abyss = level.map_or_else(Abyss::default, |level| Abyss {
+        depth: level.0.depth,
+        ..Abyss::new(if dev_run {
+            abyss.run_seed
+        } else {
+            level.0.seed
+        })
+    });
     // The world record resets with the run for now (#285), and standing starts afresh in the
     // new world from the delver's alignment (#542).
     // A faction that likes or hates the delver's class or folk starts apart from it (#547).
-    let delver = character.map_or(fb_faction::Delver::of_alignment(fb_faction::Alignment::TrueNeutral), |c| fb_faction::Delver {
-        alignment: c.class.alignment(),
-        class: Some(c.class.faction_class()),
-        folk: Some(c.folk),
-    });
+    let delver = character.map_or(
+        fb_faction::Delver::of_alignment(fb_faction::Alignment::TrueNeutral),
+        |c| fb_faction::Delver {
+            alignment: c.class.alignment(),
+            class: Some(c.class.faction_class()),
+            folk: Some(c.folk),
+        },
+    );
     *record = WorldRecord::new_delve_as(&delver, abyss.run_seed);
 }
 
 /// Leaving the delve leaves the abyss.
-fn end_the_run(mut commands: Commands, mut abyss: ResMut<Abyss>, mut staged: ResMut<Staged>, mut prepared: ResMut<PreparedStone>) {
+fn end_the_run(
+    mut commands: Commands,
+    mut abyss: ResMut<Abyss>,
+    mut staged: ResMut<Staged>,
+    mut prepared: ResMut<PreparedStone>,
+) {
     *abyss = Abyss::default();
     *staged = Staged::default();
     prepared.clear();
@@ -317,7 +384,9 @@ fn prefetch_below(
     // Its loot rolls for the luck worn now; if that changes before the stair down, the level's
     // loot is rolled again on arrival (`crate::staged::Staged::take_items`).
     let odds = crate::character::loot_odds(character.as_deref(), inventory.as_deref(), key.1);
-    commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1, odds))));
+    commands.insert_resource(Below(Fitting::start(key, move || {
+        Prepared::make(key.0, key.1, odds)
+    })));
 }
 
 /// F at a stair uses it, unless an item or container is under the crosshair. A delver at 0 hit
@@ -336,10 +405,17 @@ fn take_stair(
 ) {
     // An item or container under the crosshair takes the press instead.
     let aiming = aimed.is_some_and(|a| a.0.is_some());
-    if journey.is_some() || fallen.is_some() || dying.is_some() || aiming || !input.just_pressed(Action::Primary) {
+    if journey.is_some()
+        || fallen.is_some()
+        || dying.is_some()
+        || aiming
+        || !input.just_pressed(Action::Primary)
+    {
         return;
     }
-    let (Some(feet), Some(eye)) = (players.iter().next(), cameras.iter().next()) else { return };
+    let (Some(feet), Some(eye)) = (players.iter().next(), cameras.iter().next()) else {
+        return;
+    };
     let looking = eye.forward().as_vec3();
     if let Some(stair) = stair_in_reach(&level.0, feet.translation.xz(), looking.xz()) {
         used.write(UseStair(stair.kind));
@@ -367,10 +443,20 @@ pub(crate) fn prompt_stair(
             return None;
         }
         let (feet, eye) = (players.iter().next()?, cameras.iter().next()?);
-        let stair = stair_in_reach(&level.0, feet.translation.xz(), eye.forward().as_vec3().xz())?;
+        let stair = stair_in_reach(
+            &level.0,
+            feet.translation.xz(),
+            eye.forward().as_vec3().xz(),
+        )?;
         let fallback = Keymap::default();
-        let target = Target::Stair { down: stair.kind == StairKind::Down };
-        Some(key_line(keymap.as_deref().unwrap_or(&fallback), &verbs_for(&target, &Delver::default()))).filter(|line| !line.is_empty())
+        let target = Target::Stair {
+            down: stair.kind == StairKind::Down,
+        };
+        Some(key_line(
+            keymap.as_deref().unwrap_or(&fallback),
+            &verbs_for(&target, &Delver::default()),
+        ))
+        .filter(|line| !line.is_empty())
     })();
     if *said != line {
         if line.is_some() || prompt.0 == *said {
@@ -393,7 +479,9 @@ fn begin_journey(
     mut container: Option<ResMut<OpenContainer>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
-    let Some(UseStair(by)) = used.read().last().copied() else { return };
+    let Some(UseStair(by)) = used.read().last().copied() else {
+        return;
+    };
     if journey.is_some() || fallen.is_some() || dying.is_some() || level.0.stair(by).is_none() {
         return;
     }
@@ -408,14 +496,24 @@ fn begin_journey(
     let fade = commands
         .spawn((
             Name::new("travel fade"),
-            Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
             BackgroundColor(Color::BLACK.with_alpha(0.0)),
             GlobalZIndex(100),
             Pickable::IGNORE,
             DespawnOnExit(AppState::Delving),
         ))
         .id();
-    commands.insert_resource(Journey { by, phase: Phase::FadingOut, seconds: 0.0, fade });
+    commands.insert_resource(Journey {
+        by,
+        phase: Phase::FadingOut,
+        seconds: 0.0,
+        fade,
+    });
 }
 
 /// Fades out, holds a frame at black for [`LeavingLevel`], swaps the level for the next, and
@@ -454,10 +552,20 @@ fn step_journey(
             // (A level with a record is never started ahead, and its record sets its floor: the
             // loot rolled ahead is not laid out over it.)
             let made = (journey.by == StairKind::Down && record.level(to).is_none())
-                .then(|| below.as_mut().filter(|below| *below.0.key() == (abyss.run_seed, to)).and_then(|below| below.0.wait()))
+                .then(|| {
+                    below
+                        .as_mut()
+                        .filter(|below| *below.0.key() == (abyss.run_seed, to))
+                        .and_then(|below| below.0.wait())
+                })
                 .flatten();
             let mut next = match made {
-                Some(Prepared { level, stone, folk, staging }) => {
+                Some(Prepared {
+                    level,
+                    stone,
+                    folk,
+                    staging,
+                }) => {
                     staged.set(&level, staging);
                     prepared.set(level.seed, level.depth, stone);
                     figures.keep(folk);
@@ -475,7 +583,11 @@ fn step_journey(
             }
             .unwrap_or_else(|| next.start());
             abyss.depth = to;
-            abyss.arrival = if journey.by == StairKind::Down { Arrival::FromAbove } else { Arrival::FromBelow };
+            abyss.arrival = if journey.by == StairKind::Down {
+                Arrival::FromAbove
+            } else {
+                Arrival::FromBelow
+            };
             // Nothing blocked on the old level blocks the new, and nothing aimed at is still there.
             *blocked = BlockedCells::default();
             aimed.0 = None;
@@ -488,7 +600,10 @@ fn step_journey(
                 let [wx, _, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
                 body.translation = Vec3::new(wx, 0.0, wz);
                 body.rotation = Quat::from_rotation_y(facing.yaw());
-                *locomotion = Locomotion { yaw: facing.yaw(), ..default() };
+                *locomotion = Locomotion {
+                    yaw: facing.yaw(),
+                    ..default()
+                };
             }
             spawn_depth_title(&mut commands, fonts.as_deref(), to);
             journey.phase = Phase::FadingIn;
@@ -510,7 +625,9 @@ fn step_journey(
 
 /// "Depth N", large, in the display face, near the top of the view.
 pub fn spawn_depth_title(commands: &mut Commands, fonts: Option<&UiFonts>, depth: u32) {
-    let font = fonts.map_or_else(TextFont::default, |f| TextFont::from_font_size(46.0).with_font(f.display.clone()));
+    let font = fonts.map_or_else(TextFont::default, |f| {
+        TextFont::from_font_size(46.0).with_font(f.display.clone())
+    });
     commands.spawn((
         Name::new("depth title"),
         DepthTitle { seconds: 0.0 },
@@ -518,8 +635,17 @@ pub fn spawn_depth_title(commands: &mut Commands, fonts: Option<&UiFonts>, depth
         font,
         TextLayout::justify(Justify::Center),
         TextColor(INK.with_alpha(0.0)),
-        TextShadow { offset: Vec2::new(2.0, 2.0), color: BG.with_alpha(0.0) },
-        Node { position_type: PositionType::Absolute, width: percent(100), top: percent(26), justify_content: JustifyContent::Center, ..default() },
+        TextShadow {
+            offset: Vec2::new(2.0, 2.0),
+            color: BG.with_alpha(0.0),
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            top: percent(26),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
         GlobalZIndex(101),
         Pickable::IGNORE,
         DespawnOnExit(AppState::Delving),
@@ -527,7 +653,11 @@ pub fn spawn_depth_title(commands: &mut Commands, fonts: Option<&UiFonts>, depth
 }
 
 /// Fades the depth in and out, and takes it away.
-fn fade_depth_title(mut commands: Commands, time: Res<Time>, mut titles: Query<(Entity, &mut DepthTitle, &mut TextColor, &mut TextShadow)>) {
+fn fade_depth_title(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut titles: Query<(Entity, &mut DepthTitle, &mut TextColor, &mut TextShadow)>,
+) {
     for (entity, mut title, mut color, mut shadow) in &mut titles {
         title.seconds += time.delta_secs();
         if title.seconds >= TITLE_SECONDS {
@@ -556,17 +686,32 @@ mod tests {
 
     #[test]
     fn the_level_made_in_the_background_is_the_one_made_in_place() {
-        let background = Fitting::start((1207, 2), || Prepared::make(1207, 2, fb_items::Odds::loot(2))).wait().expect("the job runs");
+        let background = Fitting::start((1207, 2), || {
+            Prepared::make(1207, 2, fb_items::Odds::loot(2))
+        })
+        .wait()
+        .expect("the job runs");
         let level = Abyss::new(1207).level_at(2);
         assert_eq!(background.level, level);
         assert_eq!(background.stone, stone_chunks(&level));
         // Each folk figure, mesh buffers and all, is the one built here, one at a time.
         assert!(!level.folk.is_empty(), "the level has folk to make");
-        assert_eq!(background.folk.len(), level.folk.iter().filter(|s| crate::folk::has_figure(s)).count());
+        assert_eq!(
+            background.folk.len(),
+            level
+                .folk
+                .iter()
+                .filter(|s| crate::folk::has_figure(s))
+                .count()
+        );
         for spot in &level.folk {
             let person = Person::of(spot, level.faction(spot.faction), 2);
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
-            let made = background.folk.iter().find(|(p, _)| p.spot == *spot).expect("every spot has a person");
+            let made = background
+                .folk
+                .iter()
+                .find(|(p, _)| p.spot == *spot)
+                .expect("every spot has a person");
             assert_eq!(made.0, person);
             assert_eq!(format!("{:?}", made.1), format!("{figure:?}"));
         }
@@ -576,7 +721,11 @@ mod tests {
     fn stairs_lead_one_level_down_or_up() {
         assert_eq!(depth_after(1, StairKind::Down), 2);
         assert_eq!(depth_after(5, StairKind::Up), 4);
-        assert_eq!(depth_after(1, StairKind::Up), 1, "no way above the first level");
+        assert_eq!(
+            depth_after(1, StairKind::Up),
+            1,
+            "no way above the first level"
+        );
     }
 
     #[test]
@@ -586,9 +735,21 @@ mod tests {
         let (ax, ay, facing) = down.arrival();
         let feet = Vec2::new((ax as f32 + 0.5) * CELL, (ay as f32 + 0.5) * CELL);
         let toward = Vec2::new(-facing.step().0 as f32, -facing.step().1 as f32);
-        assert_eq!(stair_in_reach(&level, feet, toward), Some(down), "beside it, looking at it");
-        assert_eq!(stair_in_reach(&level, feet, -toward), None, "with their back to it");
-        assert_eq!(stair_in_reach(&level, feet + toward * -3.0 * CELL, toward), None, "too far off");
+        assert_eq!(
+            stair_in_reach(&level, feet, toward),
+            Some(down),
+            "beside it, looking at it"
+        );
+        assert_eq!(
+            stair_in_reach(&level, feet, -toward),
+            None,
+            "with their back to it"
+        );
+        assert_eq!(
+            stair_in_reach(&level, feet + toward * -3.0 * CELL, toward),
+            None,
+            "too far off"
+        );
         assert_eq!(stair_in_reach(&level, feet, Vec2::ZERO), None);
     }
 
@@ -605,8 +766,17 @@ mod tests {
             .init_resource::<Aimed>()
             .init_resource::<Keymap>()
             .add_systems(Update, prompt_stair);
-        app.world_mut().spawn((Player, Transform::from_translation(feet)));
-        let eye = app.world_mut().spawn((PlayerCamera, GlobalTransform::from(Transform::from_translation(feet).looking_to(toward, Vec3::Y)))).id();
+        app.world_mut()
+            .spawn((Player, Transform::from_translation(feet)));
+        let eye = app
+            .world_mut()
+            .spawn((
+                PlayerCamera,
+                GlobalTransform::from(
+                    Transform::from_translation(feet).looking_to(toward, Vec3::Y),
+                ),
+            ))
+            .id();
         let prompt = |app: &App| app.world().resource::<CrosshairPrompt>().0.clone();
         app.update();
         assert_eq!(prompt(&app).as_deref(), Some("F Go down"));
@@ -619,7 +789,11 @@ mod tests {
         app.update();
         assert_eq!(prompt(&app).as_deref(), Some("F Go down"));
         // Turned away, the line goes.
-        app.world_mut().entity_mut(eye).insert(GlobalTransform::from(Transform::from_translation(feet).looking_to(-toward, Vec3::Y)));
+        app.world_mut()
+            .entity_mut(eye)
+            .insert(GlobalTransform::from(
+                Transform::from_translation(feet).looking_to(-toward, Vec3::Y),
+            ));
         app.update();
         assert_eq!(prompt(&app), None);
     }

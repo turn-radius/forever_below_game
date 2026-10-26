@@ -16,9 +16,15 @@ pub use item::{
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
 pub use screen_ink::{InkStyle, ScreenInk, ScreenInkExempt};
-pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
+pub use toon::{
+    Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial,
+    ToonUniform,
+};
 
-use bevy::{asset::embedded_asset, light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};
+use bevy::{
+    asset::embedded_asset, light::cluster::GlobalClusterSettings, prelude::*,
+    shader::load_shader_library,
+};
 
 /// Registers the toon and outline materials and their WESL shaders, the screen-space ink pass (`screen_ink`, #434), and has every view draw
 /// directly rather than through Bevy's GPU-built indirect draws (`indirect`, #163), with lights
@@ -38,10 +44,13 @@ impl Plugin for ArmoryRenderPlugin {
         load_shader_library!(app, "outline.wesl");
         embedded_asset!(app, "screen_ink.wesl");
 
-        app.add_plugins((MaterialPlugin::<ToonMaterial>::default(), MaterialPlugin::<OutlineMaterial>::default()))
-            .init_resource::<OutlineMaterials>()
-            .add_systems(Startup, cluster_lights_on_the_cpu)
-            .add_systems(Update, flame::flicker_flames);
+        app.add_plugins((
+            MaterialPlugin::<ToonMaterial>::default(),
+            MaterialPlugin::<OutlineMaterial>::default(),
+        ))
+        .init_resource::<OutlineMaterials>()
+        .add_systems(Startup, cluster_lights_on_the_cpu)
+        .add_systems(Update, flame::flicker_flames);
         indirect::add(app);
         screen_ink::add(app);
     }
@@ -76,12 +85,20 @@ mod tests {
         app.insert_resource(GlobalClusterSettings {
             supports_storage_buffers: true,
             clustered_decals_are_usable: false,
-            gpu_clustering: Some(GlobalClusterGpuSettings { initial_z_slice_list_capacity: 1024, initial_index_list_capacity: 65536 }),
+            gpu_clustering: Some(GlobalClusterGpuSettings {
+                initial_z_slice_list_capacity: 1024,
+                initial_index_list_capacity: 65536,
+            }),
             max_uniform_buffer_clusterable_objects: 204,
             view_cluster_bindings_max_indices: 16384,
         })
         .add_systems(Startup, cluster_lights_on_the_cpu);
         app.update();
-        assert!(app.world().resource::<GlobalClusterSettings>().gpu_clustering.is_none());
+        assert!(
+            app.world()
+                .resource::<GlobalClusterSettings>()
+                .gpu_clustering
+                .is_none()
+        );
     }
 }

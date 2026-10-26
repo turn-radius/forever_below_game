@@ -24,18 +24,29 @@ use armory::{
         food::{Food, FoodStyle},
     },
 };
-use bevy::{camera::{Exposure, ShadowLodOrigin, visibility::{RenderLayers, VisibilityRange}}, light::NotShadowCaster, prelude::*, render::view::Tonemapping};
+use bevy::{
+    camera::{
+        Exposure, ShadowLodOrigin,
+        visibility::{RenderLayers, VisibilityRange},
+    },
+    light::NotShadowCaster,
+    prelude::*,
+    render::view::Tonemapping,
+};
 use fb_level::{CELL, Level, LightKind, StairKind};
 
+use crate::audio::sound_effect;
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
-use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
-use crate::audio::sound_effect;
 use crate::play::DelveSystems;
+use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
+use crate::render::{
+    ArmoryItem, ArmoryPart, InkOutline, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial,
+    part_to_mesh,
+};
 use crate::settings::GameSettings;
 use crate::travel::{Abyss, Arrival};
 use crate::tuning::{LightTuning, Tuning};
-use crate::render::{ArmoryItem, ArmoryPart, InkOutline, ItemAppearance, MinWidth, OutlineMaterial, ToonMaterial, part_to_mesh};
 use fb_level::LevelStyle;
 use geometry::{CellView, Doorway, LevelMesh};
 
@@ -52,14 +63,47 @@ impl Plugin for LevelPlugin {
             // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
             .add_systems(
                 Update,
-                (clear_stone, spawn_stone, spawn_columns, spawn_bars, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+                (
+                    clear_stone,
+                    spawn_stone,
+                    spawn_columns,
+                    spawn_bars,
+                    spawn_corridor_arches,
+                    spawn_fixtures,
+                    spawn_stairs,
+                    spawn_debug_camera,
+                )
+                    .chain()
+                    .run_if(resource_exists_and_changed::<CurrentLevel>)
+                    .in_set(DelveSystems),
             )
             // Offscreen captures stay silent, as the music does.
-            .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
-            .add_systems(Update, (shut_the_entrance, fog_cameras, debug_camera_takes_over, unshadow_flames).in_set(DelveSystems))
+            .add_systems(
+                Startup,
+                load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)),
+            )
+            .add_systems(
+                Update,
+                (
+                    shut_the_entrance,
+                    fog_cameras,
+                    debug_camera_takes_over,
+                    unshadow_flames,
+                )
+                    .in_set(DelveSystems),
+            )
             // After the render layers have propagated down, which `Update` does.
-            .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
-            .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
+            .add_systems(
+                PostUpdate,
+                limit_far_parts
+                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+            )
+            .add_systems(
+                Update,
+                apply_light_tuning
+                    .run_if(resource_changed::<Tuning>)
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -71,7 +115,10 @@ pub const CHUNK_CELLS: i32 = 16;
 /// on another thread ahead of time ([`crate::travel`]).
 pub fn stone_chunks(level: &Level) -> Vec<LevelMesh> {
     let view = CellView::new(level);
-    geometry::chunks(&view, CHUNK_CELLS).into_iter().map(|range| geometry::level_mesh(&view, range)).collect()
+    geometry::chunks(&view, CHUNK_CELLS)
+        .into_iter()
+        .map(|range| geometry::level_mesh(&view, range))
+        .collect()
 }
 
 /// The stone of a level made ahead of time: [`spawn_stone`] uses it when it is the stone of the
@@ -92,7 +139,11 @@ impl PreparedStone {
     /// The stone made ahead for `level`, if that is the level it was made for. Whatever was
     /// kept is used up either way.
     fn take_for(&mut self, level: &Level) -> Option<Vec<LevelMesh>> {
-        let chunks = self.ready.take().filter(|(seed, depth, _)| (*seed, *depth) == (level.seed, level.depth)).map(|(_, _, chunks)| chunks);
+        let chunks = self
+            .ready
+            .take()
+            .filter(|(seed, depth, _)| (*seed, *depth) == (level.seed, level.depth))
+            .map(|(_, _, chunks)| chunks);
         self.used += u32::from(chunks.is_some());
         chunks
     }
@@ -156,7 +207,10 @@ impl FixedLight {
     pub fn light(self, tuning: &LightTuning) -> PointLight {
         match self {
             // A hearth's campfire lights like a hall's brazier, so the two fires match.
-            FixedLight::Brazier | FixedLight::Campfire => cast_shadows(Torch::flickering(Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE), tuning.flicker_depth)),
+            FixedLight::Brazier | FixedLight::Campfire => cast_shadows(Torch::flickering(
+                Torch::light(tuning.brazier_peak, tuning.brazier_reach, &EXPOSURE),
+                tuning.flicker_depth,
+            )),
             FixedLight::Glowcaps => glowcap_light(tuning),
         }
     }
@@ -178,7 +232,11 @@ pub const STONE_INK: Color = Color::srgb(0.008, 0.009, 0.011);
 const STONE_JOINT_INK: Color = Color::srgb(0.02, 0.022, 0.026);
 
 fn abyss_ambient(tuning: &LightTuning) -> GlobalAmbientLight {
-    GlobalAmbientLight { color: AMBIENT_COLOR, brightness: tuning.ambient_lux, ..default() }
+    GlobalAmbientLight {
+        color: AMBIENT_COLOR,
+        brightness: tuning.ambient_lux,
+        ..default()
+    }
 }
 
 /// The abyss's fog, as tuned.
@@ -186,7 +244,10 @@ fn abyss_fog(tuning: &LightTuning) -> DistanceFog {
     DistanceFog {
         color: FOG_COLOR,
         directional_light_color: Color::NONE,
-        falloff: FogFalloff::Linear { start: tuning.fog_start, end: tuning.fog_end },
+        falloff: FogFalloff::Linear {
+            start: tuning.fog_start,
+            end: tuning.fog_end,
+        },
         ..default()
     }
 }
@@ -206,7 +267,10 @@ fn apply_light_tuning(
         ambient.brightness = light.ambient_lux;
     }
     for mut fog in &mut fogs {
-        fog.falloff = FogFalloff::Linear { start: light.fog_start, end: light.fog_end };
+        fog.falloff = FogFalloff::Linear {
+            start: light.fog_start,
+            end: light.fog_end,
+        };
     }
     for (kind, mut point) in &mut lights {
         *point = kind.light(light);
@@ -219,13 +283,19 @@ fn apply_light_tuning(
 /// Where a part is drawn: from the camera out to [`draw_end`], measured to the middle of its
 /// box. The edge is abrupt, since the fog has already faded what lies there to nothing.
 fn draw_range(light: &LightTuning) -> VisibilityRange {
-    VisibilityRange { use_aabb: true, ..VisibilityRange::abrupt(0.0, draw_end(light)) }
+    VisibilityRange {
+        use_aabb: true,
+        ..VisibilityRange::abrupt(0.0, draw_end(light))
+    }
 }
 
 /// A part of the level's world: not drawn by a camera of its own (an inventory icon, the doll
 /// or the held item's stage), which a part's [`RenderLayers`] tell once they have propagated
 /// down to it.
-type WorldPart = (Or<(With<ArmoryPart>, With<InkOutline>)>, Without<RenderLayers>);
+type WorldPart = (
+    Or<(With<ArmoryPart>, With<InkOutline>)>,
+    Without<RenderLayers>,
+);
 
 /// Bevy tracks the draw ranges of only the first 32 cameras (`check_visibility_ranges` takes 32),
 /// and culls a ranged thing for any view past them.
@@ -276,14 +346,23 @@ fn limit_far_parts(
 
 /// The look of the level's own stone and fixtures.
 fn stone_appearance(seed: u32) -> ItemAppearance {
-    let condition = Condition { wear: STONE_WEAR, rot: 1.0, ..Condition::of(ConditionState::Neglected) };
+    let condition = Condition {
+        wear: STONE_WEAR,
+        rot: 1.0,
+        ..Condition::of(ConditionState::Neglected)
+    };
     ItemAppearance {
         condition,
         seed,
         decay_scale_factor: STONE_PATTERN_SCALE / condition.scale,
         // The rock's ink is drawn by its own ribbons, wider than an item's hull may grow, and
         // darker than the Armory's, so it never shows lighter than unlit stone in the dark.
-        outline: OutlineMaterial { color: STONE_INK.into(), width_px: 1.8, max_width: 0.6, ..default() },
+        outline: OutlineMaterial {
+            color: STONE_INK.into(),
+            width_px: 1.8,
+            max_width: 0.6,
+            ..default()
+        },
         ..default()
     }
 }
@@ -294,7 +373,11 @@ pub fn fixture_appearance(seed: u32, state: ConditionState) -> ItemAppearance {
     ItemAppearance {
         condition: Condition::of(state),
         seed,
-        outline: OutlineMaterial { color: STONE_INK.into(), max_width: 0.3, ..default() },
+        outline: OutlineMaterial {
+            color: STONE_INK.into(),
+            max_width: 0.3,
+            ..default()
+        },
         ..default()
     }
 }
@@ -311,7 +394,9 @@ impl LevelSounds {
 }
 
 fn load_level_sounds(mut commands: Commands, assets: Res<AssetServer>) {
-    commands.insert_resource(LevelSounds { door_shut: assets.load(LevelSounds::DOOR_SHUT) });
+    commands.insert_resource(LevelSounds {
+        door_shut: assets.load(LevelSounds::DOOR_SHUT),
+    });
 }
 
 /// Marks every entity the level spawns.
@@ -418,14 +503,25 @@ fn spawn_stone(
     mut outline_materials: ResMut<Assets<OutlineMaterial>>,
 ) {
     let level = &level.0;
-    let chunks = prepared.take_for(level).unwrap_or_else(|| stone_chunks(level));
+    let chunks = prepared
+        .take_for(level)
+        .unwrap_or_else(|| stone_chunks(level));
     let stone = stone_appearance(level.seed);
 
     // The rock: one entity per surface per chunk, each surface kind sharing one material.
-    let fine_ink = outline_materials.add(OutlineMaterial { color: STONE_JOINT_INK.into(), width_px: 1.0, ..stone.outline });
+    let fine_ink = outline_materials.add(OutlineMaterial {
+        color: STONE_JOINT_INK.into(),
+        width_px: 1.0,
+        ..stone.outline
+    });
     let ink = outline_materials.add(stone.outline);
     let mut materials: Vec<(&'static str, Handle<ToonMaterial>)> = Vec::new();
-    for LevelMesh { surfaces, ink: lines, joints } in &chunks {
+    for LevelMesh {
+        surfaces,
+        ink: lines,
+        joints,
+    } in &chunks
+    {
         for part in &surfaces.parts {
             let material = match materials.iter().find(|(name, _)| *name == part.name) {
                 Some((_, handle)) => handle.clone(),
@@ -453,16 +549,30 @@ fn spawn_stone(
                     handle
                 }
             };
-            commands.spawn((StonePiece, Name::new(part.name), Mesh3d(meshes.add(part_to_mesh(part))), MeshMaterial3d(material)));
+            commands.spawn((
+                StonePiece,
+                Name::new(part.name),
+                Mesh3d(meshes.add(part_to_mesh(part))),
+                MeshMaterial3d(material),
+            ));
         }
         if !lines.indices.is_empty() {
-            commands.spawn((StonePiece, Name::new("ink"), Mesh3d(meshes.add(part_to_mesh(lines))), MeshMaterial3d(ink.clone())));
+            commands.spawn((
+                StonePiece,
+                Name::new("ink"),
+                Mesh3d(meshes.add(part_to_mesh(lines))),
+                MeshMaterial3d(ink.clone()),
+            ));
         }
         if !joints.indices.is_empty() {
-            commands.spawn((StonePiece, Name::new("joints"), Mesh3d(meshes.add(part_to_mesh(joints))), MeshMaterial3d(fine_ink.clone())));
+            commands.spawn((
+                StonePiece,
+                Name::new("joints"),
+                Mesh3d(meshes.add(part_to_mesh(joints))),
+                MeshMaterial3d(fine_ink.clone()),
+            ));
         }
     }
-
 }
 
 /// The columns of a hall: one mesh for each shape (height and variant) shared by every column
@@ -484,39 +594,69 @@ fn spawn_columns(
     let stone = stone_appearance(level.seed);
     let finishes = geometry::level_finishes(level);
     let ink = outline_materials.add(stone.outline);
-    let mut shapes: std::collections::HashMap<(i32, i32, u32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
+    let mut shapes: std::collections::HashMap<
+        (i32, i32, u32, u32),
+        Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>,
+    > = Default::default();
     // One material for every shape's part of a name: they differ only in their meshes.
-    let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
+    let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> =
+        Default::default();
     for spot in spots {
         // A column is one moss all over, in quarters, so columns of a shape still share a mesh.
         let [cx, _, cz] = geometry::cell_centre(spot.cell.0, spot.cell.1);
         let moss = (finishes.moss_at(cx, cz) * 4.0).round() as u32;
-        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant, moss)).or_insert_with(|| {
-            mossy_column(&spot, level.seed, moss)
-                .parts
-                .iter()
-                .map(|part| {
-                    let material = materials
-                        .entry(part.name)
-                        .or_insert_with(|| {
-                            let mut material = stone.material_for(part);
-                            material.extension.min_width = MinWidth::default();
-                            toon_materials.add(material)
-                        })
-                        .clone();
-                    (part.name, meshes.add(part_to_mesh(part)), material, part.outline)
-                })
-                .collect()
-        });
+        let parts = shapes
+            .entry((spot.seat as i32, spot.top as i32, spot.variant, moss))
+            .or_insert_with(|| {
+                mossy_column(&spot, level.seed, moss)
+                    .parts
+                    .iter()
+                    .map(|part| {
+                        let material = materials
+                            .entry(part.name)
+                            .or_insert_with(|| {
+                                let mut material = stone.material_for(part);
+                                material.extension.min_width = MinWidth::default();
+                                toon_materials.add(material)
+                            })
+                            .clone();
+                        (
+                            part.name,
+                            meshes.add(part_to_mesh(part)),
+                            material,
+                            part.outline,
+                        )
+                    })
+                    .collect()
+            });
         let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
         let turn = Quat::from_rotation_y(spot.turn as f32 * std::f32::consts::FRAC_PI_2);
         let root = commands
-            .spawn((StonePiece, ArmoryItem, Name::new("column"), Transform::from_translation(at).with_rotation(turn), Visibility::default()))
+            .spawn((
+                StonePiece,
+                ArmoryItem,
+                Name::new("column"),
+                Transform::from_translation(at).with_rotation(turn),
+                Visibility::default(),
+            ))
             .id();
         for (name, mesh, material, outlined) in parts.iter() {
-            let part = commands.spawn((ArmoryPart, Name::new(*name), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), ChildOf(root))).id();
+            let part = commands
+                .spawn((
+                    ArmoryPart,
+                    Name::new(*name),
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    ChildOf(root),
+                ))
+                .id();
             if *outlined {
-                commands.spawn((InkOutline, Mesh3d(mesh.clone()), MeshMaterial3d(ink.clone()), ChildOf(part)));
+                commands.spawn((
+                    InkOutline,
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(ink.clone()),
+                    ChildOf(part),
+                ));
             }
         }
     }
@@ -537,11 +677,21 @@ fn spawn_bars(
         return;
     }
     let ceiling = geometry::bars::Ceiling::new(level);
-    let ink = outline_materials.add(fixture_appearance(level.seed, ConditionState::BattleWorn).outline);
+    let ink =
+        outline_materials.add(fixture_appearance(level.seed, ConditionState::BattleWorn).outline);
     // One set of materials for each keep of iron: a cell block's bars all match.
-    let mut materials: std::collections::HashMap<(geometry::bars::Keep, &'static str), Handle<ToonMaterial>> = Default::default();
-    let mut attach = |commands: &mut Commands, item: &armory::ItemMesh, root: Entity, keep: geometry::bars::Keep| {
-        let iron = ItemAppearance { condition: keep.condition(), ..fixture_appearance(level.seed, ConditionState::Serviceable) };
+    let mut materials: std::collections::HashMap<
+        (geometry::bars::Keep, &'static str),
+        Handle<ToonMaterial>,
+    > = Default::default();
+    let mut attach = |commands: &mut Commands,
+                      item: &armory::ItemMesh,
+                      root: Entity,
+                      keep: geometry::bars::Keep| {
+        let iron = ItemAppearance {
+            condition: keep.condition(),
+            ..fixture_appearance(level.seed, ConditionState::Serviceable)
+        };
         for part in &item.parts {
             if part.positions.is_empty() {
                 continue;
@@ -555,27 +705,67 @@ fn spawn_bars(
                 })
                 .clone();
             let mesh = meshes.add(part_to_mesh(part));
-            let entity = commands.spawn((ArmoryPart, Name::new(part.name), Mesh3d(mesh.clone()), MeshMaterial3d(material), ChildOf(root))).id();
+            let entity = commands
+                .spawn((
+                    ArmoryPart,
+                    Name::new(part.name),
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material),
+                    ChildOf(root),
+                ))
+                .id();
             if part.outline {
-                commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink.clone()), ChildOf(entity)));
+                commands.spawn((
+                    InkOutline,
+                    Mesh3d(mesh),
+                    MeshMaterial3d(ink.clone()),
+                    ChildOf(entity),
+                ));
             }
         }
     };
     for spot in bars {
         let item = geometry::bars::bars_mesh(&spot, level, &ceiling);
         let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
-        let root = commands.spawn((StonePiece, ArmoryItem, Name::new("bars"), Transform::from_translation(at), Visibility::default())).id();
-        attach(&mut commands, &item, root, geometry::bars::Keep::of(level, spot.cell));
+        let root = commands
+            .spawn((
+                StonePiece,
+                ArmoryItem,
+                Name::new("bars"),
+                Transform::from_translation(at),
+                Visibility::default(),
+            ))
+            .id();
+        attach(
+            &mut commands,
+            &item,
+            root,
+            geometry::bars::Keep::of(level, spot.cell),
+        );
     }
     for spot in gates {
         let gate = geometry::bars::gate_mesh(&spot, level, &ceiling);
         let at = v3(geometry::cell_centre(spot.cell.0, spot.cell.1));
         let turn = Quat::from_rotation_y(geometry::bars::gate_turn(&spot));
-        let root = commands.spawn((StonePiece, ArmoryItem, Name::new("gate"), Transform::from_translation(at).with_rotation(turn), Visibility::default())).id();
+        let root = commands
+            .spawn((
+                StonePiece,
+                ArmoryItem,
+                Name::new("gate"),
+                Transform::from_translation(at).with_rotation(turn),
+                Visibility::default(),
+            ))
+            .id();
         let keep = geometry::bars::Keep::of(level, spot.cell);
         attach(&mut commands, &gate.frame, root, keep);
         let leaf = commands
-            .spawn((Name::new("gate leaf"), Transform::from_translation(v3(gate.hinge)).with_rotation(Quat::from_rotation_y(geometry::bars::leaf_swing(&spot))), Visibility::default(), ChildOf(root)))
+            .spawn((
+                Name::new("gate leaf"),
+                Transform::from_translation(v3(gate.hinge))
+                    .with_rotation(Quat::from_rotation_y(geometry::bars::leaf_swing(&spot))),
+                Visibility::default(),
+                ChildOf(root),
+            ))
             .id();
         attach(&mut commands, &gate.leaf, leaf, keep);
     }
@@ -593,35 +783,69 @@ fn spawn_corridor_arches(
 ) {
     let level = &level.0;
     let arches = geometry::arch::corridor_arches(level, &geometry::level_finishes(level));
-    let Some(soffit) = arches.first().map(|a| a.soffit) else { return };
+    let Some(soffit) = arches.first().map(|a| a.soffit) else {
+        return;
+    };
     let stone = stone_appearance(level.seed);
     let ink = outline_materials.add(stone.outline);
     let mut shapes = Vec::new();
     for pointed in [false, true] {
-        let Some(shape) = geometry::arch::corridor_arch(soffit, level.seed, pointed) else { continue };
+        let Some(shape) = geometry::arch::corridor_arch(soffit, level.seed, pointed) else {
+            continue;
+        };
         let parts: Vec<_> = shape
             .parts
             .iter()
             .map(|part| {
                 let mut material = stone.material_for(part);
                 material.extension.min_width = MinWidth::default();
-                (part.name, meshes.add(part_to_mesh(part)), toon_materials.add(material), part.outline)
+                (
+                    part.name,
+                    meshes.add(part_to_mesh(part)),
+                    toon_materials.add(material),
+                    part.outline,
+                )
             })
             .collect();
         shapes.push((pointed, parts));
     }
     for arch in arches {
-        let Some((_, parts)) = shapes.iter().find(|(pointed, _)| *pointed == arch.pointed) else { continue };
+        let Some((_, parts)) = shapes.iter().find(|(pointed, _)| *pointed == arch.pointed) else {
+            continue;
+        };
         let at = v3(geometry::cell_centre(arch.cell.0, arch.cell.1));
         // The shape runs along z; a corridor along x turns it a quarter.
-        let turn = Quat::from_rotation_y(if arch.along_x { std::f32::consts::FRAC_PI_2 } else { 0.0 });
+        let turn = Quat::from_rotation_y(if arch.along_x {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            0.0
+        });
         let root = commands
-            .spawn((StonePiece, ArmoryItem, Name::new("corridor arch"), Transform::from_translation(at).with_rotation(turn), Visibility::default()))
+            .spawn((
+                StonePiece,
+                ArmoryItem,
+                Name::new("corridor arch"),
+                Transform::from_translation(at).with_rotation(turn),
+                Visibility::default(),
+            ))
             .id();
         for (name, mesh, material, outlined) in parts.iter() {
-            let part = commands.spawn((ArmoryPart, Name::new(*name), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), ChildOf(root))).id();
+            let part = commands
+                .spawn((
+                    ArmoryPart,
+                    Name::new(*name),
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    ChildOf(root),
+                ))
+                .id();
             if *outlined {
-                commands.spawn((InkOutline, Mesh3d(mesh.clone()), MeshMaterial3d(ink.clone()), ChildOf(part)));
+                commands.spawn((
+                    InkOutline,
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(ink.clone()),
+                    ChildOf(part),
+                ));
             }
         }
     }
@@ -658,13 +882,30 @@ pub struct ClaimFit {
 }
 
 impl ClaimFit {
-    pub fn make(level: &Level, door: &fb_level::ClaimDoor, style: fb_level::DoorStyle, seed: u32) -> Self {
+    pub fn make(
+        level: &Level,
+        door: &fb_level::ClaimDoor,
+        style: fb_level::DoorStyle,
+        seed: u32,
+    ) -> Self {
         let spec = geometry::door::DoorSpec::rolled(door.kind, style, level.style, seed);
         let (fixture, moving) = match door.switch {
-            fb_level::SwitchKind::Lever => (geometry::door::lever_plate(seed), geometry::door::lever_handle()),
-            fb_level::SwitchKind::Chain => (geometry::door::chain_housing(seed), geometry::door::chain_pull(seed)),
+            fb_level::SwitchKind::Lever => (
+                geometry::door::lever_plate(seed),
+                geometry::door::lever_handle(),
+            ),
+            fb_level::SwitchKind::Chain => (
+                geometry::door::chain_housing(seed),
+                geometry::door::chain_pull(seed),
+            ),
         };
-        ClaimFit { kind: door.kind, switch: door.switch, leaf: geometry::door::claim_leaf(&spec), fixture, moving }
+        ClaimFit {
+            kind: door.kind,
+            switch: door.switch,
+            leaf: geometry::door::claim_leaf(&spec),
+            fixture,
+            moving,
+        }
     }
 }
 
@@ -677,27 +918,42 @@ impl FixtureShapes {
             .into_iter()
             .map(|doorway| {
                 let seed = door_seed(level, &doorway);
-                let style = view.finishes().door_style(doorway.x, doorway.y).unwrap_or(fb_level::DoorStyle::Timber);
+                let style = view
+                    .finishes()
+                    .door_style(doorway.x, doorway.y)
+                    .unwrap_or(fb_level::DoorStyle::Timber);
                 let mut frame = match level.style {
                     LevelStyle::RoughRock => geometry::door_frame(level.ceiling, style, seed),
-                    LevelStyle::StoneHalls => geometry::stone::door_frame(level, (doorway.x, doorway.y), style, seed),
+                    LevelStyle::StoneHalls => {
+                        geometry::stone::door_frame(level, (doorway.x, doorway.y), style, seed)
+                    }
                 };
                 // The masonry round the frame grows moss as the wall beside it does; the timber does not.
                 let [across, up, through] = doorway.basis();
                 let centre = geometry::cell_centre(doorway.x, doorway.y);
-                for part in frame.parts.iter_mut().filter(|p| p.material == Some(MaterialKind::Stone)) {
+                for part in frame
+                    .parts
+                    .iter_mut()
+                    .filter(|p| p.material == Some(MaterialKind::Stone))
+                {
                     part.uvs_b = part
                         .positions
                         .iter()
                         .map(|p| {
-                            let world = [0, 1, 2].map(|k| centre[k] + across[k] * p[0] + up[k] * p[1] + through[k] * p[2]);
+                            let world = [0, 1, 2].map(|k| {
+                                centre[k] + across[k] * p[0] + up[k] * p[1] + through[k] * p[2]
+                            });
                             [view.finishes().moss_at(world[0], world[2]), 0.0]
                         })
                         .collect();
                 }
                 // The entrance hangs a door; each door on the edge of a claim hangs one of its kind.
-                let leaf = ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
-                let claim = claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)).map(|d| ClaimFit::make(level, d, style, seed));
+                let leaf =
+                    ((doorway.x, doorway.y) == entrance).then(|| geometry::entrance_leaf(seed));
+                let claim = claim_doors
+                    .iter()
+                    .find(|d| (d.x, d.y) == (doorway.x, doorway.y))
+                    .map(|d| ClaimFit::make(level, d, style, seed));
                 (doorway, frame, leaf, claim)
             })
             .collect();
@@ -705,7 +961,9 @@ impl FixtureShapes {
             .lights
             .iter()
             .enumerate()
-            .map(|(i, spot)| (spot.kind == LightKind::Brazier).then(|| geometry::brazier(light_seed(level, i))))
+            .map(|(i, spot)| {
+                (spot.kind == LightKind::Brazier).then(|| geometry::brazier(light_seed(level, i)))
+            })
             .collect();
         FixtureShapes { doors, braziers }
     }
@@ -740,26 +998,56 @@ fn spawn_fixtures(
     // shut already, and it does not swing again.
     let shut_already = abyss.is_some_and(|a| a.arrival == Arrival::FromBelow);
     let relief = geometry::Relief::new(level);
-    let FixtureShapes { doors, braziers } = staged.as_mut().and_then(|s| s.take_fixtures(level)).unwrap_or_else(|| FixtureShapes::make(level));
+    let FixtureShapes { doors, braziers } = staged
+        .as_mut()
+        .and_then(|s| s.take_fixtures(level))
+        .unwrap_or_else(|| FixtureShapes::make(level));
 
     // Door frames, and the entrance door hung in its own.
     let entrance = (level.entrance.x as i32, level.entrance.y as i32);
     for (doorway, frame, leaf, claim) in doors {
         let seed = door_seed(level, &doorway);
         let transform = doorway_transform(&doorway);
-        spawner.spawn(&frame, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
+        spawner
+            .spawn(
+                &frame,
+                &fixture_appearance(seed, ConditionState::BattleWorn),
+            )
+            .insert((StonePiece, transform));
         if (doorway.x, doorway.y) == entrance {
             let hinge = transform.transform_point(v3(geometry::entrance_hinge()));
-            let swing = if shut_already { DoorSwing::Shut } else { DoorSwing::Open };
+            let swing = if shut_already {
+                DoorSwing::Shut
+            } else {
+                DoorSwing::Open
+            };
             if shut_already {
                 blocked.0.insert(entrance);
             }
-            let door = EntranceDoor { shut: transform.rotation, centre: transform.translation, cell: entrance, swing };
+            let door = EntranceDoor {
+                shut: transform.rotation,
+                centre: transform.translation,
+                cell: entrance,
+                swing,
+            };
             let leaf = leaf.expect("the entrance doorway has a leaf");
             spawner
-                .spawn(&leaf, &fixture_appearance(seed, ConditionState::Serviceable))
-                .insert((StonePiece, Name::new("entrance door"), door, Transform::from_translation(hinge).with_rotation(door.rotation())));
-        } else if let (Some(claim_door), Some(fit)) = (claim_doors.iter().find(|d| (d.x, d.y) == (doorway.x, doorway.y)), claim) {
+                .spawn(
+                    &leaf,
+                    &fixture_appearance(seed, ConditionState::Serviceable),
+                )
+                .insert((
+                    StonePiece,
+                    Name::new("entrance door"),
+                    door,
+                    Transform::from_translation(hinge).with_rotation(door.rotation()),
+                ));
+        } else if let (Some(claim_door), Some(fit)) = (
+            claim_doors
+                .iter()
+                .find(|d| (d.x, d.y) == (doorway.x, doorway.y)),
+            claim,
+        ) {
             // A door on the edge of a claim, of its kind: locked by how the faction stands (`crate::doors`).
             let cell = (doorway.x, doorway.y);
             let mut state = crate::doors::Doors::default();
@@ -768,35 +1056,98 @@ fn spawn_fixtures(
             let door_state = &state.0[&cell];
             // The switch on the claim's side lets the delver out of a locked door.
             if !door_state.shared {
-                if let Some(at) = crate::doors::switch_mount(&transform, Some(&relief), level.style, door_state.switch, door_state.through, door_state.inward) {
-                    let switch = crate::doors::Switch { target: crate::doors::SwitchTarget::Door(cell), kind: door_state.switch };
-                    spawner.spawn(&fit.fixture, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Name::new("door switch"), switch, at));
+                if let Some(at) = crate::doors::switch_mount(
+                    &transform,
+                    Some(&relief),
+                    level.style,
+                    door_state.switch,
+                    door_state.through,
+                    door_state.inward,
+                ) {
+                    let switch = crate::doors::Switch {
+                        target: crate::doors::SwitchTarget::Door(cell),
+                        kind: door_state.switch,
+                    };
+                    spawner
+                        .spawn(
+                            &fit.fixture,
+                            &fixture_appearance(seed, ConditionState::BattleWorn),
+                        )
+                        .insert((StonePiece, Name::new("door switch"), switch, at));
                     match door_state.switch {
                         fb_level::SwitchKind::Lever => {
-                            let pivot = at.mul_transform(Transform::from_translation(Vec3::new(0.0, 0.0, geometry::door::LEVER_PIVOT)));
+                            let pivot = at.mul_transform(Transform::from_translation(Vec3::new(
+                                0.0,
+                                0.0,
+                                geometry::door::LEVER_PIVOT,
+                            )));
                             let pull = crate::doors::lever_target(door_state);
-                            let handle = crate::doors::LeverHandle { cell, rest: at.rotation, pull };
+                            let handle = crate::doors::LeverHandle {
+                                cell,
+                                rest: at.rotation,
+                                pull,
+                            };
                             spawner
-                                .spawn(&fit.moving, &fixture_appearance(seed, ConditionState::BattleWorn))
-                                .insert((StonePiece, Name::new("door lever handle"), handle, pivot.with_rotation(handle.rotation(pull))));
+                                .spawn(
+                                    &fit.moving,
+                                    &fixture_appearance(seed, ConditionState::BattleWorn),
+                                )
+                                .insert((
+                                    StonePiece,
+                                    Name::new("door lever handle"),
+                                    handle,
+                                    pivot.with_rotation(handle.rotation(pull)),
+                                ));
                         }
                         fb_level::SwitchKind::Chain => {
                             let rest = at.transform_point(v3(geometry::door::chain_exit()));
-                            let chain = crate::doors::ChainPull { cell, rest, down: at.rotation * Vec3::NEG_Y };
+                            let chain = crate::doors::ChainPull {
+                                cell,
+                                rest,
+                                down: at.rotation * Vec3::NEG_Y,
+                            };
                             spawner
-                                .spawn(&fit.moving, &fixture_appearance(seed, ConditionState::BattleWorn))
-                                .insert((StonePiece, Name::new("door chain"), chain, Transform::from_translation(chain.translation(swing)).with_rotation(at.rotation)));
+                                .spawn(
+                                    &fit.moving,
+                                    &fixture_appearance(seed, ConditionState::BattleWorn),
+                                )
+                                .insert((
+                                    StonePiece,
+                                    Name::new("door chain"),
+                                    chain,
+                                    Transform::from_translation(chain.translation(swing))
+                                        .with_rotation(at.rotation),
+                                ));
                         }
                     }
                 }
             }
             // The pintles or guides stay put on the frame.
-            spawner.spawn(&fit.leaf.fixed, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, transform));
-            let hinge = transform.transform_point(v3(fit.leaf.hinge));
-            let leaf_door = crate::doors::DoorLeaf { cell, shut: transform.rotation, hinge, lift: fit.leaf.lift, squash: fit.leaf.squash_for(level.ceiling) };
             spawner
-                .spawn(&fit.leaf.leaf, &fixture_appearance(seed, ConditionState::Serviceable))
-                .insert((StonePiece, Name::new(format!("claim door, {}", fit.kind.name())), leaf_door, leaf_door.transform(swing)));
+                .spawn(
+                    &fit.leaf.fixed,
+                    &fixture_appearance(seed, ConditionState::BattleWorn),
+                )
+                .insert((StonePiece, transform));
+            let hinge = transform.transform_point(v3(fit.leaf.hinge));
+            let leaf_door = crate::doors::DoorLeaf {
+                cell,
+                shut: transform.rotation,
+                hinge,
+                lift: fit.leaf.lift,
+                squash: fit.leaf.squash_for(level.ceiling),
+            };
+            spawner
+                .spawn(
+                    &fit.leaf.leaf,
+                    &fixture_appearance(seed, ConditionState::Serviceable),
+                )
+                .insert((
+                    StonePiece,
+                    Name::new(format!("claim door, {}", fit.kind.name())),
+                    leaf_door,
+                    leaf_door.transform(swing),
+                ));
             if let Some(hung) = hung.as_deref_mut() {
                 hung.0.extend(state.0);
             }
@@ -808,40 +1159,77 @@ fn spawn_fixtures(
         let at = v3(fb_level::Level::world(spot.x, spot.y));
         let seed = light_seed(level, i);
         match spot.kind {
-            LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
+            LightKind::Glowcaps => {
+                spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light)
+            }
             // The fire itself is the prop standing here; this is its light, hung at the heart of the flame.
             LightKind::Campfire => {
-                let state = fb_level::props::campfire_state(fb_level::props::campfire_seed(level.seed, spot.x, spot.y));
-                let flame = armory::families::campfire::Campfire::light(&state).map_or(Vec3::Y * 2.0, |anchor| v3(anchor.position));
-                commands.spawn((StonePiece, Name::new("campfire light"), FixedLight::Campfire, FixedLight::Campfire.light(&tuning.light), Transform::from_translation(at + flame)));
+                let state = fb_level::props::campfire_state(fb_level::props::campfire_seed(
+                    level.seed, spot.x, spot.y,
+                ));
+                let flame = armory::families::campfire::Campfire::light(&state)
+                    .map_or(Vec3::Y * 2.0, |anchor| v3(anchor.position));
+                commands.spawn((
+                    StonePiece,
+                    Name::new("campfire light"),
+                    FixedLight::Campfire,
+                    FixedLight::Campfire.light(&tuning.light),
+                    Transform::from_translation(at + flame),
+                ));
             }
             LightKind::Brazier => {
                 let (mesh, flame) = brazier.expect("a brazier has a shape");
-                spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
+                spawner
+                    .spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn))
+                    .insert((StonePiece, Transform::from_translation(at)));
                 let light = FixedLight::Brazier.light(&tuning.light);
-                commands.spawn((StonePiece, Name::new("brazier light"), FixedLight::Brazier, light, Transform::from_translation(at + Vec3::Y * flame)));
+                commands.spawn((
+                    StonePiece,
+                    Name::new("brazier light"),
+                    FixedLight::Brazier,
+                    light,
+                    Transform::from_translation(at + Vec3::Y * flame),
+                ));
             }
         }
     }
 }
 
 /// The level's stairs, each in its cell, which the delver cannot walk onto.
-fn spawn_stairs(level: Res<CurrentLevel>, mut blocked: ResMut<BlockedCells>, mut spawner: crate::render::ItemSpawner) {
+fn spawn_stairs(
+    level: Res<CurrentLevel>,
+    mut blocked: ResMut<BlockedCells>,
+    mut spawner: crate::render::ItemSpawner,
+) {
     let level = &level.0;
     for stair in &level.stairs {
         blocked.0.insert((stair.x as i32, stair.y as i32));
         let seed = level.seed ^ ((stair.x << 16 | stair.y) ^ 0x57A1);
         let mesh = stairs::stair_mesh(stair.kind, level.ceiling, seed);
         let (at, yaw) = stairs::stair_transform(stair);
-        let name = if stair.kind == StairKind::Down { "stair down" } else { "stair up" };
+        let name = if stair.kind == StairKind::Down {
+            "stair down"
+        } else {
+            "stair up"
+        };
         spawner
             .spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn))
-            .insert((StonePiece, Name::new(name), Transform::from_translation(v3(at)).with_rotation(Quat::from_rotation_y(yaw))));
+            .insert((
+                StonePiece,
+                Name::new(name),
+                Transform::from_translation(v3(at)).with_rotation(Quat::from_rotation_y(yaw)),
+            ));
     }
 }
 
 /// A patch of glowcaps: three clusters round the spot, and one faint steady light over them.
-fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpawner, at: Vec3, seed: u32, tuning: &LightTuning) {
+fn spawn_glowcaps(
+    commands: &mut Commands,
+    spawner: &mut crate::render::ItemSpawner,
+    at: Vec3,
+    seed: u32,
+    tuning: &LightTuning,
+) {
     let mut light_at = Vec::new();
     for k in 0..3u32 {
         let mut state = Food::roll_as(seed.wrapping_add(k * 7919), FoodStyle::Mushroom);
@@ -849,22 +1237,44 @@ fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpaw
         p.glow = p.glow.max(0.6);
         p.outer = GLOWCAP_COLOR;
         let angle = seed as f32 * 0.37 + k as f32 * 2.2;
-        let offset = if k == 0 { Vec3::ZERO } else { Vec3::new(angle.cos(), 0.0, angle.sin()) * (2.2 + k as f32 * 0.6) };
-        let anchor = Food::light(&state).map(|a| v3(a.position)).unwrap_or(Vec3::Y * 2.0);
+        let offset = if k == 0 {
+            Vec3::ZERO
+        } else {
+            Vec3::new(angle.cos(), 0.0, angle.sin()) * (2.2 + k as f32 * 0.6)
+        };
+        let anchor = Food::light(&state)
+            .map(|a| v3(a.position))
+            .unwrap_or(Vec3::Y * 2.0);
         light_at.push(at + offset + anchor);
-        let appearance = ItemAppearance { seed: state.seed, decay_scale_factor: 3.0, ..default() };
-        spawner
-            .spawn(&Food::build(&state), &appearance)
-            .insert((StonePiece, Transform::from_translation(at + offset).with_rotation(Quat::from_rotation_y(angle))));
+        let appearance = ItemAppearance {
+            seed: state.seed,
+            decay_scale_factor: 3.0,
+            ..default()
+        };
+        spawner.spawn(&Food::build(&state), &appearance).insert((
+            StonePiece,
+            Transform::from_translation(at + offset).with_rotation(Quat::from_rotation_y(angle)),
+        ));
     }
     let centre = light_at.iter().sum::<Vec3>() / light_at.len() as f32;
-    commands.spawn((StonePiece, Name::new("glowcap light"), FixedLight::Glowcaps, glowcap_light(tuning), Transform::from_translation(centre + Vec3::Y * 1.5)));
+    commands.spawn((
+        StonePiece,
+        Name::new("glowcap light"),
+        FixedLight::Glowcaps,
+        glowcap_light(tuning),
+        Transform::from_translation(centre + Vec3::Y * 1.5),
+    ));
 }
 
 /// The faint light over a patch of glowcaps. Shadowed like every light in the level, so it
 /// stays in the cells it can see; the caps themselves cast none (`unshadow_flames`).
 pub fn glowcap_light(tuning: &LightTuning) -> PointLight {
-    cast_shadows(point_light(GLOWCAP_LIGHT, tuning.glowcap_peak, tuning.glowcap_reach, &EXPOSURE))
+    cast_shadows(point_light(
+        GLOWCAP_LIGHT,
+        tuning.glowcap_peak,
+        tuning.glowcap_reach,
+        &EXPOSURE,
+    ))
 }
 
 /// Flames and embers on the level's fixtures give the light, so they must not shadow it.
@@ -906,7 +1316,12 @@ fn shut_the_entrance(
                 if let Some(sounds) = &sounds {
                     let game = game.as_deref().copied().unwrap_or_default();
                     let tuning = tuning.as_deref().cloned().unwrap_or_default();
-                    commands.spawn((Name::new("door shut"), AudioPlayer::new(sounds.door_shut.clone()), sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
+                    commands.spawn((
+                        Name::new("door shut"),
+                        AudioPlayer::new(sounds.door_shut.clone()),
+                        sound_effect(&game, &tuning),
+                        DespawnOnExit(crate::launch::AppState::Delving),
+                    ));
                 }
             }
             None => {}
@@ -916,7 +1331,10 @@ fn shut_the_entrance(
 }
 
 /// A first-person or capture camera just spawned, with no fog yet.
-type NewUnfoggedCamera = (Or<(Added<PlayerCamera>, Added<DebugCamera>)>, Without<DistanceFog>);
+type NewUnfoggedCamera = (
+    Or<(Added<PlayerCamera>, Added<DebugCamera>)>,
+    Without<DistanceFog>,
+);
 
 /// Lays the abyss's dark over every first-person or debug camera.
 fn fog_cameras(
@@ -939,10 +1357,25 @@ fn arch_eye(level: &fb_level::Level, doorway: &geometry::Doorway) -> Vec3 {
     let eye = Vec3::Y * EYE_HEIGHT;
     let centre = v3(geometry::cell_centre(doorway.x, doorway.y));
     let through = v3(doorway.through);
-    let step = |dir: Vec3, k: i32| (doorway.x + (dir.x * k as f32).round() as i32, doorway.y + (dir.z * k as f32).round() as i32);
-    let run = |dir: Vec3| (1..=3).take_while(|&k| level.is_open(step(dir, k).0, step(dir, k).1)).count();
-    let score = |dir: Vec3| run(dir) * 2 + level.room_at(step(dir, 1).0, step(dir, 1).1).is_some() as usize * 10;
-    let from_dir = if score(-through) >= score(through) { -through } else { through };
+    let step = |dir: Vec3, k: i32| {
+        (
+            doorway.x + (dir.x * k as f32).round() as i32,
+            doorway.y + (dir.z * k as f32).round() as i32,
+        )
+    };
+    let run = |dir: Vec3| {
+        (1..=3)
+            .take_while(|&k| level.is_open(step(dir, k).0, step(dir, k).1))
+            .count()
+    };
+    let score = |dir: Vec3| {
+        run(dir) * 2 + level.room_at(step(dir, 1).0, step(dir, 1).1).is_some() as usize * 10
+    };
+    let from_dir = if score(-through) >= score(through) {
+        -through
+    } else {
+        through
+    };
     centre + from_dir * CELL * (run(from_dir) as f32).min(2.5) + eye
 }
 
@@ -955,7 +1388,9 @@ pub struct DebugCamera {
 }
 
 fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
-    let Ok(mode) = std::env::var("FB_DEBUG_CAMERA") else { return };
+    let Ok(mode) = std::env::var("FB_DEBUG_CAMERA") else {
+        return;
+    };
     let level = &level.0;
     let (sx, sy, facing) = level.start();
     let inward = v3(geometry::facing_vector(facing));
@@ -964,26 +1399,39 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
     let transform = match mode.as_str() {
         "back" | "shut" => {
             let at = start + inward * CELL * 0.9 + eye;
-            Transform::from_translation(at).looking_at(at - inward * CELL * 2.0 - Vec3::Y * 3.0, Vec3::Y)
+            Transform::from_translation(at)
+                .looking_at(at - inward * CELL * 2.0 - Vec3::Y * 3.0, Vec3::Y)
         }
         "top" => {
             let centre = Vec3::new(level.width as f32, 0.0, level.height as f32) * CELL * 0.5;
             let span = level.width.max(level.height) as f32 * CELL;
-            Transform::from_translation(centre + Vec3::new(0.0, span * 0.9, span * 0.5)).looking_at(centre, Vec3::Y)
+            Transform::from_translation(centre + Vec3::new(0.0, span * 0.9, span * 0.5))
+                .looking_at(centre, Vec3::Y)
         }
         "hall" | "vault" => {
             // The first colonnaded hall, from one end of its long axis looking down it.
             let Some(room) = level.rooms.iter().find(|r| {
-                (r.y..r.y + r.h).any(|y| (r.x..r.x + r.w).any(|x| level.cell(x as i32, y as i32) == fb_level::Cell::Column))
+                (r.y..r.y + r.h).any(|y| {
+                    (r.x..r.x + r.w)
+                        .any(|x| level.cell(x as i32, y as i32) == fb_level::Cell::Column)
+                })
             }) else {
                 return;
             };
             let (cx, cy) = room.centre();
             let (half_x, half_y) = (room.w as f32 * 0.5, room.h as f32 * 0.5);
             let along_x = room.w >= room.h;
-            let (from, dir) = if along_x { ((cx - half_x + 0.7, cy), Vec3::X) } else { ((cx, cy - half_y + 0.7), Vec3::Z) };
+            let (from, dir) = if along_x {
+                ((cx - half_x + 0.7, cy), Vec3::X)
+            } else {
+                ((cx, cy - half_y + 0.7), Vec3::Z)
+            };
             let at = v3(fb_level::Level::world(from.0, from.1)) + eye;
-            let aim = if mode == "vault" { dir * 60.0 + Vec3::Y * 45.0 } else { dir * 60.0 };
+            let aim = if mode == "vault" {
+                dir * 60.0 + Vec3::Y * 45.0
+            } else {
+                dir * 60.0
+            };
             Transform::from_translation(at).looking_at(at + aim, Vec3::Y)
         }
         mode if mode.starts_with("arch") => {
@@ -994,12 +1442,32 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 Some("rock") => fb_level::DoorStyle::RockCut,
                 _ => fb_level::DoorStyle::RoundArch,
             };
-            let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
+            let finishes =
+                fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
             let view = geometry::CellView::new(level);
             // Prefer one with a room on a side, so the view is of a hall and not a passage.
-            let styled: Vec<_> = geometry::doorways(&view).into_iter().filter(|d| finishes.door_style(d.x, d.y) == Some(want)).collect();
-            let roomy = |d: &geometry::Doorway| [-1, 1].iter().any(|&s| level.room_at(d.x + (d.through[0] as i32) * s, d.y + (d.through[2] as i32) * s).is_some());
-            let Some(doorway) = styled.iter().copied().find(roomy).or(styled.first().copied()) else { return };
+            let styled: Vec<_> = geometry::doorways(&view)
+                .into_iter()
+                .filter(|d| finishes.door_style(d.x, d.y) == Some(want))
+                .collect();
+            let roomy = |d: &geometry::Doorway| {
+                [-1, 1].iter().any(|&s| {
+                    level
+                        .room_at(
+                            d.x + (d.through[0] as i32) * s,
+                            d.y + (d.through[2] as i32) * s,
+                        )
+                        .is_some()
+                })
+            };
+            let Some(doorway) = styled
+                .iter()
+                .copied()
+                .find(roomy)
+                .or(styled.first().copied())
+            else {
+                return;
+            };
             let centre = v3(geometry::cell_centre(doorway.x, doorway.y));
             let at = arch_eye(level, &doorway);
             Transform::from_translation(at).looking_at(centre + Vec3::Y * 11.0, Vec3::Y)
@@ -1010,12 +1478,22 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let gates = geometry::bars::gates(level);
             let Some(first) = gates.first() else { return };
             let room = level.room_at(first.cell.0, first.cell.1);
-            let row: Vec<_> = gates.iter().filter(|g| level.room_at(g.cell.0, g.cell.1) == room).collect();
+            let row: Vec<_> = gates
+                .iter()
+                .filter(|g| level.room_at(g.cell.0, g.cell.1) == room)
+                .collect();
             let gate = row[row.len() / 2];
             let centre = v3(geometry::cell_centre(gate.cell.0, gate.cell.1));
             let out = -Vec3::new(gate.into.0 as f32, 0.0, gate.into.1 as f32);
             // As far back in the aisle as it runs, up to three cells.
-            let back = (1..=3).take_while(|&k| level.is_open(gate.cell.0 + gate.into.0 * -k, gate.cell.1 + gate.into.1 * -k)).count() as f32;
+            let back = (1..=3)
+                .take_while(|&k| {
+                    level.is_open(
+                        gate.cell.0 + gate.into.0 * -k,
+                        gate.cell.1 + gate.into.1 * -k,
+                    )
+                })
+                .count() as f32;
             let at = centre + out * CELL * (back - 0.45).max(0.8) + eye;
             Transform::from_translation(at).looking_at(centre + Vec3::Y * 9.0, Vec3::Y)
         }
@@ -1023,30 +1501,59 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             // The corridor run with the most arches, from its end looking down it.
             let arches = geometry::arch::corridor_arches(level, &geometry::level_finishes(level));
             let runs = geometry::arch::corridor_runs(level);
-            let count = |run: &geometry::arch::CorridorRun| arches.iter().filter(|a| run.cells.contains(&a.cell)).count();
-            let Some(run) = runs.iter().max_by_key(|r| (count(r), r.cells.len())) else { return };
+            let count = |run: &geometry::arch::CorridorRun| {
+                arches
+                    .iter()
+                    .filter(|a| run.cells.contains(&a.cell))
+                    .count()
+            };
+            let Some(run) = runs.iter().max_by_key(|r| (count(r), r.cells.len())) else {
+                return;
+            };
             let (from, to) = (run.cells[0], *run.cells.last().unwrap());
-            let dir = Vec3::new((to.0 - from.0).signum() as f32, 0.0, (to.1 - from.1).signum() as f32);
-            let dir = if dir == Vec3::ZERO { if run.along_x { Vec3::X } else { Vec3::Z } } else { dir };
+            let dir = Vec3::new(
+                (to.0 - from.0).signum() as f32,
+                0.0,
+                (to.1 - from.1).signum() as f32,
+            );
+            let dir = if dir == Vec3::ZERO {
+                if run.along_x { Vec3::X } else { Vec3::Z }
+            } else {
+                dir
+            };
             let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
             Transform::from_translation(at).looking_to(dir, Vec3::Y)
         }
         "wide" => {
             // The longest straight stretch of corridor at least two cells wide, from its end
             // looking down it along the middle of its width.
-            let corridor = |x: i32, y: i32| level.cell(x, y) == fb_level::Cell::Floor && level.room_at(x, y).is_none();
+            let corridor = |x: i32, y: i32| {
+                level.cell(x, y) == fb_level::Cell::Floor && level.room_at(x, y).is_none()
+            };
             let mut best: Option<(usize, (i32, i32), bool)> = None;
             for along_x in [true, false] {
-                let (lines, length) = if along_x { (level.height as i32, level.width as i32) } else { (level.width as i32, level.height as i32) };
+                let (lines, length) = if along_x {
+                    (level.height as i32, level.width as i32)
+                } else {
+                    (level.width as i32, level.height as i32)
+                };
                 for line in 0..lines - 1 {
                     let mut run = 0;
                     for at in 0..=length {
-                        let (x, y, nx, ny) = if along_x { (at, line, at, line + 1) } else { (line, at, line + 1, at) };
+                        let (x, y, nx, ny) = if along_x {
+                            (at, line, at, line + 1)
+                        } else {
+                            (line, at, line + 1, at)
+                        };
                         if at < length && corridor(x, y) && corridor(nx, ny) {
                             run += 1;
                         } else {
                             if best.is_none_or(|b| run > b.0) && run > 0 {
-                                let start = if along_x { (at - run as i32, line) } else { (line, at - run as i32) };
+                                let start = if along_x {
+                                    (at - run as i32, line)
+                                } else {
+                                    (line, at - run as i32)
+                                };
                                 best = Some((run, start, along_x));
                             }
                             run = 0;
@@ -1054,7 +1561,9 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                     }
                 }
             }
-            let Some((_, (sx, sy), along_x)) = best else { return };
+            let Some((_, (sx, sy), along_x)) = best else {
+                return;
+            };
             let dir = if along_x { Vec3::X } else { Vec3::Z };
             // Between the band's two lines, at the run's first cell.
             let side = if along_x { Vec3::Z } else { Vec3::X };
@@ -1064,15 +1573,21 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         "cobble" | "flagstone" | "rubble" => {
             // The first room with cobbled or flagged floor, or rubble walls, looking east: down
             // at the floor ahead for the floors, level at the far wall for rubble.
-            let finishes = fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
+            let finishes =
+                fb_level::finishes(level, &fb_level::LevelParams::for_style(level.style));
             let wanted = |r: &fb_level::Room| {
-                (r.y..r.y + r.h).flat_map(|y| (r.x..r.x + r.w).map(move |x| (x, y))).find_map(|(x, y)| finishes.at(x as i32, y as i32)).is_some_and(|f| match mode.as_str() {
-                    "cobble" => f.floor == fb_level::FloorFinish::Cobble,
-                    "flagstone" => f.floor == fb_level::FloorFinish::Flagstone,
-                    _ => f.walls == fb_level::WallFinish::Rubble,
-                })
+                (r.y..r.y + r.h)
+                    .flat_map(|y| (r.x..r.x + r.w).map(move |x| (x, y)))
+                    .find_map(|(x, y)| finishes.at(x as i32, y as i32))
+                    .is_some_and(|f| match mode.as_str() {
+                        "cobble" => f.floor == fb_level::FloorFinish::Cobble,
+                        "flagstone" => f.floor == fb_level::FloorFinish::Flagstone,
+                        _ => f.walls == fb_level::WallFinish::Rubble,
+                    })
             };
-            let Some(room) = level.rooms.iter().find(|r| wanted(r)) else { return };
+            let Some(room) = level.rooms.iter().find(|r| wanted(r)) else {
+                return;
+            };
             let (cx, cy) = room.centre();
             let from = match mode.as_str() {
                 "cobble" => (room.x as f32 + 0.8, cy),
@@ -1081,7 +1596,8 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             };
             let at = v3(fb_level::Level::world(from.0, from.1)) + eye;
             let pitch = if mode == "rubble" { -1.0 } else { -9.0 };
-            Transform::from_translation(at).looking_at(at + Vec3::X * 30.0 + Vec3::Y * pitch, Vec3::Y)
+            Transform::from_translation(at)
+                .looking_at(at + Vec3::X * 30.0 + Vec3::Y * pitch, Vec3::Y)
         }
         "web" => {
             // The first web of the kind `FB_DEBUG_WEB` names (corner, ceiling or floor), from a
@@ -1091,27 +1607,55 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 Ok("floor") => fb_level::WebKind::Floor,
                 _ => fb_level::WebKind::Corner,
             };
-            let Some(web) = level.webs.iter().find(|w| w.kind == kind) else { return };
+            let Some(web) = level.webs.iter().find(|w| w.kind == kind) else {
+                return;
+            };
             let at = v3(fb_level::Level::world(web.x, web.y));
             let facing = Quat::from_rotation_y(web.yaw) * Vec3::NEG_Z;
             let (target, back) = match kind {
-                fb_level::WebKind::Corner => (at + facing * web.size * 0.35 + Vec3::Y * web.height * 0.55, facing * CELL * 1.5),
-                fb_level::WebKind::Ceiling => (at + Vec3::Y * web.height, Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.5),
-                fb_level::WebKind::Floor => (at + Vec3::Y * 1.0, Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.45),
+                fb_level::WebKind::Corner => (
+                    at + facing * web.size * 0.35 + Vec3::Y * web.height * 0.55,
+                    facing * CELL * 1.5,
+                ),
+                fb_level::WebKind::Ceiling => (
+                    at + Vec3::Y * web.height,
+                    Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.5,
+                ),
+                fb_level::WebKind::Floor => (
+                    at + Vec3::Y * 1.0,
+                    Quat::from_rotation_y(web.yaw + 1.57) * Vec3::NEG_Z * CELL * 0.45,
+                ),
             };
-            let from = if kind == fb_level::WebKind::Corner { at + back + eye } else { target + back + Vec3::Y * if kind == fb_level::WebKind::Floor { 9.0 } else { -4.0 } };
+            let from = if kind == fb_level::WebKind::Corner {
+                at + back + eye
+            } else {
+                target
+                    + back
+                    + Vec3::Y
+                        * if kind == fb_level::WebKind::Floor {
+                            9.0
+                        } else {
+                            -4.0
+                        }
+            };
             Transform::from_translation(from).looking_at(target, Vec3::Y)
         }
         "banner" => {
             // The banner `FB_DEBUG_BANNER` names (the first if unset), from five cells out in
             // front of it, looking at its middle.
-            let index = std::env::var("FB_DEBUG_BANNER").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
-            let Some(spot) = level.banners.get(index) else { return };
+            let index = std::env::var("FB_DEBUG_BANNER")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let Some(spot) = level.banners.get(index) else {
+                return;
+            };
             let (_, top) = crate::props::banner_hang(spot, level);
             let hang = crate::props::banner_transform(spot, top);
             let out = hang.rotation * Vec3::Z;
             let target = hang.translation - Vec3::Y * 9.0;
-            let from = Vec3::new(hang.translation.x, EYE_HEIGHT, hang.translation.z) + out * CELL * 2.5;
+            let from =
+                Vec3::new(hang.translation.x, EYE_HEIGHT, hang.translation.z) + out * CELL * 2.5;
             Transform::from_translation(from).looking_at(target, Vec3::Y)
         }
         "role" => {
@@ -1125,30 +1669,55 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 Ok("store") => fb_level::RoomRole::Store,
                 _ => fb_level::RoomRole::Hearth,
             };
-            let by_index = std::env::var("FB_DEBUG_ROOM").ok().and_then(|v| v.parse::<usize>().ok());
-            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| level.roles_of(r).contains(&want))) else { return };
+            let by_index = std::env::var("FB_DEBUG_ROOM")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok());
+            let Some(index) = by_index
+                .or_else(|| (0..level.rooms.len()).find(|&r| level.roles_of(r).contains(&want)))
+            else {
+                return;
+            };
             let room = level.rooms[index];
             // At the room's middle, or for a sleeping room at the middle of its bedrolls.
             let beds: Vec<(f32, f32)> = level
                 .props
                 .iter()
-                .filter(|p| matches!(p.prop, fb_level::Prop::Scenery { kind: armory::build::scenery::Scenery::Bedroll, .. }) && room.contains(p.x as i32, p.y as i32))
+                .filter(|p| {
+                    matches!(
+                        p.prop,
+                        fb_level::Prop::Scenery {
+                            kind: armory::build::scenery::Scenery::Bedroll,
+                            ..
+                        }
+                    ) && room.contains(p.x as i32, p.y as i32)
+                })
                 .map(|p| (p.x, p.y))
                 .collect();
             let (cx, cy) = if want == fb_level::RoomRole::Sleeping && !beds.is_empty() {
-                (beds.iter().map(|b| b.0).sum::<f32>() / beds.len() as f32, beds.iter().map(|b| b.1).sum::<f32>() / beds.len() as f32)
+                (
+                    beds.iter().map(|b| b.0).sum::<f32>() / beds.len() as f32,
+                    beds.iter().map(|b| b.1).sum::<f32>() / beds.len() as f32,
+                )
             } else {
                 room.centre()
             };
             let free = |x: f32, y: f32| level.props.iter().all(|p| (p.x - x).hypot(p.y - y) > 0.9);
             let stand = (room.y..room.y + room.h)
-                .flat_map(|y| (room.x..room.x + room.w).map(move |x| (x as f32 + 0.5, y as f32 + 0.5)))
-                .filter(|&(x, y)| level.cell(x as i32, y as i32) == fb_level::Cell::Floor && free(x, y))
+                .flat_map(|y| {
+                    (room.x..room.x + room.w).map(move |x| (x as f32 + 0.5, y as f32 + 0.5))
+                })
+                .filter(|&(x, y)| {
+                    level.cell(x as i32, y as i32) == fb_level::Cell::Floor && free(x, y)
+                })
                 // Far from the middle, or for beds about two cells off them so they fill the view.
                 .min_by(|a, b| {
                     let score = |p: &(f32, f32)| {
                         let d = (p.0 - cx).hypot(p.1 - cy);
-                        if want == fb_level::RoomRole::Sleeping { (d - 2.0).abs() } else { -d }
+                        if want == fb_level::RoomRole::Sleeping {
+                            (d - 2.0).abs()
+                        } else {
+                            -d
+                        }
                     };
                     score(a).total_cmp(&score(b))
                 })
@@ -1161,41 +1730,117 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             // The level's denizen members that are stood in the game: a guard if
             // `FB_DEBUG_ROLE=guard`, otherwise the middle of the biggest knot of them, from the
             // most open side a few cells off, looking at them.
-            let shown: Vec<&fb_level::FolkSpot> = level.folk.iter().filter(|s| crate::folk::has_figure(s) && s.denizen.is_some()).collect();
+            let shown: Vec<&fb_level::FolkSpot> = level
+                .folk
+                .iter()
+                .filter(|s| crate::folk::has_figure(s) && s.denizen.is_some())
+                .collect();
             let guard = std::env::var("FB_DEBUG_ROLE").as_deref() == Ok("guard");
-            let near = |a: &fb_level::FolkSpot| shown.iter().filter(|b| (a.x - b.x).hypot(a.y - b.y) < 4.0).count();
-            let Some(anchor) = shown.iter().copied().filter(|s| !guard || s.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard)).max_by_key(|s| near(s)) else { return };
-            let group: Vec<_> = shown.iter().filter(|b| (anchor.x - b.x).hypot(anchor.y - b.y) < 4.0).collect();
-            let (mx, my) = if guard { (anchor.x, anchor.y) } else { (group.iter().map(|g| g.x).sum::<f32>() / group.len() as f32, group.iter().map(|g| g.y).sum::<f32>() / group.len() as f32) };
+            let near = |a: &fb_level::FolkSpot| {
+                shown
+                    .iter()
+                    .filter(|b| (a.x - b.x).hypot(a.y - b.y) < 4.0)
+                    .count()
+            };
+            let Some(anchor) = shown
+                .iter()
+                .copied()
+                .filter(|s| {
+                    !guard
+                        || s.trade
+                            .is_some_and(|t| t.profession == fb_faction::Profession::Guard)
+                })
+                .max_by_key(|s| near(s))
+            else {
+                return;
+            };
+            let group: Vec<_> = shown
+                .iter()
+                .filter(|b| (anchor.x - b.x).hypot(anchor.y - b.y) < 4.0)
+                .collect();
+            let (mx, my) = if guard {
+                (anchor.x, anchor.y)
+            } else {
+                (
+                    group.iter().map(|g| g.x).sum::<f32>() / group.len() as f32,
+                    group.iter().map(|g| g.y).sum::<f32>() / group.len() as f32,
+                )
+            };
             let at = v3(fb_level::Level::world(mx, my));
             let (cx, cy) = (mx.floor() as i32, my.floor() as i32);
             let reach = if guard { 3 } else { 4 };
-            let side = [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West]
-                .into_iter()
-                .max_by_key(|f| (1..=reach).take_while(|k| level.is_open(cx + f.step().0 * k, cy + f.step().1 * k)).count())
-                .unwrap_or(facing);
+            let side = [
+                fb_level::Facing::North,
+                fb_level::Facing::East,
+                fb_level::Facing::South,
+                fb_level::Facing::West,
+            ]
+            .into_iter()
+            .max_by_key(|f| {
+                (1..=reach)
+                    .take_while(|k| level.is_open(cx + f.step().0 * k, cy + f.step().1 * k))
+                    .count()
+            })
+            .unwrap_or(facing);
             // A guard is seen from the front, the way they face, if that side is open.
             let side = if guard {
                 let (fx, fy) = anchor.facing();
-                let ahead = if fx.abs() > fy.abs() { if fx > 0.0 { fb_level::Facing::East } else { fb_level::Facing::West } } else if fy > 0.0 { fb_level::Facing::South } else { fb_level::Facing::North };
-                if (1..=2).all(|k| level.is_open(cx + ahead.step().0 * k, cy + ahead.step().1 * k)) { ahead } else { side }
+                let ahead = if fx.abs() > fy.abs() {
+                    if fx > 0.0 {
+                        fb_level::Facing::East
+                    } else {
+                        fb_level::Facing::West
+                    }
+                } else if fy > 0.0 {
+                    fb_level::Facing::South
+                } else {
+                    fb_level::Facing::North
+                };
+                if (1..=2).all(|k| level.is_open(cx + ahead.step().0 * k, cy + ahead.step().1 * k))
+                {
+                    ahead
+                } else {
+                    side
+                }
             } else {
                 side
             };
-            let back = (1..=reach).take_while(|k| level.is_open(cx + side.step().0 * k, cy + side.step().1 * k)).count() as f32;
-            let from = at + v3(geometry::facing_vector(side)) * CELL * back.max(if guard { 2.0 } else { 1.0 }) * 0.9 + eye;
+            let back = (1..=reach)
+                .take_while(|k| level.is_open(cx + side.step().0 * k, cy + side.step().1 * k))
+                .count() as f32;
+            let from = at
+                + v3(geometry::facing_vector(side))
+                    * CELL
+                    * back.max(if guard { 2.0 } else { 1.0 })
+                    * 0.9
+                + eye;
             Transform::from_translation(from).looking_at(at + Vec3::Y * 11.0, Vec3::Y)
         }
         "brazier" | "glowcaps" => {
-            let kind = if mode == "brazier" { LightKind::Brazier } else { LightKind::Glowcaps };
-            let Some(spot) = level.lights.iter().find(|l| l.kind == kind) else { return };
+            let kind = if mode == "brazier" {
+                LightKind::Brazier
+            } else {
+                LightKind::Glowcaps
+            };
+            let Some(spot) = level.lights.iter().find(|l| l.kind == kind) else {
+                return;
+            };
             let at = v3(fb_level::Level::world(spot.x, spot.y));
             let (cx, cy) = (spot.x.floor() as i32, spot.y.floor() as i32);
             // Stand off toward the most open side, looking down at the light.
-            let side = [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West]
-                .into_iter()
-                .max_by_key(|f| (1..=2).take_while(|k| level.is_open(cx + f.step().0 * k, cy + f.step().1 * k)).count())
-                .unwrap_or(facing);
+            let side = [
+                fb_level::Facing::North,
+                fb_level::Facing::East,
+                fb_level::Facing::South,
+                fb_level::Facing::West,
+            ]
+            .into_iter()
+            .max_by_key(|f| {
+                (1..=2)
+                    .take_while(|k| level.is_open(cx + f.step().0 * k, cy + f.step().1 * k))
+                    .count()
+            })
+            .unwrap_or(facing);
             let from = at + v3(geometry::facing_vector(side)) * CELL * 1.4 + eye;
             Transform::from_translation(from).looking_at(at + Vec3::Y * 4.0, Vec3::Y)
         }
@@ -1203,45 +1848,89 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let finishes = geometry::level_finishes(level);
             let (back, wanted): (f32, Box<dyn Fn(i32, i32) -> f32>) = match mode.as_str() {
                 // Where the moss is thickest, a few steps off, taking in floor and wall foot.
-                "moss" => (CELL * 1.6, Box::new(|x, y| finishes.moss_at((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL))),
-                "strata" => (CELL * 1.0, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Strata) as u32 as f32))),
+                "moss" => (
+                    CELL * 1.6,
+                    Box::new(|x, y| {
+                        finishes.moss_at((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL)
+                    }),
+                ),
+                "strata" => (
+                    CELL * 1.0,
+                    Box::new(|x, y| {
+                        finishes.at(x, y).map_or(0.0, |f| {
+                            (f.walls == fb_level::WallFinish::Strata) as u32 as f32
+                        })
+                    }),
+                ),
                 // A hewn quarter's craggy rock.
-                "hewn" => (CELL * 1.0, Box::new(|x, y| (finishes.character_at(x, y) == Some(fb_level::Character::Hewn)) as u32 as f32)),
+                "hewn" => (
+                    CELL * 1.0,
+                    Box::new(|x, y| {
+                        (finishes.character_at(x, y) == Some(fb_level::Character::Hewn)) as u32
+                            as f32
+                    }),
+                ),
                 // Close under the torch, or from across the level.
-                _ => (if mode == "rock" { CELL } else { CELL * 10.0 }, Box::new(|x, y| finishes.at(x, y).map_or(0.0, |f| (f.walls == fb_level::WallFinish::Rock) as u32 as f32))),
+                _ => (
+                    if mode == "rock" { CELL } else { CELL * 10.0 },
+                    Box::new(|x, y| {
+                        finishes.at(x, y).map_or(0.0, |f| {
+                            (f.walls == fb_level::WallFinish::Rock) as u32 as f32
+                        })
+                    }),
+                ),
             };
             // A wall seen from an open run of cells: the best score, then the longest run.
             let mut best: Option<(f32, i32, i32, fb_level::Facing)> = None;
             for y in 0..level.height as i32 {
                 for x in 0..level.width as i32 {
-                    for facing in [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West] {
+                    for facing in [
+                        fb_level::Facing::North,
+                        fb_level::Facing::East,
+                        fb_level::Facing::South,
+                        fb_level::Facing::West,
+                    ] {
                         let (dx, dy) = facing.step();
                         if !level.is_open(x, y) || level.is_open(x + dx, y + dy) {
                             continue;
                         }
-                        let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
-                        let score = if mode == "rock-far" { run } else { wanted(x, y) * 100.0 + run.min(back / CELL) };
+                        let run = (1..=12)
+                            .take_while(|k| level.is_open(x - dx * k, y - dy * k))
+                            .count() as f32;
+                        let score = if mode == "rock-far" {
+                            run
+                        } else {
+                            wanted(x, y) * 100.0 + run.min(back / CELL)
+                        };
                         if best.is_none_or(|(b, ..)| score > b) {
                             best = Some((score, x, y, facing));
                         }
                     }
                 }
             }
-            let Some((_, x, y, facing)) = best else { return };
+            let Some((_, x, y, facing)) = best else {
+                return;
+            };
             let (dx, dy) = facing.step();
-            let run = (1..=12).take_while(|k| level.is_open(x - dx * k, y - dy * k)).count() as f32;
+            let run = (1..=12)
+                .take_while(|k| level.is_open(x - dx * k, y - dy * k))
+                .count() as f32;
             let d = v3(geometry::facing_vector(facing));
             let wall = v3(geometry::cell_centre(x, y)) + d * CELL * 0.5;
             let stand = (back).min(run * CELL + CELL * 0.5 - 2.0);
             let drop = if mode == "moss" { 12.0 } else { 1.0 };
             let from = wall - d * stand + eye;
-            Transform::from_translation(from).looking_at(wall + Vec3::Y * (EYE_HEIGHT - drop), Vec3::Y)
+            Transform::from_translation(from)
+                .looking_at(wall + Vec3::Y * (EYE_HEIGHT - drop), Vec3::Y)
         }
         _ => Transform::from_translation(start + eye).looking_to(inward, Vec3::Y),
     };
     commands
         .spawn((
-            DebugCamera { walk_in: mode == "shut", fog: mode != "top" },
+            DebugCamera {
+                walk_in: mode == "shut",
+                fog: mode != "top",
+            },
             StonePiece,
             Camera3d::default(),
             EXPOSURE,
@@ -1255,9 +1944,15 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         // twice as far, to show a room whole.
         .with_child((
             if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "cool") {
-                Torch::flickering(point_light(Color::srgb(0.85, 0.95, 1.0), 1.0, 120.0, &EXPOSURE), 0.0)
+                Torch::flickering(
+                    point_light(Color::srgb(0.85, 0.95, 1.0), 1.0, 120.0, &EXPOSURE),
+                    0.0,
+                )
             } else if std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "lantern") {
-                Torch::flickering(point_light(Color::srgb(1.0, 0.9, 0.74), 2.0, 240.0, &EXPOSURE), 0.0)
+                Torch::flickering(
+                    point_light(Color::srgb(1.0, 0.9, 0.74), 2.0, 240.0, &EXPOSURE),
+                    0.0,
+                )
             } else if mode == "corridor" {
                 // A corridor's arches stand further apart than the usual light reaches.
                 Torch::light(2.5, 260.0, &EXPOSURE)
@@ -1267,7 +1962,10 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             Transform::from_xyz(4.0, -3.0, 2.0),
         ));
     if mode == "top" {
-        commands.insert_resource(GlobalAmbientLight { brightness: 120.0, ..abyss_ambient(&LightTuning::default()) });
+        commands.insert_resource(GlobalAmbientLight {
+            brightness: 120.0,
+            ..abyss_ambient(&LightTuning::default())
+        });
     }
 }
 
@@ -1281,7 +1979,9 @@ fn debug_camera_takes_over(
     mut player_cameras: Query<&mut Camera, With<PlayerCamera>>,
     mut players: Query<&mut Transform, With<Player>>,
 ) {
-    let Ok((entity, mut debug)) = debug.single_mut() else { return };
+    let Ok((entity, mut debug)) = debug.single_mut() else {
+        return;
+    };
     for mut camera in &mut player_cameras {
         camera.is_active = false;
     }
@@ -1319,7 +2019,10 @@ mod tests {
             }
         }
         assert!(stone > 0, "doorway masonry");
-        let spot = geometry::stone::columns(&level).into_iter().next().expect("a hall with columns at depth 2");
+        let spot = geometry::stone::columns(&level)
+            .into_iter()
+            .next()
+            .expect("a hall with columns at depth 2");
         for part in &mossy_column(&spot, level.seed, 3).parts {
             assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
             assert!(part.uvs_b.iter().all(|uv| uv[0] == 0.75));
@@ -1334,8 +2037,16 @@ mod tests {
             let level = crate::travel::Abyss::new(seed).level_at(2);
             for doorway in geometry::doorways(&geometry::CellView::new(&level)) {
                 let at = arch_eye(&level, &doorway);
-                let (x, y) = ((at.x / fb_level::CELL).floor() as i32, (at.z / fb_level::CELL).floor() as i32);
-                assert!(level.is_open(x, y) || (x, y) == (doorway.x, doorway.y), "seed {seed}: the eye for the doorway at {},{} stands at {x},{y}", doorway.x, doorway.y);
+                let (x, y) = (
+                    (at.x / fb_level::CELL).floor() as i32,
+                    (at.z / fb_level::CELL).floor() as i32,
+                );
+                assert!(
+                    level.is_open(x, y) || (x, y) == (doorway.x, doorway.y),
+                    "seed {seed}: the eye for the doorway at {},{} stands at {x},{y}",
+                    doorway.x,
+                    doorway.y
+                );
             }
         }
     }
@@ -1348,13 +2059,20 @@ mod tests {
     }
 
     fn door() -> EntranceDoor {
-        EntranceDoor { shut: Quat::IDENTITY, centre: Vec3::new(110.0, 0.0, 190.0), cell: (5, 9), swing: DoorSwing::Open }
+        EntranceDoor {
+            shut: Quat::IDENTITY,
+            centre: Vec3::new(110.0, 0.0, 190.0),
+            cell: (5, 9),
+            swing: DoorSwing::Open,
+        }
     }
 
     /// An app that limits new parts, and one part that has just appeared.
     fn limiting() -> (App, Entity) {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).init_resource::<Tuning>().add_systems(Update, limit_far_parts);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Tuning>()
+            .add_systems(Update, limit_far_parts);
         let part = app.world_mut().spawn(ArmoryPart).id();
         (app, part)
     }
@@ -1370,12 +2088,21 @@ mod tests {
     fn parts_on_another_cameras_layer_get_no_range() {
         // An icon, the doll or the held item, whose layer reaches the part a frame after it
         // appears, as `Propagate<RenderLayers>` does.
-        for layer in [crate::inventory::icon::ICON_LAYER, crate::inventory::doll::DOLL_LAYER, crate::carry::VIEW_MODEL_LAYER] {
+        for layer in [
+            crate::inventory::icon::ICON_LAYER,
+            crate::inventory::doll::DOLL_LAYER,
+            crate::carry::VIEW_MODEL_LAYER,
+        ] {
             let (mut app, part) = limiting();
             app.update();
-            app.world_mut().entity_mut(part).insert(RenderLayers::layer(layer));
+            app.world_mut()
+                .entity_mut(part)
+                .insert(RenderLayers::layer(layer));
             settle(&mut app);
-            assert!(app.world().get::<VisibilityRange>(part).is_none(), "layer {layer}");
+            assert!(
+                app.world().get::<VisibilityRange>(part).is_none(),
+                "layer {layer}"
+            );
         }
     }
 
@@ -1384,7 +2111,9 @@ mod tests {
         let (mut app, part) = limiting();
         settle(&mut app);
         assert!(app.world().get::<VisibilityRange>(part).is_some());
-        let cameras: Vec<Entity> = (0..RANGED_VIEWS + 1).map(|_| app.world_mut().spawn(Camera::default()).id()).collect();
+        let cameras: Vec<Entity> = (0..RANGED_VIEWS + 1)
+            .map(|_| app.world_mut().spawn(Camera::default()).id())
+            .collect();
         settle(&mut app);
         assert!(app.world().get::<VisibilityRange>(part).is_none());
         for camera in cameras {
@@ -1398,10 +2127,20 @@ mod tests {
     fn a_new_part_is_drawn_out_to_the_fogs_end_and_a_margin() {
         let (mut app, part) = limiting();
         settle(&mut app);
-        let range = app.world().get::<VisibilityRange>(part).expect("the part has a range").clone();
+        let range = app
+            .world()
+            .get::<VisibilityRange>(part)
+            .expect("the part has a range")
+            .clone();
         let fog_end = app.world().resource::<Tuning>().light.fog_end;
-        assert!(range.is_visible_at_all(fog_end), "a part at the fog's end is drawn");
-        assert!(range.is_culled(fog_end + DRAW_MARGIN + 1.0), "a part past the margin is not");
+        assert!(
+            range.is_visible_at_all(fog_end),
+            "a part at the fog's end is drawn"
+        );
+        assert!(
+            range.is_culled(fog_end + DRAW_MARGIN + 1.0),
+            "a part past the margin is not"
+        );
         assert!(range.is_abrupt());
     }
 
@@ -1421,7 +2160,10 @@ mod tests {
     #[test]
     fn the_view_from_above_draws_every_part() {
         let (mut app, part) = limiting();
-        app.world_mut().spawn(DebugCamera { walk_in: false, fog: false });
+        app.world_mut().spawn(DebugCamera {
+            walk_in: false,
+            fog: false,
+        });
         settle(&mut app);
         assert!(app.world().get::<VisibilityRange>(part).is_none());
     }
@@ -1431,10 +2173,16 @@ mod tests {
         let mut d = door();
         // No player yet, or one still in the doorway's reach: the door stands open.
         assert_eq!(d.step(1.0, None), None);
-        assert_eq!(d.step(1.0, Some(d.centre + Vec3::new(0.0, 0.0, -CELL))), None);
+        assert_eq!(
+            d.step(1.0, Some(d.centre + Vec3::new(0.0, 0.0, -CELL))),
+            None
+        );
         assert_eq!(d.swing, DoorSwing::Open);
         // A step further in and it begins to swing, then shuts after SHUT_SECONDS and stays.
-        assert_eq!(d.step(0.1, Some(d.centre + Vec3::new(0.0, 0.0, -1.3 * CELL))), Some(DoorEvent::BeganToShut));
+        assert_eq!(
+            d.step(0.1, Some(d.centre + Vec3::new(0.0, 0.0, -1.3 * CELL))),
+            Some(DoorEvent::BeganToShut)
+        );
         let mut t = 0.0;
         let mut shut = 0;
         while d.swing != DoorSwing::Shut {
@@ -1454,25 +2202,44 @@ mod tests {
         app.init_resource::<Time>()
             .init_resource::<BlockedCells>()
             .insert_resource(LevelSounds::default())
-            .insert_resource(GameSettings { sound_volume: 0.5, ..default() })
+            .insert_resource(GameSettings {
+                sound_volume: 0.5,
+                ..default()
+            })
             .init_resource::<Tuning>()
             .add_systems(Update, shut_the_entrance);
         let d = door();
         app.world_mut().spawn((d, Transform::default()));
-        let player = app.world_mut().spawn((Player, GlobalTransform::from_translation(d.centre))).id();
-        let sounds = |app: &mut App| app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
+        let player = app
+            .world_mut()
+            .spawn((Player, GlobalTransform::from_translation(d.centre)))
+            .id();
+        let sounds = |app: &mut App| {
+            app.world_mut()
+                .query::<&AudioPlayer>()
+                .iter(app.world())
+                .count()
+        };
         let frame = |app: &mut App| {
-            app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_millis(100));
             app.update();
         };
         frame(&mut app);
         assert_eq!(sounds(&mut app), 0, "open: silent");
         // The player walks in; the door swings, silent until it reaches shut.
-        *app.world_mut().get_mut::<GlobalTransform>(player).unwrap() = GlobalTransform::from_translation(d.centre - Vec3::Z * 1.5 * CELL);
+        *app.world_mut().get_mut::<GlobalTransform>(player).unwrap() =
+            GlobalTransform::from_translation(d.centre - Vec3::Z * 1.5 * CELL);
         let mut shut_at = None;
         for i in 0..40 {
             frame(&mut app);
-            let swing = app.world_mut().query::<&EntranceDoor>().single(app.world()).unwrap().swing;
+            let swing = app
+                .world_mut()
+                .query::<&EntranceDoor>()
+                .single(app.world())
+                .unwrap()
+                .swing;
             if swing == DoorSwing::Shut && shut_at.is_none() {
                 shut_at = Some(i);
                 assert_eq!(sounds(&mut app), 1, "it sounds the frame it shuts");
@@ -1483,12 +2250,18 @@ mod tests {
         assert!(shut_at.is_some());
         assert_eq!(sounds(&mut app), 1, "and only once");
         let mut playback = app.world_mut().query::<&PlaybackSettings>();
-        assert_eq!(playback.single(app.world()).unwrap().volume.to_linear(), 0.5, "at the sound volume");
+        assert_eq!(
+            playback.single(app.world()).unwrap().volume.to_linear(),
+            0.5,
+            "at the sound volume"
+        );
     }
 
     #[test]
     fn the_door_sound_is_an_asset() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(LevelSounds::DOOR_SHUT);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(LevelSounds::DOOR_SHUT);
         let duration = crate::audio::ogg_vorbis_duration(&std::fs::read(path).unwrap()).unwrap();
         assert!((0.3..2.0).contains(&duration), "{duration}");
     }
@@ -1503,8 +2276,15 @@ mod tests {
     #[test]
     fn a_grave_find_brazier_burns_as_bright_as_a_new_one() {
         let (brazier, _) = geometry::brazier(1207);
-        let (new, grave) = (fixture_appearance(1207, ConditionState::Pristine), fixture_appearance(1207, ConditionState::GraveFind));
-        let flames: Vec<_> = brazier.parts.iter().filter(|p| p.name.starts_with("flame")).collect();
+        let (new, grave) = (
+            fixture_appearance(1207, ConditionState::Pristine),
+            fixture_appearance(1207, ConditionState::GraveFind),
+        );
+        let flames: Vec<_> = brazier
+            .parts
+            .iter()
+            .filter(|p| p.name.starts_with("flame"))
+            .collect();
         assert!(!flames.is_empty());
         for flame in flames {
             let (a, b) = (new.material_for(flame), grave.material_for(flame));
@@ -1522,7 +2302,10 @@ mod tests {
     #[test]
     fn stone_wears_at_a_moderate_amount() {
         let stone = stone_appearance(1207);
-        let part = armory::Part { material: Some(MaterialKind::Stone), ..default() };
+        let part = armory::Part {
+            material: Some(MaterialKind::Stone),
+            ..default()
+        };
         let decay = stone.material_for(&part).extension.decay;
         assert_eq!(decay.kind, 9);
         assert!((decay.amount - STONE_WEAR).abs() < 1e-6);
@@ -1537,15 +2320,25 @@ mod tests {
                 let level = fb_level::generate(seed, depth);
                 let (a, b) = (FixtureShapes::make(&level), FixtureShapes::make(&level));
                 assert_eq!(a, b, "seed {seed} depth {depth}");
-                let finishes = fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
+                let finishes =
+                    fb_level::finishes(&level, &fb_level::LevelParams::for_style(level.style));
                 for (doorway, frame, _, _) in &a.doors {
                     let timber = frame.parts.iter().any(|p| p.name == "frame");
                     let style = finishes.door_style(doorway.x, doorway.y);
-                    assert_eq!(timber, style == Some(fb_level::DoorStyle::Timber), "seed {seed} depth {depth} at {},{}", doorway.x, doorway.y);
+                    assert_eq!(
+                        timber,
+                        style == Some(fb_level::DoorStyle::Timber),
+                        "seed {seed} depth {depth} at {},{}",
+                        doorway.x,
+                        doorway.y
+                    );
                     arched[slot] += !timber as u32;
                 }
             }
         }
-        assert!(arched[0] > 0 && arched[1] > 0, "arched doorways at depth 5 and 4: {arched:?}");
+        assert!(
+            arched[0] > 0 && arched[1] > 0,
+            "arched doorways at depth 5 and 4: {arched:?}"
+        );
     }
 }

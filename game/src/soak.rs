@@ -21,8 +21,8 @@
 
 use bevy::{
     core_pipeline::core_3d::Opaque3d,
-    ecs::resource::IsResource,
     diagnostic::{DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin},
+    ecs::resource::IsResource,
     input::{InputSystems, mouse::AccumulatedMouseMotion},
     pbr::Shadow,
     prelude::*,
@@ -33,13 +33,18 @@ use bevy::{
         render_phase::ViewBinnedRenderPhases,
     },
 };
-use fb_level::{CELL, path::{find_path, line_of_sight}};
+use fb_level::{
+    CELL,
+    path::{find_path, line_of_sight},
+};
 use procgen_rng::Mulberry32;
 
 use crate::carry::{FloorItem, REACH};
 use crate::combat::feedback::Corpse;
 use crate::creatures::Critter;
-use crate::inventory::{Drag, FloorChanges, Inventory, Location, OpenContainer, Target, icon::IconCache};
+use crate::inventory::{
+    Drag, FloorChanges, Inventory, Location, OpenContainer, Target, icon::IconCache,
+};
 use crate::launch::AppState;
 use crate::play::{CurrentLevel, Player, Screen, ScreenOpen};
 use crate::props::{Container, PropPiece};
@@ -59,13 +64,20 @@ impl SoakPlugin {
     pub fn from_env() -> Option<SoakPlugin> {
         let seconds = parse_seconds(&std::env::var("FB_SOAK").ok()?)?;
         let churn_icons = crate::launch::env_set("FB_SOAK_CHURN");
-        Some(SoakPlugin { seconds, churn_icons })
+        Some(SoakPlugin {
+            seconds,
+            churn_icons,
+        })
     }
 }
 
 /// `FB_SOAK`'s value as a positive number of seconds.
 pub fn parse_seconds(value: &str) -> Option<f32> {
-    value.trim().parse::<f32>().ok().filter(|s| s.is_finite() && *s > 0.0)
+    value
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|s| s.is_finite() && *s > 0.0)
 }
 
 impl Plugin for SoakPlugin {
@@ -76,10 +88,21 @@ impl Plugin for SoakPlugin {
         if !app.is_plugin_added::<EntityCountDiagnosticsPlugin>() {
             app.add_plugins(EntityCountDiagnosticsPlugin::default());
         }
-        let seed = std::env::var("FB_SOAK_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+        let seed = std::env::var("FB_SOAK_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
         app.insert_resource(Soak::new(self.seconds, self.churn_icons, seed))
             .init_resource::<RenderCounts>()
-            .add_systems(PreUpdate, (start_from_title.run_if(in_state(AppState::Title)), drive.run_if(in_state(AppState::Delving))).after(InputSystems).before(crate::keymap::HoldSet))
+            .add_systems(
+                PreUpdate,
+                (
+                    start_from_title.run_if(in_state(AppState::Title)),
+                    drive.run_if(in_state(AppState::Delving)),
+                )
+                    .after(InputSystems)
+                    .before(crate::keymap::HoldSet),
+            )
             .add_systems(Update, act.run_if(in_state(AppState::Delving)))
             .add_systems(Last, report);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
@@ -163,7 +186,14 @@ const TITLE_SECONDS: f32 = 1.0;
 
 /// On the title, Enter begins a new delve, once the title has shown a while and its entities
 /// are logged.
-fn start_from_title(mut soak: ResMut<Soak>, keys: Option<ResMut<ButtonInput<KeyCode>>>, time: Res<Time<Real>>, entities: Query<()>, resources: Query<(), With<IsResource>>, sounds: Query<(), With<AudioPlayer>>) {
+fn start_from_title(
+    mut soak: ResMut<Soak>,
+    keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    time: Res<Time<Real>>,
+    entities: Query<()>,
+    resources: Query<(), With<IsResource>>,
+    sounds: Query<(), With<AudioPlayer>>,
+) {
     let Some(mut keys) = keys else { return };
     for key in std::mem::take(&mut soak.tapped) {
         keys.release(key);
@@ -219,7 +249,9 @@ fn drive(
     mouse: Option<ResMut<ButtonInput<MouseButton>>>,
     mut motion: ResMut<AccumulatedMouseMotion>,
 ) {
-    let (Some(mut keys), Some(mut mouse)) = (keys, mouse) else { return };
+    let (Some(mut keys), Some(mut mouse)) = (keys, mouse) else {
+        return;
+    };
     let now = time.elapsed_secs();
     let soak = &mut *soak;
     for key in std::mem::take(&mut soak.tapped) {
@@ -235,7 +267,11 @@ fn drive(
     if open.0.is_some() {
         keys.release(KeyCode::KeyW);
         if now >= soak.close_screen {
-            let key = if open.is(Screen::Inventory) { KeyCode::KeyI } else { KeyCode::Escape };
+            let key = if open.is(Screen::Inventory) {
+                KeyCode::KeyI
+            } else {
+                KeyCode::Escape
+            };
             soak.tap(&mut keys, key);
             soak.close_screen = f32::MAX;
             soak.next_screen = now + soak.rng.range_f32(6.0, 14.0);
@@ -246,7 +282,11 @@ fn drive(
         return;
     }
     if now >= soak.next_screen {
-        let key = if soak.rng.chance(0.75) { KeyCode::KeyI } else { KeyCode::Escape };
+        let key = if soak.rng.chance(0.75) {
+            KeyCode::KeyI
+        } else {
+            KeyCode::Escape
+        };
         soak.tap(&mut keys, key);
         soak.stats.screens += 1;
         soak.close_screen = now + soak.rng.range_f32(1.0, 4.0);
@@ -258,12 +298,23 @@ fn drive(
     let foe = creatures
         .iter()
         .map(|t| t.translation.xz())
-        .filter(|p| p.distance(at) < 60.0 && line_of_sight((at.x / CELL, at.y / CELL), (p.x / CELL, p.y / CELL), blocked))
+        .filter(|p| {
+            p.distance(at) < 60.0
+                && line_of_sight(
+                    (at.x / CELL, at.y / CELL),
+                    (p.x / CELL, p.y / CELL),
+                    blocked,
+                )
+        })
         .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
     let goal = match foe {
         Some(p) => Some(p),
         None => {
-            if soak.path.first().is_some_and(|&c| centre_of(c).distance(at) < CELL * 0.4) {
+            if soak
+                .path
+                .first()
+                .is_some_and(|&c| centre_of(c).distance(at) < CELL * 0.4)
+            {
                 soak.path.remove(0);
             }
             // Stuck, or at the end of the way: a new way to a random open cell.
@@ -274,7 +325,11 @@ fn drive(
                 let toward: Vec<Vec2> = if roll < 0.4 {
                     creatures.iter().map(|t| t.translation.xz()).collect()
                 } else if roll < 0.6 {
-                    containers.iter().filter(|(_, c)| !c.opened).map(|(t, _)| t.translation().xz()).collect()
+                    containers
+                        .iter()
+                        .filter(|(_, c)| !c.opened)
+                        .map(|(t, _)| t.translation().xz())
+                        .collect()
                 } else {
                     Vec::new()
                 };
@@ -298,7 +353,9 @@ fn drive(
     };
     // Turn with the mouse as `crate::player::look` reads it.
     let yaw = body.rotation.to_euler(EulerRot::YXZ).0;
-    let turn = (yaw_toward(at, goal) - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    let turn = (yaw_toward(at, goal) - yaw + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
     let per_pixel = crate::player::look_turn(Vec2::X, &settings).x;
     if per_pixel.abs() > 0.0 {
         motion.delta = Vec2::new(turn.clamp(-0.25, 0.25) / per_pixel, 0.0);
@@ -318,10 +375,17 @@ fn drive(
 }
 
 /// A way from `from` to a random open cell, if one is found within a few tries.
-fn random_path(rng: &mut Mulberry32, level: &fb_level::Level, from: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+fn random_path(
+    rng: &mut Mulberry32,
+    level: &fb_level::Level,
+    from: (i32, i32),
+) -> Option<Vec<(i32, i32)>> {
     let blocked = |x: i32, y: i32| !level.is_open(x, y);
     for _ in 0..20 {
-        let to = (rng.int(0, level.width - 1) as i32, rng.int(0, level.height - 1) as i32);
+        let to = (
+            rng.int(0, level.width - 1) as i32,
+            rng.int(0, level.height - 1) as i32,
+        );
         if blocked(to.0, to.1) || to == from {
             continue;
         }
@@ -359,14 +423,30 @@ fn act(
     let soak = &mut *soak;
     soak.dropped.retain(|(_, when)| now - when < 60.0);
     let recent: Vec<_> = soak.dropped.iter().map(|(id, _)| *id).collect();
-    if let Some((_, item)) = floor.iter().find(|(t, f)| !recent.contains(&f.id) && t.translation().distance(at) < REACH * 0.6)
+    if let Some((_, item)) = floor
+        .iter()
+        .find(|(t, f)| !recent.contains(&f.id) && t.translation().distance(at) < REACH * 0.6)
         && let Ok(change) = crate::inventory::quick(&mut inventory, item.id)
     {
         changes.0.extend(change);
         soak.stats.picked += 1;
     }
-    if let Some((entity, _, piece, &container)) = containers.iter().find(|(_, t, _, c)| !c.opened && t.translation().distance(at) < REACH * 0.8) {
-        crate::props::open_container(&mut commands, &mut spawner, &level.0, entity, piece, container, &mut screen, &mut showing, None, &tuning.as_deref().cloned().unwrap_or_default());
+    if let Some((entity, _, piece, &container)) = containers
+        .iter()
+        .find(|(_, t, _, c)| !c.opened && t.translation().distance(at) < REACH * 0.8)
+    {
+        crate::props::open_container(
+            &mut commands,
+            &mut spawner,
+            &level.0,
+            entity,
+            piece,
+            container,
+            &mut screen,
+            &mut showing,
+            None,
+            &tuning.as_deref().cloned().unwrap_or_default(),
+        );
         soak.stats.opened += 1;
         return;
     }
@@ -395,8 +475,18 @@ fn act(
             soak.stats.equipped += 1;
         }
     } else if inventory.contents_count(id) == 0 {
-        let Some(size) = inventory.footprint(id) else { return };
-        let drag = Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
+        let Some(size) = inventory.footprint(id) else {
+            return;
+        };
+        let drag = Drag {
+            id,
+            grab: IVec2::ZERO,
+            size,
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
         if let Ok(change) = crate::inventory::drop_at(&mut inventory, &drag, Target::Level, 4) {
             changes.0.extend(change);
             soak.dropped.push((id, now));
@@ -422,8 +512,11 @@ static SHADOW_PHASES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 /// and `Culling` as 1, 2 and 3.
 static PREPROCESSING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-const PREPROCESSING_MODES: [(GpuPreprocessingMode, &str); 3] =
-    [(GpuPreprocessingMode::None, "None"), (GpuPreprocessingMode::PreprocessingOnly, "PreprocessingOnly"), (GpuPreprocessingMode::Culling, "Culling")];
+const PREPROCESSING_MODES: [(GpuPreprocessingMode, &str); 3] = [
+    (GpuPreprocessingMode::None, "None"),
+    (GpuPreprocessingMode::PreprocessingOnly, "PreprocessingOnly"),
+    (GpuPreprocessingMode::Culling, "Culling"),
+];
 
 fn count_render_phases(
     opaque: Option<Res<ViewBinnedRenderPhases<Opaque3d>>>,
@@ -433,7 +526,11 @@ fn count_render_phases(
     use std::sync::atomic::Ordering::Relaxed;
     OPAQUE_PHASES.store(opaque.map_or(0, |p| p.len()), Relaxed);
     SHADOW_PHASES.store(shadow.map_or(0, |p| p.len()), Relaxed);
-    let mode = support.and_then(|s| PREPROCESSING_MODES.iter().position(|&(m, _)| m == s.max_supported_mode));
+    let mode = support.and_then(|s| {
+        PREPROCESSING_MODES
+            .iter()
+            .position(|&(m, _)| m == s.max_supported_mode)
+    });
     PREPROCESSING.store(mode.map_or(0, |i| i + 1), Relaxed);
 }
 
@@ -465,11 +562,19 @@ fn report(
     *render_counts = RenderCounts {
         opaque_phases: OPAQUE_PHASES.load(Relaxed),
         shadow_phases: SHADOW_PHASES.load(Relaxed),
-        preprocessing: PREPROCESSING.load(Relaxed).checked_sub(1).map_or("", |i| PREPROCESSING_MODES[i].1),
+        preprocessing: PREPROCESSING
+            .load(Relaxed)
+            .checked_sub(1)
+            .map_or("", |i| PREPROCESSING_MODES[i].1),
     };
-    let frame_ms = store.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    let frame_ms = store
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
     let active = cameras.iter().filter(|(_, c, _)| c.is_active).count();
-    let (icon_count, icon_drawing) = icons.as_deref().map_or((0, 0), |c| (c.len(), c.drawing_count()));
+    let (icon_count, icon_drawing) = icons
+        .as_deref()
+        .map_or((0, 0), |c| (c.len(), c.drawing_count()));
     eprintln!(
         "soak: t={:.0}s entities={} meshes={} images={} toon={} standard={} outline={} cameras={} active_cameras={} readbacks={} icons={} icons_drawing={} opaque_phases={} shadow_phases={} preprocessing={} frame_ms={:.1} {:?}",
         now - started,
@@ -490,9 +595,15 @@ fn report(
         frame_ms,
         soak.stats,
     );
-    let named: Vec<String> = cameras.iter().filter(|(_, c, _)| c.is_active).map(|(e, _, n)| format!("{e}:{}", n.map_or("", |n| n.as_str()))).collect();
+    let named: Vec<String> = cameras
+        .iter()
+        .filter(|(_, c, _)| c.is_active)
+        .map(|(e, _, n)| format!("{e}:{}", n.map_or("", |n| n.as_str())))
+        .collect();
     eprintln!("soak: active cameras {}", named.join(", "));
-    if soak.churn_icons && let Some(mut icons) = icons {
+    if soak.churn_icons
+        && let Some(mut icons) = icons
+    {
         icons.forget_drawn();
     }
     if now - started >= soak.seconds {
@@ -516,9 +627,16 @@ mod tests {
     #[test]
     fn yaw_faces_the_goal() {
         let at = Vec2::ZERO;
-        for goal in [Vec2::new(0.0, -5.0), Vec2::new(3.0, 1.0), Vec2::new(-2.0, 7.0)] {
+        for goal in [
+            Vec2::new(0.0, -5.0),
+            Vec2::new(3.0, 1.0),
+            Vec2::new(-2.0, 7.0),
+        ] {
             let forward = Quat::from_rotation_y(yaw_toward(at, goal)) * Vec3::NEG_Z;
-            assert!(forward.xz().normalize().abs_diff_eq(goal.normalize(), 1e-5), "{goal}");
+            assert!(
+                forward.xz().normalize().abs_diff_eq(goal.normalize(), 1e-5),
+                "{goal}"
+            );
         }
     }
 
@@ -526,7 +644,8 @@ mod tests {
     fn random_paths_run_over_open_floor() {
         let level = fb_level::generate(1207, 1);
         let (x, y, _) = level.start();
-        let path = random_path(&mut Mulberry32::new(3), &level, (x as i32, y as i32)).expect("a way");
+        let path =
+            random_path(&mut Mulberry32::new(3), &level, (x as i32, y as i32)).expect("a way");
         assert!(path.iter().all(|&(x, y)| level.is_open(x, y)));
     }
 }

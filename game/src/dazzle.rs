@@ -49,7 +49,10 @@ impl Adaptation {
         let used_to_the_dark = self.dark_minutes;
         if lit > BRIGHT {
             self.dark_minutes = 0.0;
-            return (used_to_the_dark >= DARK_MINUTES).then(|| (0.5 + 0.5 * (used_to_the_dark - DARK_MINUTES) / (FULL_MINUTES - DARK_MINUTES)).min(1.0));
+            return (used_to_the_dark >= DARK_MINUTES).then(|| {
+                (0.5 + 0.5 * (used_to_the_dark - DARK_MINUTES) / (FULL_MINUTES - DARK_MINUTES))
+                    .min(1.0)
+            });
         }
         self.dark_minutes = (self.dark_minutes - 2.0 * minutes).max(0.0);
         None
@@ -71,15 +74,31 @@ fn dazzle_the_delver(
     // A new delve restarts the clock below where this last stood, and a clock set at a stroke (a
     // delve resumed) lets no time pass.
     let jumped = std::mem::replace(&mut *jumps, clock.jumps()) != clock.jumps();
-    let minutes = last.map_or(0.0, |was| if jumped || now < was { 0.0 } else { (now - was) / 60.0 });
+    let minutes = last.map_or(0.0, |was| {
+        if jumped || now < was {
+            0.0
+        } else {
+            (now - was) / 60.0
+        }
+    });
     *last = Some(now);
-    let Some((player, at, effects)) = players.iter_mut().next() else { return };
+    let Some((player, at, effects)) = players.iter_mut().next() else {
+        return;
+    };
     let eye = at.translation + Vec3::Y * EYE_HEIGHT;
-    let lit = lit_level(eye, lights.iter().map(|(t, l)| (t.translation(), l)), Exposure::INDOOR.exposure());
-    let Some(intensity) = eyes.see(lit, minutes) else { return };
+    let lit = lit_level(
+        eye,
+        lights.iter().map(|(t, l)| (t.translation(), l)),
+        Exposure::INDOOR.exposure(),
+    );
+    let Some(intensity) = eyes.see(lit, minutes) else {
+        return;
+    };
     let defs = &crate::rules::GameRules::of(&rules).effects;
     match effects {
-        Some(mut effects) => effects.0.add(defs, DAZZLED, intensity, None, Source::Surroundings),
+        Some(mut effects) => effects
+            .0
+            .add(defs, DAZZLED, intensity, None, Source::Surroundings),
         None => {
             let mut fresh = Effects::default();
             fresh.add(defs, DAZZLED, intensity, None, Source::Surroundings);
@@ -123,7 +142,11 @@ mod tests {
         assert_eq!(eyes.see(0.9, 0.0), None, "the eyes have adjusted");
         eyes.see(0.02, 10.0);
         eyes.see(0.3, 5.0);
-        assert_eq!(eyes.see(0.9, 0.0), None, "five middling minutes undid ten dark ones");
+        assert_eq!(
+            eyes.see(0.9, 0.0),
+            None,
+            "five middling minutes undid ten dark ones"
+        );
     }
 
     #[test]

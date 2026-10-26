@@ -17,7 +17,10 @@ use bevy::prelude::*;
 use fb_level::webs::web_mesh;
 use fb_level::{Level, WebSpot};
 
-use crate::level::{LevelPiece, geometry::{Relief, stone::ceiling_at}};
+use crate::level::{
+    LevelPiece,
+    geometry::{Relief, stone::ceiling_at},
+};
 use crate::play::{CurrentLevel, DelveSystems};
 use crate::render::{ArmoryPart, ItemAppearance, ItemSpawner, OutlineMaterial, ToonMaterial};
 
@@ -25,7 +28,15 @@ pub struct WebsPlugin;
 
 impl Plugin for WebsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (hang_webs.run_if(resource_exists_and_changed::<CurrentLevel>), veil_webs).chain().in_set(DelveSystems));
+        app.add_systems(
+            Update,
+            (
+                hang_webs.run_if(resource_exists_and_changed::<CurrentLevel>),
+                veil_webs,
+            )
+                .chain()
+                .in_set(DelveSystems),
+        );
     }
 }
 
@@ -45,7 +56,12 @@ pub const WEB_OPACITY: f32 = 0.6;
 pub fn web_appearance(seed: u32) -> ItemAppearance {
     ItemAppearance {
         seed,
-        outline: OutlineMaterial { color: Color::srgb(0.34, 0.37, 0.40).into(), width_px: 0.5, max_width: 0.02, see_through: false },
+        outline: OutlineMaterial {
+            color: Color::srgb(0.34, 0.37, 0.40).into(),
+            width_px: 0.5,
+            max_width: 0.02,
+            see_through: false,
+        },
         ..default()
     }
 }
@@ -53,11 +69,17 @@ pub fn web_appearance(seed: u32) -> ItemAppearance {
 /// The webs' transform: on the floor under the spot, turned to its yaw.
 pub fn web_transform(relief: &Relief, spot: &WebSpot) -> Transform {
     let [x, _, z] = Level::world(spot.x, spot.y);
-    Transform::from_xyz(x, relief.floor_height(x, z), z).with_rotation(Quat::from_rotation_y(spot.yaw))
+    Transform::from_xyz(x, relief.floor_height(x, z), z)
+        .with_rotation(Quat::from_rotation_y(spot.yaw))
 }
 
 /// Spawns every web the level has, clearing the last level's.
-fn hang_webs(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<WebPiece>>, mut spawner: ItemSpawner) {
+fn hang_webs(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    old: Query<Entity, With<WebPiece>>,
+    mut spawner: ItemSpawner,
+) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
@@ -66,9 +88,16 @@ fn hang_webs(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity
     for (index, spot) in level.webs.iter().enumerate() {
         let transform = web_transform(&relief, spot);
         // A little into the vault, so a strand is anchored in the stone and not under it.
-        let roof = ceiling_at(level, transform.translation.x, transform.translation.z) - transform.translation.y + 0.3;
+        let roof = ceiling_at(level, transform.translation.x, transform.translation.z)
+            - transform.translation.y
+            + 0.3;
         let mesh = web_mesh(spot, roof);
-        spawner.spawn(&mesh, &web_appearance(index as u32)).insert((LevelPiece, WebPiece { index, spot: *spot }, Name::new(format!("{:?} web", spot.kind)), transform));
+        spawner.spawn(&mesh, &web_appearance(index as u32)).insert((
+            LevelPiece,
+            WebPiece { index, spot: *spot },
+            Name::new(format!("{:?} web", spot.kind)),
+            transform,
+        ));
     }
 }
 
@@ -102,27 +131,42 @@ mod tests {
             .init_asset::<OutlineMaterial>()
             .init_resource::<crate::render::OutlineMaterials>()
             .insert_resource(CurrentLevel(level))
-            .add_systems(Update, hang_webs.run_if(resource_exists_and_changed::<CurrentLevel>));
+            .add_systems(
+                Update,
+                hang_webs.run_if(resource_exists_and_changed::<CurrentLevel>),
+            );
         app.update();
         app
     }
 
     fn count(app: &mut App) -> usize {
-        app.world_mut().query::<&WebPiece>().iter(app.world()).count()
+        app.world_mut()
+            .query::<&WebPiece>()
+            .iter(app.world())
+            .count()
     }
 
     #[test]
     fn webs_spawn_only_for_levels_that_have_them() {
-        let nest = (1..40).map(|seed| fb_level::generate(seed, 3)).find(|l| !l.webs.is_empty()).expect("a nest within 40 seeds");
+        let nest = (1..40)
+            .map(|seed| fb_level::generate(seed, 3))
+            .find(|l| !l.webs.is_empty())
+            .expect("a nest within 40 seeds");
         let webs = nest.webs.len();
-        let bare = (1..40).map(|seed| fb_level::generate(seed, 1)).find(|l| l.webs.is_empty()).expect("a level with no webs");
+        let bare = (1..40)
+            .map(|seed| fb_level::generate(seed, 1))
+            .find(|l| l.webs.is_empty())
+            .expect("a level with no webs");
         assert_eq!(count(&mut webbed(nest)), webs);
         assert_eq!(count(&mut webbed(bare)), 0);
     }
 
     #[test]
     fn a_web_is_scoped_to_the_level() {
-        let nest = (1..40).map(|seed| fb_level::generate(seed, 3)).find(|l| !l.webs.is_empty()).unwrap();
+        let nest = (1..40)
+            .map(|seed| fb_level::generate(seed, 3))
+            .find(|l| !l.webs.is_empty())
+            .unwrap();
         let mut app = webbed(nest);
         let mut pieces = app.world_mut().query_filtered::<&bevy::state::state_scoped::DespawnOnExit<crate::launch::AppState>, With<WebPiece>>();
         assert!(pieces.iter(app.world()).count() > 0);

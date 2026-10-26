@@ -36,12 +36,20 @@ impl<K, T: Send + 'static> Fitting<K, T> {
     /// Starts `work` on the async compute pool.
     pub fn start(key: K, work: impl FnOnce() -> T + Send + 'static) -> Self {
         let pool = AsyncComputeTaskPool::get_or_init(TaskPool::default);
-        Fitting { key, task: Some(pool.spawn(async move { work() })), ready: None }
+        Fitting {
+            key,
+            task: Some(pool.spawn(async move { work() })),
+            ready: None,
+        }
     }
 
     /// A job that is done already, holding `result`: no task is spawned.
     pub fn ready(key: K, result: T) -> Self {
-        Fitting { key, task: None, ready: Some(result) }
+        Fitting {
+            key,
+            task: None,
+            ready: Some(result),
+        }
     }
 
     /// What the job was started for.
@@ -154,7 +162,13 @@ impl FitCache {
 /// under, and its whole state (wear, a torch's fuel, a bow's arrow). An item's `Debug` prints
 /// every field, floats at full precision, so two states that differ never share a key.
 pub fn item_key(slot: Slot, item: &Item) -> String {
-    format!("{slot:?}/{}/{}/{}/{}", item.base, item.seed, item.title(), shape_key(&item.shape))
+    format!(
+        "{slot:?}/{}/{}/{}/{}",
+        item.base,
+        item.seed,
+        item.title(),
+        shape_key(&item.shape)
+    )
 }
 
 /// A shape's whole state, as it enters a key.
@@ -175,7 +189,9 @@ pub fn figure_key(spec: &BodySpec, worn: &[(Slot, Item)], dirt: f32) -> String {
 
 impl<K: fmt::Debug, T> fmt::Debug for Fitting<K, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Fitting").field("key", &self.key).finish_non_exhaustive()
+        f.debug_struct("Fitting")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
     }
 }
 
@@ -212,7 +228,11 @@ mod tests {
     }
 
     fn bare() -> Arc<Figure> {
-        Arc::new(Figure::dress(&BodySpec::roll(fb_body::Folk::Human, 1), &[], 0.0))
+        Arc::new(Figure::dress(
+            &BodySpec::roll(fb_body::Folk::Human, 1),
+            &[],
+            0.0,
+        ))
     }
 
     #[test]
@@ -244,7 +264,11 @@ mod tests {
         cache.store_figure("k", figure.clone());
         assert!(Arc::ptr_eq(&cache.figure("k").unwrap(), &figure));
         assert!(cache.figure("other").is_none() && cache.held("k").is_none());
-        assert_eq!((cache.hits, cache.misses), (1, 2), "a held kit is not a figure");
+        assert_eq!(
+            (cache.hits, cache.misses),
+            (1, 2),
+            "a held kit is not a figure"
+        );
     }
 
     #[test]
@@ -253,9 +277,28 @@ mod tests {
         let mut helm = fb_items::roll_item("Helm", 5).unwrap();
         let key = figure_key(&spec, &[(Slot::Head, helm.clone())], 0.2);
         assert_eq!(key, figure_key(&spec, &[(Slot::Head, helm.clone())], 0.2));
-        assert_ne!(key, figure_key(&spec, &[(Slot::Head, helm.clone())], 0.3), "dirt");
-        assert_ne!(key, figure_key(&BodySpec { jaw: spec.jaw + 0.01, ..spec.clone() }, &[(Slot::Head, helm.clone())], 0.2), "a body field");
-        assert_ne!(key, figure_key(&spec, &[(Slot::Hip, helm.clone())], 0.2), "the slot");
+        assert_ne!(
+            key,
+            figure_key(&spec, &[(Slot::Head, helm.clone())], 0.3),
+            "dirt"
+        );
+        assert_ne!(
+            key,
+            figure_key(
+                &BodySpec {
+                    jaw: spec.jaw + 0.01,
+                    ..spec.clone()
+                },
+                &[(Slot::Head, helm.clone())],
+                0.2
+            ),
+            "a body field"
+        );
+        assert_ne!(
+            key,
+            figure_key(&spec, &[(Slot::Hip, helm.clone())], 0.2),
+            "the slot"
+        );
         let mut condition = helm.shape.condition();
         condition.wear += if condition.wear > 0.5 { -0.1 } else { 0.1 };
         helm.shape.set_condition(condition);
@@ -263,13 +306,19 @@ mod tests {
         assert_ne!(key, worn, "wear");
         let mut cache = FitCache::default();
         cache.store_figure(&key, bare());
-        assert!(cache.figure(&worn).is_none(), "the worn helm is fitted again");
+        assert!(
+            cache.figure(&worn).is_none(),
+            "the worn helm is fitted again"
+        );
     }
 
     #[test]
     fn a_cached_figure_is_what_a_fresh_dressing_makes() {
         let spec = BodySpec::roll(fb_body::Folk::Dwarf, 7);
-        let worn = fb_items::outfit::outfit("fighter").unwrap().roll(7, fb_body::Folk::Dwarf.key()).worn;
+        let worn = fb_items::outfit::outfit("fighter")
+            .unwrap()
+            .roll(7, fb_body::Folk::Dwarf.key())
+            .worn;
         let key = figure_key(&spec, &worn, 0.3);
         let mut cache = FitCache::default();
         cache.store_figure(&key, Arc::new(Figure::dress(&spec, &worn, 0.3)));
@@ -286,7 +335,9 @@ mod tests {
         world.insert_resource(cache);
         world.init_resource::<crate::inventory::DollStage>();
         world.init_resource::<crate::inventory::icon::IconCache>();
-        world.run_system_once(crate::inventory::leave_the_delve).unwrap();
+        world
+            .run_system_once(crate::inventory::leave_the_delve)
+            .unwrap();
         assert!(world.resource::<FitCache>().is_empty());
     }
 }

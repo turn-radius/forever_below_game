@@ -70,9 +70,21 @@ const FLAT_TILT: f32 = 0.6;
 const MIN_FILL: f32 = 0.5;
 /// The Armory's plate, ink and accent (`--plate`, `--plate-ink` and `--accent` in
 /// `reference/spline-armory.html`), so items read against it as they do there.
-pub const PLATE: Color = Color::srgb(0xdf as f32 / 255.0, 0xe3 as f32 / 255.0, 0xe0 as f32 / 255.0);
-pub const PLATE_INK: Color = Color::srgb(0x1c as f32 / 255.0, 0x23 as f32 / 255.0, 0x26 as f32 / 255.0);
-const ACCENT: Color = Color::srgb(0x2e as f32 / 255.0, 0x6b as f32 / 255.0, 0x62 as f32 / 255.0);
+pub const PLATE: Color = Color::srgb(
+    0xdf as f32 / 255.0,
+    0xe3 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
+);
+pub const PLATE_INK: Color = Color::srgb(
+    0x1c as f32 / 255.0,
+    0x23 as f32 / 255.0,
+    0x26 as f32 / 255.0,
+);
+const ACCENT: Color = Color::srgb(
+    0x2e as f32 / 255.0,
+    0x6b as f32 / 255.0,
+    0x62 as f32 / 255.0,
+);
 
 /// Shows the [`Turntable`] page: add with the resource set from [`Turntable::from_args`] or
 /// left at its default, and optionally a [`Focus`] to open on a close-up.
@@ -115,7 +127,11 @@ pub struct Turntable {
 
 impl Default for Turntable {
     fn default() -> Self {
-        Turntable { family: Family::Mace, first_seed: DEFAULT_SEED, wear: ConditionState::Pristine }
+        Turntable {
+            family: Family::Mace,
+            first_seed: DEFAULT_SEED,
+            wear: ConditionState::Pristine,
+        }
     }
 }
 
@@ -130,12 +146,19 @@ impl Turntable {
                 Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
                 None => (arg, None),
             };
-            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| args.next())
+                    .ok_or(format!("{flag} needs a value"))
+            };
             match flag.as_str() {
                 "--family" => turntable.family = parse_family(&value()?)?,
                 "--seed" => {
                     let seed = value()?;
-                    turntable.first_seed = seed.parse().map_err(|_| format!("--seed: {seed:?} is not a u32"))?;
+                    turntable.first_seed = seed
+                        .parse()
+                        .map_err(|_| format!("--seed: {seed:?} is not a u32"))?;
                 }
                 "--wear" => turntable.wear = parse_wear(&value()?)?,
                 other => return Err(format!("unknown argument {other:?}")),
@@ -146,7 +169,10 @@ impl Turntable {
 
     /// [`Turntable::from_args`] with `wear` (the `FB_WEAR` variable) as the starting
     /// condition; a `--wear` flag wins. Unset or empty, the turntable opens pristine.
-    pub fn from_wear_and_args(wear: Option<String>, args: impl IntoIterator<Item = String>) -> Result<Turntable, String> {
+    pub fn from_wear_and_args(
+        wear: Option<String>,
+        args: impl IntoIterator<Item = String>,
+    ) -> Result<Turntable, String> {
         let wear = wear.filter(|w| !w.is_empty());
         if let Some(wear) = &wear {
             parse_wear(wear).map_err(|e| format!("FB_WEAR: {e}"))?;
@@ -169,7 +195,9 @@ impl Turntable {
 
     /// Moves `pages` grids forward (negative: back).
     pub fn page(&mut self, pages: i32) {
-        self.first_seed = self.first_seed.wrapping_add_signed(pages.wrapping_mul(PAGE as i32));
+        self.first_seed = self
+            .first_seed
+            .wrapping_add_signed(pages.wrapping_mul(PAGE as i32));
     }
 
     /// Steps `by` places through [`Item::PORTED`], wrapping.
@@ -181,7 +209,10 @@ impl Turntable {
 
     /// The next of [`WEAR_STEPS`], back to pristine after a grave find.
     pub fn step_wear(&mut self) {
-        let at = WEAR_STEPS.iter().position(|&w| w == self.wear).map_or(0, |i| i + 1);
+        let at = WEAR_STEPS
+            .iter()
+            .position(|&w| w == self.wear)
+            .map_or(0, |i| i + 1);
         self.wear = WEAR_STEPS[at % WEAR_STEPS.len()];
     }
 
@@ -190,8 +221,15 @@ impl Turntable {
     pub fn appearance(&self, item: &Item) -> ItemAppearance {
         let own = item.condition();
         ItemAppearance {
-            palette: ItemPalette { materials: item.palette(), ..ItemPalette::ARMORY },
-            condition: Condition { scale: own.scale, broken: own.broken, ..Condition::of(self.wear) },
+            palette: ItemPalette {
+                materials: item.palette(),
+                ..ItemPalette::ARMORY
+            },
+            condition: Condition {
+                scale: own.scale,
+                broken: own.broken,
+                ..Condition::of(self.wear)
+            },
             seed: item.seed(),
             etching: item.etching(),
             ..default()
@@ -211,11 +249,21 @@ pub struct Focus {
 impl Focus {
     /// A close-up of grid slot `slot`, given as text (the `FB_CLOSEUP` variable).
     pub fn close_up_on(slot: &str) -> Result<Focus, String> {
-        let index: usize = slot.trim().parse().map_err(|_| format!("{slot:?} is not a slot number"))?;
+        let index: usize = slot
+            .trim()
+            .parse()
+            .map_err(|_| format!("{slot:?} is not a slot number"))?;
         if index >= PAGE as usize {
-            return Err(format!("slot {index} is off the page; slots run 0 to {}", PAGE - 1));
+            return Err(format!(
+                "slot {index} is off the page; slots run 0 to {}",
+                PAGE - 1
+            ));
         }
-        Ok(Focus { slot: index, close_up: true, ..default() })
+        Ok(Focus {
+            slot: index,
+            close_up: true,
+            ..default()
+        })
     }
 
     /// Closes in on the selected slot, or goes back to the grid. Each close-up starts square
@@ -256,7 +304,11 @@ pub struct Orbit {
 
 impl Default for Orbit {
     fn default() -> Self {
-        Orbit { yaw: 0.0, pitch: 0.0, zoom: 1.0 }
+        Orbit {
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
+        }
     }
 }
 
@@ -271,7 +323,8 @@ impl Orbit {
     /// above.
     pub fn drag(&mut self, pixels: Vec2) {
         self.yaw -= pixels.x * Self::DRAG_SPEED;
-        self.pitch = (self.pitch + pixels.y * Self::DRAG_SPEED).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
+        self.pitch =
+            (self.pitch + pixels.y * Self::DRAG_SPEED).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
     }
 
     /// Zooms in `steps` scroll lines (negative: out), 10% a line.
@@ -287,18 +340,36 @@ impl Orbit {
 
 /// A family by its [`Family::key`]; it must be ported.
 pub fn parse_family(key: &str) -> Result<Family, String> {
-    let ported = || Item::PORTED.iter().map(|f| f.key()).collect::<Vec<_>>().join(", ");
+    let ported = || {
+        Item::PORTED
+            .iter()
+            .map(|f| f.key())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let family = Family::ALL
         .into_iter()
         .find(|f| f.key().eq_ignore_ascii_case(key))
         .ok_or_else(|| format!("unknown family {key:?}; ported: {}", ported()))?;
-    if family.is_ported() { Ok(family) } else { Err(format!("{} is not ported yet; ported: {}", family.key(), ported())) }
+    if family.is_ported() {
+        Ok(family)
+    } else {
+        Err(format!(
+            "{} is not ported yet; ported: {}",
+            family.key(),
+            ported()
+        ))
+    }
 }
 
 /// A condition preset by name, ignoring case, `_`, `-` and spaces: `gravefind`, `grave_find`,
 /// `Battle-worn`.
 pub fn parse_wear(name: &str) -> Result<ConditionState, String> {
-    let wanted: String = name.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    let wanted: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
     WEAR_STEPS
         .into_iter()
         .find(|&w| wear_name(w).chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase() == wanted)
@@ -346,7 +417,10 @@ impl GridPose {
         // Within a few percent of true size is left at true size, so the label's note means
         // something.
         let scale = fit * MIN_FILL;
-        GridPose { tilt, scale: if scale > 1.05 { scale } else { 1.0 } }
+        GridPose {
+            tilt,
+            scale: if scale > 1.05 { scale } else { 1.0 },
+        }
     }
 
     /// Whether the grid shows the item larger than life.
@@ -363,7 +437,11 @@ impl GridPose {
 /// How far an item of bounds `size` tips toward the grid camera: [`FLAT_TILT`] if it lies
 /// flat, otherwise none.
 pub fn grid_tilt(size: Vec3) -> f32 {
-    if size.y < FLAT_SHARE * size.x.hypot(size.z) { FLAT_TILT } else { 0.0 }
+    if size.y < FLAT_SHARE * size.x.hypot(size.z) {
+        FLAT_TILT
+    } else {
+        0.0
+    }
 }
 
 /// The width and height an item of bounds `size` takes on screen as it spins about its
@@ -378,7 +456,11 @@ pub fn grid_box(size: Vec3, tilt: f32) -> Vec2 {
 /// metres beyond (1 world unit = 10 cm).
 pub fn true_size(size: Vec3) -> String {
     let cm = size.max_element() * 10.0;
-    if cm < 100.0 { format!("{cm:.0} cm") } else { format!("{:.1} m", cm / 100.0) }
+    if cm < 100.0 {
+        format!("{cm:.0} cm")
+    } else {
+        format!("{:.1} m", cm / 100.0)
+    }
 }
 
 /// Spin angle shared by every slot, so rebuilding a page keeps the motion continuous.
@@ -418,12 +500,26 @@ impl PageLayout {
         let grid = Vec2::new(COLUMNS as f32, ROWS as f32);
         let item_box = item * (1.0 + ITEM_MARGIN);
         // Pixels left for the items once margins and labels are taken.
-        let room = viewport - Vec2::new(2.0 * EDGE_MARGIN, STATUS_HEIGHT + EDGE_MARGIN + ROWS as f32 * LABEL_HEIGHT);
-        let pixel = (item_box * grid / room.max(Vec2::ONE)).max_element().max(f32::EPSILON);
+        let room = viewport
+            - Vec2::new(
+                2.0 * EDGE_MARGIN,
+                STATUS_HEIGHT + EDGE_MARGIN + ROWS as f32 * LABEL_HEIGHT,
+            );
+        let pixel = (item_box * grid / room.max(Vec2::ONE))
+            .max_element()
+            .max(f32::EPSILON);
         // A narrow window gives up label room before the grid runs off the sides.
         let min_cell_width = MIN_CELL_WIDTH.min(room.x / grid.x);
-        let cell = Vec2::new(item_box.x.max(min_cell_width * pixel), item_box.y + LABEL_HEIGHT * pixel);
-        PageLayout { item, viewport, pixel, cell }
+        let cell = Vec2::new(
+            item_box.x.max(min_cell_width * pixel),
+            item_box.y + LABEL_HEIGHT * pixel,
+        );
+        PageLayout {
+            item,
+            viewport,
+            pixel,
+            cell,
+        }
     }
 
     /// Centre of grid cell `index` (row-major from top left).
@@ -452,12 +548,20 @@ impl PageLayout {
     }
 
     /// The cell under viewport point `cursor`, if any.
-    fn cell_at(&self, cursor: Vec2, camera: &Camera, camera_transform: &GlobalTransform) -> Option<usize> {
+    fn cell_at(
+        &self,
+        cursor: Vec2,
+        camera: &Camera,
+        camera_transform: &GlobalTransform,
+    ) -> Option<usize> {
         let half = (self.cell * 0.5).extend(0.0);
         (0..PAGE as usize).find(|&index| {
             let centre = self.cell_centre(index);
-            let corners = [centre - half, centre + half].map(|c| camera.world_to_viewport(camera_transform, c));
-            let [Ok(bottom_left), Ok(top_right)] = corners else { return false };
+            let corners = [centre - half, centre + half]
+                .map(|c| camera.world_to_viewport(camera_transform, c));
+            let [Ok(bottom_left), Ok(top_right)] = corners else {
+                return false;
+            };
             Rect::from_corners(bottom_left, top_right).contains(cursor)
         })
     }
@@ -513,17 +617,31 @@ fn setup(mut commands: Commands) {
         Text::default(),
         TextFont::from_font_size(18.0),
         TextColor(PLATE_INK),
-        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(16.0),
+            left: px(20.0),
+            ..default()
+        },
     ));
     commands.spawn((
         SelectionFrame,
-        Node { position_type: PositionType::Absolute, border: UiRect::all(px(2.0)), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            border: UiRect::all(px(2.0)),
+            ..default()
+        },
         BorderColor::all(ACCENT),
         Visibility::Hidden,
     ));
 }
 
-fn keys(keys: Res<ButtonInput<KeyCode>>, mut turntable: ResMut<Turntable>, mut focus: ResMut<Focus>, mut spin: ResMut<Spin>) {
+fn keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut turntable: ResMut<Turntable>,
+    mut focus: ResMut<Focus>,
+    mut spin: ResMut<Spin>,
+) {
     let pressed = |key| keys.just_pressed(key);
     if pressed(KeyCode::ArrowRight) {
         focus.step(1, &mut turntable);
@@ -599,11 +717,15 @@ fn hover(
     let moved = cursor != *last_cursor;
     *last_cursor = cursor;
     let clicked = buttons.just_pressed(MouseButton::Left);
-    let (Some(cursor), Ok((camera, camera_transform))) = (cursor, cameras.single()) else { return };
+    let (Some(cursor), Ok((camera, camera_transform))) = (cursor, cameras.single()) else {
+        return;
+    };
     if !(moved || clicked) {
         return;
     }
-    let Some(cell) = layout.cell_at(cursor, camera, camera_transform) else { return };
+    let Some(cell) = layout.cell_at(cursor, camera, camera_transform) else {
+        return;
+    };
     if focus.slot != cell {
         focus.slot = cell;
     }
@@ -623,14 +745,25 @@ fn show_page(
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    let items: Vec<(u32, Option<Item>)> = turntable.seeds().map(|seed| (seed, roll_for_page(turntable.family, seed))).collect();
-    let meshes: Vec<_> = items.iter().map(|(_, item)| item.as_ref().map(Item::build).unwrap_or_default()).collect();
+    let items: Vec<(u32, Option<Item>)> = turntable
+        .seeds()
+        .map(|seed| (seed, roll_for_page(turntable.family, seed)))
+        .collect();
+    let meshes: Vec<_> = items
+        .iter()
+        .map(|(_, item)| item.as_ref().map(Item::build).unwrap_or_default())
+        .collect();
     let bounds: Vec<_> = meshes.iter().map(item_bounds).collect();
-    let sizes: Vec<Vec3> = bounds.iter().map(|b| b.map_or(FALLBACK_ITEM_SIZE, |b| Vec3::from(b.max - b.min))).collect();
+    let sizes: Vec<Vec3> = bounds
+        .iter()
+        .map(|b| b.map_or(FALLBACK_ITEM_SIZE, |b| Vec3::from(b.max - b.min)))
+        .collect();
     let largest = page_box(&sizes);
     *layout = PageLayout::fit(largest, layout.viewport);
 
-    for (index, (((seed, item), mesh), bounds)) in items.iter().zip(&meshes).zip(&bounds).enumerate() {
+    for (index, (((seed, item), mesh), bounds)) in
+        items.iter().zip(&meshes).zip(&bounds).enumerate()
+    {
         let centre = layout.slot(index);
         let size = sizes[index];
         let pose = GridPose::of(size, largest);
@@ -648,22 +781,41 @@ fn show_page(
             TextFont::from_font_size(17.0),
             TextColor(PLATE_INK),
             TextLayout::justify(Justify::Center),
-            Node { position_type: PositionType::Absolute, width: px(LABEL_WIDTH), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(LABEL_WIDTH),
+                ..default()
+            },
             // Hidden until `place_labels` has a camera position for it.
             Visibility::Hidden,
         ));
         let Some(item) = item else { continue };
         let slot = commands
-            .spawn((OnPage, Slot { index, size, pose }, Transform::from_translation(centre), Visibility::default()))
+            .spawn((
+                OnPage,
+                Slot { index, size, pose },
+                Transform::from_translation(centre),
+                Visibility::default(),
+            ))
             .id();
-        let offset = bounds.map_or(Vec3::Y * -FALLBACK_ITEM_SIZE.y * 0.5, |b| -Vec3::from(b.center()));
-        spawner.spawn(mesh, &turntable.appearance(item)).insert((Transform::from_translation(offset), ChildOf(slot)));
+        let offset = bounds.map_or(Vec3::Y * -FALLBACK_ITEM_SIZE.y * 0.5, |b| {
+            -Vec3::from(b.center())
+        });
+        spawner
+            .spawn(mesh, &turntable.appearance(item))
+            .insert((Transform::from_translation(offset), ChildOf(slot)));
     }
 }
 
 /// Refits the grid when the viewport changes size.
 fn fit_page(cameras: Query<&Camera, With<TurntableCamera>>, mut layout: ResMut<PageLayout>) {
-    let Some(viewport) = cameras.single().ok().and_then(Camera::logical_viewport_size) else { return };
+    let Some(viewport) = cameras
+        .single()
+        .ok()
+        .and_then(Camera::logical_viewport_size)
+    else {
+        return;
+    };
     if viewport != layout.viewport {
         *layout = PageLayout::fit(layout.item, viewport);
     }
@@ -682,7 +834,11 @@ fn place_slots(layout: Res<PageLayout>, mut slots: Query<(&Slot, &mut Transform)
 /// The largest [`grid_box`] among items of bounds `sizes`, axis by axis, each tipped as
 /// [`grid_tilt`] says.
 fn page_box(sizes: &[Vec3]) -> Vec2 {
-    sizes.iter().map(|&s| grid_box(s, grid_tilt(s))).reduce(Vec2::max).unwrap_or(grid_box(FALLBACK_ITEM_SIZE, 0.0))
+    sizes
+        .iter()
+        .map(|&s| grid_box(s, grid_tilt(s)))
+        .reduce(Vec2::max)
+        .unwrap_or(grid_box(FALLBACK_ITEM_SIZE, 0.0))
 }
 
 /// How full quivers and bolt cases are on the page: full, half, empty, by seed.
@@ -697,7 +853,11 @@ fn item_name(family: Family, item: Option<&Item>) -> String {
     item.map_or_else(|| format!("{} (not ported)", family.key()), Item::noun)
 }
 
-fn show_status(turntable: Res<Turntable>, focus: Res<Focus>, mut status: Query<&mut Text, With<StatusLine>>) {
+fn show_status(
+    turntable: Res<Turntable>,
+    focus: Res<Focus>,
+    mut status: Query<&mut Text, With<StatusLine>>,
+) {
     if !(turntable.is_changed() || focus.is_changed()) {
         return;
     }
@@ -705,7 +865,10 @@ fn show_status(turntable: Res<Turntable>, focus: Res<Focus>, mut status: Query<&
         let seed = turntable.seed(focus.slot);
         format!(
             "{}   seed {seed}   {}\nLeft/Right item   Drag orbit   Scroll zoom   W wear   Space pause   Enter or Esc back",
-            item_name(turntable.family, roll_for_page(turntable.family, seed).as_ref()),
+            item_name(
+                turntable.family,
+                roll_for_page(turntable.family, seed).as_ref()
+            ),
             wear_name(turntable.wear),
         )
     } else {
@@ -724,14 +887,26 @@ fn show_status(turntable: Res<Turntable>, focus: Res<Focus>, mut status: Query<&
 
 /// Turns every slot; on the grid each also takes its [`GridPose`], in the close-up it stands
 /// level at true size.
-fn spin(time: Res<Time>, focus: Res<Focus>, mut state: ResMut<Spin>, mut slots: Query<(&Slot, &mut Transform)>) {
+fn spin(
+    time: Res<Time>,
+    focus: Res<Focus>,
+    mut state: ResMut<Spin>,
+    mut slots: Query<(&Slot, &mut Transform)>,
+) {
     if !state.paused {
         state.angle = (state.angle + SPIN_SPEED * time.delta_secs()) % std::f32::consts::TAU;
     }
     for (slot, mut transform) in &mut slots {
         // Offset each slot so the grid shows items at different angles.
         let angle = state.angle + slot.index as f32 * 0.7;
-        let pose = if focus.close_up { GridPose { tilt: 0.0, scale: 1.0 } } else { slot.pose };
+        let pose = if focus.close_up {
+            GridPose {
+                tilt: 0.0,
+                scale: 1.0,
+            }
+        } else {
+            slot.pose
+        };
         transform.rotation = pose.rotation(angle);
         transform.scale = Vec3::splat(pose.scale);
     }
@@ -741,7 +916,11 @@ fn spin(time: Res<Time>, focus: Res<Focus>, mut state: ResMut<Spin>, mut slots: 
 fn show_focus(focus: Res<Focus>, mut slots: Query<(&Slot, &mut Visibility)>) {
     for (slot, mut visibility) in &mut slots {
         let shown = !focus.close_up || slot.index == focus.slot;
-        visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+        visibility.set_if_neq(if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 
@@ -754,17 +933,22 @@ fn frame_camera(
     slots: Query<(&Slot, &Transform), Without<TurntableCamera>>,
     mut cameras: Query<(&mut Projection, &mut Transform), With<TurntableCamera>>,
 ) {
-    let selected = slots.iter().find(|(slot, _)| focus.close_up && slot.index == focus.slot);
+    let selected = slots
+        .iter()
+        .find(|(slot, _)| focus.close_up && slot.index == focus.slot);
     for (mut projection, mut transform) in &mut cameras {
         let target = match selected {
             Some((slot, pivot)) => {
                 if !matches!(*projection, Projection::Perspective(_)) {
                     *projection = Projection::Perspective(default());
                 }
-                let Projection::Perspective(perspective) = &*projection else { continue };
+                let Projection::Perspective(perspective) = &*projection else {
+                    continue;
+                };
                 let centre = pivot.translation;
                 let distance = framing_distance(slot.size, perspective, CLOSE_UP_FILL);
-                Transform::from_translation(centre + focus.orbit.offset(distance)).looking_at(centre, Vec3::Y)
+                Transform::from_translation(centre + focus.orbit.offset(distance))
+                    .looking_at(centre, Vec3::Y)
             }
             None => {
                 let (height, centre) = layout.view();
@@ -777,11 +961,14 @@ fn frame_camera(
                 };
                 if current != Some(height) {
                     *projection = Projection::Orthographic(OrthographicProjection {
-                        scaling_mode: ScalingMode::FixedVertical { viewport_height: height },
+                        scaling_mode: ScalingMode::FixedVertical {
+                            viewport_height: height,
+                        },
                         ..OrthographicProjection::default_3d()
                     });
                 }
-                Transform::from_translation(centre + Vec3::Z * GRID_CAMERA_DISTANCE).looking_at(centre, Vec3::Y)
+                Transform::from_translation(centre + Vec3::Z * GRID_CAMERA_DISTANCE)
+                    .looking_at(centre, Vec3::Y)
             }
         };
         if *transform != target {
@@ -797,13 +984,17 @@ fn place_labels(
     cameras: Query<(&Camera, &GlobalTransform), With<TurntableCamera>>,
     mut labels: Query<(&Label, &mut Node, &mut Visibility)>,
 ) {
-    let Ok((camera, camera_transform)) = cameras.single() else { return };
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
     for (label, mut node, mut visibility) in &mut labels {
         if focus.close_up {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
-        let Ok(at) = camera.world_to_viewport(camera_transform, layout.label(label.index)) else { continue };
+        let Ok(at) = camera.world_to_viewport(camera_transform, layout.label(label.index)) else {
+            continue;
+        };
         node.left = px(at.x - LABEL_WIDTH * 0.5);
         node.top = px(at.y);
         visibility.set_if_neq(Visibility::Inherited);
@@ -817,13 +1008,18 @@ fn place_selection(
     cameras: Query<(&Camera, &GlobalTransform), With<TurntableCamera>>,
     mut frames: Query<(&mut Node, &mut Visibility), With<SelectionFrame>>,
 ) {
-    let Ok((camera, camera_transform)) = cameras.single() else { return };
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
     let centre = layout.cell_centre(focus.slot);
     // The whole cell, label and all, inset a few pixels so neighbouring frames don't touch.
     let half = (layout.cell * 0.5 - 3.0 * layout.pixel).extend(0.0);
-    let corners = [centre - half, centre + half].map(|c| camera.world_to_viewport(camera_transform, c));
+    let corners =
+        [centre - half, centre + half].map(|c| camera.world_to_viewport(camera_transform, c));
     for (mut node, mut visibility) in &mut frames {
-        let [Ok(bottom_left), Ok(top_right)] = corners else { continue };
+        let [Ok(bottom_left), Ok(top_right)] = corners else {
+            continue;
+        };
         if focus.close_up {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
@@ -848,14 +1044,32 @@ mod tests {
     #[test]
     fn defaults_to_maces_from_1207() {
         let turntable = Turntable::from_args(Vec::new()).unwrap();
-        assert_eq!(turntable, Turntable { family: Family::Mace, first_seed: 1207, wear: ConditionState::Pristine });
-        assert_eq!(turntable.seeds().collect::<Vec<_>>(), (1207..1219).collect::<Vec<_>>());
+        assert_eq!(
+            turntable,
+            Turntable {
+                family: Family::Mace,
+                first_seed: 1207,
+                wear: ConditionState::Pristine
+            }
+        );
+        assert_eq!(
+            turntable.seeds().collect::<Vec<_>>(),
+            (1207..1219).collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn parses_the_command_line() {
-        let turntable = Turntable::from_args(args("--family mace --seed=42 --wear grave_find")).unwrap();
-        assert_eq!(turntable, Turntable { family: Family::Mace, first_seed: 42, wear: ConditionState::GraveFind });
+        let turntable =
+            Turntable::from_args(args("--family mace --seed=42 --wear grave_find")).unwrap();
+        assert_eq!(
+            turntable,
+            Turntable {
+                family: Family::Mace,
+                first_seed: 42,
+                wear: ConditionState::GraveFind
+            }
+        );
         assert!(Turntable::from_args(args("--family wand")).is_err());
         assert!(Turntable::from_args(args("--seed")).is_err());
         assert!(Turntable::from_args(args("--seed -3")).is_err());
@@ -879,13 +1093,20 @@ mod tests {
         assert_eq!(turntable.first_seed, 1207 + PAGE);
         turntable.page(-1);
         assert_eq!(turntable, start);
-        let rolled = |t: &Turntable| t.seeds().map(|s| Item::roll(t.family, s)).collect::<Vec<_>>();
+        let rolled = |t: &Turntable| {
+            t.seeds()
+                .map(|s| Item::roll(t.family, s))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(rolled(&turntable), rolled(&start));
     }
 
     #[test]
     fn paging_wraps_at_the_ends_of_the_seed_range() {
-        let mut turntable = Turntable { first_seed: 3, ..default() };
+        let mut turntable = Turntable {
+            first_seed: 3,
+            ..default()
+        };
         turntable.page(-1);
         assert_eq!(turntable.first_seed, 3u32.wrapping_sub(PAGE));
         turntable.page(1);
@@ -894,7 +1115,10 @@ mod tests {
 
     #[test]
     fn switching_family_and_back_restores_the_view() {
-        let start = Turntable { first_seed: 900, ..default() };
+        let start = Turntable {
+            first_seed: 900,
+            ..default()
+        };
         let mut turntable = start;
         turntable.step_family(1);
         turntable.step_family(-1);
@@ -904,23 +1128,41 @@ mod tests {
 
     #[test]
     fn opens_pristine_unless_wear_is_asked_for() {
-        let open = |wear: Option<&str>, line: &str| Turntable::from_wear_and_args(wear.map(String::from), args(line)).unwrap().wear;
+        let open = |wear: Option<&str>, line: &str| {
+            Turntable::from_wear_and_args(wear.map(String::from), args(line))
+                .unwrap()
+                .wear
+        };
         assert_eq!(open(None, "--family mace"), ConditionState::Pristine);
         assert_eq!(open(Some(""), "--family mace"), ConditionState::Pristine);
-        assert_eq!(open(Some("neglected"), "--family mace"), ConditionState::Neglected);
-        assert_eq!(open(Some("neglected"), "--wear pristine"), ConditionState::Pristine);
+        assert_eq!(
+            open(Some("neglected"), "--family mace"),
+            ConditionState::Neglected
+        );
+        assert_eq!(
+            open(Some("neglected"), "--wear pristine"),
+            ConditionState::Pristine
+        );
         assert!(Turntable::from_wear_and_args(Some("muddy".into()), args("")).is_err());
     }
 
     /// Presses W twice, as typing into the window a capture opens can, and returns the wear.
     fn wear_after_typing(app: &mut App) -> ConditionState {
-        use bevy::input::{ButtonState, InputPlugin, keyboard::{Key, KeyboardInput}};
+        use bevy::input::{
+            ButtonState, InputPlugin,
+            keyboard::{Key, KeyboardInput},
+        };
         app.add_plugins((MinimalPlugins, InputPlugin))
             .init_resource::<Turntable>()
             .init_resource::<Focus>()
             .init_resource::<Spin>()
             .add_systems(Update, keys);
-        for state in [ButtonState::Pressed, ButtonState::Released, ButtonState::Pressed, ButtonState::Released] {
+        for state in [
+            ButtonState::Pressed,
+            ButtonState::Released,
+            ButtonState::Pressed,
+            ButtonState::Released,
+        ] {
             app.world_mut().write_message(KeyboardInput {
                 key_code: KeyCode::KeyW,
                 logical_key: Key::Character("w".into()),
@@ -936,7 +1178,10 @@ mod tests {
 
     #[test]
     fn typed_w_steps_the_wear() {
-        assert_eq!(wear_after_typing(&mut App::new()), ConditionState::BattleWorn);
+        assert_eq!(
+            wear_after_typing(&mut App::new()),
+            ConditionState::BattleWorn
+        );
     }
 
     #[test]
@@ -961,7 +1206,10 @@ mod tests {
     #[test]
     fn appearance_keeps_the_items_own_look() {
         let item = Item::roll(Family::Mace, 1207).unwrap();
-        let turntable = Turntable { wear: ConditionState::GraveFind, ..default() };
+        let turntable = Turntable {
+            wear: ConditionState::GraveFind,
+            ..default()
+        };
         let appearance = turntable.appearance(&item);
         assert_eq!(appearance.palette.materials, item.palette());
         assert_eq!(appearance.seed, 1207);
@@ -972,18 +1220,27 @@ mod tests {
     #[test]
     fn selection_turns_the_page_off_either_end() {
         let mut turntable = Turntable::default();
-        let mut focus = Focus { slot: PAGE as usize - 1, ..default() };
+        let mut focus = Focus {
+            slot: PAGE as usize - 1,
+            ..default()
+        };
         focus.step(1, &mut turntable);
         assert_eq!((focus.slot, turntable.first_seed), (0, 1207 + PAGE));
         focus.step(-1, &mut turntable);
-        assert_eq!((focus.slot, turntable.first_seed), (PAGE as usize - 1, 1207));
+        assert_eq!(
+            (focus.slot, turntable.first_seed),
+            (PAGE as usize - 1, 1207)
+        );
         focus.step(-5, &mut turntable);
         assert_eq!((focus.slot, turntable.first_seed), (6, 1207));
     }
 
     #[test]
     fn rows_stop_at_the_top_and_bottom() {
-        let mut focus = Focus { slot: 1, ..default() };
+        let mut focus = Focus {
+            slot: 1,
+            ..default()
+        };
         focus.step_row(-1);
         assert_eq!(focus.slot, 1);
         focus.step_row(1);
@@ -994,19 +1251,35 @@ mod tests {
 
     #[test]
     fn close_up_toggles_back_to_the_same_page_square_on() {
-        let mut focus = Focus { slot: 4, ..default() };
+        let mut focus = Focus {
+            slot: 4,
+            ..default()
+        };
         focus.toggle_close_up();
         focus.orbit.drag(Vec2::new(120.0, -40.0));
         focus.orbit.zoom_by(3.0);
         focus.toggle_close_up();
-        assert_eq!(focus, Focus { slot: 4, ..default() });
+        assert_eq!(
+            focus,
+            Focus {
+                slot: 4,
+                ..default()
+            }
+        );
         focus.toggle_close_up();
         assert_eq!(focus.orbit, Orbit::default());
     }
 
     #[test]
     fn close_up_slot_comes_from_the_environment() {
-        assert_eq!(Focus::close_up_on("0"), Ok(Focus { slot: 0, close_up: true, ..default() }));
+        assert_eq!(
+            Focus::close_up_on("0"),
+            Ok(Focus {
+                slot: 0,
+                close_up: true,
+                ..default()
+            })
+        );
         assert_eq!(Focus::close_up_on(" 11 ").map(|f| f.slot), Ok(11));
         assert!(Focus::close_up_on("12").is_err());
         assert!(Focus::close_up_on("first").is_err());
@@ -1034,14 +1307,26 @@ mod tests {
         ] {
             let layout = PageLayout::fit(grid_box(item, 0.0), viewport);
             let swept = item.x.hypot(item.z);
-            assert!(swept <= layout.cell.x, "{item}: the turning item is wider than its cell");
+            assert!(
+                swept <= layout.cell.x,
+                "{item}: the turning item is wider than its cell"
+            );
             for index in 0..PAGE as usize {
                 let centre = layout.cell_centre(index);
                 let (slot, label) = (layout.slot(index), layout.label(index));
-                assert!(slot.y + item.y * 0.5 <= centre.y + layout.cell.y * 0.5 + 1e-4, "{item}: top leaves the cell");
-                assert!(slot.y - item.y * 0.5 >= label.y - 1e-4, "{item}: item runs into its label");
+                assert!(
+                    slot.y + item.y * 0.5 <= centre.y + layout.cell.y * 0.5 + 1e-4,
+                    "{item}: top leaves the cell"
+                );
+                assert!(
+                    slot.y - item.y * 0.5 >= label.y - 1e-4,
+                    "{item}: item runs into its label"
+                );
                 let label_bottom = label.y - LABEL_HEIGHT * layout.pixel;
-                assert!(label_bottom >= centre.y - layout.cell.y * 0.5 - 1e-4, "{item}: label leaves the cell");
+                assert!(
+                    label_bottom >= centre.y - layout.cell.y * 0.5 - 1e-4,
+                    "{item}: label leaves the cell"
+                );
             }
         }
     }
@@ -1054,15 +1339,27 @@ mod tests {
             let half = Vec2::new(height * viewport.x / viewport.y, height) * 0.5;
             let grid = layout.cell * Vec2::new(COLUMNS as f32, ROWS as f32) * 0.5;
             let eps = 1e-3;
-            assert!(grid.y <= centre.y + half.y - STATUS_HEIGHT * layout.pixel + eps, "{viewport}: grid under the status line");
-            assert!(-grid.y >= centre.y - half.y + EDGE_MARGIN * layout.pixel - eps, "{viewport}: grid off the bottom");
-            assert!(grid.x <= half.x - EDGE_MARGIN * layout.pixel + eps, "{viewport}: grid off the sides");
+            assert!(
+                grid.y <= centre.y + half.y - STATUS_HEIGHT * layout.pixel + eps,
+                "{viewport}: grid under the status line"
+            );
+            assert!(
+                -grid.y >= centre.y - half.y + EDGE_MARGIN * layout.pixel - eps,
+                "{viewport}: grid off the bottom"
+            );
+            assert!(
+                grid.x <= half.x - EDGE_MARGIN * layout.pixel + eps,
+                "{viewport}: grid off the sides"
+            );
         }
     }
 
     #[test]
     fn close_up_fills_the_view() {
-        let perspective = PerspectiveProjection { aspect_ratio: 16.0 / 9.0, ..default() };
+        let perspective = PerspectiveProjection {
+            aspect_ratio: 16.0 / 9.0,
+            ..default()
+        };
         let size = Vec3::new(1.0, 8.0, 1.0);
         let distance = framing_distance(size, &perspective, 0.8);
         let radius = size.x.hypot(size.z) * 0.5;
@@ -1086,13 +1383,19 @@ mod tests {
     #[test]
     fn the_turntable_shows_writing() {
         assert_eq!(parse_family("writing"), Ok(Family::Writing));
-        let sizes = page_sizes(&Turntable { family: Family::Writing, ..default() });
+        let sizes = page_sizes(&Turntable {
+            family: Family::Writing,
+            ..default()
+        });
         assert!(!sizes.is_empty() && sizes.iter().all(|s| s.x > 0.0 && s.y > 0.0));
     }
 
     #[test]
     fn small_sundries_fill_a_share_of_their_cells() {
-        let turntable = Turntable { family: Family::Sundry, ..default() };
+        let turntable = Turntable {
+            family: Family::Sundry,
+            ..default()
+        };
         let sizes = page_sizes(&turntable);
         let largest = page_box(&sizes);
         let layout = PageLayout::fit(largest, Vec2::new(1920.0, 1080.0));
@@ -1101,8 +1404,14 @@ mod tests {
             let pose = GridPose::of(size, largest);
             let shown = grid_box(size, pose.tilt) * pose.scale;
             let share = shown / layout.cell;
-            assert!(share.max_element() >= 0.25, "slot {index} ({size}) fills {share} of its cell");
-            assert!(shown.x <= room.x + 1e-4 && shown.y <= room.y + 1e-4, "slot {index} ({size}) overflows its cell");
+            assert!(
+                share.max_element() >= 0.25,
+                "slot {index} ({size}) fills {share} of its cell"
+            );
+            assert!(
+                shown.x <= room.x + 1e-4 && shown.y <= room.y + 1e-4,
+                "slot {index} ({size}) overflows its cell"
+            );
         }
     }
 
@@ -1119,15 +1428,28 @@ mod tests {
 
     #[test]
     fn the_largest_item_keeps_its_true_size() {
-        let sizes = [Vec3::new(1.0, 8.0, 1.0), Vec3::new(0.3, 0.4, 0.2), Vec3::new(1.0, 6.0, 1.0)];
+        let sizes = [
+            Vec3::new(1.0, 8.0, 1.0),
+            Vec3::new(0.3, 0.4, 0.2),
+            Vec3::new(1.0, 6.0, 1.0),
+        ];
         let largest = page_box(&sizes);
-        assert_eq!(GridPose::of(sizes[0], largest), GridPose { tilt: 0.0, scale: 1.0 });
+        assert_eq!(
+            GridPose::of(sizes[0], largest),
+            GridPose {
+                tilt: 0.0,
+                scale: 1.0
+            }
+        );
         // Three quarters the height: still true to scale.
         assert!(!GridPose::of(sizes[2], largest).magnified());
         let small = GridPose::of(sizes[1], largest);
         assert!(small.magnified(), "{small:?}");
         let share = (grid_box(sizes[1], small.tilt) * small.scale / largest).max_element();
-        assert!((share - MIN_FILL).abs() < 1e-4, "magnified to {share} of the largest");
+        assert!(
+            (share - MIN_FILL).abs() < 1e-4,
+            "magnified to {share} of the largest"
+        );
     }
 
     #[test]

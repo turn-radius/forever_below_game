@@ -28,8 +28,8 @@ use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle, WallFinish};
 use procgen_rng::Mulberry32;
 
 use super::{
-    CEILING_STONE, CellView, DIRECTIONS, FLOOR_STONE, Face, Ink, LevelMesh, Relief, SEGMENTS, WALL_STONE, door_frame_in,
-    facing_vector,
+    CEILING_STONE, CellView, DIRECTIONS, FLOOR_STONE, Face, Ink, LevelMesh, Relief, SEGMENTS,
+    WALL_STONE, door_frame_in, facing_vector,
 };
 
 /// The highest a crown can stand over the spring, which is the level's ceiling.
@@ -96,7 +96,13 @@ struct Frame {
 
 impl Frame {
     fn at(&self, a: f32, b: f32, depth: f32) -> V3 {
-        vec3::add(self.origin, vec3::add(vec3::add(vec3::scale(self.a, a), vec3::scale(self.b, b)), vec3::scale(self.n, depth)))
+        vec3::add(
+            self.origin,
+            vec3::add(
+                vec3::add(vec3::scale(self.a, a), vec3::scale(self.b, b)),
+                vec3::scale(self.n, depth),
+            ),
+        )
     }
 }
 
@@ -105,7 +111,15 @@ impl Frame {
 /// down to the plane, so a block beside a lower one shows a face rather than a gap. Texture
 /// coordinates are the frame's axes in world space, a cell to one, so the stone's grain carries
 /// across blocks.
-fn slab(mesh: &mut MeshBuilder, f: &Frame, ar: [f32; 2], br: [f32; 2], depth: f32, ch: f32, skirt: bool) {
+fn slab(
+    mesh: &mut MeshBuilder,
+    f: &Frame,
+    ar: [f32; 2],
+    br: [f32; 2],
+    depth: f32,
+    ch: f32,
+    skirt: bool,
+) {
     slab_rough(mesh, f, ar, br, depth, ch, skirt, [0.0; 8]);
 }
 
@@ -113,7 +127,16 @@ fn slab(mesh: &mut MeshBuilder, f: &Frame, ar: [f32; 2], br: [f32; 2], depth: f3
 /// (`a` then `b` for the corners in the order low-low, high-low, high-high, low-high), so the
 /// block is an irregular quadrilateral and the shell shows in the extra gaps round it.
 #[allow(clippy::too_many_arguments)]
-fn slab_rough(mesh: &mut MeshBuilder, f: &Frame, ar: [f32; 2], br: [f32; 2], depth: f32, ch: f32, skirt: bool, cut: [f32; 8]) {
+fn slab_rough(
+    mesh: &mut MeshBuilder,
+    f: &Frame,
+    ar: [f32; 2],
+    br: [f32; 2],
+    depth: f32,
+    ch: f32,
+    skirt: bool,
+    cut: [f32; 8],
+) {
     let uv = |p: V3| [vec3::dot(p, f.a) / CELL, vec3::dot(p, f.b) / CELL];
     let mut quad = |corners: [V3; 4], facing: V3| {
         mesh.push_flat_quad(corners, corners.map(uv), facing);
@@ -125,7 +148,11 @@ fn slab_rough(mesh: &mut MeshBuilder, f: &Frame, ar: [f32; 2], br: [f32; 2], dep
     let corner = |i: usize, d: f32, inset: f32| {
         let (sa, sb) = ([1.0, -1.0, -1.0, 1.0][i], [1.0, 1.0, -1.0, -1.0][i]);
         let (a, b) = ([a0, a1, a1, a0][i], [b0, b0, b1, b1][i]);
-        f.at(a + sa * (cut[2 * i] + inset), b + sb * (cut[2 * i + 1] + inset), d)
+        f.at(
+            a + sa * (cut[2 * i] + inset),
+            b + sb * (cut[2 * i + 1] + inset),
+            d,
+        )
     };
     let edge = |i: usize| corner(i, rim, 0.0);
     let face = |i: usize| corner(i, depth, ch);
@@ -177,7 +204,11 @@ impl RoomVault {
         };
         let shape = match self.vault {
             Vault::Barrel { along_x } => {
-                let (p, lo, hi) = if along_x { (z, self.lo[1], self.hi[1]) } else { (x, self.lo[0], self.hi[0]) };
+                let (p, lo, hi) = if along_x {
+                    (z, self.lo[1], self.hi[1])
+                } else {
+                    (x, self.lo[0], self.hi[0])
+                };
                 arch(local(p, lo, hi, 1.0))
             }
             Vault::Groin { bays } => {
@@ -206,17 +237,38 @@ impl Vaults {
         let mut rooms = Vec::new();
         for room in &level.rooms {
             let lo = [room.x as f32 * CELL, room.y as f32 * CELL];
-            let hi = [(room.x + room.w) as f32 * CELL, (room.y + room.h) as f32 * CELL];
-            let columned = (room.y..room.y + room.h)
-                .any(|y| (room.x..room.x + room.w).any(|x| level.cell(x as i32, y as i32) == Cell::Column));
+            let hi = [
+                (room.x + room.w) as f32 * CELL,
+                (room.y + room.h) as f32 * CELL,
+            ];
+            let columned = (room.y..room.y + room.h).any(|y| {
+                (room.x..room.x + room.w).any(|x| level.cell(x as i32, y as i32) == Cell::Column)
+            });
             let (w, h) = (hi[0] - lo[0], hi[1] - lo[1]);
             rooms.push(if columned {
                 let span = w.min(h) * 0.5;
-                RoomVault { lo, hi, vault: Vault::Barrel { along_x: room.w >= room.h }, rise: (span * 0.28).clamp(8.0, MAX_RISE), spring }
+                RoomVault {
+                    lo,
+                    hi,
+                    vault: Vault::Barrel {
+                        along_x: room.w >= room.h,
+                    },
+                    rise: (span * 0.28).clamp(8.0, MAX_RISE),
+                    spring,
+                }
             } else {
-                let bays = [((room.w as f32 / 5.0).round() as u32).max(1), ((room.h as f32 / 5.0).round() as u32).max(1)];
+                let bays = [
+                    ((room.w as f32 / 5.0).round() as u32).max(1),
+                    ((room.h as f32 / 5.0).round() as u32).max(1),
+                ];
                 let half = (w / bays[0] as f32).min(h / bays[1] as f32) * 0.5;
-                RoomVault { lo, hi, vault: Vault::Groin { bays }, rise: (half * 0.3).clamp(5.0, 16.0), spring }
+                RoomVault {
+                    lo,
+                    hi,
+                    vault: Vault::Groin { bays },
+                    rise: (half * 0.3).clamp(5.0, 16.0),
+                    spring,
+                }
             });
         }
         Vaults { rooms, spring }
@@ -230,7 +282,10 @@ impl Vaults {
     pub fn height(&self, x: f32, z: f32) -> f32 {
         let mut top = self.spring;
         for room in &self.rooms {
-            let (cx, cz) = (x.clamp(room.lo[0], room.hi[0]), z.clamp(room.lo[1], room.hi[1]));
+            let (cx, cz) = (
+                x.clamp(room.lo[0], room.hi[0]),
+                z.clamp(room.lo[1], room.hi[1]),
+            );
             let outside = (x - cx).abs().max((z - cz).abs());
             if outside > CELL {
                 continue;
@@ -248,10 +303,18 @@ impl Vaults {
         let rooms = self
             .rooms
             .iter()
-            .filter(|r| r.lo[0] - CELL - reach <= hi[0] && r.hi[0] + CELL + reach >= lo[0] && r.lo[1] - CELL - reach <= hi[1] && r.hi[1] + CELL + reach >= lo[1])
+            .filter(|r| {
+                r.lo[0] - CELL - reach <= hi[0]
+                    && r.hi[0] + CELL + reach >= lo[0]
+                    && r.lo[1] - CELL - reach <= hi[1]
+                    && r.hi[1] + CELL + reach >= lo[1]
+            })
             .copied()
             .collect();
-        Vaults { rooms, spring: self.spring }
+        Vaults {
+            rooms,
+            spring: self.spring,
+        }
     }
 
     /// The soffit's height, and where every vault springs from.
@@ -266,8 +329,17 @@ impl Vaults {
         let mut out = Vec::new();
         // A line from `a` to `b` in steps no longer than a cell's grid step.
         let straight = |a: [f32; 2], b: [f32; 2]| {
-            let steps = (((b[0] - a[0]).hypot(b[1] - a[1])) / (CELL / SEGMENTS as f32)).ceil().max(1.0) as usize;
-            (0..=steps).map(|i| [a[0] + (b[0] - a[0]) * i as f32 / steps as f32, a[1] + (b[1] - a[1]) * i as f32 / steps as f32]).collect::<Vec<_>>()
+            let steps = (((b[0] - a[0]).hypot(b[1] - a[1])) / (CELL / SEGMENTS as f32))
+                .ceil()
+                .max(1.0) as usize;
+            (0..=steps)
+                .map(|i| {
+                    [
+                        a[0] + (b[0] - a[0]) * i as f32 / steps as f32,
+                        a[1] + (b[1] - a[1]) * i as f32 / steps as f32,
+                    ]
+                })
+                .collect::<Vec<_>>()
         };
         for room in &self.rooms {
             let (lo, hi) = (room.lo, room.hi);
@@ -283,7 +355,10 @@ impl Vaults {
                     }
                 }
                 Vault::Groin { bays } => {
-                    let (bw, bh) = ((hi[0] - lo[0]) / bays[0] as f32, (hi[1] - lo[1]) / bays[1] as f32);
+                    let (bw, bh) = (
+                        (hi[0] - lo[0]) / bays[0] as f32,
+                        (hi[1] - lo[1]) / bays[1] as f32,
+                    );
                     for j in 0..bays[1] {
                         for i in 0..bays[0] {
                             let (x0, z0) = (lo[0] + bw * i as f32, lo[1] + bh * j as f32);
@@ -338,8 +413,14 @@ fn vault_ribs(vaults: &Vaults, in_range: &impl Fn(i32, i32) -> bool, ink: &mut I
             run.clear();
         };
         for pair in rib.windows(2) {
-            let middle = [(pair[0][0] + pair[1][0]) * 0.5, (pair[0][1] + pair[1][1]) * 0.5];
-            let (cx, cy) = ((middle[0] / CELL).floor() as i32, (middle[1] / CELL).floor() as i32);
+            let middle = [
+                (pair[0][0] + pair[1][0]) * 0.5,
+                (pair[0][1] + pair[1][1]) * 0.5,
+            ];
+            let (cx, cy) = (
+                (middle[0] / CELL).floor() as i32,
+                (middle[1] / CELL).floor() as i32,
+            );
             if !in_range(cx, cy) {
                 flush(&mut run, ink);
                 continue;
@@ -374,7 +455,9 @@ pub fn ceiling_at(level: &Level, x: f32, z: f32) -> f32 {
 fn courses(seed: u32, spring: f32) -> Vec<(f32, f32)> {
     let mut rng = Mulberry32::new(seed ^ 0xc0a2_5e55);
     let count = ((spring / 3.75).round() as usize).max(4);
-    let raw: Vec<f32> = (0..count).map(|_| 0.85 + 0.3 * rng.range_f32(0.0, 1.0)).collect();
+    let raw: Vec<f32> = (0..count)
+        .map(|_| 0.85 + 0.3 * rng.range_f32(0.0, 1.0))
+        .collect();
     let total: f32 = raw.iter().sum();
     let mut out = Vec::new();
     let mut y = 0.0;
@@ -412,7 +495,12 @@ struct Run {
 
 impl Run {
     fn frame(&self) -> Frame {
-        Frame { origin: self.origin, a: self.u, b: [0.0, 1.0, 0.0], n: self.n }
+        Frame {
+            origin: self.origin,
+            a: self.u,
+            b: [0.0, 1.0, 0.0],
+            n: self.n,
+        }
     }
 
     fn length(&self) -> f32 {
@@ -442,9 +530,16 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
     let in_range = |x: i32, y: i32| x >= x0 && x < x1 && y >= y0 && y < y1;
     // Columns stand in drawn cells: the stone is laid under and over them.
     let drawn = |x: i32, y: i32| view.cell(x, y) != Cell::Rock;
-    let has_face = |x: i32, y: i32, f: Facing| drawn(x, y) && view.cell(x + f.step().0, y + f.step().1) == Cell::Rock;
+    let has_face = |x: i32, y: i32, f: Facing| {
+        drawn(x, y) && view.cell(x + f.step().0, y + f.step().1) == Cell::Rock
+    };
 
-    let (mut floor, mut ceiling, mut walls, mut damp) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let (mut floor, mut ceiling, mut walls, mut damp) = (
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+    );
     let mut cobbles = super::cobble::Stones::default();
     let (mut ink, mut joints) = (Ink::default(), Ink::default());
     let flat = Relief::new(level);
@@ -470,7 +565,14 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                 .build(&flat, &mut floor);
                 if view.is_cobbled(x, y) {
                     let open = view.neighbours_open(x, y);
-                    super::cobble::cobbles(level.seed, x, y, &|_, _| 0.0, &|px, pz| view.floor_wear(x, y, open, px, pz), &mut cobbles);
+                    super::cobble::cobbles(
+                        level.seed,
+                        x,
+                        y,
+                        &|_, _| 0.0,
+                        &|px, pz| view.floor_wear(x, y, open, px, pz),
+                        &mut cobbles,
+                    );
                 } else {
                     flagstones(level.seed, x, y, &mut floor);
                 }
@@ -486,7 +588,10 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                 let (u, _) = wall_axes(facing);
                 let (ux, uz) = unit_step(u);
                 // Upright ink where the wall turns a corner rather than running on.
-                let corners = [!has_face(x - ux, y - uz, facing), !has_face(x + ux, y + uz, facing)];
+                let corners = [
+                    !has_face(x - ux, y - uz, facing),
+                    !has_face(x + ux, y + uz, facing),
+                ];
                 wall_shell(&vaults, (x, y), facing, corners, &mut walls, &mut ink);
                 // Each run is laid once per stretch: from its first face in this range.
                 if !(in_range(x - ux, y - uz) && has_face(x - ux, y - uz, facing)) {
@@ -498,9 +603,19 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                     // A block is rubble or ashlar by the cell it starts in.
                     let rubble_at = |s: f32| {
                         let i = ((s / CELL).floor() as i32).clamp(0, run.cells - 1);
-                        view.finishes().at(run.start.0 + ux * i, run.start.1 + uz * i).is_some_and(|f| f.walls == WallFinish::Rubble)
+                        view.finishes()
+                            .at(run.start.0 + ux * i, run.start.1 + uz * i)
+                            .is_some_and(|f| f.walls == WallFinish::Rubble)
                     };
-                    lay_blocks(&run, &vaults, &courses, &owns, &rubble_at, (&mut walls, &mut damp), &mut joints);
+                    lay_blocks(
+                        &run,
+                        &vaults,
+                        &courses,
+                        &owns,
+                        &rubble_at,
+                        (&mut walls, &mut damp),
+                        &mut joints,
+                    );
                 }
             }
         }
@@ -515,11 +630,21 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
     parts.add_look("ceiling", ceiling, stone(CEILING_STONE));
     let mut joints = joints.into_part();
     joints.name = "joints";
-    LevelMesh { surfaces: parts.finish(), ink: ink.into_part(), joints }
+    LevelMesh {
+        surfaces: parts.finish(),
+        ink: ink.into_part(),
+        joints,
+    }
 }
 
 /// The run of faces looking `facing` through `at`, found by walking out to both its ends.
-fn find_run(view: &CellView, at: (i32, i32), facing: Facing, seed: u32, has_face: &impl Fn(i32, i32, Facing) -> bool) -> Run {
+fn find_run(
+    view: &CellView,
+    at: (i32, i32),
+    facing: Facing,
+    seed: u32,
+    has_face: &impl Fn(i32, i32, Facing) -> bool,
+) -> Run {
     let (u, n) = wall_axes(facing);
     let (ux, uz) = unit_step(u);
     let mut start = at;
@@ -532,28 +657,55 @@ fn find_run(view: &CellView, at: (i32, i32), facing: Facing, seed: u32, has_face
     }
     let d = facing_vector(facing);
     let centre = super::cell_centre(start.0, start.1);
-    let origin = vec3::sub(vec3::add(centre, vec3::scale(d, CELL * 0.5)), vec3::scale(u, CELL * 0.5));
+    let origin = vec3::sub(
+        vec3::add(centre, vec3::scale(d, CELL * 0.5)),
+        vec3::scale(u, CELL * 0.5),
+    );
     // A run ends in rock where the wall turns an inside corner, and in the open where it turns
     // a jamb or an outside corner.
     let before = view.cell(start.0 - ux, start.1 - uz) == Cell::Rock;
     let after = view.cell(start.0 + ux * cells, start.1 + uz * cells) == Cell::Rock;
-    let margin = [if before { INSIDE_CORNER } else { JOINT * 0.5 }, if after { INSIDE_CORNER } else { JOINT * 0.5 }];
+    let margin = [
+        if before { INSIDE_CORNER } else { JOINT * 0.5 },
+        if after { INSIDE_CORNER } else { JOINT * 0.5 },
+    ];
     let key = seed
         ^ (facing as u32 + 1).wrapping_mul(0x9e37_79b1)
         ^ (start.0 as u32).wrapping_mul(0x85eb_ca6b)
         ^ (start.1 as u32).wrapping_mul(0xc2b2_ae35);
-    Run { start, cells, u, n, origin, key, margin }
+    Run {
+        start,
+        cells,
+        u,
+        n,
+        origin,
+        key,
+        margin,
+    }
 }
 
 /// One cell's face of a wall: the shell from the floor to the ceiling, flat on the cell's
 /// plane, and the ink along its top and its upright `corners` (start and end).
-fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [bool; 2], walls: &mut MeshBuilder, ink: &mut Ink) {
+fn wall_shell(
+    vaults: &Vaults,
+    (x, y): (i32, i32),
+    facing: Facing,
+    corners: [bool; 2],
+    walls: &mut MeshBuilder,
+    ink: &mut Ink,
+) {
     let (u, n) = wall_axes(facing);
     let (dx, dy) = facing.step();
     // The wall's grid points, in order along `u`: the plane is a whole number of cells, the
     // other axis steps with the ceiling's own grid.
     let point = |j: usize| -> (f32, f32) {
-        let along = |cell: i32, forward: bool| if forward { grid(cell, j) } else { grid(cell, SEGMENTS - j) };
+        let along = |cell: i32, forward: bool| {
+            if forward {
+                grid(cell, j)
+            } else {
+                grid(cell, SEGMENTS - j)
+            }
+        };
         if dx == 0 {
             (along(x, u[0] > 0.0), (y + (dy + 1) / 2) as f32 * CELL)
         } else {
@@ -568,7 +720,10 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
         })
         .collect();
     for j in 0..SEGMENTS {
-        let (a, b) = ([tops[j][0], 0.0, tops[j][2]], [tops[j + 1][0], 0.0, tops[j + 1][2]]);
+        let (a, b) = (
+            [tops[j][0], 0.0, tops[j][2]],
+            [tops[j + 1][0], 0.0, tops[j + 1][2]],
+        );
         let quad = [a, b, tops[j + 1], tops[j]];
         walls.push_flat_quad(quad, quad.map(uv), n);
     }
@@ -583,7 +738,9 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
         }
         let top = tops[j];
         let rows = (top[1] / 4.0).ceil().max(1.0) as usize;
-        let upright: Vec<V3> = (0..=rows).map(|r| [top[0], top[1] * r as f32 / rows as f32, top[2]]).collect();
+        let upright: Vec<V3> = (0..=rows)
+            .map(|r| [top[0], top[1] * r as f32 / rows as f32, top[2]])
+            .collect();
         ink.ribbon_lifted(&upright, &vec![n; upright.len()], CORNER_INK_LIFT);
     }
 }
@@ -642,10 +799,21 @@ fn lay_blocks(
         let p = run.point(s);
         vaults.height(p[0], p[2])
     };
-    let line = |a: f32, b: f32, y: f32| [vec3::add(run.point(a), [0.0, y, 0.0]), vec3::add(run.point(b), [0.0, y, 0.0])];
-    let tallest = (0..=(len / 2.0) as usize).map(|i| height_at(i as f32 * 2.0)).fold(0.0f32, f32::max);
+    let line = |a: f32, b: f32, y: f32| {
+        [
+            vec3::add(run.point(a), [0.0, y, 0.0]),
+            vec3::add(run.point(b), [0.0, y, 0.0]),
+        ]
+    };
+    let tallest = (0..=(len / 2.0) as usize)
+        .map(|i| height_at(i as f32 * 2.0))
+        .fold(0.0f32, f32::max);
     let any_rubble = (0..run.cells).any(|i| rubble_at((i as f32 + 0.5) * CELL));
-    let rubble_courses = if any_rubble { rubble_courses(run.key, tallest) } else { Vec::new() };
+    let rubble_courses = if any_rubble {
+        rubble_courses(run.key, tallest)
+    } else {
+        Vec::new()
+    };
     // The course `k` of a style, if it is below the highest crown.
     let course = |rubble: bool, k: usize| -> Option<(f32, f32)> {
         let list = if rubble { &rubble_courses } else { courses };
@@ -659,15 +827,25 @@ fn lay_blocks(
         }
         let mut rng = Mulberry32::new(run.key ^ (k as u32).wrapping_mul(0x9e37_79b1));
         // Rubble draws from a stream of its own, so ashlar lays out as it always did.
-        let mut rough = Mulberry32::new(run.key ^ (k as u32).wrapping_mul(0x9e37_79b1) ^ 0x5eed_7ab1);
+        let mut rough =
+            Mulberry32::new(run.key ^ (k as u32).wrapping_mul(0x9e37_79b1) ^ 0x5eed_7ab1);
         let mut s = 0.0;
         while s < len - 1e-3 {
             // Every block draws the same numbers, owned or not, so the course lays out
             // alike whichever stretch is asking.
-            let (long, short_chance, short, proud) =
-                (rng.range_f32(BLOCK_LENGTH.0, BLOCK_LENGTH.1), rng.range_f32(0.0, 1.0), rng.range_f32(3.4, 4.8), rng.range_f32(PROUD.0, PROUD.1));
+            let (long, short_chance, short, proud) = (
+                rng.range_f32(BLOCK_LENGTH.0, BLOCK_LENGTH.1),
+                rng.range_f32(0.0, 1.0),
+                rng.range_f32(3.4, 4.8),
+                rng.range_f32(PROUD.0, PROUD.1),
+            );
             let cut: [f32; 8] = std::array::from_fn(|_| rough.range_f32(0.0, RUBBLE_CUT));
-            let (r_pin, r_gap, r_pin_y, r_tall) = (rough.range_f32(0.0, 1.0), rough.range_f32(1.3, 2.2), rough.range_f32(0.0, 1.0), rough.range_f32(0.0, 1.0));
+            let (r_pin, r_gap, r_pin_y, r_tall) = (
+                rough.range_f32(0.0, 1.0),
+                rough.range_f32(1.3, 2.2),
+                rough.range_f32(0.0, 1.0),
+                rough.range_f32(0.0, 1.0),
+            );
             let (r_long, r_split, r_chamfer, r_drop, r_proud) = (
                 rough.range_f32(RUBBLE_LENGTH.0, RUBBLE_LENGTH.1),
                 rough.range_f32(0.0, 1.0),
@@ -679,7 +857,10 @@ fn lay_blocks(
             let (mut l, absorb) = if rubble {
                 // Many short stones and a few long ones.
                 let u = (r_long - RUBBLE_LENGTH.0) / (RUBBLE_LENGTH.1 - RUBBLE_LENGTH.0);
-                (RUBBLE_LENGTH.0 + (RUBBLE_LENGTH.1 - RUBBLE_LENGTH.0) * u.powf(1.7), RUBBLE_LENGTH.0)
+                (
+                    RUBBLE_LENGTH.0 + (RUBBLE_LENGTH.1 - RUBBLE_LENGTH.0) * u.powf(1.7),
+                    RUBBLE_LENGTH.0,
+                )
             } else if short_chance < 0.12 {
                 (short, 3.0)
             } else {
@@ -691,33 +872,59 @@ fn lay_blocks(
             let (a, b) = (s, s + l);
             s = b;
             let owned = owns((a + b) * 0.5);
-            let Some((y0, h)) = course(rubble, k) else { continue };
-            let (joint, proud) = if rubble { (RUBBLE_JOINT, r_proud) } else { (JOINT, proud) };
+            let Some((y0, h)) = course(rubble, k) else {
+                continue;
+            };
+            let (joint, proud) = if rubble {
+                (RUBBLE_JOINT, r_proud)
+            } else {
+                (JOINT, proud)
+            };
             let lo = a + if a < 1e-3 { run.margin[0] } else { joint * 0.5 };
-            let mut hi = b - if b > len - 1e-3 { run.margin[1] } else { joint * 0.5 };
+            let mut hi = b - if b > len - 1e-3 {
+                run.margin[1]
+            } else {
+                joint * 0.5
+            };
             // Now and then a long stone stops short, and a small pinning stone is wedged in the gap.
             let pin = (rubble && r_pin < RUBBLE_PIN && hi - lo > 4.5).then(|| {
                 hi -= r_gap;
                 [hi + joint, hi + r_gap]
             });
-            let lowest = (0..=4).map(|i| height_at(lo + (hi - lo) * i as f32 / 4.0)).fold(f32::MAX, f32::min);
+            let lowest = (0..=4)
+                .map(|i| height_at(lo + (hi - lo) * i as f32 / 4.0))
+                .fold(f32::MAX, f32::min);
             // A rubble stone is a little shorter than its course, and a different amount each time.
             let drop = if rubble { r_drop * RUBBLE_DROP } else { 0.0 };
             // A few stones are through-stones, as tall as two courses and standing further out.
             let tall = rubble && k > 0 && r_tall < RUBBLE_TALL;
-            let reach = if tall { course(true, k + 1).map_or(0.0, |(_, h2)| h2) } else { 0.0 };
+            let reach = if tall {
+                course(true, k + 1).map_or(0.0, |(_, h2)| h2)
+            } else {
+                0.0
+            };
             let proud = if reach > 0.0 { proud + 0.15 } else { proud };
             // A stone of the course above a through-stone's lower half stands behind its face
             // wherever they overlap, never level with it, which would fight over the pixels.
-            let proud = through.iter().filter(|t| t.course == k && t.span[0] < hi && t.span[1] > lo).fold(proud, |p, t| p.min(t.proud - THROUGH_SETBACK));
-            let (bottom, top) = (y0 + joint * 0.5, (y0 + h + reach - joint * 0.5 - drop).min(lowest - UNDER_SOFFIT));
+            let proud = through
+                .iter()
+                .filter(|t| t.course == k && t.span[0] < hi && t.span[1] > lo)
+                .fold(proud, |p, t| p.min(t.proud - THROUGH_SETBACK));
+            let (bottom, top) = (
+                y0 + joint * 0.5,
+                (y0 + h + reach - joint * 0.5 - drop).min(lowest - UNDER_SOFFIT),
+            );
             if hi - lo < 2.0 || top - bottom < 1.4 {
                 continue;
             }
             // Every stretch notes the through-stones, owned or not, so a stone cut by a stretch's
             // edge sits back from the through-stone of the next as it would laid whole.
             if reach > 0.0 {
-                through.push(Through { course: k + 1, span: [lo, hi], proud });
+                through.push(Through {
+                    course: k + 1,
+                    span: [lo, hi],
+                    proud,
+                });
             }
             if !owned {
                 continue;
@@ -731,7 +938,16 @@ fn lay_blocks(
                 let room = ((ar[1] - ar[0]).min(br[1] - br[0])).max(0.0);
                 let chamfer = r_chamfer.min(depth * 0.95).min(room * 0.2);
                 let tame = (room * 0.22 / RUBBLE_CUT).min(1.0);
-                slab_rough(out, &frame, ar, br, depth, chamfer, true, cut.map(|c| c * tame));
+                slab_rough(
+                    out,
+                    &frame,
+                    ar,
+                    br,
+                    depth,
+                    chamfer,
+                    true,
+                    cut.map(|c| c * tame),
+                );
             };
             // The ink in the joint below this block (the base of the wall for the lowest), and the
             // upright one before it.
@@ -749,7 +965,12 @@ fn lay_blocks(
             if let Some(wedge) = pin {
                 let height = ((top - bottom) * 0.5).min((wedge[1] - wedge[0]) * 1.4 + 0.4);
                 let at = bottom + (top - bottom - height) * r_pin_y;
-                dress(out, wedge, [at, at + height], PIN_PROUD + PIN_PROUD_PER_COURSE * k as f32);
+                dress(
+                    out,
+                    wedge,
+                    [at, at + height],
+                    PIN_PROUD + PIN_PROUD_PER_COURSE * k as f32,
+                );
             }
             // Now and then a rubble stone is two, one on the other.
             if rubble && r_split < RUBBLE_SPLIT && top - bottom > 2.6 {
@@ -768,11 +989,24 @@ fn lay_blocks(
             // Damp darkens the lowest course, and now and then the knocks of a floor's traffic
             // have taken a corner off a block.
             let mut luck = Mulberry32::new(run.key ^ (a * 64.0) as u32 ^ 0x0da4_9b10);
-            let (chipped, size, left) = (luck.range_f32(0.0, 1.0) < CHIP_CHANCE, luck.range_f32(CHIP.0, CHIP.1), luck.range_f32(0.0, 1.0) < 0.5);
+            let (chipped, size, left) = (
+                luck.range_f32(0.0, 1.0) < CHIP_CHANCE,
+                luck.range_f32(CHIP.0, CHIP.1),
+                luck.range_f32(0.0, 1.0) < 0.5,
+            );
             if chipped && hi - lo > size * 2.5 && top - bottom > size * 2.0 {
                 dress(damp, [lo, hi], [bottom + size, top], proud);
-                let strip = if left { [lo + size, hi] } else { [lo, hi - size] };
-                dress(damp, strip, [bottom, bottom + size], if rubble { proud * 0.6 } else { proud - 0.2 });
+                let strip = if left {
+                    [lo + size, hi]
+                } else {
+                    [lo, hi - size]
+                };
+                dress(
+                    damp,
+                    strip,
+                    [bottom, bottom + size],
+                    if rubble { proud * 0.6 } else { proud - 0.2 },
+                );
             } else {
                 dress(damp, [lo, hi], [bottom, top], proud);
             }
@@ -790,7 +1024,11 @@ fn vault_cell(vaults: &Vaults, x: i32, y: i32, mesh: &mut MeshBuilder) {
     for j in 0..=SEGMENTS {
         for i in 0..=SEGMENTS {
             let (px, pz) = (grid(x, i), grid(y, j));
-            mesh.push_vertex([px, vaults.height(px, pz), pz], vaults.normal(px, pz), [px / CELL, pz / CELL]);
+            mesh.push_vertex(
+                [px, vaults.height(px, pz), pz],
+                vaults.normal(px, pz),
+                [px / CELL, pz / CELL],
+            );
         }
     }
     let at = |i: usize, j: usize| base + (j * (SEGMENTS + 1) + i) as u32;
@@ -805,38 +1043,109 @@ fn vault_cell(vaults: &Vaults, x: i32, y: i32, mesh: &mut MeshBuilder) {
 /// Splits `0..total` into `n` strips with their joints wandering up to `wander` of a strip off even.
 fn split(total: f32, n: usize, rng: &mut Mulberry32, wander: f32) -> Vec<f32> {
     let step = total / n as f32;
-    (0..=n).map(|i| if i == 0 || i == n { i as f32 * step } else { (i as f32 + rng.range_f32(-wander, wander)) * step }).collect()
+    (0..=n)
+        .map(|i| {
+            if i == 0 || i == n {
+                i as f32 * step
+            } else {
+                (i as f32 + rng.range_f32(-wander, wander)) * step
+            }
+        })
+        .collect()
 }
 
 /// Flagstones over cell `(x, y)`: two to four rows of two to four slabs of all sizes, the
 /// joints wandering. A slab is now and then sunk, or cracked in two with one half lower.
 fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
-    let mut rng = Mulberry32::new(seed ^ (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca6b) ^ 0xf1a6_5700);
-    let frame = Frame { origin: [x as f32 * CELL, 0.0, y as f32 * CELL], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    let mut rng = Mulberry32::new(
+        seed ^ (x as u32).wrapping_mul(0x9e37_79b1)
+            ^ (y as u32).wrapping_mul(0x85eb_ca6b)
+            ^ 0xf1a6_5700,
+    );
+    let frame = Frame {
+        origin: [x as f32 * CELL, 0.0, y as f32 * CELL],
+        a: [1.0, 0.0, 0.0],
+        b: [0.0, 0.0, 1.0],
+        n: [0.0, 1.0, 0.0],
+    };
     let rows = 2 + (rng.range_f32(0.0, 1.0) * 2.6) as usize;
     let zs = split(CELL, rows, &mut rng, 0.34);
     for r in 0..rows {
         let cols = 2 + (rng.range_f32(0.0, 1.0) * 2.6) as usize;
         let xs = split(CELL, cols, &mut rng, 0.34);
         for c in 0..cols {
-            let (sunk, cracked, at, drop) = (rng.range_f32(0.0, 1.0) < 0.1, rng.range_f32(0.0, 1.0) < 0.08, rng.range_f32(0.35, 0.65), rng.range_f32(0.04, 0.1));
-            let raise = if sunk { rng.range_f32(0.02, 0.06) } else { rng.range_f32(FLAG_RAISE.0, FLAG_RAISE.1) };
+            let (sunk, cracked, at, drop) = (
+                rng.range_f32(0.0, 1.0) < 0.1,
+                rng.range_f32(0.0, 1.0) < 0.08,
+                rng.range_f32(0.35, 0.65),
+                rng.range_f32(0.04, 0.1),
+            );
+            let raise = if sunk {
+                rng.range_f32(0.02, 0.06)
+            } else {
+                rng.range_f32(FLAG_RAISE.0, FLAG_RAISE.1)
+            };
             let inset = JOINT * 0.5;
-            let (a0, a1, b0, b1) = (xs[c] + inset, xs[c + 1] - inset, zs[r] + inset, zs[r + 1] - inset);
+            let (a0, a1, b0, b1) = (
+                xs[c] + inset,
+                xs[c + 1] - inset,
+                zs[r] + inset,
+                zs[r + 1] - inset,
+            );
             if !cracked || a1 - a0 < 3.0 || b1 - b0 < 3.0 {
-                slab(mesh, &frame, [a0, a1], [b0, b1], raise, FLAG_CHAMFER.min(raise * 0.9), false);
+                slab(
+                    mesh,
+                    &frame,
+                    [a0, a1],
+                    [b0, b1],
+                    raise,
+                    FLAG_CHAMFER.min(raise * 0.9),
+                    false,
+                );
                 continue;
             }
             // The crack runs across the longer side, a hair wide, and one half has settled.
             let low = (raise - drop).max(0.03);
             if a1 - a0 >= b1 - b0 {
                 let m = a0 + (a1 - a0) * at;
-                slab(mesh, &frame, [a0, m - 0.12], [b0, b1], raise, FLAG_CHAMFER.min(raise * 0.9), false);
-                slab(mesh, &frame, [m + 0.12, a1], [b0, b1], low, FLAG_CHAMFER.min(low * 0.9), false);
+                slab(
+                    mesh,
+                    &frame,
+                    [a0, m - 0.12],
+                    [b0, b1],
+                    raise,
+                    FLAG_CHAMFER.min(raise * 0.9),
+                    false,
+                );
+                slab(
+                    mesh,
+                    &frame,
+                    [m + 0.12, a1],
+                    [b0, b1],
+                    low,
+                    FLAG_CHAMFER.min(low * 0.9),
+                    false,
+                );
             } else {
                 let m = b0 + (b1 - b0) * at;
-                slab(mesh, &frame, [a0, a1], [b0, m - 0.12], raise, FLAG_CHAMFER.min(raise * 0.9), false);
-                slab(mesh, &frame, [a0, a1], [m + 0.12, b1], low, FLAG_CHAMFER.min(low * 0.9), false);
+                slab(
+                    mesh,
+                    &frame,
+                    [a0, a1],
+                    [b0, m - 0.12],
+                    raise,
+                    FLAG_CHAMFER.min(raise * 0.9),
+                    false,
+                );
+                slab(
+                    mesh,
+                    &frame,
+                    [a0, a1],
+                    [m + 0.12, b1],
+                    low,
+                    FLAG_CHAMFER.min(low * 0.9),
+                    false,
+                );
             }
         }
     }
@@ -851,8 +1160,18 @@ fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
 pub fn door_frame(level: &Level, (x, y): (i32, i32), style: DoorStyle, seed: u32) -> ItemMesh {
     let vaults = Vaults::new(level);
     let top = vaults.highest_over(x, y) + 1.5;
-    let courses: Vec<(f32, f32)> = courses(level.seed, level.ceiling).into_iter().filter(|&(bottom, _)| bottom < top).collect();
-    door_frame_in(style, &courses, top, CELL * 0.5 + 1.0, (JOINT, CHAMFER), seed)
+    let courses: Vec<(f32, f32)> = courses(level.seed, level.ceiling)
+        .into_iter()
+        .filter(|&(bottom, _)| bottom < top)
+        .collect();
+    door_frame_in(
+        style,
+        &courses,
+        top,
+        CELL * 0.5 + 1.0,
+        (JOINT, CHAMFER),
+        seed,
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -890,15 +1209,29 @@ pub fn columns(level: &Level) -> Vec<ColumnSpot> {
                 continue;
             }
             let (cx, cz) = ((x as f32 + 0.5) * CELL, (y as f32 + 0.5) * CELL);
-            let over: Vec<f32> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (0.0, 0.0)]
-                .iter()
-                .map(|&(sx, sz)| vaults.height(cx + sx * COLUMN_HALF, cz + sz * COLUMN_HALF))
-                .collect();
+            let over: Vec<f32> = [
+                (-1.0, -1.0),
+                (1.0, -1.0),
+                (1.0, 1.0),
+                (-1.0, 1.0),
+                (0.0, 0.0),
+            ]
+            .iter()
+            .map(|&(sx, sz)| vaults.height(cx + sx * COLUMN_HALF, cz + sz * COLUMN_HALF))
+            .collect();
             // Whole decimetres, so columns of a hall share a mesh.
             let seat = over.iter().copied().fold(f32::MAX, f32::min).floor();
             let top = (over.iter().copied().fold(0.0, f32::max) + 0.3).ceil();
-            let h = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663) ^ level.seed;
-            out.push(ColumnSpot { cell: (x, y), seat, top, variant: (h >> 7) % COLUMN_VARIANTS, turn: (h >> 13) % 4 });
+            let h = (x as u32).wrapping_mul(73_856_093)
+                ^ (y as u32).wrapping_mul(19_349_663)
+                ^ level.seed;
+            out.push(ColumnSpot {
+                cell: (x, y),
+                seat,
+                top,
+                variant: (h >> 7) % COLUMN_VARIANTS,
+                turn: (h >> 13) % 4,
+            });
         }
     }
     out
@@ -914,16 +1247,30 @@ pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
     let (plinth, abacus, echinus) = (1.6, 1.4, 2.4);
     let shaft_bottom = plinth + 1.5;
     let shaft_top = seat - abacus - echinus - 0.6;
-    let (r_bottom, r_top) = (4.3 + rng.range_f32(0.0, 0.25), 3.6 + rng.range_f32(0.0, 0.2));
+    let (r_bottom, r_top) = (
+        4.3 + rng.range_f32(0.0, 0.25),
+        3.6 + rng.range_f32(0.0, 0.2),
+    );
     let drums = (((shaft_top - shaft_bottom) / 9.0).round() as usize).max(3);
-    let joints: Vec<f32> = (1..drums).map(|i| shaft_bottom + (shaft_top - shaft_bottom) * i as f32 / drums as f32).collect();
+    let joints: Vec<f32> = (1..drums)
+        .map(|i| shaft_bottom + (shaft_top - shaft_bottom) * i as f32 / drums as f32)
+        .collect();
 
     // The turned body, bottom to top, as (radius, height).
-    let mut profile: Vec<[f32; 2]> = vec![[0.0, plinth], [5.5, plinth], [5.6, plinth + 0.4], [5.3, plinth + 0.9], [4.9, plinth + 1.2]];
+    let mut profile: Vec<[f32; 2]> = vec![
+        [0.0, plinth],
+        [5.5, plinth],
+        [5.6, plinth + 0.4],
+        [5.3, plinth + 0.9],
+        [4.9, plinth + 1.2],
+    ];
     let swell = |t: f32| 0.32 * (std::f32::consts::PI * t.powf(0.8)).sin();
     let shaft_radius = |y: f32| {
         let t = ((y - shaft_bottom) / (shaft_top - shaft_bottom)).clamp(0.0, 1.0);
-        let dip = joints.iter().map(|&j| ((1.0 - ((y - j) / 0.5).powi(2)).max(0.0)) * 0.16).fold(0.0f32, f32::max);
+        let dip = joints
+            .iter()
+            .map(|&j| ((1.0 - ((y - j) / 0.5).powi(2)).max(0.0)) * 0.16)
+            .fold(0.0f32, f32::max);
         r_bottom + (r_top - r_bottom) * t + swell(t) - dip
     };
     let mut ys: Vec<f32> = Vec::new();
@@ -939,27 +1286,56 @@ pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
     profile.extend(ys.iter().map(|&y| [shaft_radius(y), y]));
     // The necking ring, then the echinus flaring out under the abacus.
     let e = shaft_top;
-    profile.extend([[r_top + 0.45, e + 0.2], [r_top + 0.45, e + 0.5], [r_top + 0.1, e + 0.7]]);
+    profile.extend([
+        [r_top + 0.45, e + 0.2],
+        [r_top + 0.45, e + 0.5],
+        [r_top + 0.1, e + 0.7],
+    ]);
     for i in 1..=6 {
         let t = i as f32 / 6.0;
-        profile.push([r_top + 0.1 + (5.9 - r_top - 0.1) * (1.0 - (1.0 - t).powi(2)), e + 0.7 + (echinus - 0.1) * t]);
+        profile.push([
+            r_top + 0.1 + (5.9 - r_top - 0.1) * (1.0 - (1.0 - t).powi(2)),
+            e + 0.7 + (echinus - 0.1) * t,
+        ]);
     }
     profile.push([5.9, seat - abacus]);
     profile.push([0.0, seat - abacus]);
     // Dense enough that chips and wear have vertices to move.
     let profile = densify(&profile, 1.0);
-    let mut body = lathe(&profile, &LatheOptions { facets: 28, shading: Shading::SMOOTH, ..Default::default() });
-    wear(&mut body, &mut rng, [shaft_bottom, shaft_top], r_bottom, seed ^ variant);
+    let mut body = lathe(
+        &profile,
+        &LatheOptions {
+            facets: 28,
+            shading: Shading::SMOOTH,
+            ..Default::default()
+        },
+    );
+    wear(
+        &mut body,
+        &mut rng,
+        [shaft_bottom, shaft_top],
+        r_bottom,
+        seed ^ variant,
+    );
 
     let mut foot = plank(2.0 * COLUMN_HALF, plinth, 2.0 * COLUMN_HALF, 0.4);
     foot.translate([0.0, plinth * 0.5, 0.0]);
     body.append(&foot);
-    let mut cap = plank(2.0 * COLUMN_HALF, top - seat + abacus, 2.0 * COLUMN_HALF, 0.4);
+    let mut cap = plank(
+        2.0 * COLUMN_HALF,
+        top - seat + abacus,
+        2.0 * COLUMN_HALF,
+        0.4,
+    );
     cap.translate([0.0, (top + seat - abacus) * 0.5, 0.0]);
     body.append(&cap);
 
     let mut parts = Parts::new();
-    parts.add_look("column", body, Look::of(MaterialKind::Stone).tinted(COLUMN_STONE));
+    parts.add_look(
+        "column",
+        body,
+        Look::of(MaterialKind::Stone).tinted(COLUMN_STONE),
+    );
     parts.finish()
 }
 
@@ -980,13 +1356,26 @@ fn densify(profile: &[[f32; 2]], max: f32) -> Vec<[f32; 2]> {
 
 /// Erodes the turned body: a slow wander of the surface, worse at the foot where the damp
 /// sits, and a few chips knocked out of the shaft and the capital.
-fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]: [f32; 2], radius: f32, seed: u32) {
+fn wear(
+    body: &mut MeshBuilder,
+    rng: &mut Mulberry32,
+    [shaft_bottom, shaft_top]: [f32; 2],
+    radius: f32,
+    seed: u32,
+) {
     let chips: Vec<(V3, f32, f32)> = (0..4 + (rng.range_f32(0.0, 3.0) as usize))
         .map(|_| {
-            let (angle, y) = (rng.range_f32(0.0, std::f32::consts::TAU), rng.range_f32(shaft_bottom, shaft_top + 2.0));
+            let (angle, y) = (
+                rng.range_f32(0.0, std::f32::consts::TAU),
+                rng.range_f32(shaft_bottom, shaft_top + 2.0),
+            );
             // Chips bite deeper low down, where a column takes its knocks.
             let low = 1.0 - ((y - shaft_bottom) / (shaft_top - shaft_bottom)).clamp(0.0, 1.0);
-            ([angle.cos() * radius, y, angle.sin() * radius], rng.range_f32(1.1, 2.3), 0.25 + 0.45 * low * rng.range_f32(0.4, 1.0))
+            (
+                [angle.cos() * radius, y, angle.sin() * radius],
+                rng.range_f32(1.1, 2.3),
+                0.25 + 0.45 * low * rng.range_f32(0.4, 1.0),
+            )
         })
         .collect();
     for p in &mut body.positions {
@@ -997,7 +1386,8 @@ fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]:
         }
         let (dx, dz) = (p[0] / r, p[2] / r);
         let foot = (-(p[1] - shaft_bottom).max(0.0) / 6.0).exp();
-        let mut sink = (value_noise3([p[0] / 3.0, p[1] / 5.0, p[2] / 3.0], seed) - 0.5) * (0.3 + 0.5 * foot);
+        let mut sink =
+            (value_noise3([p[0] / 3.0, p[1] / 5.0, p[2] / 3.0], seed) - 0.5) * (0.3 + 0.5 * foot);
         for &(centre, size, depth) in &chips {
             let d = vec3::distance(*p, centre);
             if d < size {
@@ -1040,7 +1430,10 @@ mod tests {
     fn halls(seed: u32) -> Level {
         let level = fb_level::generate(seed, 2);
         assert_eq!(level.style, LevelStyle::StoneHalls);
-        Level { stairs: Vec::new(), ..level }
+        Level {
+            stairs: Vec::new(),
+            ..level
+        }
     }
 
     #[test]
@@ -1050,13 +1443,24 @@ mod tests {
         let mesh = level_mesh(&view, view.bounds());
         let over = |name: &str, (x, y): (u32, u32)| {
             let (x0, z0) = (x as f32 * CELL, y as f32 * CELL);
-            part(&mesh, name).positions.iter().any(|p| p[0] > x0 + 0.5 && p[0] < x0 + CELL - 0.5 && p[2] > z0 + 0.5 && p[2] < z0 + CELL - 0.5)
+            part(&mesh, name).positions.iter().any(|p| {
+                p[0] > x0 + 0.5
+                    && p[0] < x0 + CELL - 0.5
+                    && p[2] > z0 + 0.5
+                    && p[2] < z0 + CELL - 0.5
+            })
         };
         let down = level.stair(fb_level::StairKind::Down).expect("a way down");
         let up = level.stair(fb_level::StairKind::Up).expect("a way up");
-        assert!(!over("floor", (down.x, down.y)), "no floor over the way down");
+        assert!(
+            !over("floor", (down.x, down.y)),
+            "no floor over the way down"
+        );
         assert!(!over("ceiling", (up.x, up.y)), "no vault over the way up");
-        assert!(over("ceiling", (down.x, down.y)), "the vault still covers the way down");
+        assert!(
+            over("ceiling", (down.x, down.y)),
+            "the vault still covers the way down"
+        );
     }
 
     fn key(p: &[f32; 3]) -> [i64; 3] {
@@ -1077,11 +1481,20 @@ mod tests {
         let view = CellView::uncobbled(&level);
         let a = level_mesh(&view, view.bounds());
         assert_eq!(a, level_mesh(&view, view.bounds()));
-        assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "damp", "ceiling"]);
+        assert_eq!(
+            a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(),
+            ["floor", "walls", "damp", "ceiling"]
+        );
         assert!(!a.joints.indices.is_empty());
         for p in a.surfaces.parts.iter().chain([&a.ink, &a.joints]) {
             p.validate().unwrap();
-            assert!(p.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3), "{}: normals are unit", p.name);
+            assert!(
+                p.normals
+                    .iter()
+                    .all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3),
+                "{}: normals are unit",
+                p.name
+            );
         }
         let other = halls(1208);
         let view = CellView::new(&other);
@@ -1091,11 +1504,28 @@ mod tests {
     #[test]
     fn cobbles_replace_the_flagstones_in_a_cobbled_cell() {
         // A level with a timbered quarter, whose floors are cobbled.
-        let level = (1..200).map(halls).find(|l| l.rooms.iter().any(|r| CellView::new(l).is_cobbled(r.x as i32, r.y as i32))).expect("some hall has a cobbled room");
+        let level = (1..200)
+            .map(halls)
+            .find(|l| {
+                l.rooms
+                    .iter()
+                    .any(|r| CellView::new(l).is_cobbled(r.x as i32, r.y as i32))
+            })
+            .expect("some hall has a cobbled room");
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
-        assert!(mesh.surfaces.parts.iter().any(|p| p.name.starts_with("stones_")));
-        let flags = part(&level_mesh(&CellView::uncobbled(&level), view.bounds()), "floor").indices.len();
+        assert!(
+            mesh.surfaces
+                .parts
+                .iter()
+                .any(|p| p.name.starts_with("stones_"))
+        );
+        let flags = part(
+            &level_mesh(&CellView::uncobbled(&level), view.bounds()),
+            "floor",
+        )
+        .indices
+        .len();
         assert_ne!(part(&mesh, "floor").indices.len(), flags);
         for p in &mesh.surfaces.parts {
             p.validate().unwrap();
@@ -1123,17 +1553,32 @@ mod tests {
         let level = halls(1207);
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
-        for (name, toward) in [("walls", None), ("floor", Some(1.0f32)), ("ceiling", Some(-1.0))] {
+        for (name, toward) in [
+            ("walls", None),
+            ("floor", Some(1.0f32)),
+            ("ceiling", Some(-1.0)),
+        ] {
             let p = part(&mesh, name);
             for tri in p.indices.as_chunks::<3>().0 {
                 let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| p.positions[i as usize]);
-                let face = vec3::normalize_or(vec3::cross(vec3::sub(b, a), vec3::sub(c, a)), [0.0; 3]);
+                let face =
+                    vec3::normalize_or(vec3::cross(vec3::sub(b, a), vec3::sub(c, a)), [0.0; 3]);
                 let centre = vec3::scale(vec3::add(vec3::add(a, b), c), 1.0 / 3.0);
                 let probe = vec3::add(centre, vec3::scale(face, 0.05));
-                let cell = view.cell((probe[0] / CELL).floor() as i32, (probe[2] / CELL).floor() as i32);
-                assert_ne!(cell, Cell::Rock, "{name}: a face looks into rock at {centre:?}");
+                let cell = view.cell(
+                    (probe[0] / CELL).floor() as i32,
+                    (probe[2] / CELL).floor() as i32,
+                );
+                assert_ne!(
+                    cell,
+                    Cell::Rock,
+                    "{name}: a face looks into rock at {centre:?}"
+                );
                 if let Some(sign) = toward {
-                    assert!(face[1] * sign > -0.01, "{name}: faces the wrong way at {centre:?}");
+                    assert!(
+                        face[1] * sign > -0.01,
+                        "{name}: faces the wrong way at {centre:?}"
+                    );
                 }
             }
         }
@@ -1141,16 +1586,23 @@ mod tests {
 
     /// The wall stone of stone halls levels in chunks, for the seeds (of the delve that Abyss
     /// makes) at depths 2 and 4.
-    fn wall_chunks(seeds: std::ops::RangeInclusive<u32>) -> impl Iterator<Item = (u32, u32, Level, Vec<LevelMesh>)> {
-        seeds.flat_map(|seed| [2u32, 4].map(|depth| (seed, depth))).filter_map(|(seed, depth)| {
-            let level = crate::travel::Abyss::new(seed).level_at(depth);
-            if level.style != LevelStyle::StoneHalls {
-                return None;
-            }
-            let view = CellView::new(&level);
-            let meshes = super::super::chunks(&view, 8).into_iter().map(|range| level_mesh(&view, range)).collect();
-            Some((seed, depth, level, meshes))
-        })
+    fn wall_chunks(
+        seeds: std::ops::RangeInclusive<u32>,
+    ) -> impl Iterator<Item = (u32, u32, Level, Vec<LevelMesh>)> {
+        seeds
+            .flat_map(|seed| [2u32, 4].map(|depth| (seed, depth)))
+            .filter_map(|(seed, depth)| {
+                let level = crate::travel::Abyss::new(seed).level_at(depth);
+                if level.style != LevelStyle::StoneHalls {
+                    return None;
+                }
+                let view = CellView::new(&level);
+                let meshes = super::super::chunks(&view, 8)
+                    .into_iter()
+                    .map(|range| level_mesh(&view, range))
+                    .collect();
+                Some((seed, depth, level, meshes))
+            })
     }
 
     /// No wall face stands out in the rock, beyond the stones' proud reach, and none lies on
@@ -1164,18 +1616,34 @@ mod tests {
                     (-1..=1).any(|dx| {
                         let (x, y) = (cx + dx, cz + dy);
                         let (x0, z0) = (x as f32 * CELL, y as f32 * CELL);
-                        let (ddx, ddz) = ((x0 - q[0]).max(q[0] - (x0 + CELL)).max(0.0), (z0 - q[2]).max(q[2] - (z0 + CELL)).max(0.0));
+                        let (ddx, ddz) = (
+                            (x0 - q[0]).max(q[0] - (x0 + CELL)).max(0.0),
+                            (z0 - q[2]).max(q[2] - (z0 + CELL)).max(0.0),
+                        );
                         view.cell(x, y) != Cell::Rock && ddx.hypot(ddz) < 1.2
                     })
                 })
             };
             for mesh in &meshes {
-                for p in mesh.surfaces.parts.iter().filter(|p| p.name == "walls" || p.name == "damp") {
+                for p in mesh
+                    .surfaces
+                    .parts
+                    .iter()
+                    .filter(|p| p.name == "walls" || p.name == "damp")
+                {
                     let far = p.positions.iter().find(|q| !in_reach(q));
-                    assert!(far.is_none(), "seed {seed} depth {depth}: a wall vertex stands out in the rock at {far:?}");
+                    assert!(
+                        far.is_none(),
+                        "seed {seed} depth {depth}: a wall vertex stands out in the rock at {far:?}"
+                    );
                 }
                 let overlaps = coplanar_overlaps(mesh, &["walls", "damp"]);
-                assert!(overlaps.is_empty(), "seed {seed} depth {depth}: {} overlapping wall faces, e.g. {}", overlaps.len(), overlaps[0]);
+                assert!(
+                    overlaps.is_empty(),
+                    "seed {seed} depth {depth}: {} overlapping wall faces, e.g. {}",
+                    overlaps.len(),
+                    overlaps[0]
+                );
             }
         }
     }
@@ -1194,26 +1662,52 @@ mod tests {
     /// Pairs of coplanar triangles with the same facing that overlap, in the `names` parts.
     fn coplanar_overlaps(mesh: &LevelMesh, names: &[&str]) -> Vec<String> {
         let mut tris: Vec<(usize, i32, i64, [[f32; 2]; 3], f32)> = Vec::new();
-        for p in mesh.surfaces.parts.iter().filter(|p| names.contains(&p.name)) {
+        for p in mesh
+            .surfaces
+            .parts
+            .iter()
+            .filter(|p| names.contains(&p.name))
+        {
             for tri in p.indices.as_chunks::<3>().0 {
                 let ps = [tri[0], tri[1], tri[2]].map(|i| p.positions[i as usize]);
-                let n = vec3::normalize_or(vec3::cross(vec3::sub(ps[1], ps[0]), vec3::sub(ps[2], ps[0])), [0.0; 3]);
-                let Some(axis) = [0, 2].into_iter().find(|&a| n[a].abs() > 0.9999) else { continue };
+                let n = vec3::normalize_or(
+                    vec3::cross(vec3::sub(ps[1], ps[0]), vec3::sub(ps[2], ps[0])),
+                    [0.0; 3],
+                );
+                let Some(axis) = [0, 2].into_iter().find(|&a| n[a].abs() > 0.9999) else {
+                    continue;
+                };
                 let plane = (ps[0][axis] * 20.0).round() as i64;
                 let flat = ps.map(|q| match axis {
                     0 => [q[1], q[2]],
                     1 => [q[0], q[2]],
                     _ => [q[0], q[1]],
                 });
-                tris.push((axis, if n[axis] > 0.0 { 1 } else { -1 }, plane, flat, ps[0][axis]));
+                tris.push((
+                    axis,
+                    if n[axis] > 0.0 { 1 } else { -1 },
+                    plane,
+                    flat,
+                    ps[0][axis],
+                ));
             }
         }
         tris.sort_by_key(|t| (t.0, t.1, t.2));
         let mut out = Vec::new();
         for (i, a) in tris.iter().enumerate() {
-            for b in tris[i + 1..].iter().take_while(|b| (b.0, b.1) == (a.0, a.1) && b.2 - a.2 <= 1) {
+            for b in tris[i + 1..]
+                .iter()
+                .take_while(|b| (b.0, b.1) == (a.0, a.1) && b.2 - a.2 <= 1)
+            {
                 if (a.4 - b.4).abs() < 0.002 && overlap_area(&a.3, &b.3) > 0.5 {
-                    out.push(format!("axis {} facing {} near {:.2}: {:?} over {:?}", a.0, a.1, a.2 as f32 / 20.0, a.3, b.3));
+                    out.push(format!(
+                        "axis {} facing {} near {:.2}: {:?} over {:?}",
+                        a.0,
+                        a.1,
+                        a.2 as f32 / 20.0,
+                        a.3,
+                        b.3
+                    ));
                 }
             }
         }
@@ -1223,7 +1717,8 @@ mod tests {
     /// The area two triangles share, by clipping one against the other.
     fn overlap_area(a: &[[f32; 2]; 3], b: &[[f32; 2]; 3]) -> f32 {
         fn wound(t: &[[f32; 2]; 3]) -> [[f32; 2]; 3] {
-            let area = (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0]);
+            let area = (t[1][0] - t[0][0]) * (t[2][1] - t[0][1])
+                - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0]);
             if area < 0.0 { [t[0], t[2], t[1]] } else { *t }
         }
         let (a, b) = (wound(a), wound(b));
@@ -1248,7 +1743,12 @@ mod tests {
                 return 0.0;
             }
         }
-        let area: f32 = (0..poly.len()).map(|j| poly[j][0] * poly[(j + 1) % poly.len()][1] - poly[(j + 1) % poly.len()][0] * poly[j][1]).sum();
+        let area: f32 = (0..poly.len())
+            .map(|j| {
+                poly[j][0] * poly[(j + 1) % poly.len()][1]
+                    - poly[(j + 1) % poly.len()][0] * poly[j][1]
+            })
+            .sum();
         area.abs() * 0.5
     }
 
@@ -1259,10 +1759,18 @@ mod tests {
             let view = CellView::new(&level);
             let vaults = Vaults::new(&level);
             let mesh = level_mesh(&view, view.bounds());
-            let ceiling: std::collections::HashSet<_> = part(&mesh, "ceiling").positions.iter().map(key).collect();
-            let tops: Vec<_> = part(&mesh, "walls").positions.iter().filter(|p| p[1] > 1.0 && (p[1] - vaults.height(p[0], p[2])).abs() < 1e-4).collect();
+            let ceiling: std::collections::HashSet<_> =
+                part(&mesh, "ceiling").positions.iter().map(key).collect();
+            let tops: Vec<_> = part(&mesh, "walls")
+                .positions
+                .iter()
+                .filter(|p| p[1] > 1.0 && (p[1] - vaults.height(p[0], p[2])).abs() < 1e-4)
+                .collect();
             assert!(tops.len() > 100);
-            assert!(tops.iter().all(|p| ceiling.contains(&key(p))), "seed {seed}: a wall top is off the ceiling's grid");
+            assert!(
+                tops.iter().all(|p| ceiling.contains(&key(p))),
+                "seed {seed}: a wall top is off the ceiling's grid"
+            );
         }
     }
 
@@ -1273,10 +1781,24 @@ mod tests {
         let mesh = level_mesh(&view, view.bounds());
         let floor = part(&mesh, "floor");
         let (x0, y0, x1, y1) = view.bounds();
-        let cells = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| view.cell(x, y) != Cell::Rock).count();
-        let in_plane = floor.indices.as_chunks::<3>().0.iter().filter(|tri| tri.iter().all(|&i| floor.positions[i as usize][1] == 0.0)).count();
+        let cells = (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| view.cell(x, y) != Cell::Rock)
+            .count();
+        let in_plane = floor
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|tri| tri.iter().all(|&i| floor.positions[i as usize][1] == 0.0))
+            .count();
         assert_eq!(in_plane, cells * SEGMENTS * SEGMENTS * 2);
-        assert!(floor.positions.iter().all(|p| p[1] >= 0.0 && p[1] <= FLAG_RAISE.1 + 1e-4));
+        assert!(
+            floor
+                .positions
+                .iter()
+                .all(|p| p[1] >= 0.0 && p[1] <= FLAG_RAISE.1 + 1e-4)
+        );
     }
 
     #[test]
@@ -1287,15 +1809,28 @@ mod tests {
         let walls = part(&mesh, "walls");
         // A triangle facing along a wall's normal either is the shell, whole on a cell plane
         // and reaching the floor, or stands off it. Blocks have no face of their own in the plane.
-        let on_plane = |p: &[f32; 3], axis: usize| (p[axis] / CELL - (p[axis] / CELL).round()).abs() < 1e-5;
+        let on_plane =
+            |p: &[f32; 3], axis: usize| (p[axis] / CELL - (p[axis] / CELL).round()).abs() < 1e-5;
         let (mut proud, mut shell) = (0, 0);
         for tri in walls.indices.as_chunks::<3>().0 {
             let ps = [tri[0], tri[1], tri[2]].map(|i| walls.positions[i as usize]);
-            let n = vec3::normalize_or(vec3::cross(vec3::sub(ps[1], ps[0]), vec3::sub(ps[2], ps[0])), [0.0; 3]);
-            let axis = if n[0].abs() > 0.99 { 0 } else if n[2].abs() > 0.99 { 2 } else { continue };
+            let n = vec3::normalize_or(
+                vec3::cross(vec3::sub(ps[1], ps[0]), vec3::sub(ps[2], ps[0])),
+                [0.0; 3],
+            );
+            let axis = if n[0].abs() > 0.99 {
+                0
+            } else if n[2].abs() > 0.99 {
+                2
+            } else {
+                continue;
+            };
             if ps.iter().all(|p| on_plane(p, axis)) {
                 shell += 1;
-                assert!(ps.iter().any(|p| p[1] == 0.0) || ps.iter().all(|p| p[1] > 0.0), "a stone face lies in the shell's plane");
+                assert!(
+                    ps.iter().any(|p| p[1] == 0.0) || ps.iter().all(|p| p[1] > 0.0),
+                    "a stone face lies in the shell's plane"
+                );
             } else {
                 proud += 1;
             }
@@ -1310,12 +1845,24 @@ mod tests {
             let level = halls(seed);
             let view = CellView::new(&level);
             let whole = level_mesh(&view, view.bounds());
-            let mut all: Vec<[i64; 3]> = part(&whole, "walls").positions.iter().chain(&part(&whole, "damp").positions).map(key).collect();
+            let mut all: Vec<[i64; 3]> = part(&whole, "walls")
+                .positions
+                .iter()
+                .chain(&part(&whole, "damp").positions)
+                .map(key)
+                .collect();
             let mut pieces: Vec<[i64; 3]> = Vec::new();
             let mut fine: Vec<[i64; 3]> = Vec::new();
             for range in super::super::chunks(&view, 5) {
                 let piece = level_mesh(&view, range);
-                pieces.extend(piece.surfaces.parts.iter().filter(|p| p.name == "walls" || p.name == "damp").flat_map(|p| p.positions.iter().map(key)));
+                pieces.extend(
+                    piece
+                        .surfaces
+                        .parts
+                        .iter()
+                        .filter(|p| p.name == "walls" || p.name == "damp")
+                        .flat_map(|p| p.positions.iter().map(key)),
+                );
                 fine.extend(piece.joints.positions.iter().map(key));
             }
             all.sort_unstable();
@@ -1338,37 +1885,82 @@ mod tests {
         fn with(level: &Level, rubble_chance: f64) -> CellView<'_> {
             // The chances weigh the quarters' characters against the plain one: all rubble needs a
             // weight that swamps it, and half of them one near its own.
-            let rubble_chance = if rubble_chance >= 1.0 { 1e6 } else if rubble_chance > 0.0 { 0.4 } else { 0.0 };
-            let params = fb_level::LevelParams { rubble_chance, cobble_chance: 0.0, arch_chance: 0.0, ..fb_level::LevelParams::for_style(level.style) };
+            let rubble_chance = if rubble_chance >= 1.0 {
+                1e6
+            } else if rubble_chance > 0.0 {
+                0.4
+            } else {
+                0.0
+            };
+            let params = fb_level::LevelParams {
+                rubble_chance,
+                cobble_chance: 0.0,
+                arch_chance: 0.0,
+                ..fb_level::LevelParams::for_style(level.style)
+            };
             CellView::with_params(level, &params)
         }
-        let walls_triangles = |m: &LevelMesh| ["walls", "damp"].iter().map(|n| part(m, n).indices.len() / 3).sum::<usize>();
+        let walls_triangles = |m: &LevelMesh| {
+            ["walls", "damp"]
+                .iter()
+                .map(|n| part(m, n).indices.len() / 3)
+                .sum::<usize>()
+        };
         let styles = |view: &CellView, level: &Level| -> std::collections::HashSet<WallFinish> {
-            (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| view.finishes().at(x, y)).map(|f| f.walls).collect()
+            (0..level.height as i32)
+                .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+                .filter_map(|(x, y)| view.finishes().at(x, y))
+                .map(|f| f.walls)
+                .collect()
         };
         // Styles go by quarter, so not every level mixes them: take the first three that do.
-        let mixing: Vec<u32> = (1..200).filter(|&seed| {
-            let level = halls(seed);
-            let both = styles(&with(&level, 0.5), &level);
-            both.contains(&WallFinish::Rubble) && both.contains(&WallFinish::Ashlar)
-        }).take(3).collect();
-        assert_eq!(mixing.len(), 3, "levels that mix rubble and ashlar: {mixing:?}");
+        let mixing: Vec<u32> = (1..200)
+            .filter(|&seed| {
+                let level = halls(seed);
+                let both = styles(&with(&level, 0.5), &level);
+                both.contains(&WallFinish::Rubble) && both.contains(&WallFinish::Ashlar)
+            })
+            .take(3)
+            .collect();
+        assert_eq!(
+            mixing.len(),
+            3,
+            "levels that mix rubble and ashlar: {mixing:?}"
+        );
         for seed in mixing {
             let level = halls(seed);
             let (ashlar, rubble, mixed) = (with(&level, 0.0), with(&level, 1.0), with(&level, 0.5));
-            let (a, r) = (level_mesh(&ashlar, ashlar.bounds()), level_mesh(&rubble, rubble.bounds()));
+            let (a, r) = (
+                level_mesh(&ashlar, ashlar.bounds()),
+                level_mesh(&rubble, rubble.bounds()),
+            );
             // Smaller stones in shorter courses: more of them over the same walls.
-            assert!(walls_triangles(&r) as f32 > 1.15 * walls_triangles(&a) as f32, "seed {seed}: {} against {}", walls_triangles(&r), walls_triangles(&a));
+            assert!(
+                walls_triangles(&r) as f32 > 1.15 * walls_triangles(&a) as f32,
+                "seed {seed}: {} against {}",
+                walls_triangles(&r),
+                walls_triangles(&a)
+            );
             for p in &r.surfaces.parts {
                 p.validate().unwrap();
             }
             // Blocks change style at a cell boundary, and laid in chunks come out the same.
             let whole = level_mesh(&mixed, mixed.bounds());
-            let mut all: Vec<[i64; 3]> = ["walls", "damp"].iter().flat_map(|n| part(&whole, n).positions.iter().map(key)).collect();
+            let mut all: Vec<[i64; 3]> = ["walls", "damp"]
+                .iter()
+                .flat_map(|n| part(&whole, n).positions.iter().map(key))
+                .collect();
             let mut pieces: Vec<[i64; 3]> = Vec::new();
             for range in super::super::chunks(&mixed, 5) {
                 let piece = level_mesh(&mixed, range);
-                pieces.extend(piece.surfaces.parts.iter().filter(|p| p.name == "walls" || p.name == "damp").flat_map(|p| p.positions.iter().map(key)));
+                pieces.extend(
+                    piece
+                        .surfaces
+                        .parts
+                        .iter()
+                        .filter(|p| p.name == "walls" || p.name == "damp")
+                        .flat_map(|p| p.positions.iter().map(key)),
+                );
             }
             all.sort_unstable();
             pieces.sort_unstable();
@@ -1392,7 +1984,9 @@ mod tests {
             let (cx, cz) = ((p[0] / CELL).floor() as i32, (p[2] / CELL).floor() as i32);
             // Skirts end on the plane itself, which is the edge of rock; a block's own vertex
             // is clear of it, in the cell its face looks into.
-            let inside = view.cell(cx, cz) != Cell::Rock || (on_x && view.cell(cx - 1, cz) != Cell::Rock) || (on_z && view.cell(cx, cz - 1) != Cell::Rock);
+            let inside = view.cell(cx, cz) != Cell::Rock
+                || (on_x && view.cell(cx - 1, cz) != Cell::Rock)
+                || (on_z && view.cell(cx, cz - 1) != Cell::Rock);
             assert!(inside, "a block vertex lies in rock at {p:?}");
         }
     }
@@ -1409,18 +2003,41 @@ mod tests {
             let column = column(spot.seat, spot.top, spot.variant, level.seed);
             for p in &column.parts {
                 p.validate().unwrap();
-                assert!(p.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3));
+                assert!(
+                    p.normals
+                        .iter()
+                        .all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3)
+                );
             }
             let (lo, hi) = column.bounds().unwrap();
             // Inside the cell, thinner than it.
-            assert!(lo[0] >= -CELL * 0.5 && hi[0] <= CELL * 0.5 && lo[2] >= -CELL * 0.5 && hi[2] <= CELL * 0.5);
+            assert!(
+                lo[0] >= -CELL * 0.5
+                    && hi[0] <= CELL * 0.5
+                    && lo[2] >= -CELL * 0.5
+                    && hi[2] <= CELL * 0.5
+            );
             assert!(hi[0] - lo[0] < CELL * 0.7);
             assert!(lo[1] >= 0.0 && (hi[1] - spot.top).abs() < 1e-3);
             // It reaches the vault without poking far through it.
-            let (cx, cz) = ((spot.cell.0 as f32 + 0.5) * CELL, (spot.cell.1 as f32 + 0.5) * CELL);
-            for (sx, sz) in [(-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (0.0, 0.0)] {
+            let (cx, cz) = (
+                (spot.cell.0 as f32 + 0.5) * CELL,
+                (spot.cell.1 as f32 + 0.5) * CELL,
+            );
+            for (sx, sz) in [
+                (-1.0, -1.0),
+                (1.0, 1.0),
+                (-1.0, 1.0),
+                (1.0, -1.0),
+                (0.0, 0.0),
+            ] {
                 let ceiling = vaults.height(cx + sx * COLUMN_HALF, cz + sz * COLUMN_HALF);
-                assert!(spot.seat <= ceiling + 1e-3 && spot.top >= ceiling, "seat {} and top {} about ceiling {ceiling}", spot.seat, spot.top);
+                assert!(
+                    spot.seat <= ceiling + 1e-3 && spot.top >= ceiling,
+                    "seat {} and top {} about ceiling {ceiling}",
+                    spot.seat,
+                    spot.top
+                );
             }
         }
     }
@@ -1430,14 +2047,31 @@ mod tests {
         let made = column(34.0, 36.0, 1, 1207);
         let body = &made.parts[0];
         let radius_near = |y: f32| {
-            let r: Vec<f32> = body.positions.iter().filter(|p| (p[1] - y).abs() < 0.8 && p[0].hypot(p[2]) > 2.0 && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
+            let r: Vec<f32> = body
+                .positions
+                .iter()
+                .filter(|p| {
+                    (p[1] - y).abs() < 0.8 && p[0].hypot(p[2]) > 2.0 && p[0].hypot(p[2]) < 5.4
+                })
+                .map(|p| p[0].hypot(p[2]))
+                .collect();
             r.iter().sum::<f32>() / r.len() as f32
         };
         let (low, third, top) = (radius_near(5.0), radius_near(13.0), radius_near(24.0));
-        assert!(third > low - 0.15 && third > top, "entasis: {low} {third} {top}");
+        assert!(
+            third > low - 0.15 && third > top,
+            "entasis: {low} {third} {top}"
+        );
         // The chips and the wander make the shaft uneven round its circumference.
-        let ring: Vec<f32> = body.positions.iter().filter(|p| (p[1] - 6.0).abs() < 0.8 && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
-        let (lo, hi) = ring.iter().fold((f32::MAX, f32::MIN), |(l, h), &r| (l.min(r), h.max(r)));
+        let ring: Vec<f32> = body
+            .positions
+            .iter()
+            .filter(|p| (p[1] - 6.0).abs() < 0.8 && p[0].hypot(p[2]) < 5.4)
+            .map(|p| p[0].hypot(p[2]))
+            .collect();
+        let (lo, hi) = ring
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &r| (l.min(r), h.max(r)));
         assert!(hi - lo > 0.1, "{lo} {hi}");
         // The same column twice, and a different variant another.
         assert_eq!(made, column(34.0, 36.0, 1, 1207));
@@ -1456,8 +2090,17 @@ mod tests {
             for p in &frame.parts {
                 p.validate().unwrap();
             }
-            let highest = frame.parts[0].positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
-            assert!(highest >= vaults.highest_over(door.x, door.y), "masonry stops short of the vault at ({}, {})", door.x, door.y);
+            let highest = frame.parts[0]
+                .positions
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::MIN, f32::max);
+            assert!(
+                highest >= vaults.highest_over(door.x, door.y),
+                "masonry stops short of the vault at ({}, {})",
+                door.x,
+                door.y
+            );
         }
     }
 
@@ -1473,10 +2116,23 @@ mod tests {
             for z in (0..level.height * 80).step_by(5) {
                 for x in (0..level.width * 80).step_by(7) {
                     let (px, pz) = (x as f32 * 0.25 + 0.037, z as f32 * 0.25 + 0.011);
-                    let (a, b, c) = (vaults.height(px, pz), vaults.height(px + 0.1, pz), vaults.height(px, pz + 0.1));
-                    assert!((a - b).abs() < 0.2, "seed {seed}: ceiling jumps {a} to {b} at ({px}, {pz})");
-                    assert!((a - c).abs() < 0.2, "seed {seed}: ceiling jumps {a} to {c} at ({px}, {pz})");
-                    assert!((spring - 1e-3..=spring + MAX_RISE + 1e-3).contains(&a), "{a}");
+                    let (a, b, c) = (
+                        vaults.height(px, pz),
+                        vaults.height(px + 0.1, pz),
+                        vaults.height(px, pz + 0.1),
+                    );
+                    assert!(
+                        (a - b).abs() < 0.2,
+                        "seed {seed}: ceiling jumps {a} to {b} at ({px}, {pz})"
+                    );
+                    assert!(
+                        (a - c).abs() < 0.2,
+                        "seed {seed}: ceiling jumps {a} to {c} at ({px}, {pz})"
+                    );
+                    assert!(
+                        (spring - 1e-3..=spring + MAX_RISE + 1e-3).contains(&a),
+                        "{a}"
+                    );
                 }
             }
         }
@@ -1498,12 +2154,18 @@ mod tests {
             let z = (a.y as f32 + a.h as f32 * step as f32 / 40.0) * CELL;
             for back in [0.0, 0.5, 1.0, 3.0] {
                 let x = (a.x + a.w) as f32 * CELL - back;
-                assert!((both.height(x, z) - alone.height(x, z)).abs() < 1e-4, "room a's own ceiling at ({x}, {z})");
+                assert!(
+                    (both.height(x, z) - alone.height(x, z)).abs() < 1e-4,
+                    "room a's own ceiling at ({x}, {z})"
+                );
             }
             let edge = (a.x + a.w) as f32 * CELL;
             for k in 0..40 {
                 let x = edge + CELL * 2.0 * k as f32 / 40.0;
-                assert!((both.height(x, z) - both.height(x + 0.05, z)).abs() < 0.2, "a jump between the rooms at ({x}, {z})");
+                assert!(
+                    (both.height(x, z) - both.height(x + 0.05, z)).abs() < 0.2,
+                    "a jump between the rooms at ({x}, {z})"
+                );
             }
         }
     }
@@ -1518,7 +2180,11 @@ mod tests {
             let (bottom, height) = *courses.last().unwrap();
             assert!(bottom + height >= spring + MAX_RISE);
             assert!(courses.iter().all(|&(_, h)| h > 3.0 && h < 5.2));
-            assert!(courses.windows(2).all(|w| (w[0].0 + w[0].1 - w[1].0).abs() < 1e-4));
+            assert!(
+                courses
+                    .windows(2)
+                    .all(|w| (w[0].0 + w[0].1 - w[1].0).abs() < 1e-4)
+            );
         }
     }
 

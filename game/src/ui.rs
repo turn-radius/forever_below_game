@@ -11,7 +11,11 @@ use bevy::prelude::*;
 use fb_items::Rarity;
 
 const fn hex(rgb: u32) -> Color {
-    Color::srgb(((rgb >> 16) & 0xff) as f32 / 255.0, ((rgb >> 8) & 0xff) as f32 / 255.0, (rgb & 0xff) as f32 / 255.0)
+    Color::srgb(
+        ((rgb >> 16) & 0xff) as f32 / 255.0,
+        ((rgb >> 8) & 0xff) as f32 / 255.0,
+        (rgb & 0xff) as f32 / 255.0,
+    )
 }
 
 /// The page: the whole screen, and the hover card (`--bg`).
@@ -58,13 +62,26 @@ pub const COIN_COPPER: Color = hex(0xd9875a);
 /// copper, made into the fewest coins first. No coin is "0 cp", in copper.
 pub fn coin_runs(coins: fb_items::Coins) -> Vec<(String, Color)> {
     let c = fb_items::Coins::from_copper(coins.total_copper());
-    let runs: Vec<(String, Color)> = [(c.gp, "gp", COIN_GOLD), (c.sp, "sp", COIN_SILVER), (c.cp, "cp", COIN_COPPER)]
-        .into_iter()
-        .filter(|&(n, ..)| n > 0)
-        .enumerate()
-        .map(|(i, (n, unit, colour))| (format!("{}{n} {unit}", if i == 0 { "" } else { " " }), colour))
-        .collect();
-    if runs.is_empty() { vec![("0 cp".to_string(), COIN_COPPER)] } else { runs }
+    let runs: Vec<(String, Color)> = [
+        (c.gp, "gp", COIN_GOLD),
+        (c.sp, "sp", COIN_SILVER),
+        (c.cp, "cp", COIN_COPPER),
+    ]
+    .into_iter()
+    .filter(|&(n, ..)| n > 0)
+    .enumerate()
+    .map(|(i, (n, unit, colour))| {
+        (
+            format!("{}{n} {unit}", if i == 0 { "" } else { " " }),
+            colour,
+        )
+    })
+    .collect();
+    if runs.is_empty() {
+        vec![("0 cp".to_string(), COIN_COPPER)]
+    } else {
+        runs
+    }
 }
 
 /// A price short enough for a grid cell, in its largest coin, with one decimal under ten:
@@ -85,9 +102,17 @@ pub fn coin_tag(copper: u64) -> (String, Color) {
 }
 
 /// Spawns `coins` as spans of the text `line`, each in its metal, in Plex Mono bold at `size`.
-pub fn coin_spans(line: &mut ChildSpawnerCommands, fonts: &UiFonts, coins: fb_items::Coins, size: f32) {
+pub fn coin_spans(
+    line: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    coins: fb_items::Coins,
+    size: f32,
+) {
     for (run, colour) in coin_runs(coins) {
-        line.spawn((TextSpan::new(run), UiFonts::style(&fonts.mono_bold, size, colour)));
+        line.spawn((
+            TextSpan::new(run),
+            UiFonts::style(&fonts.mono_bold, size, colour),
+        ));
     }
 }
 
@@ -135,7 +160,11 @@ impl FromWorld for UiFonts {
     /// Loads the fonts, or leaves Bevy's default font everywhere when there is no asset server
     /// (in tests).
     fn from_world(world: &mut World) -> Self {
-        let load = |path: &'static str| world.get_resource::<AssetServer>().map_or_else(Handle::default, |assets| assets.load(path));
+        let load = |path: &'static str| {
+            world
+                .get_resource::<AssetServer>()
+                .map_or_else(Handle::default, |assets| assets.load(path))
+        };
         UiFonts {
             display: load("fonts/Almendra-Regular.ttf"),
             display_bold: load("fonts/Almendra-Bold.ttf"),
@@ -152,7 +181,10 @@ impl FromWorld for UiFonts {
 impl UiFonts {
     /// A text style in `font` at `size` logical pixels.
     pub fn style(font: &Handle<Font>, size: f32, color: Color) -> (TextFont, TextColor) {
-        (TextFont::from_font_size(size).with_font(font.clone()), TextColor(color))
+        (
+            TextFont::from_font_size(size).with_font(font.clone()),
+            TextColor(color),
+        )
     }
 }
 
@@ -172,13 +204,29 @@ impl Plugin for InterfaceScalePlugin {
 /// camera in the delve, the title's camera on the title. Left alone while there is none.
 #[allow(clippy::type_complexity)]
 pub fn fit_interface(
-    cameras: Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>,
+    cameras: Query<
+        &Camera,
+        Or<(
+            With<crate::carry::ViewModelCamera>,
+            With<bevy::ui::IsDefaultUiCamera>,
+        )>,
+    >,
     tuning: Option<Res<crate::tuning::Tuning>>,
     scale: Option<ResMut<UiScale>>,
 ) {
     let Some(mut scale) = scale else { return };
-    let Some(view) = cameras.iter().filter(|c| c.is_active).find_map(Camera::logical_viewport_size).filter(|v| v.min_element() > 0.0) else { return };
-    let wanted = tuning.map_or_else(|| crate::tuning::InterfaceTuning::default().scale(view), |t| t.interface.scale(view));
+    let Some(view) = cameras
+        .iter()
+        .filter(|c| c.is_active)
+        .find_map(Camera::logical_viewport_size)
+        .filter(|v| v.min_element() > 0.0)
+    else {
+        return;
+    };
+    let wanted = tuning.map_or_else(
+        || crate::tuning::InterfaceTuning::default().scale(view),
+        |t| t.interface.scale(view),
+    );
     if scale.0 != wanted {
         scale.0 = wanted;
     }
@@ -202,7 +250,10 @@ pub fn hud_font(n: f32) -> bevy::text::FontSize {
 
 /// A node's rectangle in logical pixels.
 pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
-    Rect::from_center_size(transform.translation * node.inverse_scale_factor, node.size * node.inverse_scale_factor)
+    Rect::from_center_size(
+        transform.translation * node.inverse_scale_factor,
+        node.size * node.inverse_scale_factor,
+    )
 }
 
 /// The cursor in the UI's logical pixels, those of [`node_rect`]: the window's divided by
@@ -210,7 +261,9 @@ pub fn node_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
 /// target's scale factor times `UiScale`, `bevy_ui` 0.20 `update.rs`). With no `UiScale`
 /// resource, the window's own.
 pub fn ui_cursor(window: &Window, scale: Option<&UiScale>) -> Option<Vec2> {
-    window.cursor_position().map(|c| c / scale.map_or(1.0, |s| s.0.max(f32::EPSILON)))
+    window
+        .cursor_position()
+        .map(|c| c / scale.map_or(1.0, |s| s.0.max(f32::EPSILON)))
 }
 
 /// `text` cut into runs of words, each marked whether it is a value: a word with a digit in
@@ -246,18 +299,30 @@ pub fn numbers_line(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &s
 }
 
 /// [`numbers_line`], with the value `tint` names (its text, such as "65/165") in the colour given.
-pub fn numbers_line_tinted(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, text: &str, size: f32, tint: Option<(&str, Color)>) {
-    parent.spawn((Text::default(), UiFonts::style(&fonts.mono, size, MUTED))).with_children(|line| {
-        for (run, value) in value_runs(text) {
-            let (font, mut colour) = if value { (&fonts.mono_bold, BRIGHT) } else { (&fonts.mono, MUTED) };
-            if let Some((word, tinted)) = tint {
-                if value && run.trim() == word {
-                    colour = tinted;
+pub fn numbers_line_tinted(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    text: &str,
+    size: f32,
+    tint: Option<(&str, Color)>,
+) {
+    parent
+        .spawn((Text::default(), UiFonts::style(&fonts.mono, size, MUTED)))
+        .with_children(|line| {
+            for (run, value) in value_runs(text) {
+                let (font, mut colour) = if value {
+                    (&fonts.mono_bold, BRIGHT)
+                } else {
+                    (&fonts.mono, MUTED)
+                };
+                if let Some((word, tinted)) = tint {
+                    if value && run.trim() == word {
+                        colour = tinted;
+                    }
                 }
+                line.spawn((TextSpan::new(run), UiFonts::style(font, size, colour)));
             }
-            line.spawn((TextSpan::new(run), UiFonts::style(font, size, colour)));
-        }
-    });
+        });
 }
 
 /// Where the dashes go along a side `length` long: `(start, length)` of each, `dash` long with
@@ -270,18 +335,34 @@ pub fn dash_runs(length: f32, dash: f32, gap: f32) -> Vec<(f32, f32)> {
     let dash = dash.min(length);
     let used = count as f32 * dash + (count - 1) as f32 * gap;
     let start = (length - used) * 0.5;
-    (0..count).map(|i| (start + i as f32 * (dash + gap), dash)).collect()
+    (0..count)
+        .map(|i| (start + i as f32 * (dash + gap), dash))
+        .collect()
 }
 
 /// A dashed outline round a `size` box, spawned as absolutely placed children of `parent`
 /// (which must be `size`): dashes along the straight sides and a solid quarter arc at each
 /// corner of `radius`. Bevy's UI draws only solid borders.
-pub fn dashed_outline(parent: &mut ChildSpawnerCommands, size: Vec2, radius: f32, width: f32, dash: f32, gap: f32, colour: Color) {
+pub fn dashed_outline(
+    parent: &mut ChildSpawnerCommands,
+    size: Vec2,
+    radius: f32,
+    width: f32,
+    dash: f32,
+    gap: f32,
+    colour: Color,
+) {
     let r = radius.min(size.x * 0.5).min(size.y * 0.5);
     let edge = |on: bool, value: Val| if on { value } else { Val::Auto };
     let thick = |on: bool| if on { px(width) } else { px(0) };
     for (left, top) in [(true, true), (false, true), (true, false), (false, false)] {
-        let round = |at: bool| if at { CornerRadius::from(px(r)) } else { CornerRadius::default() };
+        let round = |at: bool| {
+            if at {
+                CornerRadius::from(px(r))
+            } else {
+                CornerRadius::default()
+            }
+        };
         parent.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -291,7 +372,12 @@ pub fn dashed_outline(parent: &mut ChildSpawnerCommands, size: Vec2, radius: f32
                 bottom: edge(!top, px(0)),
                 width: px(r),
                 height: px(r),
-                border: UiRect { left: thick(left), right: thick(!left), top: thick(top), bottom: thick(!top) },
+                border: UiRect {
+                    left: thick(left),
+                    right: thick(!left),
+                    top: thick(top),
+                    bottom: thick(!top),
+                },
                 border_radius: BorderRadius {
                     top_left: round(left && top),
                     top_right: round(!left && top),
@@ -305,7 +391,14 @@ pub fn dashed_outline(parent: &mut ChildSpawnerCommands, size: Vec2, radius: f32
     }
     let mut dash_node = |left: f32, top: f32, w: f32, h: f32| {
         parent.spawn((
-            Node { position_type: PositionType::Absolute, left: px(left), top: px(top), width: px(w), height: px(h), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(left),
+                top: px(top),
+                width: px(w),
+                height: px(h),
+                ..default()
+            },
             BackgroundColor(colour),
         ));
     };
@@ -329,7 +422,10 @@ mod tests {
         assert_eq!(load_colour(LoadBand::Encumbered), Some(ORANGE));
         assert_eq!(load_colour(LoadBand::Overloaded), Some(RED));
         let hue = |c: Color| Hsla::from(c).hue;
-        assert!(hue(AMBER) > hue(ORANGE) && hue(ORANGE) > hue(RED), "amber, then orange, then red");
+        assert!(
+            hue(AMBER) > hue(ORANGE) && hue(ORANGE) > hue(RED),
+            "amber, then orange, then red"
+        );
     }
 
     use super::*;
@@ -341,9 +437,15 @@ mod tests {
         let scale = |w: f32, h: f32| interface.scale(Vec2::new(w, h));
         assert_eq!(scale(1920.0, 1080.0), 1.0);
         assert!((scale(1280.0, 720.0) - 2.0 / 3.0).abs() < 1e-4);
-        assert!((scale(2560.0, 1440.0) - 4.0 / 3.0).abs() < 1e-4, "a bigger window, a bigger interface");
+        assert!(
+            (scale(2560.0, 1440.0) - 4.0 / 3.0).abs() < 1e-4,
+            "a bigger window, a bigger interface"
+        );
         assert_eq!(scale(2560.0, 1080.0), 1.0, "ultrawide: the height decides");
-        assert!((scale(1280.0, 1024.0) - 2.0 / 3.0).abs() < 1e-4, "5:4: the width decides");
+        assert!(
+            (scale(1280.0, 1024.0) - 2.0 / 3.0).abs() < 1e-4,
+            "5:4: the width decides"
+        );
         assert_eq!(scale(640.0, 360.0), 0.5, "never under the floor");
     }
 
@@ -355,16 +457,40 @@ mod tests {
         assert_eq!(ui_cursor(&window, None), Some(Vec2::new(640.0, 300.0)));
         // Drawn at two thirds, the interface's pixel under the mouse is half as far again.
         let cursor = ui_cursor(&window, Some(&UiScale(2.0 / 3.0))).unwrap();
-        assert!((cursor - Vec2::new(960.0, 450.0)).length() < 1e-3, "{cursor}");
+        assert!(
+            (cursor - Vec2::new(960.0, 450.0)).length() < 1e-3,
+            "{cursor}"
+        );
     }
 
     #[test]
     fn coins_read_in_their_own_metal() {
         use fb_items::Coins;
-        let runs = coin_runs(Coins { gp: 0, sp: 23, cp: 5 });
-        assert_eq!(runs, vec![("2 gp".to_string(), COIN_GOLD), (" 3 sp".to_string(), COIN_SILVER), (" 5 cp".to_string(), COIN_COPPER)]);
-        assert_eq!(coin_runs(Coins { gp: 0, sp: 8, cp: 0 }), vec![("8 sp".to_string(), COIN_SILVER)]);
-        assert_eq!(coin_runs(Coins::default()), vec![("0 cp".to_string(), COIN_COPPER)]);
+        let runs = coin_runs(Coins {
+            gp: 0,
+            sp: 23,
+            cp: 5,
+        });
+        assert_eq!(
+            runs,
+            vec![
+                ("2 gp".to_string(), COIN_GOLD),
+                (" 3 sp".to_string(), COIN_SILVER),
+                (" 5 cp".to_string(), COIN_COPPER)
+            ]
+        );
+        assert_eq!(
+            coin_runs(Coins {
+                gp: 0,
+                sp: 8,
+                cp: 0
+            }),
+            vec![("8 sp".to_string(), COIN_SILVER)]
+        );
+        assert_eq!(
+            coin_runs(Coins::default()),
+            vec![("0 cp".to_string(), COIN_COPPER)]
+        );
         for metal in [COIN_GOLD, COIN_SILVER, COIN_COPPER] {
             assert!(contrast_ratio(metal, BG) >= 4.5, "readable on the page");
             assert!(contrast_ratio(metal, CELL) >= 4.5, "readable on a cell");
@@ -374,7 +500,19 @@ mod tests {
     #[test]
     fn a_grid_tag_names_the_largest_coin() {
         let tag = |cp| coin_tag(cp).0;
-        assert_eq!([tag(250), tag(2500), tag(35), tag(7), tag(200), tag(1049), tag(99), tag(995)], ["2.5g", "25g", "3.5s", "7c", "2g", "10g", "9.9s", "10g"]);
+        assert_eq!(
+            [
+                tag(250),
+                tag(2500),
+                tag(35),
+                tag(7),
+                tag(200),
+                tag(1049),
+                tag(99),
+                tag(995)
+            ],
+            ["2.5g", "25g", "3.5s", "7c", "2g", "10g", "9.9s", "10g"]
+        );
         assert_eq!(coin_tag(250).1, COIN_GOLD);
     }
 
@@ -386,23 +524,46 @@ mod tests {
 
     /// A camera drawing a view `width` by `height` logical pixels.
     fn camera(width: u32, height: u32) -> Camera {
-        let target_info = Some(bevy::camera::RenderTargetInfo { physical_size: UVec2::new(width, height), scale_factor: 1.0 });
-        Camera { computed: bevy::camera::ComputedCameraValues { target_info, ..default() }, ..default() }
+        let target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(width, height),
+            scale_factor: 1.0,
+        });
+        Camera {
+            computed: bevy::camera::ComputedCameraValues {
+                target_info,
+                ..default()
+            },
+            ..default()
+        }
     }
 
     #[test]
     fn every_screen_is_scaled_to_the_view() {
         let mut app = App::new();
-        app.init_resource::<crate::tuning::Tuning>().init_resource::<UiScale>().add_plugins(InterfaceScalePlugin);
+        app.init_resource::<crate::tuning::Tuning>()
+            .init_resource::<UiScale>()
+            .add_plugins(InterfaceScalePlugin);
         app.update();
-        assert_eq!(app.world().resource::<UiScale>().0, 1.0, "left alone with no camera");
+        assert_eq!(
+            app.world().resource::<UiScale>().0,
+            1.0,
+            "left alone with no camera"
+        );
         // The title's camera, with nothing open.
-        let title = app.world_mut().spawn((camera(1280, 720), bevy::ui::IsDefaultUiCamera)).id();
+        let title = app
+            .world_mut()
+            .spawn((camera(1280, 720), bevy::ui::IsDefaultUiCamera))
+            .id();
         app.update();
         assert!((app.world().resource::<UiScale>().0 - 2.0 / 3.0).abs() < 1e-4);
         // The delve's, at another size.
         app.world_mut().despawn(title);
-        app.world_mut().spawn((camera(2560, 1440), crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER }));
+        app.world_mut().spawn((
+            camera(2560, 1440),
+            crate::carry::ViewModelCamera {
+                follows: Entity::PLACEHOLDER,
+            },
+        ));
         app.update();
         assert!((app.world().resource::<UiScale>().0 - 4.0 / 3.0).abs() < 1e-4);
     }
@@ -414,7 +575,10 @@ mod tests {
         assert_eq!(LINE.to_srgba().to_hex(), "#5E5040");
         assert_eq!(INK.to_srgba().to_hex(), "#E6DCC6");
         assert_eq!(MUTED.to_srgba().to_hex(), "#A89A82");
-        assert_eq!(rarity_color(Rarity::Legendary).to_srgba().to_hex(), "#F29550");
+        assert_eq!(
+            rarity_color(Rarity::Legendary).to_srgba().to_hex(),
+            "#F29550"
+        );
     }
 
     /// WCAG 2.1 AA, success criterion 1.4.3: at least 4.5:1 for body text
@@ -425,20 +589,46 @@ mod tests {
         assert!((contrast_ratio(MUTED, BG) - contrast_ratio(BG, MUTED)).abs() < 1e-6);
         let body = contrast_ratio(MUTED, BG);
         assert!(body >= 4.5, "body text {body:.2}:1");
-        let mut inks = vec![("title", INK), ("value", BRIGHT), ("flaw", BAD), ("toast", ACCENT)];
-        inks.extend([Rarity::Common, Rarity::Magic, Rarity::Rare, Rarity::Legendary].map(|r| ("rarity", rarity_color(r))));
+        let mut inks = vec![
+            ("title", INK),
+            ("value", BRIGHT),
+            ("flaw", BAD),
+            ("toast", ACCENT),
+        ];
+        inks.extend(
+            [
+                Rarity::Common,
+                Rarity::Magic,
+                Rarity::Rare,
+                Rarity::Legendary,
+            ]
+            .map(|r| ("rarity", rarity_color(r))),
+        );
         for (what, ink) in inks {
             let ratio = contrast_ratio(ink, BG);
-            assert!(ratio >= 4.5, "{what} {} {ratio:.2}:1", ink.to_srgba().to_hex());
+            assert!(
+                ratio >= 4.5,
+                "{what} {} {ratio:.2}:1",
+                ink.to_srgba().to_hex()
+            );
         }
     }
 
     #[test]
     fn values_are_picked_out_of_a_line() {
-        let runs = value_runs("Magic \u{b7} Sword \u{b7} 3.5 lb \u{b7} 1d8+1 damage \u{b7} 1\u{d7}4 cells");
-        let values: Vec<&str> = runs.iter().filter(|(_, v)| *v).map(|(r, _)| r.trim_end()).collect();
+        let runs = value_runs(
+            "Magic \u{b7} Sword \u{b7} 3.5 lb \u{b7} 1d8+1 damage \u{b7} 1\u{d7}4 cells",
+        );
+        let values: Vec<&str> = runs
+            .iter()
+            .filter(|(_, v)| *v)
+            .map(|(r, _)| r.trim_end())
+            .collect();
         assert_eq!(values, vec!["3.5", "1d8+1", "1\u{d7}4"]);
-        assert_eq!(runs.iter().map(|(r, _)| r.as_str()).collect::<String>(), "Magic \u{b7} Sword \u{b7} 3.5 lb \u{b7} 1d8+1 damage \u{b7} 1\u{d7}4 cells");
+        assert_eq!(
+            runs.iter().map(|(r, _)| r.as_str()).collect::<String>(),
+            "Magic \u{b7} Sword \u{b7} 3.5 lb \u{b7} 1d8+1 damage \u{b7} 1\u{d7}4 cells"
+        );
         assert_eq!(value_runs("Empty"), vec![("Empty".to_string(), false)]);
     }
 
@@ -447,8 +637,14 @@ mod tests {
         let runs = dash_runs(100.0, 6.0, 4.0);
         assert_eq!(runs.len(), 10);
         let last = runs.last().unwrap();
-        assert!((runs[0].0 - (100.0 - last.0 - last.1)).abs() < 1e-4, "the same margin at both ends");
-        assert!(runs.windows(2).all(|w| (w[1].0 - w[0].0 - 10.0).abs() < 1e-4));
+        assert!(
+            (runs[0].0 - (100.0 - last.0 - last.1)).abs() < 1e-4,
+            "the same margin at both ends"
+        );
+        assert!(
+            runs.windows(2)
+                .all(|w| (w[1].0 - w[0].0 - 10.0).abs() < 1e-4)
+        );
         assert_eq!(dash_runs(3.0, 6.0, 4.0), vec![(0.0, 3.0)]);
         assert!(dash_runs(0.0, 6.0, 4.0).is_empty());
     }

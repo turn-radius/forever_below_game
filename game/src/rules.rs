@@ -52,7 +52,14 @@ impl GameRules {
 pub fn data_folder() -> String {
     let root = match std::env::var_os("BEVY_ASSET_ROOT").map(std::path::PathBuf::from) {
         Some(root) => std::path::absolute(&root).unwrap_or(root),
-        None => std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(ToOwned::to_owned)).unwrap_or_default()),
+        None => std::env::var_os("CARGO_MANIFEST_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(ToOwned::to_owned))
+                    .unwrap_or_default()
+            }),
     };
     root.join("../data").to_string_lossy().into_owned()
 }
@@ -60,7 +67,10 @@ pub fn data_folder() -> String {
 /// Registers the `data` asset source. Call it before `DefaultPlugins` are added.
 pub fn use_data_folder(app: &mut App) {
     use bevy::asset::AssetApp;
-    app.register_asset_source(DATA_SOURCE, AssetSourceBuilder::platform_default(&data_folder(), None));
+    app.register_asset_source(
+        DATA_SOURCE,
+        AssetSourceBuilder::platform_default(&data_folder(), None),
+    );
 }
 
 /// Reads `rules.toml` into [`GameRules`].
@@ -72,11 +82,18 @@ impl AssetLoader for RulesLoader {
     type Settings = ();
     type Error = std::io::Error;
 
-    async fn load(&self, reader: &mut dyn Reader, _settings: &(), _load_context: &mut LoadContext<'_>) -> Result<GameRules, Self::Error> {
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        _load_context: &mut LoadContext<'_>,
+    ) -> Result<GameRules, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         // A file that is not valid rules is an error the asset server logs, and the rules stay as they were.
-        toml::from_str(&String::from_utf8_lossy(&bytes)).map(GameRules).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        toml::from_str(&String::from_utf8_lossy(&bytes))
+            .map(GameRules)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     fn extensions(&self) -> &[&str] {
@@ -100,11 +117,17 @@ pub struct RulesPlugin;
 impl Plugin for RulesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GameRules>();
-        let has_source = app.world().get_resource::<AssetServer>().is_some_and(|server| server.get_source(DATA_SOURCE).is_ok());
+        let has_source = app
+            .world()
+            .get_resource::<AssetServer>()
+            .is_some_and(|server| server.get_source(DATA_SOURCE).is_ok());
         if has_source {
             app.init_asset::<GameRules>()
                 .init_asset_loader::<RulesLoader>()
-                .add_systems(Startup, load_rules.run_if(not(resource_exists::<RulesFile>)))
+                .add_systems(
+                    Startup,
+                    load_rules.run_if(not(resource_exists::<RulesFile>)),
+                )
                 .add_systems(PreUpdate, apply_rules_file.in_set(RulesSet));
         }
     }
@@ -115,10 +138,17 @@ fn load_rules(mut commands: Commands, assets: Res<AssetServer>) {
 }
 
 /// Copies the file into [`GameRules`] when it loads and each time it is saved.
-fn apply_rules_file(mut events: MessageReader<AssetEvent<GameRules>>, file: Option<Res<RulesFile>>, files: Res<Assets<GameRules>>, mut rules: ResMut<GameRules>) {
+fn apply_rules_file(
+    mut events: MessageReader<AssetEvent<GameRules>>,
+    file: Option<Res<RulesFile>>,
+    files: Res<Assets<GameRules>>,
+    mut rules: ResMut<GameRules>,
+) {
     let Some(file) = file else { return };
     for event in events.read() {
-        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = *event else { continue };
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = *event else {
+            continue;
+        };
         if id != file.0.id() {
             continue;
         }
@@ -139,14 +169,24 @@ mod tests {
 
     #[test]
     fn the_shipped_file_is_the_defaults() {
-        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("data").join(RULES_FILE)).unwrap();
-        assert_eq!(GameRules(toml::from_str(&text).unwrap()), GameRules::default());
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("data")
+                .join(RULES_FILE),
+        )
+        .unwrap();
+        assert_eq!(
+            GameRules(toml::from_str(&text).unwrap()),
+            GameRules::default()
+        );
     }
 
     #[test]
     fn without_the_data_source_the_rules_are_the_defaults() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default())).add_plugins(RulesPlugin);
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .add_plugins(RulesPlugin);
         app.update();
         assert_eq!(*app.world().resource::<GameRules>(), GameRules::default());
         assert!(app.world().get_resource::<RulesFile>().is_none());
@@ -155,7 +195,9 @@ mod tests {
     #[test]
     fn a_missing_resource_reads_as_the_defaults() {
         let mut app = App::new();
-        app.add_systems(Update, |rules: Option<Res<GameRules>>| assert_eq!(*GameRules::of(&rules), Rules::default()));
+        app.add_systems(Update, |rules: Option<Res<GameRules>>| {
+            assert_eq!(*GameRules::of(&rules), Rules::default())
+        });
         app.update();
     }
 
@@ -173,18 +215,31 @@ mod tests {
         let mut app = App::new();
         // As `use_data_folder` leaves the asset server: a `data` source is there to load from.
         use_data_folder(&mut app);
-        app.add_plugins((MinimalPlugins, AssetPlugin::default())).add_plugins(RulesPlugin);
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .add_plugins(RulesPlugin);
         let mut faster = Rules::default();
         faster.needs.hunger_hours_to_full = 8.0;
-        let handle = app.world_mut().resource_mut::<Assets<GameRules>>().add(GameRules::default());
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<GameRules>>()
+            .add(GameRules::default());
         app.insert_resource(RulesFile(handle.clone()));
         app.update();
         assert_eq!(*app.world().resource::<GameRules>(), GameRules::default());
         // As a reload does: the asset's value is replaced, and an event says so.
-        let _ = app.world_mut().resource_mut::<Assets<GameRules>>().insert(&handle, GameRules(faster.clone()));
+        let _ = app
+            .world_mut()
+            .resource_mut::<Assets<GameRules>>()
+            .insert(&handle, GameRules(faster.clone()));
         app.update();
         app.update();
-        assert_eq!(app.world().resource::<GameRules>().needs.hunger_hours_to_full, 8.0);
+        assert_eq!(
+            app.world()
+                .resource::<GameRules>()
+                .needs
+                .hunger_hours_to_full,
+            8.0
+        );
     }
 
     #[test]

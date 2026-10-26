@@ -22,10 +22,10 @@
 //! Sight is a clear line across the level ([`fb_level::path::line_of_sight`]) within [`SEE`].
 //! Our own.
 
+use crate::combat::{ArmourClass, attack_roll};
 use bevy::prelude::*;
 use fb_character::combat::Odds;
 use fb_character::modifier;
-use crate::combat::{ArmourClass, attack_roll};
 use fb_faction::Band;
 use fb_level::path::line_of_sight;
 use fb_level::{CELL, Level};
@@ -67,10 +67,21 @@ impl Plugin for FolkRegardPlugin {
             .init_resource::<Obstacles>()
             .init_resource::<BlockedCells>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (note_striker, hostile_on_sight, regard, assist).chain().after(crate::hostility::turn_on_the_delver).before(crate::folk_routine::walk_routines).in_set(DelveSystems));
+            .add_systems(
+                Update,
+                (note_striker, hostile_on_sight, regard, assist)
+                    .chain()
+                    .after(crate::hostility::turn_on_the_delver)
+                    .before(crate::folk_routine::walk_routines)
+                    .in_set(DelveSystems),
+            );
         // `FB_STANDING=<faction index>:<band>`, for captures (README, "Debug switches").
-        if let Some(set) = std::env::var("FB_STANDING").ok().and_then(|v| parse_standing(&v)) {
-            app.insert_resource(DebugStanding(set)).add_systems(Update, force_standing.in_set(DelveSystems));
+        if let Some(set) = std::env::var("FB_STANDING")
+            .ok()
+            .and_then(|v| parse_standing(&v))
+        {
+            app.insert_resource(DebugStanding(set))
+                .add_systems(Update, force_standing.in_set(DelveSystems));
         }
     }
 }
@@ -102,7 +113,9 @@ struct DebugStanding((fb_faction::Faction, Band));
 
 fn parse_standing(v: &str) -> Option<(fb_faction::Faction, Band)> {
     let (id, band) = v.split_once(':')?;
-    let band = Band::ALL.into_iter().find(|b| b.label().eq_ignore_ascii_case(band.trim()))?;
+    let band = Band::ALL
+        .into_iter()
+        .find(|b| b.label().eq_ignore_ascii_case(band.trim()))?;
     Some((fb_faction::Faction(id.trim().parse().ok()?), band))
 }
 
@@ -133,7 +146,10 @@ fn cell(p: Vec2) -> (i32, i32) {
 /// Whether `p` (world `(x, z)`) stands in a room `faction` holds on `level`.
 pub fn in_claim(level: &Level, p: Vec2, faction: fb_faction::Faction) -> bool {
     let (x, y) = cell(p);
-    level.room_at(x, y).and_then(|room| level.claim_of(room)).is_some_and(|claim| claim.faction == faction)
+    level
+        .room_at(x, y)
+        .and_then(|room| level.claim_of(room))
+        .is_some_and(|claim| claim.faction == faction)
 }
 
 fn angle_between(from: f32, to: f32) -> f32 {
@@ -141,7 +157,11 @@ fn angle_between(from: f32, to: f32) -> f32 {
 }
 
 /// Remembers the creature whose blow last landed on the delver.
-fn note_striker(time: Res<Time>, mut attacks: MessageReader<AttackOnDelver>, mut last: ResMut<LastStriker>) {
+fn note_striker(
+    time: Res<Time>,
+    mut attacks: MessageReader<AttackOnDelver>,
+    mut last: ResMut<LastStriker>,
+) {
     let now = time.elapsed_secs();
     for attack in attacks.read() {
         if attack.species.is_some() {
@@ -159,16 +179,28 @@ fn hostile_on_sight(
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
     mut folk: Query<(&Denizen, &Transform, &mut Hostility), Without<Corpse>>,
 ) {
-    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
+    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else {
+        return;
+    };
     for (denizen, at, mut hostility) in &mut folk {
-        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
-        if hostility.is_hostile() || record.standings.band(denizen.person.faction.id) != Band::Hostile {
+        let blocked = crate::doors::opaque_for(
+            &level.0,
+            &blocked_cells,
+            doors.as_deref(),
+            Some(denizen.person.faction.id),
+        );
+        if hostility.is_hostile()
+            || record.standings.band(denizen.person.faction.id) != Band::Hostile
+        {
             continue;
         }
         let at = at.translation.xz();
         if at.distance(player) <= SEE && line_of_sight(grid(at), grid(player), &blocked) {
             *hostility = Hostility::Hostile;
-            info!("{} of {} attacks the delver on sight", denizen.person.name, denizen.person.faction.name);
+            info!(
+                "{} of {} attacks the delver on sight",
+                denizen.person.name, denizen.person.faction.name
+            );
         }
     }
 }
@@ -190,18 +222,34 @@ fn regard(
     mut toasts: Toasts,
     mut last_spoke: Local<std::collections::HashMap<fb_faction::Faction, f32>>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
-    mut folk: Query<(Entity, &Denizen, &Transform, &Hostility, &mut Routine, Option<&mut Greeting>, Has<Attending>, Has<Assisting>), Without<Corpse>>,
+    mut folk: Query<
+        (
+            Entity,
+            &Denizen,
+            &Transform,
+            &Hostility,
+            &mut Routine,
+            Option<&mut Greeting>,
+            Has<Attending>,
+            Has<Assisting>,
+        ),
+        Without<Corpse>,
+    >,
 ) {
     let dt = time.delta_secs().min(0.1);
-    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
+    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else {
+        return;
+    };
     let now = time.elapsed_secs();
     for (entity, denizen, at, hostility, mut routine, greeting, attending, assisting) in &mut folk {
         let faction = denizen.person.faction.id;
-        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(faction));
+        let blocked =
+            crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(faction));
         let band = record.standings.band(faction);
         let at = at.translation.xz();
         let distance = at.distance(player);
-        let cares = !hostility.is_hostile() && matches!(band, Band::Wary | Band::Friendly | Band::Allied);
+        let cares =
+            !hostility.is_hostile() && matches!(band, Band::Wary | Band::Friendly | Band::Allied);
         let sees = cares && distance <= SEE && line_of_sight(grid(at), grid(player), &blocked);
 
         // Greeting: a hold of a moment, then the cooldown runs out on its own.
@@ -221,17 +269,32 @@ fn regard(
                 greeted = false;
             }
         }
-        if !greeted && sees && !assisting && matches!(band, Band::Friendly | Band::Allied) && distance <= GREET_RANGE {
+        if !greeted
+            && sees
+            && !assisting
+            && matches!(band, Band::Friendly | Band::Allied)
+            && distance <= GREET_RANGE
+        {
             // Kin who greet together turn together, but one speaks for them.
-            if last_spoke.get(&faction).is_none_or(|&then| now - then > TOAST_GAP) {
+            if last_spoke
+                .get(&faction)
+                .is_none_or(|&then| now - then > TOAST_GAP)
+            {
                 last_spoke.insert(faction, now);
-                toasts.add(&format!("{} nods to you.", first_name(&denizen.person.name)));
+                toasts.add(&format!(
+                    "{} nods to you.",
+                    first_name(&denizen.person.name)
+                ));
             }
-            commands.entity(entity).insert(Greeting { left: GREET_TIME, cooldown: GREET_COOLDOWN });
+            commands.entity(entity).insert(Greeting {
+                left: GREET_TIME,
+                cooldown: GREET_COOLDOWN,
+            });
             greeting_now = true;
         }
 
-        let watching = sees && !assisting && band == Band::Wary && in_claim(&level.0, player, faction);
+        let watching =
+            sees && !assisting && band == Band::Wary && in_claim(&level.0, player, faction);
         let hold = watching || greeting_now;
         if hold {
             // Their own hold, taken once and given back once: others who hold them (a talk) keep
@@ -262,24 +325,87 @@ fn assist(
     mut struck: MessageWriter<Struck>,
     rules: Option<Res<crate::rules::GameRules>>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
-    creatures: Query<(&Critter, &Transform, Option<&ArmourClass>), (Without<Denizen>, Without<Corpse>, Without<Player>)>,
-    mut folk: Query<(Entity, &Denizen, &Hostility, &Combatant, &mut Fight, &mut Stride, &mut ArmSwing, &mut Transform, &mut Routine, Has<Assisting>), (With<Denizen>, Without<Corpse>, Without<Critter>, Without<Player>)>,
+    creatures: Query<
+        (&Critter, &Transform, Option<&ArmourClass>),
+        (Without<Denizen>, Without<Corpse>, Without<Player>),
+    >,
+    mut folk: Query<
+        (
+            Entity,
+            &Denizen,
+            &Hostility,
+            &Combatant,
+            &mut Fight,
+            &mut Stride,
+            &mut ArmSwing,
+            &mut Transform,
+            &mut Routine,
+            Has<Assisting>,
+        ),
+        (
+            With<Denizen>,
+            Without<Corpse>,
+            Without<Critter>,
+            Without<Player>,
+        ),
+    >,
 ) {
     let dt = time.delta_secs().min(0.1);
     if dt <= 0.0 {
         return;
     }
-    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
+    let Some(player) = player.iter().next().map(|t| t.translation.xz()) else {
+        return;
+    };
     let now = time.elapsed_secs();
-    let target = last.0.filter(|(_, when)| now - when <= STRIKER_FOR).and_then(|(creature, _)| creatures.get(creature).ok().map(|(c, t, ac)| (creature, c, t.translation.xz(), ac.copied().unwrap_or(ArmourClass::UNARMOURED).0)));
+    let target = last
+        .0
+        .filter(|(_, when)| now - when <= STRIKER_FOR)
+        .and_then(|(creature, _)| {
+            creatures.get(creature).ok().map(|(c, t, ac)| {
+                (
+                    creature,
+                    c,
+                    t.translation.xz(),
+                    ac.copied().unwrap_or(ArmourClass::UNARMOURED).0,
+                )
+            })
+        });
     let relief = crate::level::geometry::Relief::new(&level.0);
-    for (entity, denizen, hostility, combatant, mut fight, mut stride, mut arm, mut transform, mut routine, assisting) in &mut folk {
-        let blocked = crate::doors::solid_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
-        let see = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
+    for (
+        entity,
+        denizen,
+        hostility,
+        combatant,
+        mut fight,
+        mut stride,
+        mut arm,
+        mut transform,
+        mut routine,
+        assisting,
+    ) in &mut folk
+    {
+        let blocked = crate::doors::solid_for(
+            &level.0,
+            &blocked_cells,
+            doors.as_deref(),
+            Some(denizen.person.faction.id),
+        );
+        let see = crate::doors::opaque_for(
+            &level.0,
+            &blocked_cells,
+            doors.as_deref(),
+            Some(denizen.person.faction.id),
+        );
         let at = transform.translation.xz();
-        let ally = !hostility.is_hostile() && record.standings.band(denizen.person.faction.id) == Band::Allied;
+        let ally = !hostility.is_hostile()
+            && record.standings.band(denizen.person.faction.id) == Band::Allied;
         let engaged = target.filter(|&(_, _, goes, _)| {
-            ally && at.distance(goes) <= ALLY_RANGE && (assisting || (at.distance(player) <= SEE && line_of_sight(grid(at), grid(goes), &see) && line_of_sight(grid(at), grid(player), &see)))
+            ally && at.distance(goes) <= ALLY_RANGE
+                && (assisting
+                    || (at.distance(player) <= SEE
+                        && line_of_sight(grid(at), grid(goes), &see)
+                        && line_of_sight(grid(at), grid(player), &see)))
         });
         let Some((creature, critter, goes, armour)) = engaged else {
             if assisting {
@@ -307,10 +433,27 @@ fn assist(
                 fight.landed = true;
                 if at.distance(goes) <= reach * 1.15 {
                     // Rolled to hit against its Armor Class as the delver's swings are.
-                    let attack = attack_roll(crate::rules::GameRules::of(&rules), &combatant.weapon, combatant.strength, armour, Odds::Even, &mut fight.rng);
+                    let attack = attack_roll(
+                        crate::rules::GameRules::of(&rules),
+                        &combatant.weapon,
+                        combatant.strength,
+                        armour,
+                        Odds::Even,
+                        &mut fight.rng,
+                    );
                     if attack.hit {
-                        let damage = combatant.weapon.roll(modifier(combatant.strength), &mut fight.rng);
-                        struck.write(Struck { target: creature, damage, from: at, bludgeoning: combatant.weapon.bludgeoning, critical: attack.natural == 20, by_ally: true, graze: false });
+                        let damage = combatant
+                            .weapon
+                            .roll(modifier(combatant.strength), &mut fight.rng);
+                        struck.write(Struck {
+                            target: creature,
+                            damage,
+                            from: at,
+                            bludgeoning: combatant.weapon.bludgeoning,
+                            critical: attack.natural == 20,
+                            by_ally: true,
+                            graze: false,
+                        });
                     }
                 }
             }
@@ -325,18 +468,22 @@ fn assist(
             let direction = (goes - at).normalize_or_zero();
             let own = |o: &&Obstacle| matches!(o, Obstacle::Circle { centre, radius } if centre.distance(at) < 0.5 * denizen.radius && *radius == denizen.radius);
             let others: Vec<Obstacle> = obstacles.0.iter().filter(|o| !own(o)).copied().collect();
-            let step = (direction * pace(denizen, tuning.folk.walk_speed) * DASH * dt).clamp_length_max((goes - at).length());
+            let step = (direction * pace(denizen, tuning.folk.walk_speed) * DASH * dt)
+                .clamp_length_max((goes - at).length());
             let to = slide_around(at, at + step, denizen.radius, &blocked, &others);
             moved = (to - at).length();
             transform.translation = Vec3::new(to.x, relief.floor_height(to.x, to.y), to.y);
         }
         stride.speed = moved / dt;
-        arm.0 = fight.swing.map(|since| (since / combatant.swing_time).min(1.0));
+        arm.0 = fight
+            .swing
+            .map(|since| (since / combatant.swing_time).min(1.0));
         let to = goes - transform.translation.xz();
         if to.length_squared() > 1e-4 {
             let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
             let turn = angle_between(yaw, to.x.atan2(to.y));
-            transform.rotation = Quat::from_rotation_y(yaw + turn.clamp(-TURN_RATE * dt, TURN_RATE * dt));
+            transform.rotation =
+                Quat::from_rotation_y(yaw + turn.clamp(-TURN_RATE * dt, TURN_RATE * dt));
         }
     }
 }
@@ -369,11 +516,18 @@ mod tests {
 
     fn place(app: &mut App, entity: Entity, at: Vec2) {
         let y = app.world().get::<Transform>(entity).unwrap().translation.y;
-        app.world_mut().get_mut::<Transform>(entity).unwrap().translation = Vec3::new(at.x, y, at.y);
+        app.world_mut()
+            .get_mut::<Transform>(entity)
+            .unwrap()
+            .translation = Vec3::new(at.x, y, at.y);
     }
 
     fn at(app: &App, entity: Entity) -> Vec2 {
-        app.world().get::<Transform>(entity).unwrap().translation.xz()
+        app.world()
+            .get::<Transform>(entity)
+            .unwrap()
+            .translation
+            .xz()
     }
 
     fn step(app: &mut App, frames: usize) {
@@ -387,12 +541,24 @@ mod tests {
         let (mut app, player, folk) = folk_fight(30.0);
         app.world_mut().entity_mut(player).insert(Health::full(500));
         set_band(&mut app, folk, Band::Hostile);
-        assert_eq!(*app.world().get::<Hostility>(folk).unwrap(), Hostility::Friendly, "never provoked");
+        assert_eq!(
+            *app.world().get::<Hostility>(folk).unwrap(),
+            Hostility::Friendly,
+            "never provoked"
+        );
         let mut blows = 0;
         for _ in 0..600 {
             app.update();
-            blows += app.world().resource::<Messages<AttackOnDelver>>().iter_current_update_messages().filter(|a| a.attacker == folk).count();
-            blows += app.world().resource::<Messages<crate::creatures::behaviour::MissedDelver>>().len();
+            blows += app
+                .world()
+                .resource::<Messages<AttackOnDelver>>()
+                .iter_current_update_messages()
+                .filter(|a| a.attacker == folk)
+                .count();
+            blows += app
+                .world()
+                .resource::<Messages<crate::creatures::behaviour::MissedDelver>>()
+                .len();
         }
         assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile());
         assert!(blows > 0, "no blows");
@@ -402,27 +568,38 @@ mod tests {
     fn a_hostile_factions_folk_does_not_calm_down_out_of_sight() {
         let (mut app, player, folk) = folk_fight(30.0);
         app.world_mut().entity_mut(player).insert(Health::full(500));
-        app.world_mut().resource_mut::<Tuning>().folk.lose_interest_after = 1.0;
+        app.world_mut()
+            .resource_mut::<Tuning>()
+            .folk
+            .lose_interest_after = 1.0;
         set_band(&mut app, folk, Band::Hostile);
         step(&mut app, 10);
         assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile());
         let far = out_of_sight_of(&app, at(&app, folk));
         place(&mut app, player, Vec2::new(far.x, far.z));
         step(&mut app, 240);
-        assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile(), "calmed down");
+        assert!(
+            app.world().get::<Hostility>(folk).unwrap().is_hostile(),
+            "calmed down"
+        );
     }
 
     /// A cell of the folk's own room, between `min` and `max` world units from them, in sight.
     fn cell_in_their_room(app: &App, folk: Entity, min: f32, max: f32) -> Vec2 {
         let level = &app.world().resource::<CurrentLevel>().0;
         let here = at(app, folk);
-        let room = level.room_at(cell(here).0, cell(here).1).expect("the folk stand in a room");
+        let room = level
+            .room_at(cell(here).0, cell(here).1)
+            .expect("the folk stand in a room");
         let blocked = |x: i32, y: i32| !level.is_open(x, y);
         (0..level.height as i32)
             .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
             .filter(|&(x, y)| level.room_at(x, y) == Some(room))
             .map(|(x, y)| Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * CELL)
-            .find(|p| (min..=max).contains(&p.distance(here)) && line_of_sight(grid(*p), grid(here), blocked))
+            .find(|p| {
+                (min..=max).contains(&p.distance(here))
+                    && line_of_sight(grid(*p), grid(here), blocked)
+            })
             .expect("a cell in the room")
     }
 
@@ -432,14 +609,20 @@ mod tests {
         set_band(&mut app, folk, Band::Wary);
         let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
         let stand = cell_in_their_room(&app, folk, 45.0, 90.0);
-        assert!(in_claim(&app.world().resource::<CurrentLevel>().0, stand, faction), "the folk's room is their faction's claim");
+        assert!(
+            in_claim(&app.world().resource::<CurrentLevel>().0, stand, faction),
+            "the folk's room is their faction's claim"
+        );
         place(&mut app, player, stand);
         step(&mut app, 90);
         assert_eq!(app.world().get::<Routine>(folk).unwrap().phase, Phase::Held);
         assert!(app.world().get::<Attending>(folk).is_some());
         let to = stand - at(&app, folk);
         let forward = (app.world().get::<Transform>(folk).unwrap().rotation * Vec3::Z).xz();
-        assert!(forward.angle_to(to).abs() < 0.2, "faces the delver: {forward:?} toward {to:?}");
+        assert!(
+            forward.angle_to(to).abs() < 0.2,
+            "faces the delver: {forward:?} toward {to:?}"
+        );
         // They stay held however long the delver stands there.
         step(&mut app, 300);
         assert_eq!(app.world().get::<Routine>(folk).unwrap().phase, Phase::Held);
@@ -470,17 +653,27 @@ mod tests {
         let greeting = *app.world().get::<Greeting>(folk).expect("greeted");
         assert!(greeting.left > 0.0 && app.world().get::<Attending>(folk).is_some());
         let name = first_name(&app.world().get::<Denizen>(folk).unwrap().person.name).to_string();
-        assert_eq!(app.world().resource::<Toast>().text, format!("{name} nods to you."));
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            format!("{name} nods to you.")
+        );
         // The greeting ends, and the delver standing there is not greeted again.
         step(&mut app, 200);
         assert_eq!(app.world().get::<Greeting>(folk).unwrap().left, 0.0);
         assert!(app.world().get::<Attending>(folk).is_none());
         app.world_mut().resource_mut::<Toast>().text.clear();
         step(&mut app, 3000);
-        assert!(app.world().resource::<Toast>().text.is_empty(), "greeted again: {:?}", app.world().resource::<Toast>().text);
+        assert!(
+            app.world().resource::<Toast>().text.is_empty(),
+            "greeted again: {:?}",
+            app.world().resource::<Toast>().text
+        );
         // After the cooldown, a new greeting.
         step(&mut app, (GREET_COOLDOWN * 60.0) as usize);
-        assert!(app.world().resource::<Toast>().text.contains("nods to you"), "never greeted again");
+        assert!(
+            app.world().resource::<Toast>().text.contains("nods to you"),
+            "never greeted again"
+        );
     }
 
     #[test]
@@ -511,8 +704,18 @@ mod tests {
         let (mut blows, mut joined) = (0, false);
         for _ in 0..frames {
             app.update();
-            joined |= app.world_mut().query_filtered::<(), With<Assisting>>().iter(app.world()).next().is_some();
-            blows += app.world().resource::<Messages<Struck>>().iter_current_update_messages().filter(|s| s.target == creature).count();
+            joined |= app
+                .world_mut()
+                .query_filtered::<(), With<Assisting>>()
+                .iter(app.world())
+                .next()
+                .is_some();
+            blows += app
+                .world()
+                .resource::<Messages<Struck>>()
+                .iter_current_update_messages()
+                .filter(|s| s.target == creature)
+                .count();
         }
         (blows, joined)
     }
@@ -524,11 +727,20 @@ mod tests {
         let here = at(&app, folk);
         let beside = at(&app, player) + Vec2::new(0.0, 8.0);
         let (creature, spot) = creature_at(&mut app, beside);
-        app.world_mut().write_message(AttackOnDelver { attacker: creature, species: Some(spot.species), damage: 1, poison: 0, attacker_pos: beside });
+        app.world_mut().write_message(AttackOnDelver {
+            attacker: creature,
+            species: Some(spot.species),
+            damage: 1,
+            poison: 0,
+            attacker_pos: beside,
+        });
         let (blows, joined) = blows_on(&mut app, creature, 600);
         assert!(joined, "never joined");
         assert!(blows > 0, "no blows on the creature");
-        assert!(at(&app, folk).distance(at(&app, creature)) < here.distance(at(&app, creature)), "closed in");
+        assert!(
+            at(&app, folk).distance(at(&app, creature)) < here.distance(at(&app, creature)),
+            "closed in"
+        );
     }
 
     #[test]
@@ -542,13 +754,26 @@ mod tests {
                 app.world_mut().entity_mut(creature).insert(ArmourClass(ac));
             }
             // Out of reach of killing it, so the count is of blows and not of hit points.
-            app.world_mut().entity_mut(creature).insert(crate::combat::Health::full(100_000));
-            app.world_mut().write_message(AttackOnDelver { attacker: creature, species: Some(spot.species), damage: 1, poison: 0, attacker_pos: beside });
+            app.world_mut()
+                .entity_mut(creature)
+                .insert(crate::combat::Health::full(100_000));
+            app.world_mut().write_message(AttackOnDelver {
+                attacker: creature,
+                species: Some(spot.species),
+                damage: 1,
+                poison: 0,
+                attacker_pos: beside,
+            });
             let mut allied = true;
             let mut count = 0;
             for _ in 0..1200 {
                 app.update();
-                for s in app.world().resource::<Messages<Struck>>().iter_current_update_messages().filter(|s| s.target == creature) {
+                for s in app
+                    .world()
+                    .resource::<Messages<Struck>>()
+                    .iter_current_update_messages()
+                    .filter(|s| s.target == creature)
+                {
                     allied &= s.by_ally;
                     count += 1;
                 }
@@ -557,7 +782,10 @@ mod tests {
             count
         };
         let (soft, hard) = (landed(None), landed(Some(40)));
-        assert!(soft > 0 && hard < soft, "{hard} landed on AC 40, {soft} on AC 10");
+        assert!(
+            soft > 0 && hard < soft,
+            "{hard} landed on AC 40, {soft} on AC 10"
+        );
     }
 
     #[test]
@@ -568,15 +796,29 @@ mod tests {
         let home = at(&app, folk);
         place(&mut app, kin, home + Vec2::new(0.0, 200.0));
         step(&mut app, 3);
-        assert!(app.world().get::<Greeting>(folk).is_some() && app.world().get::<Greeting>(kin).is_none());
+        assert!(
+            app.world().get::<Greeting>(folk).is_some()
+                && app.world().get::<Greeting>(kin).is_none()
+        );
         let first = app.world().resource::<Toast>().text.clone();
         // The kinsman walks up a second later, and greets without a line of his own.
         step(&mut app, 60);
         let near = at(&app, player) + Vec2::new(0.0, 20.0);
         place(&mut app, kin, near);
         step(&mut app, 3);
-        assert!(app.world().get::<Greeting>(kin).is_some(), "the kinsman did not greet");
-        assert_eq!(app.world().resource::<Toast>().text.matches("nods to you").count(), 1, "{first:?}");
+        assert!(
+            app.world().get::<Greeting>(kin).is_some(),
+            "the kinsman did not greet"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<Toast>()
+                .text
+                .matches("nods to you")
+                .count(),
+            1,
+            "{first:?}"
+        );
     }
 
     #[test]
@@ -586,7 +828,10 @@ mod tests {
         step(&mut app, 3);
         app.world_mut().get_mut::<Routine>(folk).unwrap().hold(); // a talk
         step(&mut app, 200);
-        assert!(app.world().get::<Attending>(folk).is_none(), "the greeting is over");
+        assert!(
+            app.world().get::<Attending>(folk).is_none(),
+            "the greeting is over"
+        );
         assert_eq!(app.world().get::<Routine>(folk).unwrap().phase, Phase::Held);
     }
 
@@ -596,14 +841,26 @@ mod tests {
         set_band(&mut app, folk, Band::Friendly);
         let beside = at(&app, player) + Vec2::new(0.0, 8.0);
         let (creature, spot) = creature_at(&mut app, beside);
-        app.world_mut().write_message(AttackOnDelver { attacker: creature, species: Some(spot.species), damage: 1, poison: 0, attacker_pos: beside });
+        app.world_mut().write_message(AttackOnDelver {
+            attacker: creature,
+            species: Some(spot.species),
+            damage: 1,
+            poison: 0,
+            attacker_pos: beside,
+        });
         assert_eq!(blows_on(&mut app, creature, 300), (0, false));
     }
 
     #[test]
     fn the_standing_switch_reads_a_faction_and_a_band() {
-        assert_eq!(parse_standing("2:wary"), Some((fb_faction::Faction(2), Band::Wary)));
-        assert_eq!(parse_standing("0:Allied"), Some((fb_faction::Faction(0), Band::Allied)));
+        assert_eq!(
+            parse_standing("2:wary"),
+            Some((fb_faction::Faction(2), Band::Wary))
+        );
+        assert_eq!(
+            parse_standing("0:Allied"),
+            Some((fb_faction::Faction(0), Band::Allied))
+        );
         assert_eq!(parse_standing("x:wary"), None);
         assert_eq!(parse_standing("1:grumpy"), None);
     }

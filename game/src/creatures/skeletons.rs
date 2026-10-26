@@ -34,9 +34,9 @@
 //!   now and then standing about, clack when struck, clash on a shield and fall in a heap.
 
 use bevy::prelude::*;
+use fb_creatures::pose::ArmStance;
 use fb_creatures::skeleton::SkeletonDims;
 use fb_creatures::{DamageType, SkeletonGear, SkeletonState, Species};
-use fb_creatures::pose::ArmStance;
 use fb_items::outfit::OutfitSet;
 use fb_items::{Item, Slot};
 use procgen_rng::Mulberry32;
@@ -107,7 +107,15 @@ pub struct SkeletonKit {
 impl SkeletonKit {
     /// A skeleton with nothing worn or held.
     pub fn bare(state: &SkeletonState) -> SkeletonKit {
-        SkeletonKit::new(state, OutfitSet { worn: Vec::new(), goods: Vec::new(), ground: Vec::new() }, [None, None])
+        SkeletonKit::new(
+            state,
+            OutfitSet {
+                worn: Vec::new(),
+                goods: Vec::new(),
+                ground: Vec::new(),
+            },
+            [None, None],
+        )
     }
 
     /// A skeleton in the gear it rolled.
@@ -116,35 +124,88 @@ impl SkeletonKit {
     }
 
     /// A skeleton in `outfit`, its arms in `stance`.
-    pub fn new(state: &SkeletonState, outfit: OutfitSet, stance: [Option<ArmStance>; 2]) -> SkeletonKit {
+    pub fn new(
+        state: &SkeletonState,
+        outfit: OutfitSet,
+        stance: [Option<ArmStance>; 2],
+    ) -> SkeletonKit {
         use armory::Family;
         let dims = state.dims();
         let height = dims.body.height;
         let radius = state.radius();
         let weapon = outfit.item(Slot::Mainhand);
         let family = weapon.map(|w| w.shape.family());
-        let melee = matches!(family, Some(Family::Sword | Family::Mace | Family::Axe | Family::Club | Family::Spear | Family::Dagger | Family::Staff));
+        let melee = matches!(
+            family,
+            Some(
+                Family::Sword
+                    | Family::Mace
+                    | Family::Axe
+                    | Family::Club
+                    | Family::Spear
+                    | Family::Dagger
+                    | Family::Staff
+            )
+        );
         let (dice, bonus) = match weapon {
             None => (CLAW, 0),
-            Some(w) if melee => (w.profile.stats.damage.map_or(IMPROVISED, |d| (d.count as u32, d.sides as u32)), w.profile.stats.damage_bonus.round() as i32),
+            Some(w) if melee => (
+                w.profile
+                    .stats
+                    .damage
+                    .map_or(IMPROVISED, |d| (d.count as u32, d.sides as u32)),
+                w.profile.stats.damage_bonus.round() as i32,
+            ),
             Some(_) => (IMPROVISED, 0),
         };
-        let length = |w: &Item| w.shape.build().bounds().map_or(0.0, |(lo, hi)| (0..3).map(|i| hi[i] - lo[i]).fold(0.0, f32::max));
+        let length = |w: &Item| {
+            w.shape.build().bounds().map_or(0.0, |(lo, hi)| {
+                (0..3).map(|i| hi[i] - lo[i]).fold(0.0, f32::max)
+            })
+        };
         let reach = match weapon {
             Some(w) if melee => ARM_TO_WRIST * height + length(w),
             _ => ARM_TO_FINGERTIPS * height,
         };
         let swing_time = crate::combat::swing_time(family);
-        let to_hit = weapon.filter(|_| melee).map_or(0, |w| w.profile.stats.to_hit.round() as i32);
-        let armour: Vec<(String, f32)> = outfit.worn.iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)).filter(|(_, a)| *a != 0.0).collect();
+        let to_hit = weapon
+            .filter(|_| melee)
+            .map_or(0, |w| w.profile.stats.to_hit.round() as i32);
+        let armour: Vec<(String, f32)> = outfit
+            .worn
+            .iter()
+            .map(|(_, item)| (item.name.clone(), item.profile.stats.armour))
+            .filter(|(_, a)| *a != 0.0)
+            .collect();
         let armour_class = if armour.is_empty() {
             Species::Skeleton.stat_block().armour_class
         } else {
-            fb_character::explain::armour_class(DEXTERITY, armour).value().round() as i32
+            fb_character::explain::armour_class(DEXTERITY, armour)
+                .value()
+                .round() as i32
         };
-        let block = outfit.item(Slot::Offhand).map_or(0.0, |shield| (BLOCK_BASE + BLOCK_PER_ARMOUR * shield.profile.stats.armour).clamp(0.0, BLOCK_MOST));
-        let bludgeons = matches!(family, None | Some(Family::Mace | Family::Club | Family::Staff | Family::Bow));
-        SkeletonKit { dims, height, radius, stance, outfit, reach, dice, bonus, swing_time, to_hit, armour_class, block, bludgeons }
+        let block = outfit.item(Slot::Offhand).map_or(0.0, |shield| {
+            (BLOCK_BASE + BLOCK_PER_ARMOUR * shield.profile.stats.armour).clamp(0.0, BLOCK_MOST)
+        });
+        let bludgeons = matches!(
+            family,
+            None | Some(Family::Mace | Family::Club | Family::Staff | Family::Bow)
+        );
+        SkeletonKit {
+            dims,
+            height,
+            radius,
+            stance,
+            outfit,
+            reach,
+            dice,
+            bonus,
+            swing_time,
+            to_hit,
+            armour_class,
+            block,
+            bludgeons,
+        }
     }
 
     /// What its blow is called in the log, by what it swings: a sword slashes, a dagger or a
@@ -212,7 +273,11 @@ pub fn damage_taken(damage: u32, kind: DamageType) -> u32 {
 
 /// The damage type of a blow struck with what the delver holds.
 pub fn damage_type(bludgeoning: bool) -> DamageType {
-    if bludgeoning { DamageType::Bludgeoning } else { DamageType::Piercing }
+    if bludgeoning {
+        DamageType::Bludgeoning
+    } else {
+        DamageType::Piercing
+    }
 }
 
 /// The bone clatter of a skeleton, loaded once.
@@ -228,7 +293,11 @@ pub struct BoneSounds {
 fn load_bone_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
     if let Some(assets) = assets {
         commands.insert_resource(BoneSounds {
-            steps: [assets.load("audio/bone_step_1.ogg"), assets.load("audio/bone_step_2.ogg"), assets.load("audio/bone_step_3.ogg")],
+            steps: [
+                assets.load("audio/bone_step_1.ogg"),
+                assets.load("audio/bone_step_2.ogg"),
+                assets.load("audio/bone_step_3.ogg"),
+            ],
             rattle: assets.load("audio/bone_rattle.ogg"),
             hit: assets.load("audio/bone_hit.ogg"),
             block: assets.load("audio/bone_block.ogg"),
@@ -249,18 +318,31 @@ pub struct Rattle {
 impl Rattle {
     pub fn new(seed: u32) -> Rattle {
         let mut rng = Mulberry32::new(seed ^ 0x8A77_1E00);
-        Rattle { left: rng.range_f32(2.0, 8.0), rng }
+        Rattle {
+            left: rng.range_f32(2.0, 8.0),
+            rng,
+        }
     }
 }
 
 /// Hides each skeleton out of the draw distance ([`draw_end`], the fog's end and a margin) of the delver, and shows it again on coming back.
-fn cull_far(tuning: Res<Tuning>, players: Query<&Transform, With<Player>>, mut skeletons: Query<(&Critter, &Transform, &mut Visibility), Without<Player>>) {
-    let Some(player) = players.iter().next().map(|t| t.translation) else { return };
+fn cull_far(
+    tuning: Res<Tuning>,
+    players: Query<&Transform, With<Player>>,
+    mut skeletons: Query<(&Critter, &Transform, &mut Visibility), Without<Player>>,
+) {
+    let Some(player) = players.iter().next().map(|t| t.translation) else {
+        return;
+    };
     for (critter, at, mut visibility) in &mut skeletons {
         if !critter.spot.species.is_skeleton() {
             continue;
         }
-        let wanted = if at.translation.distance(player) > draw_end(&tuning.light) { Visibility::Hidden } else { Visibility::Inherited };
+        let wanted = if at.translation.distance(player) > draw_end(&tuning.light) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
         if *visibility != wanted {
             *visibility = wanted;
         }
@@ -276,10 +358,15 @@ fn rattle_idle(
     settings: Option<Res<GameSettings>>,
     sounds: Option<Res<BoneSounds>>,
     players: Query<&Transform, With<Player>>,
-    mut skeletons: Query<(&Transform, &mut Rattle), (With<Critter>, Without<Corpse>, Without<Player>)>,
+    mut skeletons: Query<
+        (&Transform, &mut Rattle),
+        (With<Critter>, Without<Corpse>, Without<Player>),
+    >,
 ) {
     let Some(sounds) = sounds else { return };
-    let Some(player) = players.iter().next().map(|t| t.translation) else { return };
+    let Some(player) = players.iter().next().map(|t| t.translation) else {
+        return;
+    };
     let game = settings.as_deref().copied().unwrap_or_default();
     for (at, mut rattle) in &mut skeletons {
         rattle.left -= time.delta_secs();
@@ -288,7 +375,14 @@ fn rattle_idle(
         }
         rattle.left = rattle.rng.range_f32(6.0, 14.0);
         if at.translation.distance(player) <= RATTLE_RANGE {
-            play_at(&mut commands, "bones rattle", sounds.rattle.clone(), at.translation, &game, &tuning);
+            play_at(
+                &mut commands,
+                "bones rattle",
+                sounds.rattle.clone(),
+                at.translation,
+                &game,
+                &tuning,
+            );
         }
     }
 }
@@ -316,7 +410,15 @@ mod tests {
                 (slot, item)
             })
             .collect();
-        SkeletonKit::new(&SkeletonState::roll(seed), OutfitSet { worn, goods: Vec::new(), ground: Vec::new() }, [None, None])
+        SkeletonKit::new(
+            &SkeletonState::roll(seed),
+            OutfitSet {
+                worn,
+                goods: Vec::new(),
+                ground: Vec::new(),
+            },
+            [None, None],
+        )
     }
 
     #[test]
@@ -326,9 +428,24 @@ mod tests {
             let sword = kit_in(seed, &[(Slot::Mainhand, "Sword")]);
             let dagger = kit_in(seed, &[(Slot::Mainhand, "Dagger")]);
             let bare = kit_in(seed, &[]);
-            assert!(spear.reach > dagger.reach, "{seed}: spear {} dagger {}", spear.reach, dagger.reach);
-            assert!(sword.reach > dagger.reach, "{seed}: sword {} dagger {}", sword.reach, dagger.reach);
-            assert!(dagger.reach > bare.reach, "{seed}: dagger {} fist {}", dagger.reach, bare.reach);
+            assert!(
+                spear.reach > dagger.reach,
+                "{seed}: spear {} dagger {}",
+                spear.reach,
+                dagger.reach
+            );
+            assert!(
+                sword.reach > dagger.reach,
+                "{seed}: sword {} dagger {}",
+                sword.reach,
+                dagger.reach
+            );
+            assert!(
+                dagger.reach > bare.reach,
+                "{seed}: dagger {} fist {}",
+                dagger.reach,
+                bare.reach
+            );
         }
     }
 
@@ -337,32 +454,62 @@ mod tests {
         let mut rng = Mulberry32::new(3);
         let bare = kit_in(1, &[]);
         assert_eq!(bare.dice, CLAW);
-        assert!((0..200).all(|_| (1..=3).contains(&bare.roll_damage(&mut rng))), "a claw does 1d3");
+        assert!(
+            (0..200).all(|_| (1..=3).contains(&bare.roll_damage(&mut rng))),
+            "a claw does 1d3"
+        );
         let mace = kit_in(1, &[(Slot::Mainhand, "Mace")]);
         let dagger = kit_in(1, &[(Slot::Mainhand, "Dagger")]);
-        assert!(mace.swing_time > dagger.swing_time, "a mace is swung slower than a dagger");
+        assert!(
+            mace.swing_time > dagger.swing_time,
+            "a mace is swung slower than a dagger"
+        );
         let stats = fb_items::roll_item("Mace", 41).unwrap().profile.stats;
         let dice = stats.damage.unwrap();
         assert_eq!(mace.dice, (dice.count as u32, dice.sides as u32));
-        let (lo, hi) = (dice.count as i32 + mace.bonus, (dice.count * dice.sides) as i32 + mace.bonus);
-        assert!((0..300).all(|_| (lo.max(1) as u32..=hi.max(1) as u32).contains(&mace.roll_damage(&mut rng))));
+        let (lo, hi) = (
+            dice.count as i32 + mace.bonus,
+            (dice.count * dice.sides) as i32 + mace.bonus,
+        );
+        assert!(
+            (0..300).all(
+                |_| (lo.max(1) as u32..=hi.max(1) as u32).contains(&mace.roll_damage(&mut rng))
+            )
+        );
         assert!(mace.bludgeons && bare.bludgeons && !dagger.bludgeons);
     }
 
     #[test]
     fn a_skeleton_names_its_blow_by_its_weapon_and_never_bites() {
-        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Sword")]).blow_verb(), "slashes");
-        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Mace")]).blow_verb(), "strikes");
-        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Club")]).blow_verb(), "strikes");
-        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Dagger")]).blow_verb(), "stabs");
+        assert_eq!(
+            kit_in(1, &[(Slot::Mainhand, "Sword")]).blow_verb(),
+            "slashes"
+        );
+        assert_eq!(
+            kit_in(1, &[(Slot::Mainhand, "Mace")]).blow_verb(),
+            "strikes"
+        );
+        assert_eq!(
+            kit_in(1, &[(Slot::Mainhand, "Club")]).blow_verb(),
+            "strikes"
+        );
+        assert_eq!(
+            kit_in(1, &[(Slot::Mainhand, "Dagger")]).blow_verb(),
+            "stabs"
+        );
         assert_eq!(kit_in(1, &[(Slot::Mainhand, "Spear")]).blow_verb(), "stabs");
-        assert_eq!(kit_in(1, &[(Slot::Mainhand, "Hand axe")]).blow_verb(), "hacks");
+        assert_eq!(
+            kit_in(1, &[(Slot::Mainhand, "Hand axe")]).blow_verb(),
+            "hacks"
+        );
         assert_eq!(kit_in(1, &[]).blow_verb(), "claws");
     }
 
     #[test]
     fn every_skeleton_winds_up_for_at_least_half_a_second() {
-        for base in ["Dagger", "Sword", "Spear", "Hand axe", "Mace", "Club", "Bow"] {
+        for base in [
+            "Dagger", "Sword", "Spear", "Hand axe", "Mace", "Club", "Bow",
+        ] {
             let kit = kit_in(2, &[(Slot::Mainhand, base)]);
             assert!(kit.wind_up() >= MIN_WIND_UP, "{base}: {}", kit.wind_up());
         }
@@ -374,12 +521,41 @@ mod tests {
         let bare = kit_in(2, &[(Slot::Mainhand, "Sword")]);
         assert_eq!(bare.armour_class, 13, "armor scraps");
         let helm = kit_in(2, &[(Slot::Head, "Helm"), (Slot::Mainhand, "Sword")]);
-        let kitted = kit_in(2, &[(Slot::Head, "Helm"), (Slot::Body, "Mail"), (Slot::Hands, "Gauntlets"), (Slot::Feet, "Boots"), (Slot::Mainhand, "Sword"), (Slot::Offhand, "Shield")]);
-        assert!(helm.armour_class != 13, "a helm changes it: {}", helm.armour_class);
-        assert!(kitted.armour_class > helm.armour_class, "{} vs {}", kitted.armour_class, helm.armour_class);
-        assert!(kitted.armour_class > bare.armour_class + 2, "{} vs {}", kitted.armour_class, bare.armour_class);
+        let kitted = kit_in(
+            2,
+            &[
+                (Slot::Head, "Helm"),
+                (Slot::Body, "Mail"),
+                (Slot::Hands, "Gauntlets"),
+                (Slot::Feet, "Boots"),
+                (Slot::Mainhand, "Sword"),
+                (Slot::Offhand, "Shield"),
+            ],
+        );
+        assert!(
+            helm.armour_class != 13,
+            "a helm changes it: {}",
+            helm.armour_class
+        );
+        assert!(
+            kitted.armour_class > helm.armour_class,
+            "{} vs {}",
+            kitted.armour_class,
+            helm.armour_class
+        );
+        assert!(
+            kitted.armour_class > bare.armour_class + 2,
+            "{} vs {}",
+            kitted.armour_class,
+            bare.armour_class
+        );
         // The delver's own sum, 10 + Dex modifier + each item's armour.
-        let armour: f32 = kitted.outfit.worn.iter().map(|(_, i)| i.profile.stats.armour).sum();
+        let armour: f32 = kitted
+            .outfit
+            .worn
+            .iter()
+            .map(|(_, i)| i.profile.stats.armour)
+            .sum();
         assert_eq!(kitted.armour_class, 12 + armour.round() as i32);
     }
 
@@ -390,12 +566,29 @@ mod tests {
         assert!(shielded.block > 0.0 && shielded.block <= BLOCK_MOST && open.block == 0.0);
         // Facing +Z (yaw 0) at the origin.
         let (front, behind) = (Vec2::new(0.0, 10.0), Vec2::new(0.0, -10.0));
-        assert!(shielded.blocks(Vec2::ZERO, 0.0, front, 0.0), "a low roll is turned");
-        assert!(!shielded.blocks(Vec2::ZERO, 0.0, front, 0.99), "a high roll gets through");
-        assert!(!shielded.blocks(Vec2::ZERO, 0.0, behind, 0.0), "not from behind");
-        assert!(!open.blocks(Vec2::ZERO, 0.0, front, 0.0), "no shield, no block");
+        assert!(
+            shielded.blocks(Vec2::ZERO, 0.0, front, 0.0),
+            "a low roll is turned"
+        );
+        assert!(
+            !shielded.blocks(Vec2::ZERO, 0.0, front, 0.99),
+            "a high roll gets through"
+        );
+        assert!(
+            !shielded.blocks(Vec2::ZERO, 0.0, behind, 0.0),
+            "not from behind"
+        );
+        assert!(
+            !open.blocks(Vec2::ZERO, 0.0, front, 0.0),
+            "no shield, no block"
+        );
         // Turned east, the front is +X.
-        assert!(shielded.blocks(Vec2::ZERO, std::f32::consts::FRAC_PI_2, Vec2::new(10.0, 0.0), 0.0));
+        assert!(shielded.blocks(
+            Vec2::ZERO,
+            std::f32::consts::FRAC_PI_2,
+            Vec2::new(10.0, 0.0),
+            0.0
+        ));
     }
 
     #[test]
@@ -412,7 +605,17 @@ mod tests {
         let kit = SkeletonKit::bare(&state);
         assert_eq!(kit.height, state.height());
         assert_eq!(kit.radius, state.radius());
-        let critter = Critter::new(fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Skeleton, seed: 9, pack: 0 }, fb_creatures::Creature::Skeleton(state));
+        let critter = Critter::new(
+            fb_level::CreatureSpot {
+                x: 0.0,
+                y: 0.0,
+                yaw: 0.0,
+                species: Species::Skeleton,
+                seed: 9,
+                pack: 0,
+            },
+            fb_creatures::Creature::Skeleton(state),
+        );
         assert!(critter.kit.is_some(), "a skeleton always has its kit");
         assert_eq!(critter.radius, kit.radius);
     }
@@ -436,9 +639,19 @@ mod against_a_fresh_delver {
         let mut kits = Vec::new();
         let mut counts = Vec::new();
         for seed in 1..=levels {
-            let spots: Vec<_> = fb_level::generate(seed, depth).creatures.into_iter().filter(|c| c.species.is_skeleton()).collect();
+            let spots: Vec<_> = fb_level::generate(seed, depth)
+                .creatures
+                .into_iter()
+                .filter(|c| c.species.is_skeleton())
+                .collect();
             counts.push(spots.len());
-            kits.extend(spots.iter().map(|s| SkeletonKit::new(&SkeletonState::roll(s.seed), fb_items::undead::skeleton_outfit(s.seed, fb_items::Odds::kit(depth)), [None, None])));
+            kits.extend(spots.iter().map(|s| {
+                SkeletonKit::new(
+                    &SkeletonState::roll(s.seed),
+                    fb_items::undead::skeleton_outfit(s.seed, fb_items::Odds::kit(depth)),
+                    [None, None],
+                )
+            }));
         }
         (kits, counts)
     }
@@ -470,7 +683,17 @@ mod against_a_fresh_delver {
     /// The delver's mean chance to hit a guard: the Strength modifier and the proficiency bonus,
     /// with a weapon of no ToHit (most of what the first level gives) against each guard's AC.
     fn delver_hits(delvers: &[Character], kits: &[SkeletonKit]) -> f64 {
-        let all: f64 = delvers.iter().flat_map(|d| kits.iter().map(move |k| chance(modifier(d.strength()) + fb_character::combat::PROFICIENCY_BONUS, k.armour_class))).sum();
+        let all: f64 = delvers
+            .iter()
+            .flat_map(|d| {
+                kits.iter().map(move |k| {
+                    chance(
+                        modifier(d.strength()) + fb_character::combat::PROFICIENCY_BONUS,
+                        k.armour_class,
+                    )
+                })
+            })
+            .sum();
         all / (delvers.len() * kits.len()) as f64
     }
 
@@ -479,7 +702,10 @@ mod against_a_fresh_delver {
         let delvers = delvers();
         let (kits, _) = guards(fb_items::undead::FIRST_HALLS, 8);
         let blows = blows_to_down(&delvers, &kits);
-        assert!(blows >= 4.0, "down on blow {blows:.2} on average, so not three survived");
+        assert!(
+            blows >= 4.0,
+            "down on blow {blows:.2} on average, so not three survived"
+        );
         let hits = delver_hits(&delvers, &kits);
         assert!(hits >= 0.5, "hits {:.0}%", hits * 100.0);
     }
@@ -489,18 +715,50 @@ mod against_a_fresh_delver {
     #[ignore = "a report: run with --ignored --nocapture"]
     fn report_the_stone_halls() {
         let delvers = delvers();
-        let hp: Vec<i32> = delvers.iter().map(crate::combat::first_level_hit_points).collect();
+        let hp: Vec<i32> = delvers
+            .iter()
+            .map(crate::combat::first_level_hit_points)
+            .collect();
         let mean = |v: &[i32]| v.iter().sum::<i32>() as f64 / v.len() as f64;
-        let ac: Vec<i32> = delvers.iter().map(|c| 10 + modifier(c.dexterity())).collect();
-        println!("delver: hit points {:.1} (least {}, most {}); bare AC {:.1}", mean(&hp), hp.iter().min().unwrap(), hp.iter().max().unwrap(), mean(&ac));
+        let ac: Vec<i32> = delvers
+            .iter()
+            .map(|c| 10 + modifier(c.dexterity()))
+            .collect();
+        println!(
+            "delver: hit points {:.1} (least {}, most {}); bare AC {:.1}",
+            mean(&hp),
+            hp.iter().min().unwrap(),
+            hp.iter().max().unwrap(),
+            mean(&ac)
+        );
         for depth in [2, 4] {
             let (kits, counts) = guards(depth, 24);
             let n = kits.len() as f64;
             let mut acs: Vec<i32> = kits.iter().map(|k| k.armour_class).collect();
             acs.sort();
-            let damage = kits.iter().map(|k| (k.dice.0 as f64 * (k.dice.1 as f64 + 1.0) / 2.0 + k.bonus as f64).max(1.0)).sum::<f64>() / n;
-            let most = kits.iter().map(|k| (k.dice.0 * k.dice.1) as i32 + k.bonus).max().unwrap();
-            let hits_delver = delvers.iter().enumerate().map(|(i, d)| chance(4 + kits[i % kits.len()].to_hit, 10 + modifier(d.dexterity()))).sum::<f64>() / delvers.len() as f64;
+            let damage = kits
+                .iter()
+                .map(|k| {
+                    (k.dice.0 as f64 * (k.dice.1 as f64 + 1.0) / 2.0 + k.bonus as f64).max(1.0)
+                })
+                .sum::<f64>()
+                / n;
+            let most = kits
+                .iter()
+                .map(|k| (k.dice.0 * k.dice.1) as i32 + k.bonus)
+                .max()
+                .unwrap();
+            let hits_delver = delvers
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    chance(
+                        4 + kits[i % kits.len()].to_hit,
+                        10 + modifier(d.dexterity()),
+                    )
+                })
+                .sum::<f64>()
+                / delvers.len() as f64;
             println!(
                 "depth {depth}: guards a level {:.1} ({}-{}); AC mean {:.1}, median {}, 90th {}; damage a blow {damage:.2} (most {most}); blows to down {:.2}; delver hits {:.0}%; guard hits {:.0}%",
                 counts.iter().sum::<usize>() as f64 / counts.len() as f64,

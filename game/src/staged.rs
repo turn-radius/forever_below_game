@@ -57,10 +57,20 @@ impl Staging {
             .iter()
             .map(|spot| {
                 let (mesh, appearance) = prop_mesh(spot, level, false);
-                StagedProp { mesh, appearance, contents: level.container_contents(spot, odds, &lore) }
+                StagedProp {
+                    mesh,
+                    appearance,
+                    contents: level.container_contents(spot, odds, &lore),
+                }
             })
             .collect();
-        Staging { creatures, items, props, fixtures: FixtureShapes::make(level), odds }
+        Staging {
+            creatures,
+            items,
+            props,
+            fixtures: FixtureShapes::make(level),
+            odds,
+        }
     }
 }
 
@@ -81,8 +91,22 @@ pub struct Staged {
 impl Staged {
     /// Keeps `staging` as the parts of `level`, in place of whatever was kept.
     pub fn set(&mut self, level: &Level, staging: Staging) {
-        let Staging { creatures, items, props, fixtures, odds } = staging;
-        *self = Staged { for_level: Some((level.seed, level.depth)), odds, creatures: Some(creatures), items: Some(items), props: Some(props), fixtures: Some(fixtures), taken: 0 };
+        let Staging {
+            creatures,
+            items,
+            props,
+            fixtures,
+            odds,
+        } = staging;
+        *self = Staged {
+            for_level: Some((level.seed, level.depth)),
+            odds,
+            creatures: Some(creatures),
+            items: Some(items),
+            props: Some(props),
+            fixtures: Some(fixtures),
+            taken: 0,
+        };
     }
 
     fn is_for(&self, level: &Level) -> bool {
@@ -91,7 +115,12 @@ impl Staged {
 
     /// Takes the part `slot` picks, if it is for `level` and `fits` it (a part that does not is
     /// dropped, and the system makes its own).
-    fn take_with<T>(&mut self, level: &Level, slot: impl FnOnce(&mut Self) -> &mut Option<T>, fits: impl FnOnce(&T) -> bool) -> Option<T> {
+    fn take_with<T>(
+        &mut self,
+        level: &Level,
+        slot: impl FnOnce(&mut Self) -> &mut Option<T>,
+        fits: impl FnOnce(&T) -> bool,
+    ) -> Option<T> {
         if !self.is_for(level) {
             return None;
         }
@@ -102,20 +131,33 @@ impl Staged {
 
     /// The creatures made ahead for `level`, once, if that is the level they were made for.
     pub fn take_creatures(&mut self, level: &Level) -> Option<Vec<Built>> {
-        self.take_with(level, |s| &mut s.creatures, |c| c.len() == level.creatures.len())
+        self.take_with(
+            level,
+            |s| &mut s.creatures,
+            |c| c.len() == level.creatures.len(),
+        )
     }
 
     /// The floor items made ahead for `level`, once, if they were rolled against `odds` (the
     /// delver's luck may have changed since).
-    pub fn take_items(&mut self, level: &Level, odds: Odds) -> Option<Vec<Option<(Item, ItemMesh)>>> {
+    pub fn take_items(
+        &mut self,
+        level: &Level,
+        odds: Odds,
+    ) -> Option<Vec<Option<(Item, ItemMesh)>>> {
         let rolled_at = self.odds;
-        self.take_with(level, |s| &mut s.items, |i| i.len() == level.items.len() && rolled_at == odds)
+        self.take_with(
+            level,
+            |s| &mut s.items,
+            |i| i.len() == level.items.len() && rolled_at == odds,
+        )
     }
 
     /// The props made ahead for `level`, once, their containers holding what rolls against
     /// `odds`: rolled again here if the luck changed since they were made.
     pub fn take_props(&mut self, level: &Level, odds: Odds) -> Option<Vec<StagedProp>> {
-        let mut props = self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())?;
+        let mut props =
+            self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())?;
         if self.odds != odds {
             let lore = level.lore();
             for (staged, spot) in props.iter_mut().zip(&level.props) {
@@ -127,7 +169,11 @@ impl Staged {
 
     /// The door and brazier shapes made ahead for `level`, once.
     pub fn take_fixtures(&mut self, level: &Level) -> Option<FixtureShapes> {
-        self.take_with(level, |s| &mut s.fixtures, |f| f.braziers.len() == level.lights.len())
+        self.take_with(
+            level,
+            |s| &mut s.fixtures,
+            |f| f.braziers.len() == level.lights.len(),
+        )
     }
 }
 
@@ -142,12 +188,23 @@ mod tests {
         let odds = Odds::loot(2);
         let mut staged = Staged::default();
         staged.set(&level, Staging::make(&level, odds));
-        assert!(staged.take_items(&other, odds).is_none(), "not the level it was made for");
-        let items = staged.take_items(&level, odds).expect("made for this level");
+        assert!(
+            staged.take_items(&other, odds).is_none(),
+            "not the level it was made for"
+        );
+        let items = staged
+            .take_items(&level, odds)
+            .expect("made for this level");
         assert_eq!(items.len(), level.items.len());
         assert!(staged.take_items(&level, odds).is_none(), "used up");
-        assert_eq!(staged.take_props(&level, odds).map(|p| p.len()), Some(level.props.len()));
-        assert_eq!(staged.take_creatures(&level).map(|c| c.len()), Some(level.creatures.len()));
+        assert_eq!(
+            staged.take_props(&level, odds).map(|p| p.len()),
+            Some(level.props.len())
+        );
+        assert_eq!(
+            staged.take_creatures(&level).map(|c| c.len()),
+            Some(level.creatures.len())
+        );
         assert!(staged.take_fixtures(&level).is_some());
     }
 
@@ -157,10 +214,19 @@ mod tests {
         let (before, after) = (Odds::loot(2), Odds::loot(2).with_luck(3.0));
         let mut staged = Staged::default();
         staged.set(&level, Staging::make(&level, before));
-        assert!(staged.take_items(&level, after).is_none(), "the floor is rolled in place");
-        let props = staged.take_props(&level, after).expect("the shapes still serve");
+        assert!(
+            staged.take_items(&level, after).is_none(),
+            "the floor is rolled in place"
+        );
+        let props = staged
+            .take_props(&level, after)
+            .expect("the shapes still serve");
         for (spot, prop) in level.props.iter().zip(&props) {
-            assert_eq!(prop.contents, level.container_contents(spot, after, &level.lore()), "{spot:?}");
+            assert_eq!(
+                prop.contents,
+                level.container_contents(spot, after, &level.lore()),
+                "{spot:?}"
+            );
         }
     }
 
@@ -179,7 +245,11 @@ mod tests {
             assert_eq!(staging.items.len(), level.items.len());
             for (spot, staged) in level.items.iter().zip(&staging.items) {
                 let rolled = level.floor_item(spot, Odds::loot(depth), &level.lore());
-                assert_eq!(rolled.as_ref(), staged.as_ref().map(|(item, _)| item), "depth {depth}: the loot");
+                assert_eq!(
+                    rolled.as_ref(),
+                    staged.as_ref().map(|(item, _)| item),
+                    "depth {depth}: the loot"
+                );
                 if let (Some(item), Some((_, mesh))) = (&rolled, staged) {
                     assert_eq!(&item.shape.build(), mesh, "depth {depth}: its shape");
                     items += 1;
@@ -188,28 +258,49 @@ mod tests {
 
             assert_eq!(staging.creatures.len(), level.creatures.len());
             for (spot, staged) in level.creatures.iter().zip(&staging.creatures) {
-                assert_eq!(format!("{staged:?}"), format!("{:?}", build_creature(spot, depth)), "depth {depth}: the creature");
+                assert_eq!(
+                    format!("{staged:?}"),
+                    format!("{:?}", build_creature(spot, depth)),
+                    "depth {depth}: the creature"
+                );
                 creatures += 1;
             }
 
             assert_eq!(staging.props.len(), level.props.len());
             for (spot, staged) in level.props.iter().zip(&staging.props) {
                 let (mesh, appearance) = prop_mesh(spot, &level, false);
-                assert_eq!((&mesh, &appearance), (&staged.mesh, &staged.appearance), "depth {depth}: the prop");
+                assert_eq!(
+                    (&mesh, &appearance),
+                    (&staged.mesh, &staged.appearance),
+                    "depth {depth}: the prop"
+                );
                 // A container stocked from the staged contents holds what one stocked in place does.
                 let (mut ahead, mut here) = (Inventory::default(), Inventory::default());
-                let stocked_ahead = stock_container_with(&mut ahead, spot.prop, staged.contents.clone());
-                let stocked_here = stock_container(&mut here, spot, Odds::loot(depth), &level, &level.lore());
+                let stocked_ahead =
+                    stock_container_with(&mut ahead, spot.prop, staged.contents.clone());
+                let stocked_here =
+                    stock_container(&mut here, spot, Odds::loot(depth), &level, &level.lore());
                 assert_eq!(stocked_ahead.is_some(), stocked_here.is_some());
                 if let (Some(a), Some(h)) = (stocked_ahead, stocked_here) {
                     let (a, h) = (record_contents(&ahead, a), record_contents(&here, h));
-                    assert_eq!(format!("{a:?}"), format!("{h:?}"), "depth {depth}: the contents");
+                    assert_eq!(
+                        format!("{a:?}"),
+                        format!("{h:?}"),
+                        "depth {depth}: the contents"
+                    );
                     containers += 1;
                 }
             }
 
-            assert_eq!(staging.fixtures, FixtureShapes::make(&level), "depth {depth}: the fixtures");
+            assert_eq!(
+                staging.fixtures,
+                FixtureShapes::make(&level),
+                "depth {depth}: the fixtures"
+            );
         }
-        assert!(items > 0 && creatures > 0 && containers > 0, "the comparison covered something: {items} items, {creatures} creatures, {containers} containers");
+        assert!(
+            items > 0 && creatures > 0 && containers > 0,
+            "the comparison covered something: {items} items, {creatures} creatures, {containers} containers"
+        );
     }
 }

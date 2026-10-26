@@ -17,12 +17,19 @@ use bevy::{
     window::PrimaryWindow,
 };
 use fb_level::sight::Explored;
-use fb_level::{Cell, FloorFinish, Level, LevelParams, LevelStyle, WallFinish, finishes, generate_with};
+use fb_level::{
+    Cell, FloorFinish, Level, LevelParams, LevelStyle, WallFinish, finishes, generate_with,
+};
 
 use crate::forge_view::fresh_seed;
-use crate::map::plan::{MARGIN, PlanCanvas, PlanFrame, MOSS_TINT, draw_plan_with, floor_tint, quarter_tint, shade_finishes};
+use crate::map::plan::{
+    MARGIN, MOSS_TINT, PlanCanvas, PlanFrame, draw_plan_with, floor_tint, quarter_tint,
+    shade_finishes,
+};
 use crate::map::screen::{MapView, ZOOM};
-use crate::tweak_panel::{PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body};
+use crate::tweak_panel::{
+    PanelBody, Tweak, TweakPanelPlugin, TweakPanelSystems, chip, over_body, panel_body,
+};
 use crate::ui::{BG, BRIGHT, FAINT, INK, LINE, MUTED, UiFonts, node_rect};
 
 /// Width of the panel on the right, in logical pixels.
@@ -49,7 +56,15 @@ impl Plugin for LevelViewPlugin {
                 Update,
                 (
                     (keys, press_controls).before(TweakPanelSystems),
-                    (draw_level.run_if(resource_changed::<LevelForge>), refresh_header.run_if(resource_changed::<LevelForge>), refresh_quarter_legend.run_if(resource_changed::<LevelForge>), zoom_and_pan, place_plan).chain().after(TweakPanelSystems),
+                    (
+                        draw_level.run_if(resource_changed::<LevelForge>),
+                        refresh_header.run_if(resource_changed::<LevelForge>),
+                        refresh_quarter_legend.run_if(resource_changed::<LevelForge>),
+                        zoom_and_pan,
+                        place_plan,
+                    )
+                        .chain()
+                        .after(TweakPanelSystems),
                 ),
             );
     }
@@ -79,7 +94,13 @@ impl LevelForge {
     }
 
     pub fn at_depth(seed: u32, depth: u32, params: LevelParams) -> Self {
-        LevelForge { seed, depth, params, level: generate_with(seed, depth, &params), framing: 0 }
+        LevelForge {
+            seed,
+            depth,
+            params,
+            level: generate_with(seed, depth, &params),
+            framing: 0,
+        }
     }
 
     /// Parses `--seed <n>` and `--depth <n>` (also `--seed=n`); `--level` itself is skipped.
@@ -96,17 +117,31 @@ impl LevelForge {
             match flag.as_str() {
                 "--level" => {}
                 "--seed" => {
-                    let text = inline.or_else(|| args.next()).ok_or("--seed needs a value")?;
-                    seed = text.parse().map_err(|_| format!("--seed: {text:?} is not a u32"))?;
+                    let text = inline
+                        .or_else(|| args.next())
+                        .ok_or("--seed needs a value")?;
+                    seed = text
+                        .parse()
+                        .map_err(|_| format!("--seed: {text:?} is not a u32"))?;
                 }
                 "--depth" => {
-                    let text = inline.or_else(|| args.next()).ok_or("--depth needs a value")?;
-                    depth = text.parse().ok().filter(|&d| d >= 1).ok_or_else(|| format!("--depth: {text:?} is not a depth from 1"))?;
+                    let text = inline
+                        .or_else(|| args.next())
+                        .ok_or("--depth needs a value")?;
+                    depth = text
+                        .parse()
+                        .ok()
+                        .filter(|&d| d >= 1)
+                        .ok_or_else(|| format!("--depth: {text:?} is not a depth from 1"))?;
                 }
                 other => return Err(format!("unknown argument {other:?}")),
             }
         }
-        Ok(LevelForge::at_depth(seed, depth, LevelParams::for_style(LevelStyle::for_depth(depth))))
+        Ok(LevelForge::at_depth(
+            seed,
+            depth,
+            LevelParams::for_style(LevelStyle::for_depth(depth)),
+        ))
     }
 
     /// Lays the level out again from the seed and parameters.
@@ -205,10 +240,19 @@ enum Readout {
     Summary,
 }
 
-fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut images: ResMut<Assets<Image>>, mut plan: ResMut<PlanView>) {
+fn setup(
+    mut commands: Commands,
+    fonts: Res<UiFonts>,
+    mut images: ResMut<Assets<Image>>,
+    mut plan: ResMut<PlanView>,
+) {
     commands.spawn((Camera2d, bevy::ui::IsDefaultUiCamera));
     plan.image = images.add(Image::new(
-        Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         vec![0; 4],
         TextureFormat::Rgba8UnormSrgb,
@@ -251,45 +295,92 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>, mut images: ResMut<Assets<
         .with_children(|panel| {
             panel
                 .spawn((
-                    Node { flex_direction: FlexDirection::Column, row_gap: px(9), padding: UiRect::all(px(14)), border: UiRect::bottom(px(1)), ..default() },
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(9),
+                        padding: UiRect::all(px(14)),
+                        border: UiRect::bottom(px(1)),
+                        ..default()
+                    },
                     BorderColor::all(FAINT),
                 ))
                 .with_children(|header| {
-                    header.spawn((Text::new("The Level"), UiFonts::style(&fonts.display_bold, 28.0, INK)));
-                    header.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|row| {
-                        row.spawn((Text::new("Seed"), UiFonts::style(&fonts.body, 17.0, MUTED), Node { margin: UiRect::right(px(4)), ..default() }));
-                        chip(row, &fonts, "-", Control::SeedStep(-1));
-                        row.spawn((
-                            Readout::Seed,
-                            Text::new(""),
-                            UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
-                            TextLayout::justify(Justify::Center),
-                            Node { min_width: px(92), ..default() },
-                        ));
-                        chip(row, &fonts, "+", Control::SeedStep(1));
-                        chip(row, &fonts, "New seed", Control::ForgeNew);
-                        chip(row, &fonts, "Reset", Control::Reset);
-                    });
-                    header.spawn(Node { align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|row| {
-                        row.spawn((Text::new("Depth"), UiFonts::style(&fonts.body, 17.0, MUTED), Node { margin: UiRect::right(px(4)), ..default() }));
-                        chip(row, &fonts, "-", Control::DepthStep(-1));
-                        row.spawn((
-                            Readout::Depth,
-                            Text::new(""),
-                            UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
-                            TextLayout::justify(Justify::Center),
-                            Node { min_width: px(190), ..default() },
-                        ));
-                        chip(row, &fonts, "+", Control::DepthStep(1));
-                    });
-                    header.spawn((Readout::Summary, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED)));
+                    header.spawn((
+                        Text::new("The Level"),
+                        UiFonts::style(&fonts.display_bold, 28.0, INK),
+                    ));
+                    header
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Seed"),
+                                UiFonts::style(&fonts.body, 17.0, MUTED),
+                                Node {
+                                    margin: UiRect::right(px(4)),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "-", Control::SeedStep(-1));
+                            row.spawn((
+                                Readout::Seed,
+                                Text::new(""),
+                                UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                                TextLayout::justify(Justify::Center),
+                                Node {
+                                    min_width: px(92),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "+", Control::SeedStep(1));
+                            chip(row, &fonts, "New seed", Control::ForgeNew);
+                            chip(row, &fonts, "Reset", Control::Reset);
+                        });
+                    header
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Depth"),
+                                UiFonts::style(&fonts.body, 17.0, MUTED),
+                                Node {
+                                    margin: UiRect::right(px(4)),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "-", Control::DepthStep(-1));
+                            row.spawn((
+                                Readout::Depth,
+                                Text::new(""),
+                                UiFonts::style(&fonts.mono_bold, 16.0, BRIGHT),
+                                TextLayout::justify(Justify::Center),
+                                Node {
+                                    min_width: px(190),
+                                    ..default()
+                                },
+                            ));
+                            chip(row, &fonts, "+", Control::DepthStep(1));
+                        });
+                    header.spawn((
+                        Readout::Summary,
+                        Text::new(""),
+                        UiFonts::style(&fonts.body, 16.0, MUTED),
+                    ));
                 });
             panel_body(panel);
         });
 }
 
 fn clock() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
 }
 
 fn keys(keys: Res<ButtonInput<KeyCode>>, mut forge: ResMut<LevelForge>) {
@@ -317,12 +408,24 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut forge: ResMut<LevelForge>) {
     }
 }
 
-fn press_controls(buttons: Res<ButtonInput<MouseButton>>, window: Option<Single<&Window, With<PrimaryWindow>>>, controls: Query<(&Control, &ComputedNode, &UiGlobalTransform)>, mut forge: ResMut<LevelForge>) {
+fn press_controls(
+    buttons: Res<ButtonInput<MouseButton>>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    controls: Query<(&Control, &ComputedNode, &UiGlobalTransform)>,
+    mut forge: ResMut<LevelForge>,
+) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(point) = window.and_then(|w| w.cursor_position()) else { return };
-    let Some((control, ..)) = controls.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) else { return };
+    let Some(point) = window.and_then(|w| w.cursor_position()) else {
+        return;
+    };
+    let Some((control, ..)) = controls
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    else {
+        return;
+    };
     match *control {
         Control::SeedStep(by) => {
             let seed = forge.seed.wrapping_add_signed(by as i32);
@@ -344,9 +447,18 @@ pub fn plan_px(level: &Level) -> f32 {
 
 /// Draws the whole level into the plan's picture.
 fn draw_level(forge: Res<LevelForge>, plan: Res<PlanView>, mut images: ResMut<Assets<Image>>) {
-    let canvas = draw_plan_with(&forge.level, &Explored::all(&forge.level), plan_px(&forge.level), |canvas, frame| draw_finishes(canvas, frame, &forge.level, &forge.params));
+    let canvas = draw_plan_with(
+        &forge.level,
+        &Explored::all(&forge.level),
+        plan_px(&forge.level),
+        |canvas, frame| draw_finishes(canvas, frame, &forge.level, &forge.params),
+    );
     let image = Image::new(
-        Extent3d { width: canvas.width, height: canvas.height, depth_or_array_layers: 1 },
+        Extent3d {
+            width: canvas.width,
+            height: canvas.height,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         canvas.to_rgba8(),
         TextureFormat::Rgba8UnormSrgb,
@@ -365,27 +477,51 @@ fn draw_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, para
     shade_finishes(canvas, frame, level, &f, |_, _| true);
     // A square in each room's corner in its purpose's colour, named in the legend.
     for (r, room) in level.rooms.iter().enumerate() {
-        let Some(purpose) = level.purpose_of(r) else { continue };
+        let Some(purpose) = level.purpose_of(r) else {
+            continue;
+        };
         let c = frame.at(room.x as f32 + 0.5, room.y as f32 + 0.5);
         let h = frame.px * 0.3;
-        canvas.rect([c[0] - h, c[1] - h], [c[0] + h, c[1] + h], purpose_tint(purpose), 1.0);
+        canvas.rect(
+            [c[0] - h, c[1] - h],
+            [c[0] + h, c[1] + h],
+            purpose_tint(purpose),
+            1.0,
+        );
     }
     let ink = (frame.px * 0.09).max(1.2);
     for room in &level.rooms {
         let (cx, cy) = room.centre();
         let c = frame.at(cx, cy);
         let r = frame.px * 0.32;
-        let Some(finish) = f.at(cx as i32, cy as i32).or_else(|| f.at(room.x as i32, room.y as i32)) else { continue };
+        let Some(finish) = f
+            .at(cx as i32, cy as i32)
+            .or_else(|| f.at(room.x as i32, room.y as i32))
+        else {
+            continue;
+        };
         match finish.walls {
             WallFinish::Rock => canvas.ring(c, r, ink, MARK_INK, 0.9),
             WallFinish::Strata => {
                 for k in [-0.5, 0.0, 0.5] {
-                    canvas.line([c[0] - r, c[1] + k * r], [c[0] + r, c[1] + k * r], ink, MARK_INK, 0.9);
+                    canvas.line(
+                        [c[0] - r, c[1] + k * r],
+                        [c[0] + r, c[1] + k * r],
+                        ink,
+                        MARK_INK,
+                        0.9,
+                    );
                 }
             }
             WallFinish::Ashlar => {
                 let (a, b) = ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r]);
-                for (p, q) in [(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a), ([a[0], c[1]], [b[0], c[1]])] {
+                for (p, q) in [
+                    (a, [b[0], a[1]]),
+                    ([b[0], a[1]], b),
+                    (b, [a[0], b[1]]),
+                    ([a[0], b[1]], a),
+                    ([a[0], c[1]], [b[0], c[1]]),
+                ] {
                     canvas.line(p, q, ink, MARK_INK, 0.9);
                 }
             }
@@ -413,27 +549,59 @@ fn purpose_tint(purpose: fb_level::past::Purpose) -> [f32; 3] {
 }
 
 /// Rebuilds the legend's quarters: each outline colour with its character.
-fn refresh_quarter_legend(mut commands: Commands, forge: Res<LevelForge>, fonts: Res<UiFonts>, legend: Query<(Entity, Option<&Children>), With<QuarterLegend>>) {
-    let Ok((entity, children)) = legend.single() else { return };
+fn refresh_quarter_legend(
+    mut commands: Commands,
+    forge: Res<LevelForge>,
+    fonts: Res<UiFonts>,
+    legend: Query<(Entity, Option<&Children>), With<QuarterLegend>>,
+) {
+    let Ok((entity, children)) = legend.single() else {
+        return;
+    };
     for child in children.into_iter().flatten() {
         commands.entity(*child).despawn();
     }
     let f = finishes(&forge.level, &forge.params);
     commands.entity(entity).with_children(|column| {
-        let past = forge.level.past.map_or("none".to_string(), |p| p.name().to_string());
-        column.spawn((Text::new(format!("past: {past}")), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        let past = forge
+            .level
+            .past
+            .map_or("none".to_string(), |p| p.name().to_string());
+        column.spawn((
+            Text::new(format!("past: {past}")),
+            UiFonts::style(&fonts.body, 15.0, MUTED),
+        ));
         for purpose in fb_level::past::Purpose::ALL {
             let rooms = forge.level.rooms_for(purpose).count();
             if rooms == 0 {
                 continue;
             }
             let tint = purpose_tint(purpose);
-            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
-                row.spawn((Node { width: px(14), height: px(14), ..default() }, BackgroundColor(Color::srgb(tint[0], tint[1], tint[2]))));
-                row.spawn((Text::new(format!("{} x {rooms}", purpose.name())), UiFonts::style(&fonts.body, 15.0, MUTED)));
-            });
+            column
+                .spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Node {
+                            width: px(14),
+                            height: px(14),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(tint[0], tint[1], tint[2])),
+                    ));
+                    row.spawn((
+                        Text::new(format!("{} x {rooms}", purpose.name())),
+                        UiFonts::style(&fonts.body, 15.0, MUTED),
+                    ));
+                });
         }
-        column.spawn((Text::new(format!("quarters, leaning {}", f.lean().name())), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        column.spawn((
+            Text::new(format!("quarters, leaning {}", f.lean().name())),
+            UiFonts::style(&fonts.body, 15.0, MUTED),
+        ));
         for (q, quarter) in f.quarters().iter().enumerate() {
             let tint = quarter_tint(q);
             let door = match quarter.door {
@@ -442,10 +610,30 @@ fn refresh_quarter_legend(mut commands: Commands, forge: Res<LevelForge>, fonts:
                 fb_level::DoorStyle::PointedArch => "pointed arches",
                 fb_level::DoorStyle::RockCut => "rock-cut arches",
             };
-            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|row| {
-                row.spawn((Node { width: px(14), height: px(4), ..default() }, BackgroundColor(Color::srgb(tint[0], tint[1], tint[2]))));
-                row.spawn((Text::new(format!("{}, {} rooms, {door}", quarter.character.name(), quarter.rooms.len())), UiFonts::style(&fonts.body, 15.0, MUTED)));
-            });
+            column
+                .spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Node {
+                            width: px(14),
+                            height: px(4),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(tint[0], tint[1], tint[2])),
+                    ));
+                    row.spawn((
+                        Text::new(format!(
+                            "{}, {} rooms, {door}",
+                            quarter.character.name(),
+                            quarter.rooms.len()
+                        )),
+                        UiFonts::style(&fonts.body, 15.0, MUTED),
+                    ));
+                });
         }
     });
 }
@@ -467,10 +655,14 @@ fn refresh_header(forge: Res<LevelForge>, mut readouts: Query<(&Readout, &mut Te
     for (readout, mut text) in &mut readouts {
         let line = match readout {
             Readout::Seed => forge.seed.to_string(),
-            Readout::Depth => format!("{} \u{b7} {}", forge.depth, match forge.level.style {
-                LevelStyle::RoughRock => "rough rock",
-                LevelStyle::StoneHalls => "stone halls",
-            }),
+            Readout::Depth => format!(
+                "{} \u{b7} {}",
+                forge.depth,
+                match forge.level.style {
+                    LevelStyle::RoughRock => "rough rock",
+                    LevelStyle::StoneHalls => "stone halls",
+                }
+            ),
             Readout::Summary => forge.summary(),
         };
         if text.0 != line {
@@ -482,8 +674,13 @@ fn refresh_header(forge: Res<LevelForge>, mut readouts: Query<(&Readout, &mut Te
 /// The view that fits all of `level` in a stage of `size`, a little in from its edges.
 pub fn fitted(level: &Level, size: Vec2) -> MapView {
     let extent = Vec2::new(level.width as f32, level.height as f32) + Vec2::splat(2.0 * MARGIN);
-    let scale = ((size - Vec2::splat(40.0)) / extent).min_element().clamp(LEVEL_ZOOM.0, LEVEL_ZOOM.1);
-    MapView { centre: Vec2::new(level.width as f32, level.height as f32) * 0.5, scale }
+    let scale = ((size - Vec2::splat(40.0)) / extent)
+        .min_element()
+        .clamp(LEVEL_ZOOM.0, LEVEL_ZOOM.1);
+    MapView {
+        centre: Vec2::new(level.width as f32, level.height as f32) * 0.5,
+        scale,
+    }
 }
 
 /// The stage's size in its own logical pixels, and how many of them to a window pixel (they
@@ -506,7 +703,9 @@ fn zoom_and_pan(
     mut plan: ResMut<PlanView>,
     mut dragging: Local<bool>,
 ) {
-    let (Some(window), Some(stage)) = (window, stages.iter().next()) else { return };
+    let (Some(window), Some(stage)) = (window, stages.iter().next()) else {
+        return;
+    };
     let Some(mut view) = plan.view else { return };
     let (size, per_window) = stage_size(&window, stage);
     let cursor = window.cursor_position().map(|c| c * per_window);
@@ -541,7 +740,9 @@ fn place_plan(
     mut plan: ResMut<PlanView>,
     mut nodes: Query<&mut Node, With<PlanNode>>,
 ) {
-    let (Some(window), Some(stage)) = (window, stages.iter().next()) else { return };
+    let (Some(window), Some(stage)) = (window, stages.iter().next()) else {
+        return;
+    };
     let (size, _) = stage_size(&window, stage);
     if size.x <= 1.0 {
         return;
@@ -572,8 +773,15 @@ mod tests {
     fn parses_the_command_line() {
         let forge = LevelForge::from_args(args("--level --seed 7")).unwrap();
         assert_eq!(forge.seed, 7);
-        assert_eq!(forge.level, fb_level::generate(7, 1), "the defaults lay out the game's level");
-        assert_eq!(LevelForge::from_args(args("--level")).unwrap().seed, DEFAULT_SEED);
+        assert_eq!(
+            forge.level,
+            fb_level::generate(7, 1),
+            "the defaults lay out the game's level"
+        );
+        assert_eq!(
+            LevelForge::from_args(args("--level")).unwrap().seed,
+            DEFAULT_SEED
+        );
         assert!(LevelForge::from_args(args("--seed x")).is_err());
         assert!(LevelForge::from_args(args("--wat")).is_err());
     }
@@ -583,16 +791,27 @@ mod tests {
         let mut forge = LevelForge::new(3, LevelParams::default());
         forge.set_slider("grid.width", 80.0);
         assert_eq!(forge.level.width, 80);
-        assert_eq!(forge.level, generate_with(3, 1, &forge.params), "the same seed and parameters, the same level");
+        assert_eq!(
+            forge.level,
+            generate_with(3, 1, &forge.params),
+            "the same seed and parameters, the same level"
+        );
         assert_eq!(Tweak::slider(&forge, "grid.width"), Some(80.0));
         forge.reset();
-        assert_eq!(forge.level, fb_level::generate(3, 1), "reset is the game's level again");
+        assert_eq!(
+            forge.level,
+            fb_level::generate(3, 1),
+            "reset is the game's level again"
+        );
     }
 
     #[test]
     fn depth_picks_the_styles_own_parameters() {
         let forge = LevelForge::from_args(args("--level --seed 7 --depth 2")).unwrap();
-        assert_eq!((forge.depth, forge.level.style), (2, LevelStyle::StoneHalls));
+        assert_eq!(
+            (forge.depth, forge.level.style),
+            (2, LevelStyle::StoneHalls)
+        );
         assert_eq!(forge.params, LevelParams::for_style(LevelStyle::StoneHalls));
         assert_eq!(forge.level, fb_level::generate(7, 2));
         assert!(LevelForge::from_args(args("--depth 0")).is_err());
@@ -601,7 +820,11 @@ mod tests {
         assert_eq!(forge.params, LevelParams::for_style(LevelStyle::StoneHalls));
         forge.set_slider("grid.width", 80.0);
         forge.reset();
-        assert_eq!(forge.level, fb_level::generate(7, 2), "reset at an even depth is the stone halls again");
+        assert_eq!(
+            forge.level,
+            fb_level::generate(7, 2),
+            "reset at an even depth is the stone halls again"
+        );
         forge.set_depth(1);
         assert_eq!(forge.level, fb_level::generate(7, 1));
     }
@@ -613,7 +836,10 @@ mod tests {
         forge.set_seed(9);
         assert_ne!(forge.framing, framing);
         let summary = forge.summary();
-        assert!(summary.starts_with(&format!("{} rooms", forge.level.rooms.len())), "{summary}");
+        assert!(
+            summary.starts_with(&format!("{} rooms", forge.level.rooms.len())),
+            "{summary}"
+        );
     }
 
     #[test]
@@ -622,7 +848,13 @@ mod tests {
         let size = Vec2::new(1490.0, 1080.0);
         let view = fitted(&level, size);
         let (corner, extent) = view.plan_rect(&level, size);
-        assert!(corner.x >= 0.0 && corner.y >= 0.0 && corner.x + extent.x <= size.x + 1e-3 && corner.y + extent.y <= size.y + 1e-3, "{corner} {extent}");
+        assert!(
+            corner.x >= 0.0
+                && corner.y >= 0.0
+                && corner.x + extent.x <= size.x + 1e-3
+                && corner.y + extent.y <= size.y + 1e-3,
+            "{corner} {extent}"
+        );
         assert!(plan_px(&level) > 10.0);
     }
 }

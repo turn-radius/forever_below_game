@@ -15,8 +15,8 @@ use armory::{
         plank::{plank, planked_panel},
     },
     geom::{
-        CatmullRom, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cylinder, icosphere, lathe,
-        torus, tube, value_noise3, vec3,
+        CatmullRom, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cylinder, icosphere,
+        lathe, torus, tube, value_noise3, vec3,
     },
 };
 use fb_level::{
@@ -87,7 +87,11 @@ impl<'a> CellView<'a> {
 
     /// The view of `level` with its stone finished as `finishes` say.
     pub fn with_finishes(level: &'a Level, finishes: Finishes) -> Self {
-        CellView { level, passage: entrance_passage(level), finishes }
+        CellView {
+            level,
+            passage: entrance_passage(level),
+            finishes,
+        }
     }
 
     /// The view with the finishes `params` choose.
@@ -99,7 +103,17 @@ impl<'a> CellView<'a> {
     /// for tests of the plain stone.
     #[cfg(test)]
     pub fn uncobbled(level: &'a Level) -> Self {
-        Self::with_params(level, &LevelParams { cobble_chance: 0.0, flagstone_chance: 0.0, strata_chance: 0.0, rubble_chance: 0.0, arch_chance: 0.0, ..LevelParams::for_style(level.style) })
+        Self::with_params(
+            level,
+            &LevelParams {
+                cobble_chance: 0.0,
+                flagstone_chance: 0.0,
+                strata_chance: 0.0,
+                rubble_chance: 0.0,
+                arch_chance: 0.0,
+                ..LevelParams::for_style(level.style)
+            },
+        )
     }
 
     /// What each room's and corridor's stone is finished with, and how damp it is.
@@ -113,20 +127,36 @@ impl<'a> CellView<'a> {
 
     /// Whether the floor of cell `(x, y)` is laid with cobbles.
     pub fn is_cobbled(&self, x: i32, y: i32) -> bool {
-        self.finishes.at(x, y).is_some_and(|f| f.floor == FloorFinish::Cobble)
+        self.finishes
+            .at(x, y)
+            .is_some_and(|f| f.floor == FloorFinish::Cobble)
     }
 
     /// Whether the cells west, east, north and south of `(cx, cy)` are open, for [`CellView::floor_wear`].
     pub fn neighbours_open(&self, cx: i32, cy: i32) -> [bool; 4] {
-        [self.is_open(cx - 1, cy), self.is_open(cx + 1, cy), self.is_open(cx, cy - 1), self.is_open(cx, cy + 1)]
+        [
+            self.is_open(cx - 1, cy),
+            self.is_open(cx + 1, cy),
+            self.is_open(cx, cy - 1),
+            self.is_open(cx, cy + 1),
+        ]
     }
 
     /// How worn the floor is at world `(x, z)` in cell `(cx, cy)`, 0 to 1: more by a wall, where
     /// the stone is trodden and broken, and wherever moss grows.
     pub fn floor_wear(&self, cx: i32, cy: i32, open: [bool; 4], x: f32, z: f32) -> f32 {
         let (lx, lz) = (x - cx as f32 * CELL, z - cy as f32 * CELL);
-        let by_wall = |open: bool, distance: f32| if open { 0.0 } else { (1.0 - distance / 5.0).max(0.0) };
-        let wall = by_wall(open[0], lx).max(by_wall(open[1], CELL - lx)).max(by_wall(open[2], lz)).max(by_wall(open[3], CELL - lz));
+        let by_wall = |open: bool, distance: f32| {
+            if open {
+                0.0
+            } else {
+                (1.0 - distance / 5.0).max(0.0)
+            }
+        };
+        let wall = by_wall(open[0], lx)
+            .max(by_wall(open[1], CELL - lx))
+            .max(by_wall(open[2], lz))
+            .max(by_wall(open[3], CELL - lz));
         (wall * 0.7).max(self.finishes.moss_at(x, z) * 0.8)
     }
 
@@ -136,7 +166,11 @@ impl<'a> CellView<'a> {
     }
 
     pub fn cell(&self, x: i32, y: i32) -> Cell {
-        if self.passage.contains(&(x, y)) { Cell::Floor } else { self.level.cell(x, y) }
+        if self.passage.contains(&(x, y)) {
+            Cell::Floor
+        } else {
+            self.level.cell(x, y)
+        }
     }
 
     pub fn is_open(&self, x: i32, y: i32) -> bool {
@@ -145,7 +179,8 @@ impl<'a> CellView<'a> {
 
     /// The cells to draw, `(x0, y0, x1, y1)` half open: the grid and the passage.
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
-        let (mut x0, mut y0, mut x1, mut y1) = (0, 0, self.level.width as i32, self.level.height as i32);
+        let (mut x0, mut y0, mut x1, mut y1) =
+            (0, 0, self.level.width as i32, self.level.height as i32);
         for &(x, y) in &self.passage {
             (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
         }
@@ -161,7 +196,11 @@ pub fn level_finishes(level: &Level) -> Finishes {
 /// Sets each vertex's moss, the finish's smooth value at its world position, in the part's
 /// second channel (`Part::uvs_b`), for the toon shader to paint over the stone.
 pub fn bake_moss(part: &mut Part, finishes: &Finishes) {
-    part.uvs_b = part.positions.iter().map(|p| [finishes.moss_at(p[0], p[2]), 0.0]).collect();
+    part.uvs_b = part
+        .positions
+        .iter()
+        .map(|p| [finishes.moss_at(p[0], p[2]), 0.0])
+        .collect();
 }
 
 /// The cells behind the entrance to carve, nearest first: straight outward, stopping before
@@ -179,7 +218,14 @@ pub fn entrance_passage(level: &Level) -> Vec<(i32, i32)> {
     for k in 1..=ENTRANCE_PASSAGE {
         let (x, y) = (e.x as i32 + ox * k, e.y as i32 + oy * k);
         // The cell, its two sides, and the three ahead of it must all be rock.
-        let around = [(0, 0), (lx, ly), (-lx, -ly), (ox, oy), (ox + lx, oy + ly), (ox - lx, oy - ly)];
+        let around = [
+            (0, 0),
+            (lx, ly),
+            (-lx, -ly),
+            (ox, oy),
+            (ox + lx, oy + ly),
+            (ox - lx, oy - ly),
+        ];
         if around.iter().any(|&(ax, ay)| level.is_open(x + ax, y + ay)) {
             break;
         }
@@ -213,14 +259,19 @@ pub struct Relief {
 
 impl Relief {
     pub fn new(level: &Level) -> Self {
-        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling, rough: level.style == LevelStyle::RoughRock }
+        Relief {
+            seed: level.seed ^ 0x5701_e5ed,
+            ceiling: level.ceiling,
+            rough: level.style == LevelStyle::RoughRock,
+        }
     }
 
     /// Two octaves of value noise in -0.5..0.5 for channel `channel`.
     fn wander(&self, p: V3, channel: u32) -> f32 {
         let q = vec3::scale([p[0], p[1] * 1.6, p[2]], 1.0 / RELIEF_WAVELENGTH);
         let seed = self.seed.wrapping_add(channel.wrapping_mul(0x9e37_79b9));
-        (value_noise3(q, seed) - 0.5) + 0.35 * (value_noise3(vec3::scale(q, 2.7), seed ^ 0x2545_f491) - 0.5)
+        (value_noise3(q, seed) - 0.5)
+            + 0.35 * (value_noise3(vec3::scale(q, 2.7), seed ^ 0x2545_f491) - 0.5)
     }
 
     /// The height of the drawn floor over world `(x, z)`: the grid floor point's height once
@@ -237,7 +288,11 @@ impl Relief {
         }
         let up = (p[1] / self.ceiling.max(1.0)).clamp(0.0, 1.0);
         let vertical = FLOOR_RELIEF + (CEILING_RELIEF - FLOOR_RELIEF) * up;
-        [p[0] + WALL_RELIEF * self.wander(p, 1), p[1] + vertical * self.wander(p, 2), p[2] + WALL_RELIEF * self.wander(p, 3)]
+        [
+            p[0] + WALL_RELIEF * self.wander(p, 1),
+            p[1] + vertical * self.wander(p, 2),
+            p[2] + WALL_RELIEF * self.wander(p, 3),
+        ]
     }
 
     /// The moved surface's normal at grid point `p` on a plane spanned by `u` and `v`,
@@ -245,10 +300,20 @@ impl Relief {
     /// meet shade alike across the seam.
     pub fn normal(&self, p: V3, u: V3, v: V3, facing: V3) -> V3 {
         let e = 0.5;
-        let du = vec3::sub(self.displace(vec3::add(p, vec3::scale(u, e))), self.displace(vec3::sub(p, vec3::scale(u, e))));
-        let dv = vec3::sub(self.displace(vec3::add(p, vec3::scale(v, e))), self.displace(vec3::sub(p, vec3::scale(v, e))));
+        let du = vec3::sub(
+            self.displace(vec3::add(p, vec3::scale(u, e))),
+            self.displace(vec3::sub(p, vec3::scale(u, e))),
+        );
+        let dv = vec3::sub(
+            self.displace(vec3::add(p, vec3::scale(v, e))),
+            self.displace(vec3::sub(p, vec3::scale(v, e))),
+        );
         let n = vec3::normalize_or(vec3::cross(du, dv), facing);
-        if vec3::dot(n, facing) < 0.0 { vec3::neg(n) } else { n }
+        if vec3::dot(n, facing) < 0.0 {
+            vec3::neg(n)
+        } else {
+            n
+        }
     }
 }
 
@@ -266,8 +331,14 @@ struct Face {
 
 impl Face {
     fn point(&self, i: usize, j: usize) -> V3 {
-        let (s, t) = (self.size[0] * i as f32 / self.steps[0] as f32, self.size[1] * j as f32 / self.steps[1] as f32);
-        vec3::add(self.origin, vec3::add(vec3::scale(self.u, s), vec3::scale(self.v, t)))
+        let (s, t) = (
+            self.size[0] * i as f32 / self.steps[0] as f32,
+            self.size[1] * j as f32 / self.steps[1] as f32,
+        );
+        vec3::add(
+            self.origin,
+            vec3::add(vec3::scale(self.u, s), vec3::scale(self.v, t)),
+        )
     }
 
     /// Appends the face, moved by `relief`, with world-planar uvs (one per cell).
@@ -278,7 +349,11 @@ impl Face {
             for i in 0..=nu {
                 let p = self.point(i, j);
                 let uv = [vec3::dot(p, self.u) / CELL, vec3::dot(p, self.v) / CELL];
-                mesh.push_vertex(relief.displace(p), relief.normal(p, self.u, self.v, self.facing), uv);
+                mesh.push_vertex(
+                    relief.displace(p),
+                    relief.normal(p, self.u, self.v, self.facing),
+                    uv,
+                );
             }
         }
         let flip = vec3::dot(vec3::cross(self.u, self.v), self.facing) < 0.0;
@@ -344,7 +419,10 @@ impl Ink {
         }
         let base = self.positions.len() as u32;
         for (k, (&p, &n)) in points.iter().zip(normals).enumerate() {
-            let (prev, next) = (points[k.saturating_sub(1)], points[(k + 1).min(points.len() - 1)]);
+            let (prev, next) = (
+                points[k.saturating_sub(1)],
+                points[(k + 1).min(points.len() - 1)],
+            );
             let along = vec3::sub(next, prev);
             let side = vec3::normalize_or(vec3::cross(along, n), vec3::any_perpendicular(n));
             let lifted = vec3::add(p, vec3::scale(n, lift));
@@ -355,7 +433,12 @@ impl Ink {
             }
         }
         for k in 0..points.len() as u32 - 1 {
-            let (a, b, c, d) = (base + 2 * k, base + 2 * k + 1, base + 2 * k + 3, base + 2 * k + 2);
+            let (a, b, c, d) = (
+                base + 2 * k,
+                base + 2 * k + 1,
+                base + 2 * k + 3,
+                base + 2 * k + 2,
+            );
             self.indices.extend([a, b, c, a, c, d, a, c, b, a, d, c]);
         }
     }
@@ -407,7 +490,13 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
         return stone::hall_mesh(view, (x0, y0, x1, y1));
     }
     let relief = Relief::new(level);
-    let (mut floor, mut ceiling, mut walls, mut strata, mut hewn) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let (mut floor, mut ceiling, mut walls, mut strata, mut hewn) = (
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+        MeshBuilder::new(),
+    );
     let mut paving = cobble::Stones::default();
     let mut grout = MeshBuilder::new();
     let mut ink = Ink::default();
@@ -437,7 +526,14 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
                     Some(FloorFinish::Cobble) => {
                         flat(0.0, up).build(&relief, &mut grout);
                         let open = view.neighbours_open(x, y);
-                        cobble::cobbles(level.seed, x, y, &on_relief, &|px, pz| view.floor_wear(x, y, open, px, pz), &mut paving);
+                        cobble::cobbles(
+                            level.seed,
+                            x,
+                            y,
+                            &on_relief,
+                            &|px, pz| view.floor_wear(x, y, open, px, pz),
+                            &mut paving,
+                        );
                     }
                     Some(FloorFinish::Flagstone) => {
                         flat(0.0, up).build(&relief, &mut grout);
@@ -460,33 +556,66 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
                 // Run along the wall with the room on the left, so `u x up` faces the room.
                 let u = vec3::cross(up, inward);
                 let centre = cell_centre(x, y);
-                let origin = vec3::sub(vec3::add(centre, vec3::scale(d, CELL * 0.5)), vec3::scale(u, CELL * 0.5));
-                let face = Face { origin, u, v: up, size: [CELL, level.ceiling], steps: [SEGMENTS, rows], facing: inward };
+                let origin = vec3::sub(
+                    vec3::add(centre, vec3::scale(d, CELL * 0.5)),
+                    vec3::scale(u, CELL * 0.5),
+                );
+                let face = Face {
+                    origin,
+                    u,
+                    v: up,
+                    size: [CELL, level.ceiling],
+                    steps: [SEGMENTS, rows],
+                    facing: inward,
+                };
                 // Layered rooms have a part of their own, so the shader gives them beds, and hewn
                 // ones another, so it gives them craggy facets. Every other wall is plain stone.
-                let layered = view.finishes().at(x, y).is_some_and(|f| f.walls == WallFinish::Strata);
-                let carved = view.finishes().character_at(x, y) == Some(fb_level::Character::Hewn) && !layered;
-                face.build(&relief, if layered { &mut strata } else if carved { &mut hewn } else { &mut walls });
+                let layered = view
+                    .finishes()
+                    .at(x, y)
+                    .is_some_and(|f| f.walls == WallFinish::Strata);
+                let carved = view.finishes().character_at(x, y) == Some(fb_level::Character::Hewn)
+                    && !layered;
+                face.build(
+                    &relief,
+                    if layered {
+                        &mut strata
+                    } else if carved {
+                        &mut hewn
+                    } else {
+                        &mut walls
+                    },
+                );
 
                 // Seams with the floor and ceiling: a ribbon on the wall and one on the flat.
                 for (edge, flat_facing) in [(Edge::Bottom, up), (Edge::Top, vec3::neg(up))] {
                     let base = face.edge(edge);
                     let moved: Vec<V3> = base.iter().map(|&p| relief.displace(p)).collect();
-                    let on_wall: Vec<V3> = base.iter().map(|&p| relief.normal(p, u, up, inward)).collect();
-                    let on_flat: Vec<V3> = base.iter().map(|&p| relief.normal(p, u, inward, flat_facing)).collect();
+                    let on_wall: Vec<V3> = base
+                        .iter()
+                        .map(|&p| relief.normal(p, u, up, inward))
+                        .collect();
+                    let on_flat: Vec<V3> = base
+                        .iter()
+                        .map(|&p| relief.normal(p, u, inward, flat_facing))
+                        .collect();
                     ink.ribbon(&moved, &on_wall);
                     ink.ribbon(&moved, &on_flat);
                 }
                 // Upright edges, where this wall turns a corner rather than running on.
                 for (edge, side) in [(Edge::Left, vec3::neg(u)), (Edge::Right, u)] {
                     let (sx, sy) = (side[0].round() as i32, side[2].round() as i32);
-                    let runs_on = view.is_open(x + sx, y + sy) && !view.is_open(x + sx + dx, y + sy + dy);
+                    let runs_on =
+                        view.is_open(x + sx, y + sy) && !view.is_open(x + sx + dx, y + sy + dy);
                     if runs_on {
                         continue;
                     }
                     let base = face.edge(edge);
                     let moved: Vec<V3> = base.iter().map(|&p| relief.displace(p)).collect();
-                    let normals: Vec<V3> = base.iter().map(|&p| relief.normal(p, u, up, inward)).collect();
+                    let normals: Vec<V3> = base
+                        .iter()
+                        .map(|&p| relief.normal(p, u, up, inward))
+                        .collect();
                     ink.ribbon(&moved, &normals);
                 }
             }
@@ -507,7 +636,11 @@ fn bare_level_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> L
         parts.add_look("hewn", hewn, stone(WALL_STONE));
     }
     parts.add_look("ceiling", ceiling, stone(CEILING_STONE));
-    LevelMesh { surfaces: parts.finish(), ink: ink.into_part(), joints: Part::default() }
+    LevelMesh {
+        surfaces: parts.finish(),
+        ink: ink.into_part(),
+        joints: Part::default(),
+    }
 }
 
 /// The cell ranges to draw the level in, `size` cells square, covering the whole view.
@@ -585,13 +718,27 @@ pub fn door_frame(ceiling: f32, style: DoorStyle, seed: u32) -> ItemMesh {
         courses.push((y, course.min(top - y)));
         y += course;
     }
-    door_frame_in(style, &courses, top, CELL * 0.5 + WALL_RELIEF, (0.18, 0.35), seed)
+    door_frame_in(
+        style,
+        &courses,
+        top,
+        CELL * 0.5 + WALL_RELIEF,
+        (0.18, 0.35),
+        seed,
+    )
 }
 
 /// A doorway's frame and masonry with the infill laid in `courses` (each a bottom and a
 /// height, from the floor up to `top`), its blocks reaching `reach` either side of the centre,
 /// with `joint` between them and a `chamfer` on their edges. Any style but timber is an arch.
-fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32, (joint, chamfer): (f32, f32), seed: u32) -> ItemMesh {
+fn door_frame_in(
+    style: DoorStyle,
+    courses: &[(f32, f32)],
+    top: f32,
+    reach: f32,
+    (joint, chamfer): (f32, f32),
+    seed: u32,
+) -> ItemMesh {
     if style != DoorStyle::Timber {
         return arch::door_arch(style, courses, top, reach, (joint, chamfer), seed);
     }
@@ -610,7 +757,11 @@ fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
         }
         let depth = INFILL_DEPTH + (rng.range_f32(0.0, 1.0) - 0.5) * 0.4;
         let mut stone = plank(hi - lo - gap, top - bottom, depth, chamfer);
-        stone.translate([(lo + hi) * 0.5, (bottom + top) * 0.5, (rng.range_f32(0.0, 1.0) - 0.5) * 0.25]);
+        stone.translate([
+            (lo + hi) * 0.5,
+            (bottom + top) * 0.5,
+            (rng.range_f32(0.0, 1.0) - 0.5) * 0.25,
+        ]);
         masonry.append(&stone);
     };
     for (row, &(y, h)) in courses.iter().enumerate() {
@@ -628,7 +779,13 @@ fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
             // A course level with the frame: full height beside it, and over it only from the
             // lintel's top, so the stone sits on the lintel with no gap between.
             block(a, a.max(-clear).min(b), bottom, top_of_course, &mut rng);
-            block(a.max(-clear), b.min(clear), lintel_top, top_of_course, &mut rng);
+            block(
+                a.max(-clear),
+                b.min(clear),
+                lintel_top,
+                top_of_course,
+                &mut rng,
+            );
             block(b.min(clear).max(a), b, bottom, top_of_course, &mut rng);
         }
     }
@@ -639,7 +796,11 @@ fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
     let floor = -FLOOR_RELIEF;
     let inner = half_open + 0.05;
     let over = DOOR_HEIGHT + FRAME_BEAM * 0.5;
-    for (lo, hi, bottom) in [(-reach, -inner, floor), (inner, reach, floor), (-inner, inner, over)] {
+    for (lo, hi, bottom) in [
+        (-reach, -inner, floor),
+        (inner, reach, floor),
+        (-inner, inner, over),
+    ] {
         let mut core = plank(hi - lo, top - bottom, core_depth, 0.1);
         core.translate([(lo + hi) * 0.5, (bottom + top) * 0.5, 0.0]);
         masonry.append(&core);
@@ -648,10 +809,19 @@ fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
     let mut timber = MeshBuilder::new();
     for side in [-1.0f32, 1.0] {
         let mut jamb = plank(lintel_top, FRAME_BEAM, FRAME_DEPTH, 0.25);
-        jamb.rotate_z(std::f32::consts::FRAC_PI_2).translate([side * (half_open + FRAME_BEAM * 0.5), lintel_top * 0.5, 0.0]);
+        jamb.rotate_z(std::f32::consts::FRAC_PI_2).translate([
+            side * (half_open + FRAME_BEAM * 0.5),
+            lintel_top * 0.5,
+            0.0,
+        ]);
         timber.append(&jamb);
     }
-    let mut lintel = plank(DOOR_WIDTH + FRAME_BEAM * 2.6, FRAME_BEAM, FRAME_DEPTH + 0.3, 0.25);
+    let mut lintel = plank(
+        DOOR_WIDTH + FRAME_BEAM * 2.6,
+        FRAME_BEAM,
+        FRAME_DEPTH + 0.3,
+        0.25,
+    );
     lintel.translate([0.0, DOOR_HEIGHT + FRAME_BEAM * 0.5, 0.0]);
     timber.append(&lintel);
     let mut sill = plank(DOOR_WIDTH, 0.5, FRAME_DEPTH, 0.15);
@@ -667,7 +837,11 @@ fn door_frame_in(style: DoorStyle, courses: &[(f32, f32)], top: f32, reach: f32,
 /// Where the entrance door hangs in its doorway's space: the hinge line on the frame's inward
 /// face, at the opening's left edge.
 pub fn entrance_hinge() -> V3 {
-    [fb_level::door::HINGE_ACROSS, 0.0, fb_level::door::HINGE_THROUGH]
+    [
+        fb_level::door::HINGE_ACROSS,
+        0.0,
+        fb_level::door::HINGE_THROUGH,
+    ]
 }
 
 /// The entrance door's leaf, in hinge space: the hinge line is the +Y axis, the leaf runs
@@ -681,7 +855,9 @@ pub fn entrance_leaf(seed: u32) -> ItemMesh {
     let boards = 5 + (rng.range_f32(0.0, 1.0) * 2.0) as u32;
     let mut planks = planked_panel(height - 0.2, width, boards, 0.14, LEAF_THICKNESS, 0.16);
     // Boards run up the door: the panel's length (X) turns to Y.
-    planks.rotate_z(std::f32::consts::FRAC_PI_2).translate([width * 0.5, height * 0.5 + 0.1, 0.0]);
+    planks
+        .rotate_z(std::f32::consts::FRAC_PI_2)
+        .translate([width * 0.5, height * 0.5 + 0.1, 0.0]);
 
     let mut iron = MeshBuilder::new();
     let band_t = 0.2;
@@ -699,7 +875,9 @@ pub fn entrance_leaf(seed: u32) -> ItemMesh {
                     continue;
                 }
                 let mut rivet = icosphere(0.22, 1);
-                rivet.scale([1.0, 1.0, 0.6]).translate([x, y, z + face * band_t * 0.5]);
+                rivet
+                    .scale([1.0, 1.0, 0.6])
+                    .translate([x, y, z + face * band_t * 0.5]);
                 iron.append(&rivet);
             }
         }
@@ -763,7 +941,14 @@ pub fn brazier(seed: u32) -> (ItemMesh, f32) {
         [1.4, bowl_y + 0.3],
         [0.0, bowl_y + 0.2],
     ];
-    let mut iron = lathe(&profile, &LatheOptions { facets: 24, shading: Shading::SMOOTH, ..Default::default() });
+    let mut iron = lathe(
+        &profile,
+        &LatheOptions {
+            facets: 24,
+            shading: Shading::SMOOTH,
+            ..Default::default()
+        },
+    );
     let legs = 3;
     for k in 0..legs {
         let a = std::f32::consts::TAU * (k as f32 + rng.range_f32(0.0, 1.0) * 0.1) / legs as f32;
@@ -783,10 +968,21 @@ pub fn brazier(seed: u32) -> (ItemMesh, f32) {
 
     let (mut coals, mut embers) = (MeshBuilder::new(), MeshBuilder::new());
     for _ in 0..14 {
-        let (a, r) = (rng.range_f32(0.0, 1.0) * std::f32::consts::TAU, rng.range_f32(0.0, 1.0).sqrt() * 3.0);
+        let (a, r) = (
+            rng.range_f32(0.0, 1.0) * std::f32::consts::TAU,
+            rng.range_f32(0.0, 1.0).sqrt() * 3.0,
+        );
         let mut lump = icosphere(0.55 + rng.range_f32(0.0, 1.0) * 0.45, 1);
-        lump.scale([1.0, 0.7, 1.0]).translate([a.cos() * r, bowl_y + 0.9 + rng.range_f32(0.0, 1.0) * 0.4, a.sin() * r]);
-        if rng.range_f32(0.0, 1.0) < 0.45 { embers.append(&lump) } else { coals.append(&lump) };
+        lump.scale([1.0, 0.7, 1.0]).translate([
+            a.cos() * r,
+            bowl_y + 0.9 + rng.range_f32(0.0, 1.0) * 0.4,
+            a.sin() * r,
+        ]);
+        if rng.range_f32(0.0, 1.0) < 0.45 {
+            embers.append(&lump)
+        } else {
+            coals.append(&lump)
+        };
     }
 
     let mut parts = Parts::new();
@@ -795,7 +991,14 @@ pub fn brazier(seed: u32) -> (ItemMesh, f32) {
     parts.add_look("embers", embers, glowing(EMBER, 0.8));
     let flame_base = bowl_y + 1.2;
     let flame_height = 4.5 + rng.range_f32(0.0, 1.0) * 1.5;
-    add_flame(&mut parts, [0.0, flame_base, 0.0], flame_height, 1.5, 0.08, seed);
+    add_flame(
+        &mut parts,
+        [0.0, flame_base, 0.0],
+        flame_height,
+        1.5,
+        0.08,
+        seed,
+    );
     // The light hangs just over the flame, so the bowl's rim does not cut it off from the room.
     (parts.finish(), flame_base + flame_height + 1.0)
 }
@@ -805,7 +1008,10 @@ mod tests {
     use super::*;
 
     /// Per seed: the hash of the level's stone and ink, and of its door frame.
-    const ROUGH_ROCK_HASHES: [(u32, (u64, u64)); 2] = [(1207, (3701189268064332467, 10396788927676635465)), (2, (10639431740370850025, 9434967241214962033))];
+    const ROUGH_ROCK_HASHES: [(u32, (u64, u64)); 2] = [
+        (1207, (3701189268064332467, 10396788927676635465)),
+        (2, (10639431740370850025, 9434967241214962033)),
+    ];
 
     fn level() -> Level {
         fb_level::generate(1207, 1)
@@ -838,7 +1044,11 @@ mod tests {
             width,
             height,
             cells,
-            entrance: fb_level::Entrance { x: 2, y: 4, inward: Facing::North },
+            entrance: fb_level::Entrance {
+                x: 2,
+                y: 4,
+                inward: Facing::North,
+            },
             ..level()
         };
         assert_eq!(entrance_passage(&level), vec![(2, 5)]);
@@ -854,8 +1064,16 @@ mod tests {
             part.validate().unwrap();
         }
         // Plain stone: no paving and no layered walls, which have parts of their own.
-        assert_eq!(a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "ceiling"]);
-        assert!(a.surfaces.parts.iter().all(|p| p.material == Some(MaterialKind::Stone) && !p.outline));
+        assert_eq!(
+            a.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(),
+            ["floor", "walls", "ceiling"]
+        );
+        assert!(
+            a.surfaces
+                .parts
+                .iter()
+                .all(|p| p.material == Some(MaterialKind::Stone) && !p.outline)
+        );
     }
 
     #[test]
@@ -863,19 +1081,47 @@ mod tests {
         // A cave with a cobbled quarter and no flagged one, so the per-cell cost is the cobbles'.
         let paved = |l: &Level| {
             let view = CellView::new(l);
-            let floors: Vec<_> = (0..l.height as i32).flat_map(|y| (0..l.width as i32).map(move |x| (x, y))).filter_map(|(x, y)| view.finishes().at(x, y).map(|f| f.floor)).collect();
+            let floors: Vec<_> = (0..l.height as i32)
+                .flat_map(|y| (0..l.width as i32).map(move |x| (x, y)))
+                .filter_map(|(x, y)| view.finishes().at(x, y).map(|f| f.floor))
+                .collect();
             floors.contains(&FloorFinish::Cobble) && !floors.contains(&FloorFinish::Flagstone)
         };
-        let level = (1..400).map(|seed| fb_level::generate(seed, 5)).find(paved).expect("some cave has paving");
+        let level = (1..400)
+            .map(|seed| fb_level::generate(seed, 5))
+            .find(paved)
+            .expect("some cave has paving");
         let view = CellView::new(&level);
-        let cobbled = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| view.finishes().at(x, y).is_some_and(|f| matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone))).count();
+        let cobbled = (0..level.height as i32)
+            .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                view.finishes().at(x, y).is_some_and(|f| {
+                    matches!(f.floor, FloorFinish::Cobble | FloorFinish::Flagstone)
+                })
+            })
+            .count();
         assert!(cobbled > 0);
         let whole = level_mesh(&view, view.bounds());
-        assert!(whole.surfaces.parts.iter().any(|p| p.name.starts_with("stones_")));
+        assert!(
+            whole
+                .surfaces
+                .parts
+                .iter()
+                .any(|p| p.name.starts_with("stones_"))
+        );
         let plain = level_mesh(&CellView::uncobbled(&level), view.bounds());
-        let tris = |m: &LevelMesh| m.surfaces.parts.iter().map(|p| p.indices.len() / 3).sum::<usize>();
+        let tris = |m: &LevelMesh| {
+            m.surfaces
+                .parts
+                .iter()
+                .map(|p| p.indices.len() / 3)
+                .sum::<usize>()
+        };
         let per_cell = (tris(&whole) - tris(&plain)) / cobbled;
-        assert!((300..=1600).contains(&per_cell), "{per_cell} triangles per cobbled cell");
+        assert!(
+            (300..=1600).contains(&per_cell),
+            "{per_cell} triangles per cobbled cell"
+        );
         for part in &whole.surfaces.parts {
             part.validate().unwrap();
         }
@@ -885,12 +1131,19 @@ mod tests {
                 .iter()
                 .flat_map(|m| m.surfaces.parts.iter())
                 .filter(|p| p.name.starts_with("stones_") || p.name == "grout")
-                .flat_map(|p| p.positions.iter().map(|v| (p.name, v.map(|c| (c * 1000.0).round() as i64))))
+                .flat_map(|p| {
+                    p.positions
+                        .iter()
+                        .map(|v| (p.name, v.map(|c| (c * 1000.0).round() as i64)))
+                })
                 .collect();
             out.sort_unstable();
             out
         };
-        let pieces: Vec<LevelMesh> = chunks(&view, 4).iter().map(|&c| level_mesh(&view, c)).collect();
+        let pieces: Vec<LevelMesh> = chunks(&view, 4)
+            .iter()
+            .map(|&c| level_mesh(&view, c))
+            .collect();
         assert_eq!(points(&[whole]), points(&pieces));
     }
 
@@ -907,17 +1160,29 @@ mod tests {
                     open += 1;
                     floors += !crate::level::stairs::opens_floor(level.stair_at(x, y)) as usize;
                     ceilings += !crate::level::stairs::opens_ceiling(level.stair_at(x, y)) as usize;
-                    faces += DIRECTIONS.iter().filter(|f| !view.is_open(x + f.step().0, y + f.step().1)).count();
+                    faces += DIRECTIONS
+                        .iter()
+                        .filter(|f| !view.is_open(x + f.step().0, y + f.step().1))
+                        .count();
                 }
             }
         }
         let mesh = level_mesh(&view, view.bounds());
-        let quads = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len() / 6);
+        let quads = |name: &str| {
+            mesh.surfaces
+                .parts
+                .iter()
+                .find(|p| p.name == name)
+                .map_or(0, |p| p.indices.len() / 6)
+        };
         assert!(floors < open, "the way down leaves its cell unfloored");
         assert_eq!(quads("floor"), floors * SEGMENTS * SEGMENTS);
         assert_eq!(quads("ceiling"), ceilings * SEGMENTS * SEGMENTS);
         let rows = (level.ceiling / ROW).ceil() as usize;
-        assert_eq!(quads("walls") + quads("strata") + quads("hewn"), faces * SEGMENTS * rows);
+        assert_eq!(
+            quads("walls") + quads("strata") + quads("hewn"),
+            faces * SEGMENTS * rows
+        );
     }
 
     #[test]
@@ -925,22 +1190,39 @@ mod tests {
         let level = level();
         let view = CellView::new(&level);
         let whole = level_mesh(&view, view.bounds());
-        let tris = |m: &LevelMesh| m.surfaces.parts.iter().map(|p| p.indices.len()).sum::<usize>();
-        let pieces: usize = chunks(&view, 4).iter().map(|&c| tris(&level_mesh(&view, c))).sum();
+        let tris = |m: &LevelMesh| {
+            m.surfaces
+                .parts
+                .iter()
+                .map(|p| p.indices.len())
+                .sum::<usize>()
+        };
+        let pieces: usize = chunks(&view, 4)
+            .iter()
+            .map(|&c| tris(&level_mesh(&view, c)))
+            .sum();
         assert_eq!(pieces, tris(&whole));
     }
 
     #[test]
     fn walls_meet_the_floor_on_shared_points() {
         // Without the stairs, which leave their cells unfloored.
-        let level = Level { stairs: Vec::new(), ..level() };
+        let level = Level {
+            stairs: Vec::new(),
+            ..level()
+        };
         let view = CellView::uncobbled(&level);
         let mesh = level_mesh(&view, view.bounds());
         let key = |p: &[f32; 3]| p.map(|c| (c * 1000.0).round() as i64);
-        let floor: std::collections::HashSet<_> = mesh.surfaces.parts[0].positions.iter().map(key).collect();
+        let floor: std::collections::HashSet<_> =
+            mesh.surfaces.parts[0].positions.iter().map(key).collect();
         let walls = &mesh.surfaces.parts[1];
         // The lowest wall row lies within the floor's relief, and every point of it is a floor point.
-        let low: Vec<_> = walls.positions.iter().filter(|p| p[1].abs() <= FLOOR_RELIEF).collect();
+        let low: Vec<_> = walls
+            .positions
+            .iter()
+            .filter(|p| p[1].abs() <= FLOOR_RELIEF)
+            .collect();
         assert!(!low.is_empty());
         assert!(low.iter().all(|p| floor.contains(&key(p))));
     }
@@ -949,12 +1231,18 @@ mod tests {
     fn relief_is_gentle_and_seeded() {
         let level = level();
         let relief = Relief::new(&level);
-        let other = Relief::new(&Level { seed: level.seed + 1, ..level.clone() });
+        let other = Relief::new(&Level {
+            seed: level.seed + 1,
+            ..level.clone()
+        });
         let mut moved = 0;
         for i in 0..200 {
             let p = [i as f32 * 1.7, (i % 30) as f32, i as f32 * 0.9];
             let q = relief.displace(p);
-            assert!((q[0] - p[0]).abs() <= WALL_RELIEF * 0.7 && (q[2] - p[2]).abs() <= WALL_RELIEF * 0.7);
+            assert!(
+                (q[0] - p[0]).abs() <= WALL_RELIEF * 0.7
+                    && (q[2] - p[2]).abs() <= WALL_RELIEF * 0.7
+            );
             if q != other.displace(p) {
                 moved += 1;
             }
@@ -967,7 +1255,10 @@ mod tests {
         let level = level();
         let view = CellView::new(&level);
         let doors = doorways(&view);
-        let entrance = doors.iter().find(|d| (d.x as u32, d.y as u32) == (level.entrance.x, level.entrance.y)).unwrap();
+        let entrance = doors
+            .iter()
+            .find(|d| (d.x as u32, d.y as u32) == (level.entrance.x, level.entrance.y))
+            .unwrap();
         assert_eq!(entrance.through, facing_vector(level.entrance.inward));
         let [x, y, z] = entrance.basis();
         assert!(vec3::dot(vec3::cross(x, y), z) > 0.99, "right-handed");
@@ -984,7 +1275,12 @@ mod tests {
         assert!(flame > 12.0 && flame < 18.0);
         // The masonry leaves the opening clear.
         let masonry = &frame.parts[0];
-        assert!(masonry.positions.iter().all(|p| p[1] > DOOR_HEIGHT || p[0].abs() > DOOR_WIDTH * 0.5));
+        assert!(
+            masonry
+                .positions
+                .iter()
+                .all(|p| p[1] > DOOR_HEIGHT || p[0].abs() > DOOR_WIDTH * 0.5)
+        );
         // The leaf covers the opening from the hinge.
         let (lo, hi) = leaf.bounds().unwrap();
         assert!(lo[0] < 0.0 && hi[0] > DOOR_WIDTH && hi[1] > DOOR_HEIGHT);
@@ -1023,9 +1319,17 @@ mod tests {
             let doors = doorways(&view);
             assert!(!doors.is_empty());
             for door in doors {
-                let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed ^ ((door.x as u32) << 16 | door.y as u32));
+                let frame = door_frame(
+                    level.ceiling,
+                    DoorStyle::Timber,
+                    level.seed ^ ((door.x as u32) << 16 | door.y as u32),
+                );
                 // Out to where the walls and ceiling can stand, and down into the floor's dip.
-                let (across, low, high) = (CELL * 0.5 + WALL_RELIEF * peak, -FLOOR_RELIEF * peak, level.ceiling + CEILING_RELIEF * peak);
+                let (across, low, high) = (
+                    CELL * 0.5 + WALL_RELIEF * peak,
+                    -FLOOR_RELIEF * peak,
+                    level.ceiling + CEILING_RELIEF * peak,
+                );
                 let mut rays = 0;
                 for i in 0..=96 {
                     for j in 0..=80 {
@@ -1035,9 +1339,17 @@ mod tests {
                             continue;
                         }
                         // Straight through, and slanting as seen from a step off to one side.
-                        for dir in [[0.0, 0.0, 1.0], vec3::normalize_or([0.5, 0.25, 1.0], [0.0, 0.0, 1.0])] {
+                        for dir in [
+                            [0.0, 0.0, 1.0],
+                            vec3::normalize_or([0.5, 0.25, 1.0], [0.0, 0.0, 1.0]),
+                        ] {
                             let from = vec3::sub([x, y, 0.0], vec3::scale(dir, CELL));
-                            assert!(ray_hits(&frame, from, dir), "seed {seed} door ({}, {}): open at x {x:.2} y {y:.2} along {dir:?}", door.x, door.y);
+                            assert!(
+                                ray_hits(&frame, from, dir),
+                                "seed {seed} door ({}, {}): open at x {x:.2} y {y:.2} along {dir:?}",
+                                door.x,
+                                door.y
+                            );
                             rays += 1;
                         }
                     }
@@ -1056,7 +1368,11 @@ mod tests {
             }
         };
         for part in parts {
-            part.positions.iter().chain(&part.normals).flatten().for_each(|c| eat(c.to_bits()));
+            part.positions
+                .iter()
+                .chain(&part.normals)
+                .flatten()
+                .for_each(|c| eat(c.to_bits()));
             part.indices.iter().for_each(|&i| eat(i));
         }
         h
@@ -1066,12 +1382,18 @@ mod tests {
     fn rough_rock_geometry_is_unchanged() {
         for (seed, expected) in ROUGH_ROCK_HASHES {
             // Without the stairs, which came later and leave their cells unfloored.
-            let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
+            let level = Level {
+                stairs: Vec::new(),
+                ..fb_level::generate(seed, 1)
+            };
             // With no cobbled or flagged floors and no layered walls, which came later.
             let view = CellView::uncobbled(&level);
             let mesh = level_mesh(&view, view.bounds());
             let frame = door_frame(level.ceiling, DoorStyle::Timber, level.seed);
-            let seen = (hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])), hash_parts(&frame.parts));
+            let seen = (
+                hash_parts(mesh.surfaces.parts.iter().chain([&mesh.ink])),
+                hash_parts(&frame.parts),
+            );
             assert_eq!(seen, expected, "rough rock changed for seed {seed}");
         }
     }
@@ -1079,27 +1401,77 @@ mod tests {
     #[test]
     fn the_first_level_draws_plain_stone_parts_only() {
         for seed in 1..=30 {
-            let level = Level { stairs: Vec::new(), ..fb_level::generate(seed, 1) };
+            let level = Level {
+                stairs: Vec::new(),
+                ..fb_level::generate(seed, 1)
+            };
             let drawn = level_mesh(&CellView::new(&level), CellView::new(&level).bounds());
             let plain = CellView::uncobbled(&level);
             let bare = level_mesh(&plain, plain.bounds());
-            assert_eq!(drawn.surfaces.parts.iter().map(|p| p.name).collect::<Vec<_>>(), ["floor", "walls", "ceiling"], "seed {seed}");
-            assert_eq!(hash_parts(drawn.surfaces.parts.iter().chain([&drawn.ink])), hash_parts(bare.surfaces.parts.iter().chain([&bare.ink])), "seed {seed}");
+            assert_eq!(
+                drawn
+                    .surfaces
+                    .parts
+                    .iter()
+                    .map(|p| p.name)
+                    .collect::<Vec<_>>(),
+                ["floor", "walls", "ceiling"],
+                "seed {seed}"
+            );
+            assert_eq!(
+                hash_parts(drawn.surfaces.parts.iter().chain([&drawn.ink])),
+                hash_parts(bare.surfaces.parts.iter().chain([&bare.ink])),
+                "seed {seed}"
+            );
         }
     }
 
     #[test]
     fn only_hewn_quarters_walls_are_split_off_for_the_craggy_shader() {
-        let hewn = |l: &Level| CellView::new(l).finishes().quarters().iter().any(|q| q.character == fb_level::Character::Hewn);
-        let level = (1..400).map(|seed| fb_level::generate(seed, 5)).find(hewn).expect("some cave has a hewn quarter");
+        let hewn = |l: &Level| {
+            CellView::new(l)
+                .finishes()
+                .quarters()
+                .iter()
+                .any(|q| q.character == fb_level::Character::Hewn)
+        };
+        let level = (1..400)
+            .map(|seed| fb_level::generate(seed, 5))
+            .find(hewn)
+            .expect("some cave has a hewn quarter");
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
-        let tris = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len());
+        let tris = |name: &str| {
+            mesh.surfaces
+                .parts
+                .iter()
+                .find(|p| p.name == name)
+                .map_or(0, |p| p.indices.len())
+        };
         assert!(tris("hewn") > 0, "hewn walls have a part of their own");
         // Floors and ceilings stay plain stone, and the walls split lose nothing.
-        let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { arch_chance: 0.0, strata_chance: 0.0, cobble_chance: 0.0, flagstone_chance: 0.0, ..LevelParams::for_style(level.style) }));
+        let plain = CellView::with_finishes(
+            &level,
+            finishes(
+                &level,
+                &LevelParams {
+                    arch_chance: 0.0,
+                    strata_chance: 0.0,
+                    cobble_chance: 0.0,
+                    flagstone_chance: 0.0,
+                    ..LevelParams::for_style(level.style)
+                },
+            ),
+        );
         let bare = level_mesh(&plain, plain.bounds());
-        let walls = |m: &LevelMesh| m.surfaces.parts.iter().filter(|p| ["walls", "hewn", "strata"].contains(&p.name)).map(|p| p.indices.len()).sum::<usize>();
+        let walls = |m: &LevelMesh| {
+            m.surfaces
+                .parts
+                .iter()
+                .filter(|p| ["walls", "hewn", "strata"].contains(&p.name))
+                .map(|p| p.indices.len())
+                .sum::<usize>()
+        };
         assert_eq!(walls(&mesh), walls(&bare));
     }
 
@@ -1129,16 +1501,46 @@ mod tests {
     #[test]
     fn layered_rooms_have_their_own_walls() {
         // A cave with a layered quarter.
-        let layered = |l: &Level| CellView::new(l).finishes().quarters().iter().any(|q| q.walls == fb_level::WallFinish::Strata);
-        let level = (1..400).map(|seed| fb_level::generate(seed, 5)).find(layered).expect("some cave has strata");
+        let layered = |l: &Level| {
+            CellView::new(l)
+                .finishes()
+                .quarters()
+                .iter()
+                .any(|q| q.walls == fb_level::WallFinish::Strata)
+        };
+        let level = (1..400)
+            .map(|seed| fb_level::generate(seed, 5))
+            .find(layered)
+            .expect("some cave has strata");
         let view = CellView::new(&level);
         let mesh = level_mesh(&view, view.bounds());
-        let walls = |name: &str| mesh.surfaces.parts.iter().find(|p| p.name == name).map_or(0, |p| p.indices.len());
+        let walls = |name: &str| {
+            mesh.surfaces
+                .parts
+                .iter()
+                .find(|p| p.name == name)
+                .map_or(0, |p| p.indices.len())
+        };
         assert!(walls("strata") > 0, "a layered room");
         // Splitting the walls loses none: the unlayered total is the two together.
-        let plain = CellView::with_finishes(&level, finishes(&level, &LevelParams { strata_chance: 0.0, ..LevelParams::for_style(level.style) }));
+        let plain = CellView::with_finishes(
+            &level,
+            finishes(
+                &level,
+                &LevelParams {
+                    strata_chance: 0.0,
+                    ..LevelParams::for_style(level.style)
+                },
+            ),
+        );
         let unsplit = level_mesh(&plain, plain.bounds());
-        let total: usize = unsplit.surfaces.parts.iter().filter(|p| ["walls", "hewn", "strata"].contains(&p.name)).map(|p| p.indices.len()).sum();
+        let total: usize = unsplit
+            .surfaces
+            .parts
+            .iter()
+            .filter(|p| ["walls", "hewn", "strata"].contains(&p.name))
+            .map(|p| p.indices.len())
+            .sum();
         assert_eq!(walls("walls") + walls("strata") + walls("hewn"), total);
     }
 

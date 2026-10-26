@@ -10,7 +10,10 @@
 
 use armory::{
     ItemMesh, MaterialKind,
-    build::{parts::{Look, Parts}, plank::plank},
+    build::{
+        parts::{Look, Parts},
+        plank::plank,
+    },
     geom::{MeshBuilder, V3},
 };
 use fb_level::{CELL, Stair, StairKind};
@@ -77,7 +80,11 @@ pub fn stair_mesh(kind: StairKind, ceiling: f32, seed: u32) -> ItemMesh {
             for k in 0..STEPS_DOWN {
                 let tread = -(k as f32 + 1.0) * RISE_DOWN + (rng.range_f32(0.0, 1.0) - 0.5) * 0.12;
                 let (z0, z1) = (-half + k as f32 * run, -half + (k as f32 + 1.0) * run);
-                steps.append(&block([across, tread - bottom, z1 - z0], [0.0, (tread + bottom) * 0.5, (z0 + z1) * 0.5], 0.2));
+                steps.append(&block(
+                    [across, tread - bottom, z1 - z0],
+                    [0.0, (tread + bottom) * 0.5, (z0 + z1) * 0.5],
+                    0.2,
+                ));
             }
         }
         StairKind::Up => {
@@ -86,24 +93,54 @@ pub fn stair_mesh(kind: StairKind, ceiling: f32, seed: u32) -> ItemMesh {
             for k in 0..count {
                 let tread = (k as f32 + 1.0) * RISE_UP + (rng.range_f32(0.0, 1.0) - 0.5) * 0.12;
                 let (z0, z1) = (-half + k as f32 * run, -half + (k as f32 + 1.0) * run);
-                steps.append(&block([across, tread, z1 - z0], [0.0, tread * 0.5, (z0 + z1) * 0.5], 0.2));
+                steps.append(&block(
+                    [across, tread, z1 - z0],
+                    [0.0, tread * 0.5, (z0 + z1) * 0.5],
+                    0.2,
+                ));
             }
         }
     }
     // The stringers either side and the wall behind, from the foot of the flight to the top.
     let tall = top - bottom;
     for side in [-1.0f32, 1.0] {
-        walls.append(&block([SIDE, tall, CELL], [side * (half - SIDE * 0.5), (top + bottom) * 0.5, 0.0], 0.2));
+        walls.append(&block(
+            [SIDE, tall, CELL],
+            [side * (half - SIDE * 0.5), (top + bottom) * 0.5, 0.0],
+            0.2,
+        ));
     }
-    walls.append(&block([across, tall, BACK], [0.0, (top + bottom) * 0.5, half - BACK * 0.5], 0.2));
+    walls.append(&block(
+        [across, tall, BACK],
+        [0.0, (top + bottom) * 0.5, half - BACK * 0.5],
+        0.2,
+    ));
 
     let mut parts = Parts::new();
-    parts.add_look("steps", steps, Look::of(MaterialKind::Stone).tinted(FLOOR_STONE).without_outline());
-    parts.add_look("stringers", walls, Look::of(MaterialKind::Stone).tinted(WALL_STONE).without_outline());
+    parts.add_look(
+        "steps",
+        steps,
+        Look::of(MaterialKind::Stone)
+            .tinted(FLOOR_STONE)
+            .without_outline(),
+    );
+    parts.add_look(
+        "stringers",
+        walls,
+        Look::of(MaterialKind::Stone)
+            .tinted(WALL_STONE)
+            .without_outline(),
+    );
     if kind == StairKind::Up {
         // The cap that closes the shaft over the dark, so no sky of nothing shows through it.
         let cap = block([CELL, 1.0, CELL], [0.0, top + 0.5, 0.0], 0.1);
-        parts.add_look("cap", cap, Look::of(MaterialKind::Stone).tinted(CEILING_STONE).without_outline());
+        parts.add_look(
+            "cap",
+            cap,
+            Look::of(MaterialKind::Stone)
+                .tinted(CEILING_STONE)
+                .without_outline(),
+        );
     }
     parts.finish()
 }
@@ -114,7 +151,12 @@ mod tests {
     use fb_level::Facing;
 
     fn stair(kind: StairKind, facing: Facing) -> Stair {
-        Stair { x: 3, y: 4, facing, kind }
+        Stair {
+            x: 3,
+            y: 4,
+            facing,
+            kind,
+        }
     }
 
     fn bounds(mesh: &ItemMesh) -> (V3, V3) {
@@ -128,7 +170,10 @@ mod tests {
         assert!(min[1] < -(STEPS_DOWN as f32) * RISE_DOWN, "{min:?}");
         assert!((PARAPET - 0.1..=PARAPET + 0.1).contains(&max[1]), "{max:?}");
         for axis in [0, 2] {
-            assert!(min[axis] >= -CELL * 0.5 - 0.01 && max[axis] <= CELL * 0.5 + 0.01, "axis {axis}: {min:?} {max:?}");
+            assert!(
+                min[axis] >= -CELL * 0.5 - 0.01 && max[axis] <= CELL * 0.5 + 0.01,
+                "axis {axis}: {min:?} {max:?}"
+            );
         }
         assert!(mesh.parts.iter().all(|p| !p.indices.is_empty()));
     }
@@ -161,7 +206,10 @@ mod tests {
             assert_eq!(at, cell_centre(3, 4));
             let (dx, dy) = facing.step();
             let along = [yaw.sin(), yaw.cos()];
-            assert!((along[0] - dx as f32).abs() < 1e-5 && (along[1] - dy as f32).abs() < 1e-5, "{facing:?}: {along:?}");
+            assert!(
+                (along[0] - dx as f32).abs() < 1e-5 && (along[1] - dy as f32).abs() < 1e-5,
+                "{facing:?}: {along:?}"
+            );
         }
     }
 

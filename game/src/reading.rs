@@ -26,7 +26,10 @@ impl Plugin for ReadingPlugin {
             app.add_systems(Update, read_teaching_for_capture.in_set(DelveSystems));
         }
         if std::env::var_os("FB_READ").is_some() {
-            app.add_systems(Update, read_for_capture.before(show_page).in_set(DelveSystems));
+            app.add_systems(
+                Update,
+                read_for_capture.before(show_page).in_set(DelveSystems),
+            );
         }
     }
 }
@@ -35,13 +38,21 @@ impl Plugin for ReadingPlugin {
 /// for the rest of the delve. Returns the toast's line, "You learn 12 words of Minotaur speech:
 /// greetings and trade.", counting only the words that were new, or "You already know these
 /// words." when none were.
-pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &fb_denizens::tongue::Teaching) -> String {
+pub fn study(
+    lexicon: &mut fb_denizens::tongue::Lexicon,
+    teaching: &fb_denizens::tongue::Teaching,
+) -> String {
     let learned = lexicon.learn_teaching(teaching);
     let n = learned.len();
     if n == 0 {
         return "You already know these words.".to_string();
     }
-    format!("You learn {n} {} of {}: {}.", if n == 1 { "word" } else { "words" }, fb_denizens::tongue::tongue_name(teaching.kind), teaching.topic_list())
+    format!(
+        "You learn {n} {} of {}: {}.",
+        if n == 1 { "word" } else { "words" },
+        fb_denizens::tongue::tongue_name(teaching.kind),
+        teaching.topic_list()
+    )
 }
 
 /// The book or scroll `FB_TEACH`'s entry `spec` names (`minotaur:scroll:7`), the `index`th of the
@@ -51,7 +62,10 @@ pub fn teaching_for_capture(spec: &str, index: u32) -> Option<fb_items::Item> {
     use fb_denizens::tongue::{Teaching, TeachingSize};
     let mut parts = spec.split(':').map(str::trim);
     let name = parts.next().unwrap_or_default();
-    let Some(kind) = fb_denizens::DenizenKind::ALL.into_iter().find(|k| k.key() == name.to_lowercase()) else {
+    let Some(kind) = fb_denizens::DenizenKind::ALL
+        .into_iter()
+        .find(|k| k.key() == name.to_lowercase())
+    else {
         warn!("FB_TEACH: no tongue called {name:?}");
         return None;
     };
@@ -63,7 +77,11 @@ pub fn teaching_for_capture(spec: &str, index: u32) -> Option<fb_items::Item> {
             Err(_) => {}
         }
     }
-    let size = if base == "Book" { TeachingSize::Book } else { TeachingSize::Scroll };
+    let size = if base == "Book" {
+        TeachingSize::Book
+    } else {
+        TeachingSize::Scroll
+    };
     let mut parts = fb_items::ItemParts::from(fb_items::roll_item(base, seed)?);
     parts.teaching = Some(Teaching::roll(seed, kind, size));
     fb_items::Item::from_parts(parts)
@@ -81,7 +99,13 @@ fn read_teaching_for_capture(
     if *frames != READ_AT {
         return;
     }
-    let taught: Vec<_> = inventory.carried_containers().into_iter().filter_map(|c| inventory.grid(c)).flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>()).filter(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some())).collect();
+    let taught: Vec<_> = inventory
+        .carried_containers()
+        .into_iter()
+        .filter_map(|c| inventory.grid(c))
+        .flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>())
+        .filter(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some()))
+        .collect();
     for id in taught {
         if let Some(line) = eating.read(&inventory, id) {
             toasts.say(line);
@@ -104,7 +128,10 @@ pub struct Page {
 impl OpenPage {
     /// Opens a page with `words` under `title`.
     pub fn open(&mut self, title: impl Into<String>, words: impl Into<String>) {
-        self.page = Some(Page { title: title.into(), words: words.into() });
+        self.page = Some(Page {
+            title: title.into(),
+            words: words.into(),
+        });
     }
 
     pub fn is_open(&self) -> bool {
@@ -120,14 +147,23 @@ pub struct PageView;
 const PAGE_WIDTH: f32 = 520.0;
 
 /// Opens the note `FB_READ` names, written on the current level, a moment into the delve.
-fn read_for_capture(level: Res<crate::play::CurrentLevel>, mut open: ResMut<OpenPage>, mut frames: Local<u32>) {
+fn read_for_capture(
+    level: Res<crate::play::CurrentLevel>,
+    mut open: ResMut<OpenPage>,
+    mut frames: Local<u32>,
+) {
     *frames += 1;
     const OPEN_AT: u32 = 40;
     if *frames != OPEN_AT {
         return;
     }
-    let seed = std::env::var("FB_READ").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1);
-    let Some(note) = fb_items::roll_item("Note", seed).map(|n| n.in_world(&level.0.lore())) else { return };
+    let seed = std::env::var("FB_READ")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(1);
+    let Some(note) = fb_items::roll_item("Note", seed).map(|n| n.in_world(&level.0.lore())) else {
+        return;
+    };
     if let Some(words) = &note.words {
         open.open(note.title(), words.clone());
     }
@@ -136,7 +172,11 @@ fn read_for_capture(level: Res<crate::play::CurrentLevel>, mut open: ResMut<Open
 /// Closes the page on the first key or mouse button pressed after it opened, and spends that
 /// press. It runs as input is read, before the frame's other systems: a page opens in `Update`,
 /// so the press that opened it was read a frame earlier.
-fn put_page_down(mut open: ResMut<OpenPage>, mut keys: ResMut<ButtonInput<KeyCode>>, mut mouse: ResMut<ButtonInput<MouseButton>>) {
+fn put_page_down(
+    mut open: ResMut<OpenPage>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+) {
     if !open.is_open() {
         return;
     }
@@ -173,7 +213,9 @@ fn show_page(
     for entity in &shown {
         commands.entity(entity).despawn();
     }
-    let (Some(page), Some(fonts)) = (&open.page, fonts) else { return };
+    let (Some(page), Some(fonts)) = (&open.page, fonts) else {
+        return;
+    };
     let mut root = commands.spawn((
         Name::new("PageView"),
         PageView,
@@ -208,10 +250,26 @@ fn show_page(
                 BorderColor::all(GOLD),
             ))
             .with_children(|sheet| {
-                sheet.spawn((Text::new(page.title.clone()), UiFonts::style(&fonts.display, 22.0, GOLD)));
-                sheet.spawn((Node { height: px(1), ..default() }, BackgroundColor(FAINT)));
-                sheet.spawn((Text::new(page.words.clone()), UiFonts::style(&fonts.body_italic, 19.0, INK), TextLayout::justify(Justify::Left)));
-                sheet.spawn((Text::new("Any key to put it down"), UiFonts::style(&fonts.body, 12.0, MUTED)));
+                sheet.spawn((
+                    Text::new(page.title.clone()),
+                    UiFonts::style(&fonts.display, 22.0, GOLD),
+                ));
+                sheet.spawn((
+                    Node {
+                        height: px(1),
+                        ..default()
+                    },
+                    BackgroundColor(FAINT),
+                ));
+                sheet.spawn((
+                    Text::new(page.words.clone()),
+                    UiFonts::style(&fonts.body_italic, 19.0, INK),
+                    TextLayout::justify(Justify::Left),
+                ));
+                sheet.spawn((
+                    Text::new("Any key to put it down"),
+                    UiFonts::style(&fonts.body, 12.0, MUTED),
+                ));
             });
     });
 }
@@ -232,19 +290,37 @@ mod tests {
     #[test]
     fn studying_counts_the_new_words_and_says_when_none_are() {
         use fb_denizens::tongue::{Lexicon, Teaching, Topic};
-        let greetings = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Greeting, Topic::Trade]);
+        let greetings = Teaching::of_topics(
+            fb_denizens::DenizenKind::Minotaur,
+            &[Topic::Greeting, Topic::Trade],
+        );
         let mut lexicon = Lexicon::new();
         let said = study(&mut lexicon, &greetings);
-        assert_eq!(said, format!("You learn {} words of Minotaur speech: greetings and trade.", greetings.words.len()));
-        assert_eq!(study(&mut lexicon, &greetings), "You already know these words.");
-        let more = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]);
+        assert_eq!(
+            said,
+            format!(
+                "You learn {} words of Minotaur speech: greetings and trade.",
+                greetings.words.len()
+            )
+        );
+        assert_eq!(
+            study(&mut lexicon, &greetings),
+            "You already know these words."
+        );
+        let more = Teaching::of_topics(
+            fb_denizens::DenizenKind::Minotaur,
+            &[Topic::Trade, Topic::Quest],
+        );
         assert!(study(&mut lexicon, &more).contains("of Minotaur speech: trade and requests"));
     }
 
     #[test]
     fn capture_entries_name_a_tongue_a_size_and_a_seed() {
         let book = teaching_for_capture("Demon:book:5", 0).unwrap();
-        assert_eq!((book.base.as_str(), book.seed, book.tongue()), ("Book", 5, Some(fb_denizens::DenizenKind::Demon)));
+        assert_eq!(
+            (book.base.as_str(), book.seed, book.tongue()),
+            ("Book", 5, Some(fb_denizens::DenizenKind::Demon))
+        );
         let scroll = teaching_for_capture("cyclops", 3).unwrap();
         assert_eq!((scroll.base.as_str(), scroll.seed), ("Scroll", 1003));
         assert!(teaching_for_capture("orc", 0).is_none());
@@ -253,17 +329,44 @@ mod tests {
     #[test]
     fn a_press_puts_the_page_down_and_is_spent_on_it() {
         let mut app = app();
-        app.world_mut().resource_mut::<OpenPage>().open("Note", "I escaped from a troll.");
+        app.world_mut()
+            .resource_mut::<OpenPage>()
+            .open("Note", "I escaped from a troll.");
         app.update();
-        assert!(app.world().resource::<OpenPage>().is_open(), "nothing pressed");
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        assert!(
+            app.world().resource::<OpenPage>().is_open(),
+            "nothing pressed"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
         app.update();
-        assert!(!app.world().resource::<OpenPage>().is_open(), "Esc puts it down");
-        assert!(!app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Escape), "and nothing else sees the Esc");
-        app.world_mut().resource_mut::<OpenPage>().open("Note", "Again.");
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        assert!(
+            !app.world().resource::<OpenPage>().is_open(),
+            "Esc puts it down"
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::Escape),
+            "and nothing else sees the Esc"
+        );
+        app.world_mut()
+            .resource_mut::<OpenPage>()
+            .open("Note", "Again.");
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        assert!(!app.world().resource::<OpenPage>().is_open(), "a click puts it down");
-        assert!(!app.world().resource::<ButtonInput<MouseButton>>().just_pressed(MouseButton::Left), "and the click lands on nothing else");
+        assert!(
+            !app.world().resource::<OpenPage>().is_open(),
+            "a click puts it down"
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .just_pressed(MouseButton::Left),
+            "and the click lands on nothing else"
+        );
     }
 }

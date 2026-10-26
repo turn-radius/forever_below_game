@@ -140,7 +140,11 @@ impl Default for MusicSettings {
 impl MusicSettings {
     /// The mix and silences `sound` gives, fading over `fade` seconds.
     pub fn tuned(sound: &SoundTuning, fade: f32) -> MusicSettings {
-        MusicSettings { volume: sound.music_mix, fade, gap: (sound.silence_min, sound.silence_max) }
+        MusicSettings {
+            volume: sound.music_mix,
+            fade,
+            gap: (sound.silence_min, sound.silence_max),
+        }
     }
 }
 
@@ -169,20 +173,38 @@ impl Plugin for MusicPlugin {
             // Kept as loaded if `SettingsPlugin` came first.
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
-            .add_systems(PreUpdate, mix_music.run_if(resource_changed::<Tuning>).after(crate::tuning::TuningSet))
-            .add_systems(Startup, start_music.run_if(not(resource_exists::<FrameCapturePlugin>)))
+            .add_systems(
+                PreUpdate,
+                mix_music
+                    .run_if(resource_changed::<Tuning>)
+                    .after(crate::tuning::TuningSet),
+            )
+            .add_systems(
+                Startup,
+                start_music.run_if(not(resource_exists::<FrameCapturePlugin>)),
+            )
             .add_systems(OnExit(AppState::Title), fade_out_for_the_delve)
-            .add_systems(OnExit(AppState::Delving), end_troll_theme.run_if(resource_exists::<PlaylistAudio>))
+            .add_systems(
+                OnExit(AppState::Delving),
+                end_troll_theme.run_if(resource_exists::<PlaylistAudio>),
+            )
             .add_systems(
                 Update,
                 (
                     (
                         turn_music_volume,
-                        play_creator_theme.run_if(resource_exists::<PlaylistAudio>).run_if(resource_added::<crate::title::creator::Draft>),
+                        play_creator_theme
+                            .run_if(resource_exists::<PlaylistAudio>)
+                            .run_if(resource_added::<crate::title::creator::Draft>),
                         // Beginning the delve closes the creator too, but the title has gone by
                         // the frame this sees it.
-                        back_to_the_title_track.run_if(resource_removed::<crate::title::creator::Draft>).run_if(resource_exists::<PlaylistAudio>).run_if(in_state(AppState::Title)),
-                        play_troll_theme.run_if(resource_exists::<PlaylistAudio>).run_if(in_state(AppState::Delving)),
+                        back_to_the_title_track
+                            .run_if(resource_removed::<crate::title::creator::Draft>)
+                            .run_if(resource_exists::<PlaylistAudio>)
+                            .run_if(in_state(AppState::Title)),
+                        play_troll_theme
+                            .run_if(resource_exists::<PlaylistAudio>)
+                            .run_if(in_state(AppState::Delving)),
                         play_music.run_if(resource_exists::<PlaylistAudio>),
                     )
                         .chain(),
@@ -232,7 +254,11 @@ impl MusicTrack {
 }
 
 /// Cuts short every track playing, each fading out over `fade` from where it is.
-fn fade_out_all<'a>(tracks: impl Iterator<Item = (Mut<'a, MusicTrack>, Option<&'a AudioSink>)>, fade: f32, why: &str) {
+fn fade_out_all<'a>(
+    tracks: impl Iterator<Item = (Mut<'a, MusicTrack>, Option<&'a AudioSink>)>,
+    fade: f32,
+    why: &str,
+) {
     for (mut track, sink) in tracks {
         let position = sink.map_or(0.0, |sink| sink.position().as_secs_f32());
         track.cut_short(position, fade);
@@ -241,43 +267,90 @@ fn fade_out_all<'a>(tracks: impl Iterator<Item = (Mut<'a, MusicTrack>, Option<&'
 }
 
 /// The track playing on the title fades out as the delve begins.
-pub fn fade_out_for_the_delve(settings: Res<MusicSettings>, mut tracks: Query<(&mut MusicTrack, Option<&AudioSink>)>) {
+pub fn fade_out_for_the_delve(
+    settings: Res<MusicSettings>,
+    mut tracks: Query<(&mut MusicTrack, Option<&AudioSink>)>,
+) {
     fade_out_all(tracks.iter_mut(), settings.fade, "for the delve");
 }
 
 /// Every music track, with its player and, once it has one, its sink.
-type Tracks<'w, 's> = Query<'w, 's, (&'static mut MusicTrack, &'static AudioPlayer, Option<&'static AudioSink>)>;
+type Tracks<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut MusicTrack,
+        &'static AudioPlayer,
+        Option<&'static AudioSink>,
+    ),
+>;
 
 /// Whether `theme` loops and hasn't been cut short.
 fn is_looping(theme: &Handle<AudioSource>, tracks: &Tracks) -> bool {
-    tracks.iter().any(|(track, player, _)| player.0 == *theme && track.cut.is_none())
+    tracks
+        .iter()
+        .any(|(track, player, _)| player.0 == *theme && track.cut.is_none())
 }
 
 /// Loops `theme` in place of what plays, the theme fading in as the rest fade out, unless it
 /// already loops.
-fn loop_theme(commands: &mut Commands, theme: &Handle<AudioSource>, fade: f32, schedule: &mut MusicSchedule, tracks: &mut Tracks) {
+fn loop_theme(
+    commands: &mut Commands,
+    theme: &Handle<AudioSource>,
+    fade: f32,
+    schedule: &mut MusicSchedule,
+    tracks: &mut Tracks,
+) {
     if is_looping(theme, tracks) {
         return;
     }
-    fade_out_all(tracks.iter_mut().map(|(track, _, sink)| (track, sink)), fade, "for a theme");
+    fade_out_all(
+        tracks.iter_mut().map(|(track, _, sink)| (track, sink)),
+        fade,
+        "for a theme",
+    );
     spawn_track(commands, theme.clone(), true);
     schedule.resume_at = None;
 }
 
 /// Fades out `theme` where it loops; the playlist picks up after the silence that follows.
 fn end_theme(theme: &Handle<AudioSource>, fade: f32, tracks: &mut Tracks) {
-    let looping = tracks.iter_mut().filter(|(track, player, _)| player.0 == *theme && track.cut.is_none());
-    fade_out_all(looping.map(|(track, _, sink)| (track, sink)), fade, "as its theme ends");
+    let looping = tracks
+        .iter_mut()
+        .filter(|(track, player, _)| player.0 == *theme && track.cut.is_none());
+    fade_out_all(
+        looping.map(|(track, _, sink)| (track, sink)),
+        fade,
+        "as its theme ends",
+    );
 }
 
 /// Opening the creator loops its theme, unless it already loops.
-fn play_creator_theme(mut commands: Commands, audio: Res<PlaylistAudio>, settings: Res<MusicSettings>, mut schedule: ResMut<MusicSchedule>, mut tracks: Tracks) {
-    loop_theme(&mut commands, &audio.creator_theme, settings.fade, &mut schedule, &mut tracks);
+fn play_creator_theme(
+    mut commands: Commands,
+    audio: Res<PlaylistAudio>,
+    settings: Res<MusicSettings>,
+    mut schedule: ResMut<MusicSchedule>,
+    mut tracks: Tracks,
+) {
+    loop_theme(
+        &mut commands,
+        &audio.creator_theme,
+        settings.fade,
+        &mut schedule,
+        &mut tracks,
+    );
 }
 
 /// Going back from the creator to the title's buttons fades out its theme and brings the title
 /// track back in from the start.
-fn back_to_the_title_track(mut commands: Commands, audio: Res<PlaylistAudio>, settings: Res<MusicSettings>, mut schedule: ResMut<MusicSchedule>, mut tracks: Tracks) {
+fn back_to_the_title_track(
+    mut commands: Commands,
+    audio: Res<PlaylistAudio>,
+    settings: Res<MusicSettings>,
+    mut schedule: ResMut<MusicSchedule>,
+    mut tracks: Tracks,
+) {
     end_theme(&audio.creator_theme, settings.fade, &mut tracks);
     if let Some(title) = audio.tracks.first() {
         spawn_track(&mut commands, title.clone(), false);
@@ -293,7 +366,9 @@ pub fn troll_is_near(graph: &fb_level::RoomGraph, delver: Vec3, troll: Vec3, roo
         let (x, y) = crate::map::explore::to_grid(at);
         (x.floor() as i32, y.floor() as i32)
     };
-    graph.rooms_apart(cell(delver), cell(troll)).is_some_and(|apart| apart <= rooms)
+    graph
+        .rooms_apart(cell(delver), cell(troll))
+        .is_some_and(|apart| apart <= rooms)
 }
 
 /// Loops the troll theme while a troll not yet dead for good is near the delver, and ends it
@@ -312,12 +387,28 @@ fn play_troll_theme(
     mut tracks: Tracks,
     mut last_near: Local<Option<f32>>,
 ) {
-    let (Some(rooms), Ok(delver)) = (rooms, delver.single()) else { return };
+    let (Some(rooms), Ok(delver)) = (rooms, delver.single()) else {
+        return;
+    };
     let now = time.elapsed_secs();
-    let near = trolls.iter().any(|(at, troll)| !troll.spent && troll_is_near(&rooms.0, delver.translation, at.translation, tuning.sound.troll_rooms));
+    let near = trolls.iter().any(|(at, troll)| {
+        !troll.spent
+            && troll_is_near(
+                &rooms.0,
+                delver.translation,
+                at.translation,
+                tuning.sound.troll_rooms,
+            )
+    });
     if near {
         *last_near = Some(now);
-        loop_theme(&mut commands, &audio.troll_theme, settings.fade, &mut schedule, &mut tracks);
+        loop_theme(
+            &mut commands,
+            &audio.troll_theme,
+            settings.fade,
+            &mut schedule,
+            &mut tracks,
+        );
     } else if last_near.is_some_and(|at| now - at >= tuning.sound.troll_linger) {
         *last_near = None;
         end_theme(&audio.troll_theme, settings.fade, &mut tracks);
@@ -340,7 +431,11 @@ struct PlaylistAudio {
 
 fn start_music(mut commands: Commands, assets: Res<AssetServer>, playlist: Res<Playlist>) {
     let audio = PlaylistAudio {
-        tracks: playlist.tracks.iter().map(|path| assets.load(path)).collect(),
+        tracks: playlist
+            .tracks
+            .iter()
+            .map(|path| assets.load(path))
+            .collect(),
         creator_theme: assets.load(&playlist.creator_theme),
         troll_theme: assets.load(&playlist.troll_theme),
     };
@@ -348,17 +443,31 @@ fn start_music(mut commands: Commands, assets: Res<AssetServer>, playlist: Res<P
         spawn_track(&mut commands, first.clone(), false);
     }
     // Music isn't part of the seeded world, so each run draws its own order.
-    commands.insert_resource(MusicSchedule { rng: Mulberry32::new(crate::launch::clock_seed()), last: (!audio.tracks.is_empty()).then_some(0), resume_at: None });
+    commands.insert_resource(MusicSchedule {
+        rng: Mulberry32::new(crate::launch::clock_seed()),
+        last: (!audio.tracks.is_empty()).then_some(0),
+        resume_at: None,
+    });
     commands.insert_resource(audio);
 }
 
 fn spawn_track(commands: &mut Commands, source: Handle<AudioSource>, looping: bool) {
     commands.spawn((
         Name::new("Music"),
-        MusicTrack { looping, duration: None, measured: false, cut: None },
+        MusicTrack {
+            looping,
+            duration: None,
+            measured: false,
+            cut: None,
+        },
         AudioPlayer::new(source),
         // Silent until `play_music` sets the fade-in gain on the first frame its sink exists.
-        if looping { PlaybackSettings::LOOP } else { PlaybackSettings::ONCE }.with_volume(Volume::SILENT),
+        if looping {
+            PlaybackSettings::LOOP
+        } else {
+            PlaybackSettings::ONCE
+        }
+        .with_volume(Volume::SILENT),
     ));
 }
 
@@ -369,12 +478,17 @@ pub fn turned_volume(volume: f32, steps: i32) -> f32 {
     ((volume * tenths).round() + steps as f32).clamp(0.0, tenths) / tenths
 }
 
-pub fn turn_music_volume(input: ActionInput, mut settings: ResMut<GameSettings>, naming: Option<Res<crate::title::creator::Draft>>) {
+pub fn turn_music_volume(
+    input: ActionInput,
+    mut settings: ResMut<GameSettings>,
+    naming: Option<Res<crate::title::creator::Draft>>,
+) {
     // Minus and Equal type into the creator's name field while it is open.
     if naming.is_some() {
         return;
     }
-    let steps = input.just_pressed(Action::MusicLouder) as i32 - input.just_pressed(Action::MusicQuieter) as i32;
+    let steps = input.just_pressed(Action::MusicLouder) as i32
+        - input.just_pressed(Action::MusicQuieter) as i32;
     if steps != 0 {
         let volume = turned_volume(settings.music_volume, steps);
         if settings.music_volume != volume {
@@ -403,31 +517,62 @@ pub fn ambience_volume(game: &GameSettings, tuning: &Tuning) -> f32 {
 /// What a sound effect's [`AudioPlayer`] is spawned with: played once and despawned, at
 /// [`effect_volume`].
 pub fn sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
-    (SoundEffect, PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effect_volume(game, tuning))))
+    (
+        SoundEffect,
+        PlaybackSettings::DESPAWN.with_volume(Volume::Linear(effect_volume(game, tuning))),
+    )
 }
 
 /// How far one world unit sounds: 0.1, as a unit is 10 cm.
 pub const SPATIAL_SCALE: f32 = 0.1;
 
 /// Plays `sound` from `at`, heard as a [`spatial_sound_effect`], for the length of the delve.
-pub fn play_at(commands: &mut Commands, name: &'static str, sound: Handle<AudioSource>, at: Vec3, game: &GameSettings, tuning: &Tuning) {
-    commands.spawn((Name::new(name), AudioPlayer::new(sound), spatial_sound_effect(game, tuning), Transform::from_translation(at), DespawnOnExit(crate::launch::AppState::Delving)));
+pub fn play_at(
+    commands: &mut Commands,
+    name: &'static str,
+    sound: Handle<AudioSource>,
+    at: Vec3,
+    game: &GameSettings,
+    tuning: &Tuning,
+) {
+    commands.spawn((
+        Name::new(name),
+        AudioPlayer::new(sound),
+        spatial_sound_effect(game, tuning),
+        Transform::from_translation(at),
+        DespawnOnExit(crate::launch::AppState::Delving),
+    ));
 }
 
 /// [`sound_effect`], heard from where the [`AudioPlayer`]'s entity stands, by the
 /// [`SpatialListener`] on the player's eye.
-pub fn spatial_sound_effect(game: &GameSettings, tuning: &Tuning) -> (SoundEffect, PlaybackSettings) {
+pub fn spatial_sound_effect(
+    game: &GameSettings,
+    tuning: &Tuning,
+) -> (SoundEffect, PlaybackSettings) {
     let (effect, playback) = sound_effect(game, tuning);
-    (effect, playback.with_spatial(true).with_spatial_scale(SpatialScale::new(SPATIAL_SCALE)))
+    (
+        effect,
+        playback
+            .with_spatial(true)
+            .with_spatial_scale(SpatialScale::new(SPATIAL_SCALE)),
+    )
 }
 
 /// Sound effects already playing follow a change of sound volume, or of the tuning, the same
 /// frame.
-fn turn_sound_volume(game: Res<GameSettings>, tuning: Res<Tuning>, global: Res<GlobalVolume>, mut sinks: Query<&mut AudioSink, With<SoundEffect>>) {
+fn turn_sound_volume(
+    game: Res<GameSettings>,
+    tuning: Res<Tuning>,
+    global: Res<GlobalVolume>,
+    mut sinks: Query<&mut AudioSink, With<SoundEffect>>,
+) {
     if game.is_changed() || tuning.is_changed() {
         for mut sink in &mut sinks {
             // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
-            sink.set_volume(Volume::Linear(global.volume.to_linear() * effect_volume(&game, &tuning)));
+            sink.set_volume(Volume::Linear(
+                global.volume.to_linear() * effect_volume(&game, &tuning),
+            ));
         }
     }
 }
@@ -467,7 +612,9 @@ fn play_music(
     for (entity, mut track, player, mut sink) in &mut tracks {
         if !track.measured {
             track.measured = true;
-            track.duration = sources.get(&player.0).and_then(|source| ogg_vorbis_duration(&source.bytes));
+            track.duration = sources
+                .get(&player.0)
+                .and_then(|source| ogg_vorbis_duration(&source.bytes));
             let path = player.0.path().map(ToString::to_string).unwrap_or_default();
             info!("music: playing {path}, {:?} s", track.duration);
         }
@@ -479,7 +626,12 @@ fn play_music(
         } else {
             let gain = track_gain(position, track.end(), settings.fade);
             // Bevy applies `GlobalVolume` only when it creates a sink, so it's folded in here.
-            sink.set_volume(Volume::Linear(music_gain(global.volume.to_linear(), &settings, &game, gain)));
+            sink.set_volume(Volume::Linear(music_gain(
+                global.volume.to_linear(),
+                &settings,
+                &game,
+                gain,
+            )));
         }
     }
     // The silence starts once the last track has ended, so none is drawn over a theme.
@@ -515,7 +667,9 @@ pub fn ogg_vorbis_duration(bytes: &[u8]) -> Option<f32> {
     if !bytes.starts_with(PAGE) {
         return None;
     }
-    let ident = bytes.windows(IDENTIFICATION.len()).position(|w| w == IDENTIFICATION)?;
+    let ident = bytes
+        .windows(IDENTIFICATION.len())
+        .position(|w| w == IDENTIFICATION)?;
     // After the packet tag: version (u32), channels (u8), sample rate (u32).
     let rate_at = ident + IDENTIFICATION.len() + 5;
     let sample_rate = u32::from_le_bytes(bytes.get(rate_at..rate_at + 4)?.try_into().ok()?);
@@ -570,12 +724,22 @@ mod tests {
     fn every_track_is_an_ogg_vorbis_asset() {
         let playlist = Playlist::default();
         for theme in [&playlist.creator_theme, &playlist.troll_theme] {
-            assert!(!playlist.tracks.contains(theme), "{theme} is never drawn at random");
+            assert!(
+                !playlist.tracks.contains(theme),
+                "{theme} is never drawn at random"
+            );
         }
-        for track in playlist.tracks.into_iter().chain([playlist.creator_theme, playlist.troll_theme]) {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&track);
+        for track in playlist
+            .tracks
+            .into_iter()
+            .chain([playlist.creator_theme, playlist.troll_theme])
+        {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(&track);
             let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{track}: {e}"));
-            let duration = ogg_vorbis_duration(&bytes).unwrap_or_else(|| panic!("{track}: not Ogg Vorbis"));
+            let duration =
+                ogg_vorbis_duration(&bytes).unwrap_or_else(|| panic!("{track}: not Ogg Vorbis"));
             assert!(duration > 60.0, "{track}: {duration}");
         }
     }
@@ -583,7 +747,10 @@ mod tests {
     #[test]
     fn fades_in_from_silence() {
         assert_eq!(track_gain(0.0, None, FADE), 0.0);
-        assert!(track_gain(1.0, None, FADE) >= 0.5 - 1e-6, "audible within a second");
+        assert!(
+            track_gain(1.0, None, FADE) >= 0.5 - 1e-6,
+            "audible within a second"
+        );
         assert_eq!(track_gain(FADE, None, FADE), 1.0);
         assert_eq!(track_gain(60.0, Some(120.0), FADE), 1.0);
     }
@@ -601,12 +768,24 @@ mod tests {
 
     #[test]
     fn the_title_track_fades_out_as_the_delve_begins_and_does_not_come_straight_back() {
-        let mut track = MusicTrack { looping: false, duration: Some(200.0), measured: true, cut: None };
+        let mut track = MusicTrack {
+            looping: false,
+            duration: Some(200.0),
+            measured: true,
+            cut: None,
+        };
         assert_eq!(track.end(), Some(200.0));
         track.cut_short(40.0, FADE);
         assert_eq!(track.end(), Some(43.0));
-        assert_eq!(track_gain(40.0, track.end(), FADE), 1.0, "no jump when the delve begins");
-        let falling: Vec<f32> = [40.5, 41.0, 42.0, 42.9].iter().map(|&t| track_gain(t, track.end(), FADE)).collect();
+        assert_eq!(
+            track_gain(40.0, track.end(), FADE),
+            1.0,
+            "no jump when the delve begins"
+        );
+        let falling: Vec<f32> = [40.5, 41.0, 42.0, 42.9]
+            .iter()
+            .map(|&t| track_gain(t, track.end(), FADE))
+            .collect();
         assert!(falling.windows(2).all(|w| w[1] < w[0]), "{falling:?}");
         assert!(!track.is_cut_off(42.9));
         assert!(track.is_cut_off(43.0));
@@ -616,12 +795,21 @@ mod tests {
         assert_eq!(track.end(), Some(43.0));
         // After the silence the level's music is drawn from the others, never Forever Below.
         let mut rng = Mulberry32::new(11);
-        assert!((0..500).all(|_| pick_track(&mut rng, Playlist::default().tracks.len(), Some(0)) != Some(0)));
+        assert!(
+            (0..500).all(
+                |_| pick_track(&mut rng, Playlist::default().tracks.len(), Some(0)) != Some(0)
+            )
+        );
     }
 
     #[test]
     fn a_cut_short_track_with_no_known_length_still_ends() {
-        let mut track = MusicTrack { looping: false, duration: None, measured: true, cut: None };
+        let mut track = MusicTrack {
+            looping: false,
+            duration: None,
+            measured: true,
+            cut: None,
+        };
         assert_eq!(track.end(), None);
         track.cut_short(1.0, FADE);
         assert_eq!(track.end(), Some(4.0));
@@ -635,20 +823,46 @@ mod tests {
             .insert_state(AppState::Title)
             .init_resource::<MusicSettings>()
             .add_systems(OnExit(AppState::Title), fade_out_for_the_delve);
-        let track = app.world_mut().spawn(MusicTrack { looping: false, duration: Some(120.0), measured: false, cut: None }).id();
+        let track = app
+            .world_mut()
+            .spawn(MusicTrack {
+                looping: false,
+                duration: Some(120.0),
+                measured: false,
+                cut: None,
+            })
+            .id();
         app.update();
-        assert_eq!(app.world().get::<MusicTrack>(track).unwrap().cut, None, "it plays on over the title");
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        assert_eq!(
+            app.world().get::<MusicTrack>(track).unwrap().cut,
+            None,
+            "it plays on over the title"
+        );
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Delving);
         app.update();
         // No sink without an audio device, so it fades from the start.
-        assert_eq!(app.world().get::<MusicTrack>(track).unwrap().cut, Some(MusicSettings::default().fade));
+        assert_eq!(
+            app.world().get::<MusicTrack>(track).unwrap().cut,
+            Some(MusicSettings::default().fade)
+        );
     }
 
     #[test]
     fn a_looping_track_plays_on_past_its_length_until_cut() {
-        let mut track = MusicTrack { looping: true, duration: Some(120.0), measured: true, cut: None };
+        let mut track = MusicTrack {
+            looping: true,
+            duration: Some(120.0),
+            measured: true,
+            cut: None,
+        };
         assert_eq!(track.end(), None);
-        assert_eq!(track_gain(500.0, track.end(), FADE), 1.0, "no fade at the end of each loop");
+        assert_eq!(
+            track_gain(500.0, track.end(), FADE),
+            1.0,
+            "no fade at the end of each loop"
+        );
         // Positions keep counting across loops, so a cut on the third time round still fades.
         track.cut_short(300.0, FADE);
         assert_eq!(track.end(), Some(303.0));
@@ -656,7 +870,10 @@ mod tests {
     }
 
     fn handle(n: u128) -> Handle<AudioSource> {
-        Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData)
+        Handle::Uuid(
+            bevy::asset::uuid::Uuid::from_u128(n),
+            std::marker::PhantomData,
+        )
     }
 
     fn creator_theme_app() -> App {
@@ -665,14 +882,24 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .insert_state(AppState::Title)
             .init_resource::<MusicSettings>()
-            .insert_resource(PlaylistAudio { tracks: vec![handle(1), handle(2)], creator_theme: handle(9), troll_theme: handle(10) })
-            .insert_resource(MusicSchedule { rng: Mulberry32::new(1), last: Some(0), resume_at: None })
+            .insert_resource(PlaylistAudio {
+                tracks: vec![handle(1), handle(2)],
+                creator_theme: handle(9),
+                troll_theme: handle(10),
+            })
+            .insert_resource(MusicSchedule {
+                rng: Mulberry32::new(1),
+                last: Some(0),
+                resume_at: None,
+            })
             .add_systems(OnExit(AppState::Title), fade_out_for_the_delve)
             .add_systems(
                 Update,
                 (
                     play_creator_theme.run_if(resource_added::<crate::title::creator::Draft>),
-                    back_to_the_title_track.run_if(resource_removed::<crate::title::creator::Draft>).run_if(in_state(AppState::Title)),
+                    back_to_the_title_track
+                        .run_if(resource_removed::<crate::title::creator::Draft>)
+                        .run_if(in_state(AppState::Title)),
                 )
                     .chain(),
             );
@@ -681,41 +908,81 @@ mod tests {
 
     fn tracks(app: &mut App) -> Vec<(bool, Option<f32>, Handle<AudioSource>)> {
         let mut query = app.world_mut().query::<(&MusicTrack, &AudioPlayer)>();
-        query.iter(app.world()).map(|(track, player)| (track.looping, track.cut, player.0.clone())).collect()
+        query
+            .iter(app.world())
+            .map(|(track, player)| (track.looping, track.cut, player.0.clone()))
+            .collect()
     }
 
     #[test]
     fn the_creator_loops_its_theme_until_the_delve_begins() {
         use crate::title::creator::Draft;
         let mut app = creator_theme_app();
-        app.world_mut().spawn((MusicTrack { looping: false, duration: Some(180.0), measured: true, cut: None }, AudioPlayer::new(handle(1))));
+        app.world_mut().spawn((
+            MusicTrack {
+                looping: false,
+                duration: Some(180.0),
+                measured: true,
+                cut: None,
+            },
+            AudioPlayer::new(handle(1)),
+        ));
         app.update();
-        assert_eq!(tracks(&mut app).len(), 1, "the title track plays on until the creator opens");
+        assert_eq!(
+            tracks(&mut app).len(),
+            1,
+            "the title track plays on until the creator opens"
+        );
 
         app.insert_resource(Draft::roll(1));
         app.update();
         let playing = tracks(&mut app);
-        assert!(playing.contains(&(false, Some(FADE), handle(1))), "the title track fades out: {playing:?}");
-        assert!(playing.contains(&(true, None, handle(9))), "the theme loops in its place: {playing:?}");
+        assert!(
+            playing.contains(&(false, Some(FADE), handle(1))),
+            "the title track fades out: {playing:?}"
+        );
+        assert!(
+            playing.contains(&(true, None, handle(9))),
+            "the theme loops in its place: {playing:?}"
+        );
 
         // Back to the buttons: the theme fades out and the title track comes in again.
         app.world_mut().remove_resource::<Draft>();
         app.update();
         let playing = tracks(&mut app);
-        assert!(playing.contains(&(true, Some(FADE), handle(9))), "the theme fades out: {playing:?}");
-        assert!(playing.contains(&(false, None, handle(1))), "the title track fades in: {playing:?}");
+        assert!(
+            playing.contains(&(true, Some(FADE), handle(9))),
+            "the theme fades out: {playing:?}"
+        );
+        assert!(
+            playing.contains(&(false, None, handle(1))),
+            "the title track fades in: {playing:?}"
+        );
         assert_eq!(app.world().resource::<MusicSchedule>().last, Some(0));
 
         // Into the creator again: a fresh theme over the title track, fading out.
         app.insert_resource(Draft::roll(2));
         app.update();
         let playing = tracks(&mut app);
-        assert!(playing.contains(&(true, None, handle(9))), "the theme loops again: {playing:?}");
-        assert!(playing.iter().all(|t| t == &(true, None, handle(9)) || t.1.is_some()), "nothing else plays on: {playing:?}");
+        assert!(
+            playing.contains(&(true, None, handle(9))),
+            "the theme loops again: {playing:?}"
+        );
+        assert!(
+            playing
+                .iter()
+                .all(|t| t == &(true, None, handle(9)) || t.1.is_some()),
+            "nothing else plays on: {playing:?}"
+        );
 
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Delving);
         app.update();
-        assert!(tracks(&mut app).iter().all(|t| t.1.is_some()), "everything fades as the delve begins");
+        assert!(
+            tracks(&mut app).iter().all(|t| t.1.is_some()),
+            "everything fades as the delve begins"
+        );
     }
 
     #[test]
@@ -726,11 +993,19 @@ mod tests {
         app.update();
         // `begin_delve` removes the draft and asks for the delve in the same frame.
         app.world_mut().remove_resource::<Draft>();
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Delving);
         app.update();
         let playing = tracks(&mut app);
-        assert!(!playing.iter().any(|t| t.2 == handle(1)), "no title track under the delve: {playing:?}");
-        assert!(playing.iter().all(|t| t.1.is_some()), "the theme fades out: {playing:?}");
+        assert!(
+            !playing.iter().any(|t| t.2 == handle(1)),
+            "no title track under the delve: {playing:?}"
+        );
+        assert!(
+            playing.iter().all(|t| t.1.is_some()),
+            "the theme fades out: {playing:?}"
+        );
     }
 
     /// A rough rock level's room graph, the centre of a room for the delver, and the centres of
@@ -743,8 +1018,17 @@ mod tests {
             let (x, y) = room.centre();
             Vec3::new(x * fb_level::CELL, 0.0, y * fb_level::CELL)
         };
-        let find = |from: &fb_level::Room, far: fn(u32) -> bool| level.rooms.iter().find(|r| graph.rooms_apart(corner(from), corner(r)).is_some_and(far));
-        let delver = level.rooms.iter().find(|r| find(r, |a| a > 2).is_some()).expect("a room with one far off");
+        let find = |from: &fb_level::Room, far: fn(u32) -> bool| {
+            level
+                .rooms
+                .iter()
+                .find(|r| graph.rooms_apart(corner(from), corner(r)).is_some_and(far))
+        };
+        let delver = level
+            .rooms
+            .iter()
+            .find(|r| find(r, |a| a > 2).is_some())
+            .expect("a room with one far off");
         let at = |far: fn(u32) -> bool| centre(find(delver, far).expect("a room that far"));
         let rooms = [at(|a| a == 0), at(|a| a == 1), at(|a| a > 2)];
         (graph.clone(), centre(delver), rooms)
@@ -757,7 +1041,10 @@ mod tests {
         assert_eq!(rooms, 2);
         assert!(troll_is_near(&graph, delver, same, rooms));
         assert!(troll_is_near(&graph, delver, next, rooms));
-        assert!(!troll_is_near(&graph, delver, far, rooms), "three rooms or more off is too far");
+        assert!(
+            !troll_is_near(&graph, delver, far, rooms),
+            "three rooms or more off is too far"
+        );
     }
 
     #[test]
@@ -773,24 +1060,67 @@ mod tests {
             .init_resource::<MusicSettings>()
             .insert_resource(tuning)
             .insert_resource(crate::play::LevelRooms(graph))
-            .insert_resource(PlaylistAudio { tracks: vec![handle(1), handle(2)], creator_theme: handle(9), troll_theme: handle(10) })
-            .insert_resource(MusicSchedule { rng: Mulberry32::new(1), last: Some(0), resume_at: Some(5.0) })
+            .insert_resource(PlaylistAudio {
+                tracks: vec![handle(1), handle(2)],
+                creator_theme: handle(9),
+                troll_theme: handle(10),
+            })
+            .insert_resource(MusicSchedule {
+                rng: Mulberry32::new(1),
+                last: Some(0),
+                resume_at: Some(5.0),
+            })
             .add_systems(Update, play_troll_theme.run_if(in_state(AppState::Delving)));
-        app.world_mut().spawn((crate::play::Player, Transform::from_translation(delver)));
-        app.world_mut().spawn((MusicTrack { looping: false, duration: Some(180.0), measured: true, cut: None }, AudioPlayer::new(handle(2))));
-        let troll = app.world_mut().spawn((Troll::new(&fb_creatures::TrollState::roll(1)), Transform::from_translation(next))).id();
+        app.world_mut()
+            .spawn((crate::play::Player, Transform::from_translation(delver)));
+        app.world_mut().spawn((
+            MusicTrack {
+                looping: false,
+                duration: Some(180.0),
+                measured: true,
+                cut: None,
+            },
+            AudioPlayer::new(handle(2)),
+        ));
+        let troll = app
+            .world_mut()
+            .spawn((
+                Troll::new(&fb_creatures::TrollState::roll(1)),
+                Transform::from_translation(next),
+            ))
+            .id();
         app.update();
         let playing = tracks(&mut app);
-        assert!(playing.contains(&(true, None, handle(10))), "the troll theme loops: {playing:?}");
-        assert!(playing.contains(&(false, Some(FADE), handle(2))), "the level's track fades out: {playing:?}");
-        assert_eq!(app.world().resource::<MusicSchedule>().resume_at, None, "nothing is drawn over it");
+        assert!(
+            playing.contains(&(true, None, handle(10))),
+            "the troll theme loops: {playing:?}"
+        );
+        assert!(
+            playing.contains(&(false, Some(FADE), handle(2))),
+            "the level's track fades out: {playing:?}"
+        );
+        assert_eq!(
+            app.world().resource::<MusicSchedule>().resume_at,
+            None,
+            "nothing is drawn over it"
+        );
 
         app.update();
-        assert_eq!(tracks(&mut app).iter().filter(|t| t.2 == handle(10)).count(), 1, "one theme, however long the troll stays");
+        assert_eq!(
+            tracks(&mut app)
+                .iter()
+                .filter(|t| t.2 == handle(10))
+                .count(),
+            1,
+            "one theme, however long the troll stays"
+        );
 
         app.world_mut().get_mut::<Troll>(troll).unwrap().spent = true;
         app.update();
-        assert!(tracks(&mut app).iter().all(|t| t.1.is_some()), "burned to death, it is no threat: the theme fades out");
+        assert!(
+            tracks(&mut app).iter().all(|t| t.1.is_some()),
+            "burned to death, it is no threat: the theme fades out"
+        );
     }
 
     #[test]
@@ -800,11 +1130,25 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .insert_state(AppState::Delving)
             .init_resource::<MusicSettings>()
-            .insert_resource(PlaylistAudio { tracks: vec![handle(1)], creator_theme: handle(9), troll_theme: handle(10) })
+            .insert_resource(PlaylistAudio {
+                tracks: vec![handle(1)],
+                creator_theme: handle(9),
+                troll_theme: handle(10),
+            })
             .add_systems(OnExit(AppState::Delving), end_troll_theme);
-        app.world_mut().spawn((MusicTrack { looping: true, duration: None, measured: true, cut: None }, AudioPlayer::new(handle(10))));
+        app.world_mut().spawn((
+            MusicTrack {
+                looping: true,
+                duration: None,
+                measured: true,
+                cut: None,
+            },
+            AudioPlayer::new(handle(10)),
+        ));
         app.update();
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Title);
         app.update();
         assert_eq!(tracks(&mut app), vec![(true, Some(FADE), handle(10))]);
     }
@@ -812,7 +1156,17 @@ mod tests {
     #[test]
     fn music_volume_zero_is_silent_and_one_is_the_mix() {
         let mix = MusicSettings::default();
-        let at = |music_volume: f32| music_gain(1.0, &mix, &GameSettings { music_volume, ..default() }, 1.0);
+        let at = |music_volume: f32| {
+            music_gain(
+                1.0,
+                &mix,
+                &GameSettings {
+                    music_volume,
+                    ..default()
+                },
+                1.0,
+            )
+        };
         assert_eq!(at(0.0), 0.0);
         assert_eq!(at(1.0), mix.volume);
         assert!((at(0.5) - mix.volume * 0.5).abs() < 1e-6);
@@ -834,8 +1188,13 @@ mod tests {
     #[test]
     fn a_volume_key_applies_within_the_frame() {
         let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<Keymap>().init_resource::<GameSettings>().add_systems(Update, turn_music_volume);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Minus);
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Keymap>()
+            .init_resource::<GameSettings>()
+            .add_systems(Update, turn_music_volume);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Minus);
         app.update();
         assert!((app.world().resource::<GameSettings>().music_volume - 0.9).abs() < 1e-6);
     }
@@ -843,16 +1202,27 @@ mod tests {
     #[test]
     fn volume_keys_type_into_the_creator_instead() {
         let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<Keymap>().init_resource::<GameSettings>().add_systems(Update, turn_music_volume);
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Keymap>()
+            .init_resource::<GameSettings>()
+            .add_systems(Update, turn_music_volume);
         app.insert_resource(crate::title::creator::Draft::roll(1));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Minus);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Minus);
         app.update();
-        assert_eq!(app.world().resource::<GameSettings>().music_volume, GameSettings::default().music_volume);
+        assert_eq!(
+            app.world().resource::<GameSettings>().music_volume,
+            GameSettings::default().music_volume
+        );
     }
 
     #[test]
     fn reads_the_length_of_the_soundtrack() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio/the-wizards-tower.ogg");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/audio/the-wizards-tower.ogg"
+        );
         let duration = ogg_vorbis_duration(&std::fs::read(path).unwrap()).unwrap();
         assert!((duration - 184.93).abs() < 0.05, "{duration}");
     }

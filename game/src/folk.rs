@@ -28,7 +28,13 @@
 
 use std::sync::Arc;
 
-use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, platform::collections::HashMap, prelude::*, tasks::{AsyncComputeTaskPool, TaskPool}, ui::ComputedUiRenderTargetInfo};
+use bevy::{
+    mesh::skinning::SkinnedMeshInverseBindposes,
+    platform::collections::HashMap,
+    prelude::*,
+    tasks::{AsyncComputeTaskPool, TaskPool},
+    ui::ComputedUiRenderTargetInfo,
+};
 use fb_body::{BodySpec, Folk, Joint};
 use fb_items::{Item, Rarity, Slot, roll_item_with};
 use fb_level::{FactionSpec, FolkSpot, Level};
@@ -42,8 +48,8 @@ use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::keymap::Keymap;
 use crate::level::EXPOSURE;
 use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, PlayerCamera, ScreenOpen};
-use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
 use crate::render::ItemSpawner;
+use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
 
 pub struct FolkPlugin;
 
@@ -59,7 +65,13 @@ impl Plugin for FolkPlugin {
                     spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
                     idle_folk,
                     turn_heads,
-                    (aim_at_folk, meet_aimed_folk, spawn_folk_card, show_folk_card).chain(),
+                    (
+                        aim_at_folk,
+                        meet_aimed_folk,
+                        spawn_folk_card,
+                        show_folk_card,
+                    )
+                        .chain(),
                 )
                     .in_set(DelveSystems),
             );
@@ -108,7 +120,9 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
     let livery = fb_items::outfit::Livery::from_field(faction.field, lean);
     // A name's robe goes on folk, and on fauns, whose robes are fitted to their legs and tails;
     // the other denizens go as their kit has them, their rows being sparse by design.
-    let robed = faction.denizen.is_none_or(|k| k == fb_faction::DenizenKind::Faun);
+    let robed = faction
+        .denizen
+        .is_none_or(|k| k == fb_faction::DenizenKind::Faun);
     let garment = faction.looks.garment.filter(|_| robed);
     let livery = livery.with_garment(garment.map(|g| match g {
         fb_faction::Garment::Robe => fb_items::outfit::Garment::Robe,
@@ -118,9 +132,17 @@ fn livery(faction: &FactionSpec) -> fb_items::outfit::Livery {
         fb_faction::Trim::GoldHem => fb_items::outfit::Trim::GoldHem,
     }));
     // A name that gives the colours has every piece of cloth wear them.
-    let livery = if faction.looks.colours.is_empty() { livery } else { livery.named() };
+    let livery = if faction.looks.colours.is_empty() {
+        livery
+    } else {
+        livery.named()
+    };
     // Denizens go sparsely dressed, so their legwear wears the colours; folk's is left alone.
-    if faction.is_denizen() { livery.with_legs() } else { livery }
+    if faction.is_denizen() {
+        livery.with_legs()
+    } else {
+        livery
+    }
 }
 
 /// The key of the outfit a denizen of `folk` dresses from, in `data/outfits.json`: the row of its
@@ -131,9 +153,15 @@ fn denizen_outfit(folk: Folk, spot: &FolkSpot) -> Option<&'static str> {
     spot.denizen?;
     let key = folk.key();
     let kind = if key.contains("demon") { "demon" } else { key };
-    let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+    let guard = spot
+        .trade
+        .is_some_and(|t| t.profession == fb_faction::Profession::Guard);
     let guard_row = format!("{kind}_guard");
-    guard.then(|| fb_items::outfit::outfit(&guard_row)).flatten().or_else(|| fb_items::outfit::outfit(kind)).map(|o| o.key.as_str())
+    guard
+        .then(|| fb_items::outfit::outfit(&guard_row))
+        .flatten()
+        .or_else(|| fb_items::outfit::outfit(kind))
+        .map(|o| o.key.as_str())
 }
 
 impl Person {
@@ -148,21 +176,42 @@ impl Person {
         let folk = spot.denizen.and_then(Folk::of_denizen).unwrap_or(spot.folk);
         // A succubus is a woman whatever her faction rolled; the other denizens are men.
         let succubus = spot.denizen == Some(fb_denizens::DenizenBody::Succubus);
-        let sex = if succubus { fb_body::Sex::Female } else { spot.sex };
-        let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
+        let sex = if succubus {
+            fb_body::Sex::Female
+        } else {
+            spot.sex
+        };
+        let name_key = if fb_items::tables::syllables().contains_key(folk.key()) {
+            folk.key()
+        } else {
+            Folk::Human.key()
+        };
         let name = fb_items::naming::folk_name(&mut rng, name_key, Some(sex));
         let outfit = *rng.pick(&faction.outfit_keys());
         // A denizen dresses from the row of its own kind, not a delver's class outfit.
         let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
-        let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
-            let set = o.roll_in(spot.seed, folk.key(), odds, Some(&livery(faction)));
-            let ammunition: Vec<Item> = set.goods.into_iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).collect();
-            (set.worn, ammunition)
-        });
+        let (mut gear, goods) =
+            fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {
+                let set = o.roll_in(spot.seed, folk.key(), odds, Some(&livery(faction)));
+                let ammunition: Vec<Item> = set
+                    .goods
+                    .into_iter()
+                    .filter(|i| {
+                        matches!(
+                            i.shape.family(),
+                            armory::Family::Arrow | armory::Family::Bolt
+                        )
+                    })
+                    .collect();
+                (set.worn, ammunition)
+            });
         let has = |gear: &[(Slot, Item)], slot| gear.iter().any(|(s, _)| *s == slot);
         // Nobody stands about empty-handed: a torch if the outfit gave nothing to hold.
         if !has(&gear, Slot::Mainhand) && !has(&gear, Slot::Offhand) {
-            gear.extend(roll_item_with("Torch", spot.seed.wrapping_add(2), odds).map(|torch| (Slot::Mainhand, torch)));
+            gear.extend(
+                roll_item_with("Torch", spot.seed.wrapping_add(2), odds)
+                    .map(|torch| (Slot::Mainhand, torch)),
+            );
         }
         // The plate's `rollChar`: scavengers are filthy, the freshly fallen grubby, the rest
         // a little dirty.
@@ -176,22 +225,43 @@ impl Person {
         let mut goods = goods;
         goods.extend(crate::doors::key_of(faction));
         // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
-        let spec = if spot.denizen.is_some() && !succubus { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, sex) };
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
+        let spec = if spot.denizen.is_some() && !succubus {
+            BodySpec::roll(folk, spot.seed)
+        } else {
+            BodySpec::roll_as(folk, spot.seed, sex)
+        };
+        Person {
+            spot: *spot,
+            depth,
+            faction: faction.clone(),
+            name,
+            spec,
+            outfit,
+            gear,
+            goods,
+            dirt,
+        }
     }
 
     /// What they wear, innermost slots first as listed.
     pub fn worn(&self) -> impl Iterator<Item = &(Slot, Item)> {
-        self.gear.iter().filter(|(slot, _)| !matches!(slot, Slot::Mainhand | Slot::Offhand))
+        self.gear
+            .iter()
+            .filter(|(slot, _)| !matches!(slot, Slot::Mainhand | Slot::Offhand))
     }
 
     /// What they hold.
     pub fn held(&self) -> impl Iterator<Item = &(Slot, Item)> {
-        self.gear.iter().filter(|(slot, _)| matches!(slot, Slot::Mainhand | Slot::Offhand))
+        self.gear
+            .iter()
+            .filter(|(slot, _)| matches!(slot, Slot::Mainhand | Slot::Offhand))
     }
 
     pub fn item(&self, slot: Slot) -> Option<&Item> {
-        self.gear.iter().find(|(s, _)| *s == slot).map(|(_, item)| item)
+        self.gear
+            .iter()
+            .find(|(s, _)| *s == slot)
+            .map(|(_, item)| item)
     }
 }
 
@@ -206,7 +276,8 @@ pub fn footprint(figure: &Figure) -> f32 {
 /// in [`Level::folk`] (saved records are keyed by a spot's place in the whole list, so none
 /// shifts) but nobody is made or spawned for them; this one rule hides them everywhere.
 pub fn has_figure(spot: &FolkSpot) -> bool {
-    spot.denizen.is_none_or(|body| Folk::of_denizen(body).is_some())
+    spot.denizen
+        .is_none_or(|body| Folk::of_denizen(body).is_some())
 }
 
 /// Figures already built, by spot seed, so a level drawn again reuses them.
@@ -221,11 +292,29 @@ pub struct FolkFigures {
 impl FolkFigures {
     /// The person and figure for every spot in `spots` on a level `depth` down, building (in
     /// parallel) those not yet built.
-    pub fn for_spots(&mut self, spots: &[FolkSpot], factions: &[FactionSpec], depth: u32) -> Vec<Arc<(Person, Figure)>> {
-        let missing: Vec<FolkSpot> = spots.iter().filter(|s| has_figure(s)).filter(|s| !self.built.get(&s.seed).is_some_and(|built| built.0.spot == **s && built.0.depth == depth)).copied().collect();
+    pub fn for_spots(
+        &mut self,
+        spots: &[FolkSpot],
+        factions: &[FactionSpec],
+        depth: u32,
+    ) -> Vec<Arc<(Person, Figure)>> {
+        let missing: Vec<FolkSpot> = spots
+            .iter()
+            .filter(|s| has_figure(s))
+            .filter(|s| {
+                !self
+                    .built
+                    .get(&s.seed)
+                    .is_some_and(|built| built.0.spot == **s && built.0.depth == depth)
+            })
+            .copied()
+            .collect();
         self.built_here += missing.len();
         self.keep(build_figures(&missing, factions, depth));
-        spots.iter().filter_map(|s| self.built.get(&s.seed).cloned()).collect()
+        spots
+            .iter()
+            .filter_map(|s| self.built.get(&s.seed).cloned())
+            .collect()
     }
 
     /// Keeps figures built elsewhere (see [`build_figures`]), so [`Self::for_spots`] finds them.
@@ -239,11 +328,18 @@ impl FolkFigures {
 /// A person and figure for every spot in `spots` on a level `depth` down, built in parallel.
 /// Plain data, so it can be done ahead of time on another thread ([`crate::travel`]); it runs on
 /// the async compute pool so that, ahead of time, it leaves the frame's own pool free.
-pub fn build_figures(spots: &[FolkSpot], factions: &[FactionSpec], depth: u32) -> Vec<(Person, Figure)> {
+pub fn build_figures(
+    spots: &[FolkSpot],
+    factions: &[FactionSpec],
+    depth: u32,
+) -> Vec<(Person, Figure)> {
     AsyncComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
         for spot in spots.iter().filter(|s| has_figure(s)) {
             scope.spawn(async move {
-                let faction = factions.iter().find(|f| f.id == spot.faction).expect("a spot's faction is on its level");
+                let faction = factions
+                    .iter()
+                    .find(|f| f.id == spot.faction)
+                    .expect("a spot's faction is on its level");
                 let person = Person::of(spot, faction, depth);
                 let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
                 (person, figure)
@@ -270,7 +366,13 @@ impl Denizen {
     /// What they leave when they fall: everything they wear, hold and carry, set down round the
     /// circle they stand in ([`crate::belongings::drop_belongings`]).
     pub fn belongings(&self) -> crate::belongings::Belongings {
-        let items = self.person.gear.iter().map(|(_, item)| item).chain(&self.person.goods).cloned();
+        let items = self
+            .person
+            .gear
+            .iter()
+            .map(|(_, item)| item)
+            .chain(&self.person.goods)
+            .cloned();
         crate::belongings::Belongings::new(self.person.spot.seed, items).standing_in(self.radius)
     }
 }
@@ -339,7 +441,10 @@ pub fn look_at(head: Vec3, eye: Vec3) -> Option<Vec2> {
         return None;
     }
     let pitch = to.y.atan2(across);
-    Some(Vec2::new(yaw.clamp(-HEAD_YAW_MAX, HEAD_YAW_MAX), pitch.clamp(-HEAD_PITCH_MAX, HEAD_PITCH_MAX)))
+    Some(Vec2::new(
+        yaw.clamp(-HEAD_YAW_MAX, HEAD_YAW_MAX),
+        pitch.clamp(-HEAD_PITCH_MAX, HEAD_PITCH_MAX),
+    ))
 }
 
 /// The head's rotation about the neck for a look of `(yaw, pitch)`: turned, then tipped (a
@@ -353,7 +458,8 @@ pub fn head_rotation(look: Vec2) -> Quat {
 /// turn more.
 pub fn stand_at(spot: &FolkSpot) -> Transform {
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    Transform::from_translation(at).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
+    Transform::from_translation(at)
+        .with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 
 /// Seconds a body brought back from the record has lain, long past its fall.
@@ -382,26 +488,49 @@ pub(crate) fn spawn_folk(
     // On a level that was left, each folk is as they were left (`crate::record`).
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     // A saved record is kept by a spot's place in the whole list, denizens' spots included.
-    let indices = level.0.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).map(|(i, _)| i);
-    for (index, built) in indices.zip(figures.for_spots(&level.0.folk, &level.0.factions, level.0.depth)) {
+    let indices = level
+        .0
+        .folk
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| has_figure(s))
+        .map(|(i, _)| i);
+    for (index, built) in
+        indices.zip(figures.for_spots(&level.0.folk, &level.0.factions, level.0.depth))
+    {
         let (person, figure) = &*built;
         let left = saved.and_then(|l| l.folk.get(&index));
         let Some(left) = left else {
             spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
             continue;
         };
-        let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
-        let health = crate::combat::Health { hp: left.hp, max: left.max };
+        let hostility = if left.hostile {
+            crate::hostility::Hostility::Hostile
+        } else {
+            crate::hostility::Hostility::Friendly
+        };
+        let health = crate::combat::Health {
+            hp: left.hp,
+            max: left.max,
+        };
         if left.dead {
             // A body lies bare where it fell, long fallen: what it wore is on the floor.
             let bare = crate::folk_combat::bare(person);
             let figure = Figure::dress(&bare.spec, &bare.gear, bare.dirt);
             let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &bare, &figure);
-            let fallen = crate::combat::feedback::Corpse { since: LONG_FALLEN, fell: left.transform() };
-            commands.entity(root).insert((health, hostility, fallen, crate::combat::feedback::Looted)).remove::<BlocksTheWay>();
+            let fallen = crate::combat::feedback::Corpse {
+                since: LONG_FALLEN,
+                fell: left.transform(),
+            };
+            commands
+                .entity(root)
+                .insert((health, hostility, fallen, crate::combat::feedback::Looted))
+                .remove::<BlocksTheWay>();
         } else {
             let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, person, figure);
-            commands.entity(root).insert((health, hostility, left.transform()));
+            commands
+                .entity(root)
+                .insert((health, hostility, left.transform()));
         }
     }
     // Capture hook: `FB_SPAWN=folk:<faction>` stands folk ahead of the start.
@@ -413,7 +542,13 @@ pub(crate) fn spawn_folk(
                 record.standings.meet(person.faction.id);
             }
         }
-        spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &person, &figure);
+        spawn_denizen(
+            &mut commands,
+            &mut spawner,
+            &mut bindposes,
+            &person,
+            &figure,
+        );
     }
     *shown = Some(level.0.folk.clone());
 }
@@ -429,7 +564,12 @@ pub fn spawn_denizen(
     figure: &Figure,
 ) -> Entity {
     let (min, max) = figure.bounds().unwrap_or((Vec3::ZERO, Vec3::ZERO));
-    let denizen = Denizen { person: person.clone(), radius: footprint(figure), min, max };
+    let denizen = Denizen {
+        person: person.clone(),
+        radius: footprint(figure),
+        min,
+        max,
+    };
     let root = commands
         .spawn((
             Name::new(person.name.clone()),
@@ -440,14 +580,32 @@ pub fn spawn_denizen(
             Visibility::default(),
         ))
         .id();
-    let stance = commands.spawn((Stance { idle: Idle::of(person.spot.seed), turn: 0.0 }, Transform::default(), Visibility::default(), ChildOf(root))).id();
+    let stance = commands
+        .spawn((
+            Stance {
+                idle: Idle::of(person.spot.seed),
+                turn: 0.0,
+            },
+            Transform::default(),
+            Visibility::default(),
+            ChildOf(root),
+        ))
+        .id();
     let turns = !figure.hooded && figure.pieces.iter().any(|p| p.on_head);
     let anim = spawn_rigged(spawner, bindposes, figure, stance, turns, person.spot.seed);
     if let Some(light) = &figure.light {
         // A little above the flame, so the hand and the stone under it do not burn white.
         // Lit as tuned once it is spawned (`carry::relight_given_lights`).
         let at = anim.in_joint(light.joint, light.at + Vec3::Y * HELD_LIGHT_LIFT);
-        spawner.commands().spawn((given_light(light.anchor, EXPOSURE, &crate::tuning::LightTuning::default()), Transform::from_translation(at), ChildOf(anim.joint(light.joint))));
+        spawner.commands().spawn((
+            given_light(
+                light.anchor,
+                EXPOSURE,
+                &crate::tuning::LightTuning::default(),
+            ),
+            Transform::from_translation(at),
+            ChildOf(anim.joint(light.joint)),
+        ));
     }
     commands.entity(stance).insert(anim);
     root
@@ -470,7 +628,10 @@ pub(crate) fn idle_folk(mut stances: Query<(&Stance, &mut Transform)>) {
 fn turn_heads(
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    folk: Query<(&GlobalTransform, &Children), (With<Denizen>, Without<crate::combat::feedback::Corpse>)>,
+    folk: Query<
+        (&GlobalTransform, &Children),
+        (With<Denizen>, Without<crate::combat::feedback::Corpse>),
+    >,
     mut stances: Query<(&mut Stance, &Children, Option<&FolkAnim>)>,
     mut heads: Query<(&mut FolkHead, &mut Transform)>,
 ) {
@@ -480,15 +641,27 @@ fn turn_heads(
         let from_world = root.affine().inverse();
         let eye = eye.map(|eye| from_world.transform_point3(eye));
         for &child in children {
-            let Ok((mut stance, parts, anim)) = stances.get_mut(child) else { continue };
+            let Ok((mut stance, parts, anim)) = stances.get_mut(child) else {
+                continue;
+            };
             // A skinned figure's head is its head joint, deep in the skeleton; a stand-in's is
             // a child of the stance.
-            let found = anim.and_then(|a| heads.contains(a.joint(Joint::Head)).then(|| a.joint(Joint::Head))).or_else(|| parts.iter().find(|&e| heads.contains(e)));
+            let found = anim
+                .and_then(|a| {
+                    heads
+                        .contains(a.joint(Joint::Head))
+                        .then(|| a.joint(Joint::Head))
+                })
+                .or_else(|| parts.iter().find(|&e| heads.contains(e)));
             match found {
                 Some(head) => {
-                    let Ok((mut head, mut transform)) = heads.get_mut(head) else { continue };
+                    let Ok((mut head, mut transform)) = heads.get_mut(head) else {
+                        continue;
+                    };
                     let pivot = head.pivot.unwrap_or(transform.translation);
-                    let target = eye.and_then(|eye| look_at(pivot, eye)).unwrap_or(Vec2::ZERO);
+                    let target = eye
+                        .and_then(|eye| look_at(pivot, eye))
+                        .unwrap_or(Vec2::ZERO);
                     head.look.smooth_nudge(&target, HEAD_TURN_RATE, dt);
                     // A skeleton's pose puts the turn on its head joint.
                     if anim.is_none() {
@@ -496,7 +669,11 @@ fn turn_heads(
                     }
                 }
                 None => {
-                    let target = eye.and_then(|eye| look_at(Vec3::ZERO, eye)).map_or(0.0, |look| (look.x * BODY_TURN_SHARE).clamp(-BODY_TURN_MAX, BODY_TURN_MAX));
+                    let target = eye
+                        .and_then(|eye| look_at(Vec3::ZERO, eye))
+                        .map_or(0.0, |look| {
+                            (look.x * BODY_TURN_SHARE).clamp(-BODY_TURN_MAX, BODY_TURN_MAX)
+                        });
                     stance.turn.smooth_nudge(&target, HEAD_TURN_RATE, dt);
                 }
             }
@@ -521,10 +698,18 @@ pub struct FolkCardText {
 /// The card for `person`: their name, folk and faction (named as `data/factions.json` names
 /// it), and what they wear and hold.
 pub fn folk_card_text(person: &Person, band: fb_faction::Band) -> FolkCardText {
-    let names = |gear: &mut dyn Iterator<Item = &(Slot, Item)>| gear.map(|(_, item)| (item.title().to_string(), item.rarity)).collect();
+    let names = |gear: &mut dyn Iterator<Item = &(Slot, Item)>| {
+        gear.map(|(_, item)| (item.title().to_string(), item.rarity))
+            .collect()
+    };
     FolkCardText {
         name: person.name.clone(),
-        line: format!("{} of {} \u{b7} {}", person.spec.folk.race().label, person.faction.name, band.label()),
+        line: format!(
+            "{} of {} \u{b7} {}",
+            person.spec.folk.race().label,
+            person.faction.name,
+            band.label()
+        ),
         trade: person.spot.trade.map(|t| t.label()),
         wears: names(&mut person.worn()),
         holds: names(&mut person.held()),
@@ -549,8 +734,17 @@ fn aim_at_folk(
     mut aimed: ResMut<AimedFolk>,
 ) {
     let hit = eyes.iter().next().and_then(|eye| {
-        let targets = folk.iter().map(|(entity, at, denizen)| (entity, at.compute_transform(), denizen.min, denizen.max));
-        nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity)
+        let targets = folk.iter().map(|(entity, at, denizen)| {
+            (entity, at.compute_transform(), denizen.min, denizen.max)
+        });
+        nearest_aimed(
+            eye.translation(),
+            eye.forward().as_vec3(),
+            REACH,
+            AimBuffer::of(&tuning),
+            targets,
+        )
+        .map(|(entity, _)| entity)
     });
     if aimed.0 != hit {
         aimed.0 = hit;
@@ -559,11 +753,17 @@ fn aim_at_folk(
 
 /// Spawns the folk card, hidden, once there is a camera drawing over the held torch to draw
 /// it (as the item card is).
-fn spawn_folk_card(mut commands: Commands, cards: Query<(), With<FolkCard>>, cameras: Query<Entity, With<ViewModelCamera>>) {
+fn spawn_folk_card(
+    mut commands: Commands,
+    cards: Query<(), With<FolkCard>>,
+    cameras: Query<Entity, With<ViewModelCamera>>,
+) {
     if !cards.is_empty() {
         return;
     }
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     commands.spawn((
         Name::new("Folk card"),
         DespawnOnExit(crate::launch::AppState::Delving),
@@ -582,7 +782,13 @@ fn spawn_folk_card(mut commands: Commands, cards: Query<(), With<FolkCard>>, cam
         },
         BackgroundColor(BG),
         BorderColor::all(LINE),
-        BoxShadow::new(Color::srgba(0.0, 0.0, 0.0, 0.55), px(0), px(14), px(0), px(34)),
+        BoxShadow::new(
+            Color::srgba(0.0, 0.0, 0.0, 0.55),
+            px(0),
+            px(14),
+            px(0),
+            px(34),
+        ),
         GlobalZIndex(40),
         Visibility::Hidden,
         Pickable::IGNORE,
@@ -592,38 +798,86 @@ fn spawn_folk_card(mut commands: Commands, cards: Query<(), With<FolkCard>>, cam
 /// Fills the card: the name in the display face, folk and faction under it, then what they
 /// wear and hold, each item's name in its rarity's colour, and last the keys for what can be
 /// done with them (`crate::interact::key_line`).
-fn fill_folk_card(commands: &mut Commands, card: Entity, text: &FolkCardText, prompt: &str, fonts: &UiFonts) {
-    commands.entity(card).despawn_children().with_children(|card| {
-        card.spawn((Text::new(text.name.clone()), UiFonts::style(&fonts.display, 22.0, INK)));
-        card.spawn((Text::new(text.line.clone()), UiFonts::style(&fonts.body_italic, 15.0, MUTED)));
-        if let Some(trade) = &text.trade {
-            card.spawn((Text::new(trade.clone()), UiFonts::style(&fonts.body, 15.0, INK)));
-        }
-        for (heading, items) in [("Wears", &text.wears), ("Holds", &text.holds)] {
-            if items.is_empty() {
-                continue;
+fn fill_folk_card(
+    commands: &mut Commands,
+    card: Entity,
+    text: &FolkCardText,
+    prompt: &str,
+    fonts: &UiFonts,
+) {
+    commands
+        .entity(card)
+        .despawn_children()
+        .with_children(|card| {
+            card.spawn((
+                Text::new(text.name.clone()),
+                UiFonts::style(&fonts.display, 22.0, INK),
+            ));
+            card.spawn((
+                Text::new(text.line.clone()),
+                UiFonts::style(&fonts.body_italic, 15.0, MUTED),
+            ));
+            if let Some(trade) = &text.trade {
+                card.spawn((
+                    Text::new(trade.clone()),
+                    UiFonts::style(&fonts.body, 15.0, INK),
+                ));
             }
-            card.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(heading), UiFonts::style(&fonts.mono, 12.0, MUTED)));
-            card.spawn((Text::default(), UiFonts::style(&fonts.body, 14.0, INK))).with_children(|line| {
-                for (i, (name, rarity)) in items.iter().enumerate() {
-                    if i > 0 {
-                        line.spawn((TextSpan::new(" \u{b7} "), UiFonts::style(&fonts.body, 14.0, FAINT.mix(&MUTED, 0.5))));
-                    }
-                    line.spawn((TextSpan::new(name.clone()), UiFonts::style(&fonts.body, 14.0, rarity_color(*rarity))));
+            for (heading, items) in [("Wears", &text.wears), ("Holds", &text.holds)] {
+                if items.is_empty() {
+                    continue;
                 }
-            });
-        }
-        if !prompt.is_empty() {
-            card.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(prompt), UiFonts::style(&fonts.mono, 13.0, MUTED)));
-        }
-    });
+                card.spawn((
+                    Node {
+                        margin: UiRect::top(px(4)),
+                        ..default()
+                    },
+                    Text::new(heading),
+                    UiFonts::style(&fonts.mono, 12.0, MUTED),
+                ));
+                card.spawn((Text::default(), UiFonts::style(&fonts.body, 14.0, INK)))
+                    .with_children(|line| {
+                        for (i, (name, rarity)) in items.iter().enumerate() {
+                            if i > 0 {
+                                line.spawn((
+                                    TextSpan::new(" \u{b7} "),
+                                    UiFonts::style(&fonts.body, 14.0, FAINT.mix(&MUTED, 0.5)),
+                                ));
+                            }
+                            line.spawn((
+                                TextSpan::new(name.clone()),
+                                UiFonts::style(&fonts.body, 14.0, rarity_color(*rarity)),
+                            ));
+                        }
+                    });
+            }
+            if !prompt.is_empty() {
+                card.spawn((
+                    Node {
+                        margin: UiRect::top(px(4)),
+                        ..default()
+                    },
+                    Text::new(prompt),
+                    UiFonts::style(&fonts.mono, 13.0, MUTED),
+                ));
+            }
+        });
 }
 
 /// Marks the faction of the folk looked at as met, so the character sheet lists it. Takes the
 /// record mutably only when the faction is new to the delver.
-fn meet_aimed_folk(aimed: Res<AimedFolk>, folk: Query<&Denizen>, level: Option<Res<crate::play::CurrentLevel>>, record: Option<ResMut<crate::record::WorldRecord>>) {
-    let (Some(mut record), Some(entity)) = (record, aimed.0) else { return };
-    let Ok(denizen) = folk.get(entity) else { return };
+fn meet_aimed_folk(
+    aimed: Res<AimedFolk>,
+    folk: Query<&Denizen>,
+    level: Option<Res<crate::play::CurrentLevel>>,
+    record: Option<ResMut<crate::record::WorldRecord>>,
+) {
+    let (Some(mut record), Some(entity)) = (record, aimed.0) else {
+        return;
+    };
+    let Ok(denizen) = folk.get(entity) else {
+        return;
+    };
     let faction = denizen.person.faction.id;
     if !record.standings.has_met(faction) {
         record.standings.meet(faction);
@@ -647,24 +901,47 @@ fn show_folk_card(
     folk: Query<&Denizen>,
     record: Option<Res<crate::record::WorldRecord>>,
     fonts: Res<UiFonts>,
-    mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<FolkCard>>,
+    mut cards: Query<
+        (
+            Entity,
+            &mut Node,
+            &mut Visibility,
+            &ComputedNode,
+            &ComputedUiRenderTargetInfo,
+        ),
+        With<FolkCard>,
+    >,
     mut shown: Local<Option<(Entity, fb_faction::Band)>>,
 ) {
     let screen_open = open.is_some_and(|o| o.0.is_some());
     let item_card = aimed_item.is_some_and(|a| a.0.is_some());
-    let subject = aimed.0.filter(|_| !screen_open && !item_card).and_then(|e| folk.get(e).ok().map(|d| (e, d)));
+    let subject = aimed
+        .0
+        .filter(|_| !screen_open && !item_card)
+        .and_then(|e| folk.get(e).ok().map(|d| (e, d)));
     for (card, mut node, mut visibility, computed, target) in &mut cards {
         let Some((entity, denizen)) = subject else {
             *visibility = Visibility::Hidden;
             *shown = None;
             continue;
         };
-        let band = record.as_ref().map_or(fb_faction::Band::Neutral, |r| r.standings.band(denizen.person.faction.id));
+        let band = record.as_ref().map_or(fb_faction::Band::Neutral, |r| {
+            r.standings.band(denizen.person.faction.id)
+        });
         if *shown != Some((entity, band)) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             // Nobody hides from the delver yet, so no steal.
             let fallback = Keymap::default();
-            let prompt = key_line(keymap.as_deref().unwrap_or(&fallback), &verbs_for(&Target::Folk, &Delver::default()));
-            fill_folk_card(&mut commands, card, &folk_card_text(&denizen.person, band), &prompt, &fonts);
+            let prompt = key_line(
+                keymap.as_deref().unwrap_or(&fallback),
+                &verbs_for(&Target::Folk, &Delver::default()),
+            );
+            fill_folk_card(
+                &mut commands,
+                card,
+                &folk_card_text(&denizen.person, band),
+                &prompt,
+                &fonts,
+            );
             *shown = Some((entity, band));
             *visibility = Visibility::Hidden;
             continue;
@@ -693,32 +970,54 @@ mod tests {
         fb_level::generate(1207, 1).folk
     }
 
-
     #[test]
     fn a_minotaur_spot_is_a_dressed_minotaur() {
-        let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Minotaur), ..folk_1207()[0] };
+        let spot = FolkSpot {
+            denizen: Some(fb_denizens::DenizenBody::Minotaur),
+            ..folk_1207()[0]
+        };
         let person = person_1207(&spot);
         assert_eq!(person.spec.folk, Folk::Minotaur);
         assert_eq!(person, person_1207(&spot));
         let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
-        assert!(figure.body.height > 22.0 && figure.pieces.len() >= 4, "{} tall", figure.body.height);
+        assert!(
+            figure.body.height > 22.0 && figure.pieces.len() >= 4,
+            "{} tall",
+            figure.body.height
+        );
     }
 
     /// A level at the denizen depth that holds a member of a built denizen body, and the first
     /// world's levels there.
     fn denizen_levels() -> Vec<Level> {
-        let levels: Vec<Level> = (1..=24).map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH)).filter(|l| l.folk.iter().any(|f| f.denizen.is_some())).collect();
-        assert!(!levels.is_empty(), "no level at the denizen depth holds a denizen");
+        let levels: Vec<Level> = (1..=24)
+            .map(|seed| fb_level::generate(seed, fb_faction::DENIZEN_DEPTH))
+            .filter(|l| l.folk.iter().any(|f| f.denizen.is_some()))
+            .collect();
+        assert!(
+            !levels.is_empty(),
+            "no level at the denizen depth holds a denizen"
+        );
         levels
     }
 
     #[test]
     fn only_denizens_with_a_built_body_have_a_figure() {
         for body in fb_denizens::DenizenBody::ALL {
-            let spot = FolkSpot { denizen: Some(body), ..folk_1207()[0] };
-            assert_eq!(has_figure(&spot), Folk::of_denizen(body).is_some(), "{body:?}");
+            let spot = FolkSpot {
+                denizen: Some(body),
+                ..folk_1207()[0]
+            };
+            assert_eq!(
+                has_figure(&spot),
+                Folk::of_denizen(body).is_some(),
+                "{body:?}"
+            );
         }
-        assert!(has_figure(&FolkSpot { denizen: Some(fb_denizens::DenizenBody::Minotaur), ..folk_1207()[0] }));
+        assert!(has_figure(&FolkSpot {
+            denizen: Some(fb_denizens::DenizenBody::Minotaur),
+            ..folk_1207()[0]
+        }));
         assert!(folk_1207().iter().all(has_figure));
     }
 
@@ -726,18 +1025,32 @@ mod tests {
     fn denizen_spots_spawn_as_their_folk_in_their_faction_and_leave_indices_aligned() {
         let (mut seen, mut hidden, mut unbuilt) = (0, 0, 0);
         for level in denizen_levels() {
-            let figures = FolkFigures::default().for_spots(&level.folk, &level.factions, level.depth);
-            let shown: Vec<(usize, &FolkSpot)> = level.folk.iter().enumerate().filter(|(_, s)| has_figure(s)).collect();
+            let figures =
+                FolkFigures::default().for_spots(&level.folk, &level.factions, level.depth);
+            let shown: Vec<(usize, &FolkSpot)> = level
+                .folk
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| has_figure(s))
+                .collect();
             assert_eq!(figures.len(), shown.len());
             hidden += level.folk.len() - shown.len();
-            unbuilt += level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b).is_none())).count();
+            unbuilt += level
+                .folk
+                .iter()
+                .filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b).is_none()))
+                .count();
             for ((index, spot), built) in shown.iter().zip(&figures) {
                 assert_eq!(built.0.spot, **spot, "figure for spot {index} is its own");
                 assert_eq!(built.0.faction.id, spot.faction);
                 if let Some(body) = spot.denizen {
                     seen += 1;
                     assert_eq!(Some(built.0.spec.folk), Folk::of_denizen(body));
-                    assert!(built.0.held().next().is_some(), "{} holds a weapon", built.0.name);
+                    assert!(
+                        built.0.held().next().is_some(),
+                        "{} holds a weapon",
+                        built.0.name
+                    );
                     assert!(built.1.bounds().is_some());
                 }
             }
@@ -746,20 +1059,34 @@ mod tests {
         // Exactly the spots of unbuilt bodies stay hidden, and the sweep meets some while any
         // denizen body is unbuilt.
         assert_eq!(hidden, unbuilt);
-        let any_unbuilt = fb_denizens::DenizenBody::ALL.iter().any(|b| Folk::of_denizen(*b).is_none());
-        assert!(!any_unbuilt || hidden > 0, "no unbuilt denizen met in the sweep");
+        let any_unbuilt = fb_denizens::DenizenBody::ALL
+            .iter()
+            .any(|b| Folk::of_denizen(*b).is_none());
+        assert!(
+            !any_unbuilt || hidden > 0,
+            "no unbuilt denizen met in the sweep"
+        );
     }
 
     #[test]
     fn denizen_members_dress_sparsely_in_the_faction_colours_and_guards_may_wear_more() {
         let (mut bare, mut members, mut in_colours) = (0, 0, 0);
         for level in denizen_levels() {
-            for spot in level.folk.iter().filter(|s| s.denizen.is_some_and(|b| Folk::of_denizen(b) == Some(Folk::Minotaur))) {
+            for spot in level.folk.iter().filter(|s| {
+                s.denizen
+                    .is_some_and(|b| Folk::of_denizen(b) == Some(Folk::Minotaur))
+            }) {
                 let person = Person::of(spot, level.faction(spot.faction), level.depth);
                 members += 1;
-                assert!(person.item(Slot::Mainhand).is_some(), "{} is armed", person.name);
+                assert!(
+                    person.item(Slot::Mainhand).is_some(),
+                    "{} is armed",
+                    person.name
+                );
                 assert!(person.item(Slot::Legs).is_some() && person.item(Slot::Feet).is_none());
-                let guard = spot.trade.is_some_and(|t| t.profession == fb_faction::Profession::Guard);
+                let guard = spot
+                    .trade
+                    .is_some_and(|t| t.profession == fb_faction::Profession::Guard);
                 if person.item(Slot::Body).is_none() {
                     bare += 1;
                 } else {
@@ -767,31 +1094,61 @@ mod tests {
                 }
                 let field = level.faction(spot.faction).field;
                 if let Some(armory::Item::Legs(legs)) = person.item(Slot::Legs).map(|i| &i.shape) {
-                    in_colours += usize::from([field.tincture.dye(), field.tincture2.dye()].contains(&legs.legwear.cloth.color));
+                    in_colours += usize::from(
+                        [field.tincture.dye(), field.tincture2.dye()]
+                            .contains(&legs.legwear.cloth.color),
+                    );
                 }
             }
         }
         // Only guards (a few in a camp) ever wear body armour, so the share is a small sample's.
-        assert!(members > 0 && bare * 10 >= members * 6, "{bare} of {members} are bare chested");
-        assert!(in_colours * 10 >= members * 5, "{in_colours} of {members} kilts wear the faction's tinctures");
+        assert!(
+            members > 0 && bare * 10 >= members * 6,
+            "{bare} of {members} are bare chested"
+        );
+        assert!(
+            in_colours * 10 >= members * 5,
+            "{in_colours} of {members} kilts wear the faction's tinctures"
+        );
     }
 
     #[test]
     fn a_denizen_with_no_syllables_of_its_own_is_still_named() {
         let mut rng = Mulberry32::new(5);
-        assert!(!fb_items::naming::folk_name(&mut rng, "winged demon", Some(fb_body::Sex::Male)).is_empty());
+        assert!(
+            !fb_items::naming::folk_name(&mut rng, "winged demon", Some(fb_body::Sex::Male))
+                .is_empty()
+        );
     }
 
     #[test]
     fn a_faun_spot_is_a_dressed_faun_with_bare_goat_legs() {
-        let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Faun), ..folk_1207()[0] };
+        let spot = FolkSpot {
+            denizen: Some(fb_denizens::DenizenBody::Faun),
+            ..folk_1207()[0]
+        };
         let person = person_1207(&spot);
         assert_eq!(person.spec.folk, Folk::Faun);
         assert_eq!(person, person_1207(&spot));
         let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
         let height = Folk::Human.race().h;
-        assert!(figure.body.height > 0.9 * height && figure.body.height < 1.1 * height && figure.pieces.len() >= 3, "{} tall", figure.body.height);
-        let parts = figure.pieces.iter().find(|p| p.name == "Body").unwrap().mesh.parts.iter().map(|p| p.name).collect::<Vec<_>>();
+        assert!(
+            figure.body.height > 0.9 * height
+                && figure.body.height < 1.1 * height
+                && figure.pieces.len() >= 3,
+            "{} tall",
+            figure.body.height
+        );
+        let parts = figure
+            .pieces
+            .iter()
+            .find(|p| p.name == "Body")
+            .unwrap()
+            .mesh
+            .parts
+            .iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>();
         assert!(parts.contains(&"hooves"), "{parts:?}");
     }
 
@@ -802,14 +1159,21 @@ mod tests {
             (fb_denizens::DenizenBody::HornedDemon, Folk::HornedDemon),
             (fb_denizens::DenizenBody::Succubus, Folk::Succubus),
         ] {
-            let spot = FolkSpot { denizen: Some(body), ..folk_1207()[0] };
+            let spot = FolkSpot {
+                denizen: Some(body),
+                ..folk_1207()[0]
+            };
             let person = person_1207(&spot);
             assert_eq!(person.spec.folk, folk);
             // A succubus is a woman, in body and in name; the other demons are men.
             assert_eq!(person.spec.woman, folk == Folk::Succubus, "{folk:?}");
             assert_eq!(person, person_1207(&spot));
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
-            assert!(figure.pieces.len() >= 4 && figure.body.height > 15.0, "{folk:?}: {} tall", figure.body.height);
+            assert!(
+                figure.pieces.len() >= 4 && figure.body.height > 15.0,
+                "{folk:?}: {} tall",
+                figure.body.height
+            );
         }
     }
 
@@ -826,16 +1190,39 @@ mod tests {
             let person = person_1207(&spot);
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
             let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
-            let holds = person.held().filter(|(_, item)| names.contains(&item.title())).count();
+            let holds = person
+                .held()
+                .filter(|(_, item)| names.contains(&item.title()))
+                .count();
             assert!(holds > 0, "{} holds nothing: {names:?}", person.name);
-            assert!(person.worn().any(|(_, item)| names.contains(&item.title())), "{} wears nothing: {names:?}", person.name);
+            assert!(
+                person.worn().any(|(_, item)| names.contains(&item.title())),
+                "{} wears nothing: {names:?}",
+                person.name
+            );
             // Under a hood the head turns with the body ([`Figure::dress`]).
-            let hooded = person.worn().any(|(slot, item)| *slot == fb_items::Slot::Head && matches!(item.shape, armory::Item::Hood(_)));
-            assert!(hooded || figure.pieces.iter().any(|p| p.on_head), "{}: nothing turns with the head", person.name);
+            let hooded = person.worn().any(|(slot, item)| {
+                *slot == fb_items::Slot::Head && matches!(item.shape, armory::Item::Hood(_))
+            });
+            assert!(
+                hooded || figure.pieces.iter().any(|p| p.on_head),
+                "{}: nothing turns with the head",
+                person.name
+            );
             // Standing on the floor, about as tall as their folk.
             let (lo, hi) = figure.bounds().unwrap();
-            assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
-            assert!(hi.y > spot.folk.race().h * 0.85, "{}: {} tall", person.name, hi.y);
+            assert!(
+                lo.y > -0.5 && lo.y < 0.5,
+                "{}: lowest point {}",
+                person.name,
+                lo.y
+            );
+            assert!(
+                hi.y > spot.folk.race().h * 0.85,
+                "{}: {} tall",
+                person.name,
+                hi.y
+            );
         }
     }
 
@@ -846,17 +1233,38 @@ mod tests {
         let level = fb_level::generate(1207, 1);
         let mut checked = 0;
         for spot in level.folk.iter().take(6) {
-            let spot = FolkSpot { denizen: Some(fb_denizens::DenizenBody::Cyclops), ..*spot };
+            let spot = FolkSpot {
+                denizen: Some(fb_denizens::DenizenBody::Cyclops),
+                ..*spot
+            };
             let person = Person::of(&spot, level.faction(spot.faction), 1);
             assert_eq!(person.spec.folk, Folk::Cyclops);
             let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
             let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
-            assert!(person.held().any(|(_, item)| names.contains(&item.title())), "{} holds nothing: {names:?}", person.name);
-            assert!(person.worn().any(|(_, item)| names.contains(&item.title())), "{} wears nothing: {names:?}", person.name);
+            assert!(
+                person.held().any(|(_, item)| names.contains(&item.title())),
+                "{} holds nothing: {names:?}",
+                person.name
+            );
+            assert!(
+                person.worn().any(|(_, item)| names.contains(&item.title())),
+                "{} wears nothing: {names:?}",
+                person.name
+            );
             let (lo, hi) = figure.bounds().unwrap();
-            assert!(lo.y > -0.5 && lo.y < 0.5, "{}: lowest point {}", person.name, lo.y);
+            assert!(
+                lo.y > -0.5 && lo.y < 0.5,
+                "{}: lowest point {}",
+                person.name,
+                lo.y
+            );
             // Taller than any of the six folk, about 1.7 times a human.
-            assert!(hi.y > 1.5 * Folk::Human.race().h, "{}: {} tall", person.name, hi.y);
+            assert!(
+                hi.y > 1.5 * Folk::Human.race().h,
+                "{}: {} tall",
+                person.name,
+                hi.y
+            );
             checked += 1;
         }
         assert!(checked > 0);
@@ -869,20 +1277,55 @@ mod tests {
         let spots: Vec<(FolkSpot, FactionSpec)> = (1..=8)
             .flat_map(|world| {
                 let level = fb_level::generate(world, 1);
-                level.folk.iter().map(|s| (*s, level.faction(s.faction).clone())).collect::<Vec<_>>()
+                level
+                    .folk
+                    .iter()
+                    .map(|s| (*s, level.faction(s.faction).clone()))
+                    .collect::<Vec<_>>()
             })
             .collect();
         for (spot, faction) in spots {
             for seed in 0..12 {
                 let person = Person::of(&FolkSpot { seed, ..spot }, &faction, 1);
-                let shoots = person.item(Slot::Mainhand).and_then(|w| w.profile.ranged).map(|r| r.ammunition);
+                let shoots = person
+                    .item(Slot::Mainhand)
+                    .and_then(|w| w.profile.ranged)
+                    .map(|r| r.ammunition);
                 match shoots {
-                    Some(ammunition) if person.item(Slot::Quiver).is_some_and(|h| h.profile.holds.as_ref().is_some_and(|g| g.accepts.contains(&ammunition))) => {
+                    Some(ammunition)
+                        if person.item(Slot::Quiver).is_some_and(|h| {
+                            h.profile
+                                .holds
+                                .as_ref()
+                                .is_some_and(|g| g.accepts.contains(&ammunition))
+                        }) =>
+                    {
                         archers += 1;
-                        assert_eq!(person.goods.len(), fb_items::outfit::AMMUNITION_CARRIED + 1, "{}", person.name);
-                        assert!(person.goods.iter().filter(|i| !crate::doors::is_key_of(i, faction.id)).all(|i| i.shape.family() == ammunition), "{}", person.name);
+                        assert_eq!(
+                            person.goods.len(),
+                            fb_items::outfit::AMMUNITION_CARRIED + 1,
+                            "{}",
+                            person.name
+                        );
+                        assert!(
+                            person
+                                .goods
+                                .iter()
+                                .filter(|i| !crate::doors::is_key_of(i, faction.id))
+                                .all(|i| i.shape.family() == ammunition),
+                            "{}",
+                            person.name
+                        );
                     }
-                    _ => assert!(person.goods.iter().all(|i| crate::doors::is_key_of(i, faction.id)), "{} carries {} things", person.name, person.goods.len()),
+                    _ => assert!(
+                        person
+                            .goods
+                            .iter()
+                            .all(|i| crate::doors::is_key_of(i, faction.id)),
+                        "{} carries {} things",
+                        person.name,
+                        person.goods.len()
+                    ),
                 }
             }
         }
@@ -899,7 +1342,15 @@ mod tests {
                 let person = Person::of(spot, faction, 1);
                 if faction.sex == Some(fb_body::Sex::Female) {
                     women += 1;
-                    assert_eq!((person.spec.beard, person.spec.bust > 0.0 || spot.folk == fb_body::Folk::Lizardfolk), (fb_body::Beard::None, true), "{}", faction.name);
+                    assert_eq!(
+                        (
+                            person.spec.beard,
+                            person.spec.bust > 0.0 || spot.folk == fb_body::Folk::Lizardfolk
+                        ),
+                        (fb_body::Beard::None, true),
+                        "{}",
+                        faction.name
+                    );
                 }
                 if faction.sex == Some(fb_body::Sex::Male) {
                     men += 1;
@@ -911,7 +1362,10 @@ mod tests {
                 }
             }
         }
-        assert!(women > 0 && men > 0 && clerics > 0, "{women} women, {men} men, {clerics} clerics in 200 worlds");
+        assert!(
+            women > 0 && men > 0 && clerics > 0,
+            "{women} women, {men} men, {clerics} clerics in 200 worlds"
+        );
     }
 
     #[test]
@@ -919,7 +1373,11 @@ mod tests {
         for seed in 1..=24 {
             for spec in fb_faction::World::new(seed).factions() {
                 for key in spec.outfit_keys() {
-                    assert!(fb_items::outfit::outfit(key).is_some(), "{}: {key}", spec.name);
+                    assert!(
+                        fb_items::outfit::outfit(key).is_some(),
+                        "{}: {key}",
+                        spec.name
+                    );
                 }
             }
         }
@@ -940,11 +1398,17 @@ mod tests {
     fn folk_stand_on_their_spot_facing_its_yaw() {
         let spot = folk_1207()[0];
         let t = stand_at(&spot);
-        assert_eq!(t.translation, Vec3::new(spot.x * fb_level::CELL, 0.0, spot.y * fb_level::CELL));
+        assert_eq!(
+            t.translation,
+            Vec3::new(spot.x * fb_level::CELL, 0.0, spot.y * fb_level::CELL)
+        );
         // The body's face (+Z) points the way the spot faces.
         let face = t.rotation * Vec3::Z;
         let (dx, dy) = spot.facing();
-        assert!(face.abs_diff_eq(Vec3::new(dx, 0.0, dy), 1e-5), "{face} vs ({dx}, {dy})");
+        assert!(
+            face.abs_diff_eq(Vec3::new(dx, 0.0, dy), 1e-5),
+            "{face} vs ({dx}, {dy})"
+        );
     }
 
     #[test]
@@ -958,18 +1422,26 @@ mod tests {
             })
             .collect();
         for (i, (idle, gait)) in people.iter().enumerate() {
-            let poses: Vec<fb_body::RigPose> = (0..600).map(|k| gait.idle(idle, k as f32 * 0.1)).collect();
+            let poses: Vec<fb_body::RigPose> =
+                (0..600).map(|k| gait.idle(idle, k as f32 * 0.1)).collect();
             // It moves...
             let pelvis = |p: &fb_body::RigPose| p.offset[Joint::Pelvis.index()];
-            let sway = poses.iter().map(|p| pelvis(p)[0]).fold(f32::MIN, f32::max) - poses.iter().map(|p| pelvis(p)[0]).fold(f32::MAX, f32::min);
-            let lift = poses.iter().map(|p| p.offset[Joint::Chest.index()][1]).fold(f32::MIN, f32::max);
+            let sway = poses.iter().map(|p| pelvis(p)[0]).fold(f32::MIN, f32::max)
+                - poses.iter().map(|p| pelvis(p)[0]).fold(f32::MAX, f32::min);
+            let lift = poses
+                .iter()
+                .map(|p| p.offset[Joint::Chest.index()][1])
+                .fold(f32::MIN, f32::max);
             assert!(lift > 0.03 && sway > 0.1, "{i}: lift {lift} sway {sway}");
             // ...but only a little: the hips shift under 2 cm either way and drop under 1.5 cm,
             // no joint turns more than 23 degrees (the relaxed knee, the most), and the body
             // does not walk off.
             for pose in &poses {
                 let at = pelvis(pose);
-                assert!(at[0].abs() <= 0.2 && at[1].abs() <= 0.15 && at[2] == 0.0, "{at:?}");
+                assert!(
+                    at[0].abs() <= 0.2 && at[1].abs() <= 0.15 && at[2] == 0.0,
+                    "{at:?}"
+                );
                 for (joint, q) in Joint::ALL.iter().zip(pose.rotation) {
                     let angle = 2.0 * q.0[3].abs().min(1.0).acos();
                     assert!(angle < 0.4, "{joint:?} turns {angle} radians");
@@ -977,7 +1449,10 @@ mod tests {
             }
             for (other, _) in &people[i + 1..] {
                 assert_ne!(idle, other);
-                assert!((1..50).any(|k| idle.shift(k as f32 * 0.37) != other.shift(k as f32 * 0.37)), "two folk move in step");
+                assert!(
+                    (1..50).any(|k| idle.shift(k as f32 * 0.37) != other.shift(k as f32 * 0.37)),
+                    "two folk move in step"
+                );
             }
         }
     }
@@ -996,23 +1471,63 @@ mod tests {
         assert!((side.x - HEAD_YAW_MAX).abs() < 1e-5, "{side}");
         // A head turned right by a positive yaw: its face points toward +X.
         assert!((head_rotation(Vec2::new(0.5, 0.0)) * Vec3::Z).x > 0.4);
-        assert!((head_rotation(Vec2::new(0.0, 0.3)) * Vec3::Z).y > 0.2, "a positive pitch looks up");
+        assert!(
+            (head_rotation(Vec2::new(0.0, 0.3)) * Vec3::Z).y > 0.2,
+            "a positive pitch looks up"
+        );
     }
 
     /// An app with one stand-in figure (no meshes) facing +Z from the origin, and a camera.
     fn looking_app(eye: Vec3) -> (App, Entity, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin))
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(50),
+            ))
             .init_resource::<crate::play::Obstacles>()
             .add_systems(Update, turn_heads)
-            .add_systems(PostUpdate, crate::play::gather_obstacles.after(TransformSystems::Propagate));
+            .add_systems(
+                PostUpdate,
+                crate::play::gather_obstacles.after(TransformSystems::Propagate),
+            );
         let person = person_1207(&folk_1207()[0]);
-        let denizen = Denizen { person, radius: 2.5, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
-        let root = app.world_mut().spawn((denizen, BlocksTheWay(fb_level::FloorShape::Round(2.5)), Transform::default())).id();
-        let stance = app.world_mut().spawn((Stance { idle: Idle::of(1), turn: 0.0 }, Transform::default(), ChildOf(root))).id();
-        let head = app.world_mut().spawn((FolkHead::default(), Transform::from_xyz(0.0, 14.0, 0.0), ChildOf(stance))).id();
-        let camera = app.world_mut().spawn((PlayerCamera, Transform::from_translation(eye))).id();
+        let denizen = Denizen {
+            person,
+            radius: 2.5,
+            min: Vec3::new(-2.0, 0.0, -2.0),
+            max: Vec3::new(2.0, 17.0, 2.0),
+        };
+        let root = app
+            .world_mut()
+            .spawn((
+                denizen,
+                BlocksTheWay(fb_level::FloorShape::Round(2.5)),
+                Transform::default(),
+            ))
+            .id();
+        let stance = app
+            .world_mut()
+            .spawn((
+                Stance {
+                    idle: Idle::of(1),
+                    turn: 0.0,
+                },
+                Transform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let head = app
+            .world_mut()
+            .spawn((
+                FolkHead::default(),
+                Transform::from_xyz(0.0, 14.0, 0.0),
+                ChildOf(stance),
+            ))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Transform::from_translation(eye)))
+            .id();
         (app, head, camera)
     }
 
@@ -1032,7 +1547,10 @@ mod tests {
         let face = app.world().get::<Transform>(head).unwrap().rotation * Vec3::Z;
         assert!(face.x > 0.1, "{face}");
         // The player walks off: the head comes back round.
-        app.world_mut().get_mut::<Transform>(camera).unwrap().translation = Vec3::new(200.0, 16.0, 0.0);
+        app.world_mut()
+            .get_mut::<Transform>(camera)
+            .unwrap()
+            .translation = Vec3::new(200.0, 16.0, 0.0);
         settle(&mut app);
         let look = app.world().get::<FolkHead>(head).unwrap().look;
         assert!(look.length() < 0.05, "back to straight ahead: {look}");
@@ -1044,13 +1562,28 @@ mod tests {
             let person = person_1207(&spot);
             let card = folk_card_text(&person, fb_faction::Band::Wary);
             assert_eq!(card.name, person.name);
-            assert!(card.line.ends_with(&format!("{} \u{b7} Wary", person.faction.name)), "{}", card.line);
+            assert!(
+                card.line
+                    .ends_with(&format!("{} \u{b7} Wary", person.faction.name)),
+                "{}",
+                card.line
+            );
             assert_eq!(person.faction.id, spot.faction);
-            assert!(card.line.starts_with(spot.folk.race().label.as_str()), "{}", card.line);
+            assert!(
+                card.line.starts_with(spot.folk.race().label.as_str()),
+                "{}",
+                card.line
+            );
             assert_eq!(card.wears.len() + card.holds.len(), person.gear.len());
             assert!(!card.holds.is_empty());
             for (name, rarity) in card.wears.iter().chain(&card.holds) {
-                assert!(person.gear.iter().any(|(_, item)| item.title() == name && item.rarity == *rarity), "{name}");
+                assert!(
+                    person
+                        .gear
+                        .iter()
+                        .any(|(_, item)| item.title() == name && item.rarity == *rarity),
+                    "{name}"
+                );
             }
         }
     }
@@ -1059,30 +1592,66 @@ mod tests {
     fn the_card_shows_the_trade_under_the_name_and_nothing_for_plain_folk() {
         use fb_level::Trade;
         let spot = folk_1207()[0];
-        let card = |trade| folk_card_text(&person_1207(&FolkSpot { trade, ..spot }), fb_faction::Band::Neutral).trade;
+        let card = |trade| {
+            folk_card_text(
+                &person_1207(&FolkSpot { trade, ..spot }),
+                fb_faction::Band::Neutral,
+            )
+            .trade
+        };
         assert_eq!(card(None), None);
         assert_eq!(card(Some(Trade::guard())).as_deref(), Some("Guard"));
-        let smith = Trade { profession: fb_faction::Profession::Weaponsmith, tier: fb_faction::Tier::Apprentice, style: Some(fb_faction::Style::Blades) };
-        assert_eq!(card(Some(smith)).as_deref(), Some("Apprentice weaponsmith (blades)"));
+        let smith = Trade {
+            profession: fb_faction::Profession::Weaponsmith,
+            tier: fb_faction::Tier::Apprentice,
+            style: Some(fb_faction::Style::Blades),
+        };
+        assert_eq!(
+            card(Some(smith)).as_deref(),
+            Some("Apprentice weaponsmith (blades)")
+        );
     }
 
     #[test]
     fn a_shown_folk_card_follows_a_rebinding() {
         use crate::keymap::{Action, Input};
         let (mut app, _, _) = looking_app(Vec3::ZERO);
-        app.init_resource::<Keymap>().init_resource::<UiFonts>().init_resource::<Aimed>().init_resource::<AimedFolk>().add_systems(Update, show_folk_card);
-        let folk = app.world_mut().query_filtered::<Entity, With<Denizen>>().single(app.world()).unwrap();
+        app.init_resource::<Keymap>()
+            .init_resource::<UiFonts>()
+            .init_resource::<Aimed>()
+            .init_resource::<AimedFolk>()
+            .add_systems(Update, show_folk_card);
+        let folk = app
+            .world_mut()
+            .query_filtered::<Entity, With<Denizen>>()
+            .single(app.world())
+            .unwrap();
         app.world_mut().resource_mut::<AimedFolk>().0 = Some(folk);
-        app.world_mut().spawn((FolkCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().spawn((
+            FolkCard,
+            Node::default(),
+            Visibility::Hidden,
+            ComputedNode::default(),
+            ComputedUiRenderTargetInfo::default(),
+        ));
         let line = |app: &mut App| {
             let mut texts = app.world_mut().query::<&Text>();
-            texts.iter(app.world()).map(|t| t.0.clone()).find(|t| t.contains("Talk")).unwrap_or_default()
+            texts
+                .iter(app.world())
+                .map(|t| t.0.clone())
+                .find(|t| t.contains("Talk"))
+                .unwrap_or_default()
         };
         app.update();
         app.update();
         assert!(line(&mut app).starts_with("F Talk"), "{}", line(&mut app));
         let mut keymap = app.world_mut().resource_mut::<Keymap>();
-        keymap.bindings.iter_mut().find(|b| b.action == Action::Primary).unwrap().inputs = vec![Input::Key(KeyCode::KeyE)];
+        keymap
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::Primary)
+            .unwrap()
+            .inputs = vec![Input::Key(KeyCode::KeyE)];
         app.update();
         app.update();
         assert!(line(&mut app).starts_with("E Talk"), "{}", line(&mut app));
@@ -1091,28 +1660,62 @@ mod tests {
     #[test]
     fn aiming_at_a_folk_meets_their_faction_and_leaves_the_record_alone_after() {
         let (mut app, _, _) = looking_app(Vec3::ZERO);
-        app.init_resource::<Keymap>().init_resource::<UiFonts>().init_resource::<Aimed>().init_resource::<AimedFolk>().add_systems(Update, (meet_aimed_folk, show_folk_card).chain());
-        app.insert_resource(crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 1207));
-        let folk = app.world_mut().query_filtered::<Entity, With<Denizen>>().single(app.world()).unwrap();
+        app.init_resource::<Keymap>()
+            .init_resource::<UiFonts>()
+            .init_resource::<Aimed>()
+            .init_resource::<AimedFolk>()
+            .add_systems(Update, (meet_aimed_folk, show_folk_card).chain());
+        app.insert_resource(crate::record::WorldRecord::new_delve(
+            fb_faction::Alignment::LawfulGood,
+            1207,
+        ));
+        let folk = app
+            .world_mut()
+            .query_filtered::<Entity, With<Denizen>>()
+            .single(app.world())
+            .unwrap();
         let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
-        app.world_mut().spawn((FolkCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default()));
+        app.world_mut().spawn((
+            FolkCard,
+            Node::default(),
+            Visibility::Hidden,
+            ComputedNode::default(),
+            ComputedUiRenderTargetInfo::default(),
+        ));
         app.world_mut().resource_mut::<AimedFolk>().0 = Some(folk);
         app.update();
-        assert!(app.world().resource::<crate::record::WorldRecord>().standings.has_met(faction));
+        assert!(
+            app.world()
+                .resource::<crate::record::WorldRecord>()
+                .standings
+                .has_met(faction)
+        );
         app.update();
-        let changed = app.world().resource_ref::<crate::record::WorldRecord>().last_changed();
+        let changed = app
+            .world()
+            .resource_ref::<crate::record::WorldRecord>()
+            .last_changed();
         for _ in 0..5 {
             app.update();
         }
-        assert_eq!(app.world().resource_ref::<crate::record::WorldRecord>().last_changed(), changed, "the record is untouched while a folk is aimed at");
+        assert_eq!(
+            app.world()
+                .resource_ref::<crate::record::WorldRecord>()
+                .last_changed(),
+            changed,
+            "the record is untouched while a folk is aimed at"
+        );
     }
 
     #[test]
     fn the_card_shows_only_within_reach() {
         let (mut app, _, camera) = looking_app(Vec3::new(0.0, 16.0, 30.0));
-        app.init_resource::<AimedFolk>().init_resource::<crate::tuning::Tuning>().add_systems(Update, aim_at_folk);
+        app.init_resource::<AimedFolk>()
+            .init_resource::<crate::tuning::Tuning>()
+            .add_systems(Update, aim_at_folk);
         let aim = |app: &mut App, eye: Vec3| {
-            *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_translation(eye).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y);
+            *app.world_mut().get_mut::<Transform>(camera).unwrap() =
+                Transform::from_translation(eye).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y);
             app.update();
             app.update();
             app.world().resource::<AimedFolk>().0
@@ -1122,7 +1725,8 @@ mod tests {
         // Four metres off, looking at them: out of reach.
         assert_eq!(aim(&mut app, Vec3::new(0.0, 16.0, 40.0)), None);
         // Near, but looking away.
-        *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_xyz(0.0, 16.0, 15.0).looking_at(Vec3::new(0.0, 16.0, 40.0), Vec3::Y);
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() =
+            Transform::from_xyz(0.0, 16.0, 15.0).looking_at(Vec3::new(0.0, 16.0, 40.0), Vec3::Y);
         app.update();
         app.update();
         assert_eq!(app.world().resource::<AimedFolk>().0, None);
@@ -1133,7 +1737,13 @@ mod tests {
         let (mut app, _, _) = looking_app(Vec3::new(0.0, 16.0, 30.0));
         app.update();
         app.update();
-        assert_eq!(app.world().resource::<crate::play::Obstacles>().0, vec![crate::play::Obstacle::Circle { centre: Vec2::ZERO, radius: 2.5 }]);
+        assert_eq!(
+            app.world().resource::<crate::play::Obstacles>().0,
+            vec![crate::play::Obstacle::Circle {
+                centre: Vec2::ZERO,
+                radius: 2.5
+            }]
+        );
         // And on 1207 every folk stands in a circle wide enough to bump into.
         for spot in folk_1207().iter().take(2) {
             let person = person_1207(spot);
@@ -1153,7 +1763,11 @@ mod tests {
     fn wound_against(part: &armory::Part) -> (f32, f32) {
         let (mut total, mut shading, mut outline) = (0.0, 0.0, 0.0);
         let at = |i: u32| Vec3::from_array(part.positions[i as usize]);
-        let sum = |set: &[[f32; 3]], tri: &[u32]| tri.iter().map(|&i| Vec3::from_array(set[i as usize])).sum::<Vec3>();
+        let sum = |set: &[[f32; 3]], tri: &[u32]| {
+            tri.iter()
+                .map(|&i| Vec3::from_array(set[i as usize]))
+                .sum::<Vec3>()
+        };
         for tri in part.indices.as_chunks::<3>().0 {
             let face = (at(tri[1]) - at(tri[0])).cross(at(tri[2]) - at(tri[0]));
             let area = face.length() * 0.5;
@@ -1165,10 +1779,17 @@ mod tests {
                 outline += area;
             }
         }
-        if total > 0.0 { (shading / total, outline / total) } else { (0.0, 0.0) }
+        if total > 0.0 {
+            (shading / total, outline / total)
+        } else {
+            (0.0, 0.0)
+        }
     }
 
-    fn every_fitted_folk_part_faces_out_and_is_coloured_check(seeds: impl IntoIterator<Item = u32>, people: usize) {
+    fn every_fitted_folk_part_faces_out_and_is_coloured_check(
+        seeds: impl IntoIterator<Item = u32>,
+        people: usize,
+    ) {
         // Seeds 1 to 16 and 1207: every person standing about, dressed as drawn. A part wound
         // inside out (its front faces turned in, or its ink hull pushed in over it), with broken
         // buffers, or with a black or non-finite colour would draw as unlit solid black (#151).
@@ -1179,13 +1800,30 @@ mod tests {
                 let figure = Figure::dress(&person.spec, &person.gear, person.dirt);
                 for piece in &figure.pieces {
                     for part in &piece.mesh.parts {
-                        let at = format!("seed {seed}, {} ({:?}): {} / {}", person.name, spot.folk, piece.name, part.name);
+                        let at = format!(
+                            "seed {seed}, {} ({:?}): {} / {}",
+                            person.name, spot.folk, piece.name, part.name
+                        );
                         part.validate().unwrap_or_else(|e| panic!("{at}: {e}"));
                         let (shading, outline) = wound_against(part);
-                        assert!(shading < MOST_WOUND_AGAINST, "{at}: {:.1}% of it winds against its normals", shading * 100.0);
-                        assert!(outline < MOST_WOUND_AGAINST, "{at}: {:.1}% of its ink hull pushes inward", outline * 100.0);
-                        let colour = piece.appearance.material_for(part).base.base_color.to_linear();
-                        let lum = colour.red * 0.2126 + colour.green * 0.7152 + colour.blue * 0.0722;
+                        assert!(
+                            shading < MOST_WOUND_AGAINST,
+                            "{at}: {:.1}% of it winds against its normals",
+                            shading * 100.0
+                        );
+                        assert!(
+                            outline < MOST_WOUND_AGAINST,
+                            "{at}: {:.1}% of its ink hull pushes inward",
+                            outline * 100.0
+                        );
+                        let colour = piece
+                            .appearance
+                            .material_for(part)
+                            .base
+                            .base_color
+                            .to_linear();
+                        let lum =
+                            colour.red * 0.2126 + colour.green * 0.7152 + colour.blue * 0.0722;
                         assert!(lum.is_finite() && lum > 0.002, "{at}: drawn {colour:?}");
                     }
                 }

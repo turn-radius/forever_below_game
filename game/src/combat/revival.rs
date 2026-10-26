@@ -44,8 +44,16 @@ impl Plugin for RevivalPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Revives>()
             .add_message::<ReviveChosen>()
-            .add_systems(OnEnter(AppState::Delving), |mut revives: ResMut<Revives>| revives.0 = 0)
-            .add_systems(Update, (choose, come_to, let_go, fade_wake_card).chain().in_set(DelveSystems));
+            .add_systems(
+                OnEnter(AppState::Delving),
+                |mut revives: ResMut<Revives>| revives.0 = 0,
+            )
+            .add_systems(
+                Update,
+                (choose, come_to, let_go, fade_wake_card)
+                    .chain()
+                    .in_set(DelveSystems),
+            );
         // `FB_FALL=wait|come_to|let_go`, for captures (README, "Debug switches").
         if let Ok(then) = std::env::var("FB_FALL") {
             let choice = match then.trim() {
@@ -53,7 +61,13 @@ impl Plugin for RevivalPlugin {
                 "let_go" => Some(ReviveButton::LetGo),
                 _ => None,
             };
-            app.insert_resource(DebugFall { choice, since: 0.0, down: false, chosen: false }).add_systems(Update, debug_fall.before(choose).in_set(DelveSystems));
+            app.insert_resource(DebugFall {
+                choice,
+                since: 0.0,
+                down: false,
+                chosen: false,
+            })
+            .add_systems(Update, debug_fall.before(choose).in_set(DelveSystems));
         }
     }
 }
@@ -68,7 +82,13 @@ struct DebugFall {
     chosen: bool,
 }
 
-fn debug_fall(time: Res<Time>, mut debug: ResMut<DebugFall>, unconscious: Option<Res<Unconscious>>, mut players: Query<&mut Health, With<Player>>, mut chosen: MessageWriter<ReviveChosen>) {
+fn debug_fall(
+    time: Res<Time>,
+    mut debug: ResMut<DebugFall>,
+    unconscious: Option<Res<Unconscious>>,
+    mut players: Query<&mut Health, With<Player>>,
+    mut chosen: MessageWriter<ReviveChosen>,
+) {
     debug.since += time.delta_secs();
     if !debug.down && debug.since >= 1.0 {
         for mut health in &mut players {
@@ -80,7 +100,10 @@ fn debug_fall(time: Res<Time>, mut debug: ResMut<DebugFall>, unconscious: Option
     if debug.down && unconscious.is_none() {
         debug.since = 0.0;
     }
-    if let Some(choice) = debug.choice.filter(|_| debug.down && !debug.chosen && unconscious.is_some() && debug.since >= 2.0) {
+    if let Some(choice) = debug
+        .choice
+        .filter(|_| debug.down && !debug.chosen && unconscious.is_some() && debug.since >= 2.0)
+    {
         chosen.write(ReviveChosen(choice));
         debug.chosen = true;
     }
@@ -126,7 +149,12 @@ const WAKE_FADE: f32 = 1.5;
 
 /// Darkens the view to "You fall unconscious" and offers the choice; `left` is how many times
 /// the delver may still come to, counting this one.
-pub fn fall_unconscious(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Option<Entity>, left: u32) {
+pub fn fall_unconscious(
+    commands: &mut Commands,
+    fonts: Option<&UiFonts>,
+    camera: Option<Entity>,
+    left: u32,
+) {
     commands.insert_resource(Unconscious);
     let display = fonts.map(|f| f.display.clone()).unwrap_or_default();
     let body = fonts.map(|f| f.body.clone()).unwrap_or_default();
@@ -149,7 +177,11 @@ pub fn fall_unconscious(commands: &mut Commands, fonts: Option<&UiFonts>, camera
     if let Some(camera) = camera {
         root.insert(UiTargetCamera(camera));
     }
-    let times = if left == 1 { "once more".to_string() } else { format!("{left} more times") };
+    let times = if left == 1 {
+        "once more".to_string()
+    } else {
+        format!("{left} more times")
+    };
     root.with_children(|overlay| {
         overlay.spawn((Text::new("You fall unconscious"), TextFont::from_font_size(52.0).with_font(display.clone()), TextColor(BRIGHT)));
         overlay.spawn((Text::new(format!("The abyss is not done with you. In this world you may come to {times}, and each time it leaves its mark.")), TextFont::from_font_size(20.0).with_font(body.clone()), TextColor(MUTED), TextLayout::justify(Justify::Center), Node { max_width: px(620), ..default() }));
@@ -172,7 +204,12 @@ fn choose(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
-    mut buttons: Query<(&ReviveButton, &ComputedNode, &UiGlobalTransform, &mut BorderColor)>,
+    mut buttons: Query<(
+        &ReviveButton,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &mut BorderColor,
+    )>,
     mut chosen: MessageWriter<ReviveChosen>,
 ) {
     if unconscious.is_none() {
@@ -193,7 +230,9 @@ fn choose(
         border.set_if_neq(BorderColor::all(if over { BRIGHT } else { LINE }));
     }
     let pressed = |key| keys.as_deref().is_some_and(|k| k.just_pressed(key));
-    let clicked = mouse.as_deref().is_some_and(|m| m.just_pressed(MouseButton::Left));
+    let clicked = mouse
+        .as_deref()
+        .is_some_and(|m| m.just_pressed(MouseButton::Left));
     let choice = if pressed(KeyCode::Enter) || pressed(KeyCode::NumpadEnter) {
         Some(ReviveButton::ComeTo)
     } else if pressed(KeyCode::Backspace) {
@@ -226,10 +265,30 @@ fn let_go(
 
 /// The friendly folk standing on the level, each one's faction and position on the floor
 /// (world `(x, z)`), for [`come_to`].
-type Friends<'w, 's> = Query<'w, 's, (&'static GlobalTransform, &'static Denizen, &'static Hostility), Without<Corpse>>;
+type Friends<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static GlobalTransform,
+        &'static Denizen,
+        &'static Hostility,
+    ),
+    Without<Corpse>,
+>;
 
 /// The delver as [`come_to`] moves, heals and marks them.
-type Delver<'w, 's> = Query<'w, 's, (Entity, &'static mut Health, &'static mut Transform, &'static mut Locomotion, Option<&'static DelverEffects>), With<Player>>;
+type Delver<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut Health,
+        &'static mut Transform,
+        &'static mut Locomotion,
+        Option<&'static DelverEffects>,
+    ),
+    With<Player>,
+>;
 
 /// Coming to: in the hall of the friendliest faction, healed, a share of the coin poorer; or
 /// alone where they fell, weak and hours later. Either way with a wound that never heals.
@@ -254,7 +313,9 @@ fn come_to(
     if !chosen.read().any(|c| c.0 == ReviveButton::ComeTo) {
         return;
     }
-    let Ok((player, mut health, mut body, mut locomotion, effects)) = players.single_mut() else { return };
+    let Ok((player, mut health, mut body, mut locomotion, effects)) = players.single_mut() else {
+        return;
+    };
     let revival = &rules.revival;
     commands.remove_resource::<Unconscious>();
     for overlay in &overlays {
@@ -267,14 +328,37 @@ fn come_to(
     let mut lines = vec![];
 
     // Who carries them, if anyone.
-    let friends: Vec<(u8, Vec2)> = folk.iter().filter(|(.., h)| !h.is_hostile()).map(|(at, denizen, _)| (denizen.person.spot.faction.0, at.translation().xz())).collect();
+    let friends: Vec<(u8, Vec2)> = folk
+        .iter()
+        .filter(|(.., h)| !h.is_hostile())
+        .map(|(at, denizen, _)| (denizen.person.spot.faction.0, at.translation().xz()))
+        .collect();
     let hall = level.as_deref().and_then(|level| {
-        let rooms: Vec<(u8, Option<usize>)> = friends.iter().map(|(f, at)| (*f, level.0.room_at((at.x / GRID) as i32, (at.y / GRID) as i32))).collect();
+        let rooms: Vec<(u8, Option<usize>)> = friends
+            .iter()
+            .map(|(f, at)| {
+                (
+                    *f,
+                    level.0.room_at((at.x / GRID) as i32, (at.y / GRID) as i32),
+                )
+            })
+            .collect();
         let (faction, room) = choose_hall(&rooms)?;
-        let theirs: Vec<Vec2> = friends.iter().filter(|(f, _)| *f == faction).map(|(_, at)| *at).collect();
-        let cell = hall_cell(&level.0, room, &friends.iter().map(|(_, at)| *at).collect::<Vec<_>>())?;
+        let theirs: Vec<Vec2> = friends
+            .iter()
+            .filter(|(f, _)| *f == faction)
+            .map(|(_, at)| *at)
+            .collect();
+        let cell = hall_cell(
+            &level.0,
+            room,
+            &friends.iter().map(|(_, at)| *at).collect::<Vec<_>>(),
+        )?;
         // Named as the world rolled it, from any of its folk.
-        let name = folk.iter().find(|(_, d, _)| d.person.spot.faction.0 == faction).map(|(_, d, _)| d.person.faction.name.clone())?;
+        let name = folk
+            .iter()
+            .find(|(_, d, _)| d.person.spot.faction.0 == faction)
+            .map(|(_, d, _)| d.person.faction.name.clone())?;
         Some((name, cell, theirs))
     });
 
@@ -283,7 +367,12 @@ fn come_to(
             let [wx, _, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
             let at = Vec2::new(wx, wz);
             // Face the nearest of them.
-            let yaw = theirs.iter().min_by(|a, b| a.distance(at).total_cmp(&b.distance(at))).map_or(locomotion.yaw, |near| (-(near.x - at.x)).atan2(-(near.y - at.y)));
+            let yaw = theirs
+                .iter()
+                .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+                .map_or(locomotion.yaw, |near| {
+                    (-(near.x - at.x)).atan2(-(near.y - at.y))
+                });
             body.translation = Vec3::new(wx, 0.0, wz);
             body.rotation = Quat::from_rotation_y(yaw);
             *locomotion = Locomotion { yaw, ..default() };
@@ -296,14 +385,25 @@ fn come_to(
             let name = capitalised(&faction);
             info!("{name} carry the delver to their hall; they take {owed} cp");
             lines.push(format!("{name} found you and carried you to their hall."));
-            lines.push(if owed > 0 { format!("Their healers tended you. They took {} for their trouble.", coin_words(owed)) } else { "Their healers tended you. You had no coin to give, and they will remember it.".to_string() });
+            lines.push(if owed > 0 {
+                format!(
+                    "Their healers tended you. They took {} for their trouble.",
+                    coin_words(owed)
+                )
+            } else {
+                "Their healers tended you. You had no coin to give, and they will remember it."
+                    .to_string()
+            });
         }
         None => {
             health.hp = revival.hit_points(health.max, false);
             if let Some(clock) = clock.as_deref_mut() {
                 clock.advance(revival.hours_alone * 3600.0);
             }
-            info!("the delver comes to alone after {} hours", revival.hours_alone);
+            info!(
+                "the delver comes to alone after {} hours",
+                revival.hours_alone
+            );
             lines.push("You come to where you fell, hours later. No one came for you.".to_string());
             lines.push("Whatever brought you down has lost interest, for now.".to_string());
         }
@@ -312,7 +412,10 @@ fn come_to(
     for mut brain in &mut brains {
         if matches!(brain.mode, Mode::Chase { .. }) {
             let home = brain.home;
-            brain.mode = Mode::Wander { target: Some(home), wait: 0.0 };
+            brain.mode = Mode::Wander {
+                target: Some(home),
+                wait: 0.0,
+            };
         }
     }
 
@@ -320,15 +423,29 @@ fn come_to(
     let mut effects = effects.map_or_else(Default::default, |e| e.0.clone());
     let taken: Vec<&str> = effects.active.iter().map(|a| a.id.as_str()).collect();
     let Wound { effect, part, line } = pick_wound(&taken, &mut dice.0);
-    effects.add(&rules.effects, effect, 1.0, Some(part), fb_character::effect::Source::Fall);
-    commands.entity(player).insert(DelverEffects(effects)).remove::<Slowed>();
+    effects.add(
+        &rules.effects,
+        effect,
+        1.0,
+        Some(part),
+        fb_character::effect::Source::Fall,
+    );
+    commands
+        .entity(player)
+        .insert(DelverEffects(effects))
+        .remove::<Slowed>();
     lines.push(line.to_string());
     lines.push(match revival.left(revives.0) {
         0 => "The abyss will not let you come to again.".to_string(),
         1 => "The abyss will let you come to once more.".to_string(),
         n => format!("The abyss will let you come to {n} more times."),
     });
-    spawn_wake_card(&mut commands, fonts.as_deref(), view_models.iter().next(), &lines);
+    spawn_wake_card(
+        &mut commands,
+        fonts.as_deref(),
+        view_models.iter().next(),
+        &lines,
+    );
 }
 
 /// The open cell of `room` nearest its centre that is at least a cell and a half from everyone
@@ -336,10 +453,27 @@ fn come_to(
 pub fn hall_cell(level: &Level, room: usize, folk: &[Vec2]) -> Option<(i32, i32)> {
     let room = level.rooms.get(room)?;
     let (cx, cy) = room.centre();
-    let cells: Vec<(i32, i32)> = (room.y as i32..(room.y + room.h) as i32).flat_map(|y| (room.x as i32..(room.x + room.w) as i32).map(move |x| (x, y))).filter(|&(x, y)| level.is_open(x, y) && level.stair_at(x, y).is_none()).collect();
-    let to_centre = |&(x, y): &(i32, i32)| (x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2);
-    let clear = |&(x, y): &(i32, i32)| folk.iter().all(|f| Vec2::new((x as f32 + 0.5) * GRID, (y as f32 + 0.5) * GRID).distance(*f) >= 1.5 * GRID);
-    cells.iter().filter(|c| clear(c)).min_by(|a, b| to_centre(a).total_cmp(&to_centre(b))).or_else(|| cells.iter().min_by(|a, b| to_centre(a).total_cmp(&to_centre(b)))).copied()
+    let cells: Vec<(i32, i32)> = (room.y as i32..(room.y + room.h) as i32)
+        .flat_map(|y| (room.x as i32..(room.x + room.w) as i32).map(move |x| (x, y)))
+        .filter(|&(x, y)| level.is_open(x, y) && level.stair_at(x, y).is_none())
+        .collect();
+    let to_centre =
+        |&(x, y): &(i32, i32)| (x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2);
+    let clear = |&(x, y): &(i32, i32)| {
+        folk.iter().all(|f| {
+            Vec2::new((x as f32 + 0.5) * GRID, (y as f32 + 0.5) * GRID).distance(*f) >= 1.5 * GRID
+        })
+    };
+    cells
+        .iter()
+        .filter(|c| clear(c))
+        .min_by(|a, b| to_centre(a).total_cmp(&to_centre(b)))
+        .or_else(|| {
+            cells
+                .iter()
+                .min_by(|a, b| to_centre(a).total_cmp(&to_centre(b)))
+        })
+        .copied()
 }
 
 /// The copper the delver carries: their coin purse and any purses unopened.
@@ -356,10 +490,18 @@ fn charge(inventory: &mut Inventory, owed: u32) {
 /// "the Scale Court" as the start of a line.
 fn capitalised(name: &str) -> String {
     let mut letters = name.chars();
-    letters.next().map(|first| first.to_uppercase().chain(letters).collect()).unwrap_or_default()
+    letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect())
+        .unwrap_or_default()
 }
 
-fn spawn_wake_card(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Option<Entity>, lines: &[String]) {
+fn spawn_wake_card(
+    commands: &mut Commands,
+    fonts: Option<&UiFonts>,
+    camera: Option<Entity>,
+    lines: &[String],
+) {
     let body = fonts.map(|f| f.body.clone()).unwrap_or_default();
     let mut root = commands.spawn((
         Name::new("Coming to"),
@@ -381,9 +523,29 @@ fn spawn_wake_card(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Opt
         root.insert(UiTargetCamera(camera));
     }
     root.with_children(|card| {
-        card.spawn((WakeWords, Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(10), padding: UiRect::axes(px(32), px(20)), ..default() }, BackgroundColor(BG.with_alpha(0.0)))).with_children(|panel| {
+        card.spawn((
+            WakeWords,
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: px(10),
+                padding: UiRect::axes(px(32), px(20)),
+                ..default()
+            },
+            BackgroundColor(BG.with_alpha(0.0)),
+        ))
+        .with_children(|panel| {
             for line in lines {
-                panel.spawn((Text::new(line.clone()), TextFont::from_font_size(22.0).with_font(body.clone()), TextColor(BRIGHT), TextLayout::justify(Justify::Center), Node { max_width: px(680), ..default() }));
+                panel.spawn((
+                    Text::new(line.clone()),
+                    TextFont::from_font_size(22.0).with_font(body.clone()),
+                    TextColor(BRIGHT),
+                    TextLayout::justify(Justify::Center),
+                    Node {
+                        max_width: px(680),
+                        ..default()
+                    },
+                ));
             }
         });
     });
@@ -437,7 +599,9 @@ mod tests {
     fn delve() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
-            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 60.0),
+            ))
             .insert_state(AppState::Delving)
             .insert_resource(RunDice(procgen_rng::Mulberry32::new(4)))
             .init_resource::<Character>()
@@ -445,14 +609,28 @@ mod tests {
             .init_resource::<Inventory>()
             .init_resource::<GameClock>()
             .add_plugins((VitalsPlugin, RevivalPlugin));
-        let player = app.world_mut().spawn((Player, Transform::default(), Locomotion::default(), Health::full(10))).id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Player,
+                Transform::default(),
+                Locomotion::default(),
+                Health::full(10),
+            ))
+            .id();
         app.update();
         (app, player)
     }
 
     /// Knocks the delver to 0 and waits out the last gasp.
     fn knock_down(app: &mut App, player: Entity) {
-        app.world_mut().write_message(AttackOnDelver { attacker: player, species: Some(Species::Rat), damage: 40, poison: 0, attacker_pos: Vec2::ZERO });
+        app.world_mut().write_message(AttackOnDelver {
+            attacker: player,
+            species: Some(Species::Rat),
+            damage: 40,
+            poison: 0,
+            attacker_pos: Vec2::ZERO,
+        });
         for _ in 0..((LAST_GASP * 60.0) as usize + 3) {
             app.update();
         }
@@ -464,13 +642,27 @@ mod tests {
     }
 
     fn overlays(app: &mut App) -> usize {
-        app.world_mut().query::<&UnconsciousOverlay>().iter(app.world()).count()
+        app.world_mut()
+            .query::<&UnconsciousOverlay>()
+            .iter(app.world())
+            .count()
     }
 
     /// A level with folk standing in a room, one of them, and the room.
     fn level_with_folk() -> (Level, fb_level::folk::FolkSpot, usize) {
-        let level = (1..200).map(|seed| fb_level::generate(seed, 1)).find(|l| l.folk.iter().any(|f| l.room_at(f.x as i32, f.y as i32).is_some())).expect("a level with folk in a room");
-        let spot = *level.folk.iter().find(|f| level.room_at(f.x as i32, f.y as i32).is_some()).unwrap();
+        let level = (1..200)
+            .map(|seed| fb_level::generate(seed, 1))
+            .find(|l| {
+                l.folk
+                    .iter()
+                    .any(|f| l.room_at(f.x as i32, f.y as i32).is_some())
+            })
+            .expect("a level with folk in a room");
+        let spot = *level
+            .folk
+            .iter()
+            .find(|f| level.room_at(f.x as i32, f.y as i32).is_some())
+            .unwrap();
         let room = level.room_at(spot.x as i32, spot.y as i32).unwrap();
         (level, spot, room)
     }
@@ -480,7 +672,10 @@ mod tests {
         let (mut app, player) = delve();
         knock_down(&mut app, player);
         assert!(app.world().get_resource::<Unconscious>().is_some());
-        assert!(app.world().get_resource::<Fallen>().is_none(), "not the end yet");
+        assert!(
+            app.world().get_resource::<Fallen>().is_none(),
+            "not the end yet"
+        );
         assert!(app.world().get_resource::<Dying>().is_none());
         assert_eq!(overlays(&mut app), 1);
         // Waiting changes nothing: the choice is theirs.
@@ -491,15 +686,32 @@ mod tests {
         choose(&mut app, ReviveButton::ComeTo);
         assert!(app.world().get_resource::<Unconscious>().is_none());
         assert_eq!(overlays(&mut app), 0);
-        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3, "a quarter of 10, rounded");
-        assert_eq!(app.world().get::<Slowed>(player), None, "they can move again");
+        assert_eq!(
+            app.world().get::<Health>(player).unwrap().hp,
+            3,
+            "a quarter of 10, rounded"
+        );
+        assert_eq!(
+            app.world().get::<Slowed>(player),
+            None,
+            "they can move again"
+        );
         let effects = &app.world().get::<DelverEffects>(player).unwrap().0;
         assert_eq!(effects.active.len(), 1);
         assert_eq!(effects.active[0].source, fb_character::effect::Source::Fall);
         assert!(effects.active[0].part.is_some());
-        assert!((app.world().resource::<GameClock>().game_seconds() - 4.0 * 3600.0).abs() < 1.0, "hours pass");
+        assert!(
+            (app.world().resource::<GameClock>().game_seconds() - 4.0 * 3600.0).abs() < 1.0,
+            "hours pass"
+        );
         assert_eq!(*app.world().resource::<Revives>(), Revives(1));
-        assert_eq!(app.world_mut().query::<&WakeCard>().iter(app.world()).count(), 1);
+        assert_eq!(
+            app.world_mut()
+                .query::<&WakeCard>()
+                .iter(app.world())
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -515,13 +727,21 @@ mod tests {
         assert_ne!(effects.active[0].id, effects.active[1].id);
         knock_down(&mut app, player);
         assert!(app.world().get_resource::<Unconscious>().is_none());
-        assert!(app.world().get_resource::<Fallen>().is_some(), "no third time");
+        assert!(
+            app.world().get_resource::<Fallen>().is_some(),
+            "no third time"
+        );
         // A new delve is a new world.
         for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
             app.update();
         }
-        assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        assert_eq!(
+            *app.world().resource::<State<AppState>>().get(),
+            AppState::Title
+        );
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Delving);
         app.update();
         assert_eq!(*app.world().resource::<Revives>(), Revives(0));
     }
@@ -537,7 +757,10 @@ mod tests {
         for _ in 0..((FALL_TIME * 60.0) as usize + 5) {
             app.update();
         }
-        assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+        assert_eq!(
+            *app.world().resource::<State<AppState>>().get(),
+            AppState::Title
+        );
     }
 
     #[test]
@@ -545,7 +768,16 @@ mod tests {
         let (mut app, player) = delve();
         let (level, spot, room) = level_with_folk();
         let at = crate::folk::stand_at(&spot);
-        app.world_mut().spawn((Denizen { person: crate::folk::Person::of(&spot, level.faction(spot.faction), 1), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO }, at, GlobalTransform::from(at)));
+        app.world_mut().spawn((
+            Denizen {
+                person: crate::folk::Person::of(&spot, level.faction(spot.faction), 1),
+                radius: 3.0,
+                min: Vec3::ZERO,
+                max: Vec3::ZERO,
+            },
+            at,
+            GlobalTransform::from(at),
+        ));
         app.insert_resource(CurrentLevel(level.clone()));
         let purse = fb_items::roll_item("Purse", 7).unwrap();
         let held = in_copper(purse.coins.unwrap());
@@ -557,12 +789,29 @@ mod tests {
         app.insert_resource(inventory);
         knock_down(&mut app, player);
         choose(&mut app, ReviveButton::ComeTo);
-        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 10, "healed in full");
+        assert_eq!(
+            app.world().get::<Health>(player).unwrap().hp,
+            10,
+            "healed in full"
+        );
         let body = app.world().get::<Transform>(player).unwrap().translation;
-        assert_eq!(level.room_at((body.x / GRID) as i32, (body.z / GRID) as i32), Some(room), "in their hall");
-        assert!(body.xz().distance(at.translation.xz()) >= 1.5 * GRID - 0.01, "not on top of them");
-        assert_eq!(carried_copper(app.world().resource::<Inventory>()), held - fee(held, 0.5));
-        assert!(app.world().resource::<GameClock>().game_seconds() < 1.0, "they were tended, not left lying");
+        assert_eq!(
+            level.room_at((body.x / GRID) as i32, (body.z / GRID) as i32),
+            Some(room),
+            "in their hall"
+        );
+        assert!(
+            body.xz().distance(at.translation.xz()) >= 1.5 * GRID - 0.01,
+            "not on top of them"
+        );
+        assert_eq!(
+            carried_copper(app.world().resource::<Inventory>()),
+            held - fee(held, 0.5)
+        );
+        assert!(
+            app.world().resource::<GameClock>().game_seconds() < 1.0,
+            "they were tended, not left lying"
+        );
     }
 
     #[test]
@@ -570,11 +819,25 @@ mod tests {
         let (mut app, player) = delve();
         let (level, spot, _) = level_with_folk();
         let at = crate::folk::stand_at(&spot);
-        app.world_mut().spawn((Denizen { person: crate::folk::Person::of(&spot, level.faction(spot.faction), 1), radius: 3.0, min: Vec3::ZERO, max: Vec3::ZERO }, Hostility::Hostile, at, GlobalTransform::from(at)));
+        app.world_mut().spawn((
+            Denizen {
+                person: crate::folk::Person::of(&spot, level.faction(spot.faction), 1),
+                radius: 3.0,
+                min: Vec3::ZERO,
+                max: Vec3::ZERO,
+            },
+            Hostility::Hostile,
+            at,
+            GlobalTransform::from(at),
+        ));
         app.insert_resource(CurrentLevel(level));
         knock_down(&mut app, player);
         choose(&mut app, ReviveButton::ComeTo);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3, "alone");
-        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO, "where they fell");
+        assert_eq!(
+            app.world().get::<Transform>(player).unwrap().translation,
+            Vec3::ZERO,
+            "where they fell"
+        );
     }
 }

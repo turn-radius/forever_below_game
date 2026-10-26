@@ -16,16 +16,19 @@ use bevy::{
 };
 use fb_level::{CELL, Level};
 
-use crate::keymap::{Action, ActionInput, Keymap};
-use crate::level::draw_end;
-use crate::light::point_light;
-use crate::settings::GameSettings;
-use crate::tuning::Tuning;
-use crate::launch::AppState;
 use crate::character::{Character, DelverStamina, Load};
 use crate::exhaustion::Exhaustion;
 use crate::inventory::Inventory;
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, level_has_focus};
+use crate::keymap::{Action, ActionInput, Keymap};
+use crate::launch::AppState;
+use crate::level::draw_end;
+use crate::light::point_light;
+use crate::play::{
+    BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player,
+    PlayerCamera, level_has_focus,
+};
+use crate::settings::GameSettings;
+use crate::tuning::Tuning;
 
 /// Radians of turn per pixel of mouse motion at a mouse sensitivity of 1.
 const LOOK_SENSITIVITY: f32 = 0.0022;
@@ -51,11 +54,29 @@ impl Plugin for PlayerPlugin {
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
             .add_systems(OnEnter(AppState::Delving), (spawn_player, grab_cursor))
-            .add_systems(Update, (take_cursor, look, walk, bob_head).chain().run_if(level_has_focus).after(crate::play::switch_screens).in_set(DelveSystems))
+            .add_systems(
+                Update,
+                (take_cursor, look, walk, bob_head)
+                    .chain()
+                    .run_if(level_has_focus)
+                    .after(crate::play::switch_screens)
+                    .in_set(DelveSystems),
+            )
             // The load follows the pack even with the sheet open, where the pack is changed and the
             // load condition is read.
-            .add_systems(Update, weigh_the_delver.before(walk).after(crate::play::switch_screens).in_set(DelveSystems))
-            .add_systems(Update, widen_player_view.run_if(resource_changed::<Tuning>).in_set(DelveSystems));
+            .add_systems(
+                Update,
+                weigh_the_delver
+                    .before(walk)
+                    .after(crate::play::switch_screens)
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                widen_player_view
+                    .run_if(resource_changed::<Tuning>)
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -94,13 +115,21 @@ impl Gait {
     /// foot once a stride, both 1 at their peak at walking pace and scaling with speed, so the
     /// bob fades as the body slows and is still when it stands.
     pub fn bob(&self) -> Vec2 {
-        Vec2::new(self.pace * self.phase.sin(), self.pace * (1.0 - (2.0 * self.phase).cos()) * 0.5)
+        Vec2::new(
+            self.pace * self.phase.sin(),
+            self.pace * (1.0 - (2.0 * self.phase).cos()) * 0.5,
+        )
     }
 }
 
 /// The world camera's projection for `tuning`.
 pub fn world_projection(tuning: &Tuning) -> Projection {
-    Projection::from(PerspectiveProjection { fov: tuning.view.world_fov_degrees.to_radians(), near: NEAR, far: draw_end(&tuning.light), ..default() })
+    Projection::from(PerspectiveProjection {
+        fov: tuning.view.world_fov_degrees.to_radians(),
+        near: NEAR,
+        far: draw_end(&tuning.light),
+        ..default()
+    })
 }
 
 /// Keeps every player camera's field of view and far plane to the tuning's.
@@ -159,7 +188,10 @@ fn grab_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>) {
 
 /// A click in the level takes the mouse back, if it was let go (say, by switching windows).
 /// Esc frees it by opening the menu ([`crate::play::switch_screens`]).
-pub(crate) fn take_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>, input: ActionInput) {
+pub(crate) fn take_cursor(
+    mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
+    input: ActionInput,
+) {
     if input.just_pressed(Action::TakeMouse) {
         set_grab(&mut cursor, true);
     }
@@ -168,7 +200,11 @@ pub(crate) fn take_cursor(mut cursor: Single<&mut CursorOptions, With<PrimaryWin
 /// Takes the mouse for looking round (`true`) or frees it for a screen (`false`).
 pub fn set_grab(cursor: &mut CursorOptions, grabbed: bool) {
     cursor.visible = !grabbed;
-    cursor.grab_mode = if grabbed { CursorGrabMode::Locked } else { CursorGrabMode::None };
+    cursor.grab_mode = if grabbed {
+        CursorGrabMode::Locked
+    } else {
+        CursorGrabMode::None
+    };
 }
 
 /// The turn for a mouse movement of `delta` pixels, as `(yaw, pitch)` radians: right turns
@@ -199,16 +235,33 @@ pub(crate) fn look(
 
 /// Keeps the delver's [`Load`] to what they wear and carry, working it out again only when the
 /// character or the inventory has changed, or for a delver just spawned.
-fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<(&mut Load, &mut GearPace, &mut crate::character::GearStamina), With<Player>>) {
-    let (Some(character), Some(inventory)) = (character, inventory) else { return };
-    let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
+fn weigh_the_delver(
+    character: Option<Res<Character>>,
+    inventory: Option<Res<Inventory>>,
+    rules: Option<Res<crate::rules::GameRules>>,
+    mut players: Query<
+        (&mut Load, &mut GearPace, &mut crate::character::GearStamina),
+        With<Player>,
+    >,
+) {
+    let (Some(character), Some(inventory)) = (character, inventory) else {
+        return;
+    };
+    let changed = character.is_changed()
+        || inventory.is_changed()
+        || rules.as_ref().is_some_and(|r| r.is_changed());
     let mut derived = None;
     for (mut load, mut pace, mut stamina) in &mut players {
         if changed || load.is_added() {
-            let derived = *derived.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory));
+            let derived = *derived.get_or_insert_with(|| {
+                character.derive_with(crate::rules::GameRules::of(&rules), &inventory)
+            });
             load.set_if_neq(Load::of(derived.load, derived.capacity));
             pace.set_if_neq(GearPace(derived.speed));
-            stamina.set_if_neq(crate::character::GearStamina { refill: derived.stamina_refill, cost: derived.stamina_cost });
+            stamina.set_if_neq(crate::character::GearStamina {
+                refill: derived.stamina_refill,
+                cost: derived.stamina_cost,
+            });
         }
     }
 }
@@ -226,7 +279,17 @@ impl Default for GearPace {
 }
 
 /// What walking moves and reads on the delver.
-type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&'a Slowed>, &'a Exhaustion, &'a Load, &'a DelverStamina, Option<&'a GearPace>, Has<crate::combat::guard::Guard>);
+type Walker<'a> = (
+    &'a mut Locomotion,
+    &'a mut Gait,
+    &'a mut Transform,
+    Option<&'a Slowed>,
+    &'a Exhaustion,
+    &'a Load,
+    &'a DelverStamina,
+    Option<&'a GearPace>,
+    Has<crate::combat::guard::Guard>,
+);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn walk(
@@ -245,37 +308,81 @@ pub(crate) fn walk(
     if dt <= 0.0 {
         return;
     }
-    let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace, guarding) = &mut *body;
+    let (locomotion, gait, transform, slowed, exhaustion, load, stamina, gear_pace, guarding) =
+        &mut *body;
     let moving = &tuning.moving;
     let rules = crate::rules::GameRules::of(&rules);
     // What they wear and what is on them (the cold in a cold-blooded body) set their pace.
-    let pace = gear_pace.map_or(1.0, |p| p.0) * effects.iter().next().map_or(1.0, |e| e.0.pace(&rules.effects) as f32);
-    let web = fb_level::webs::web_pace(&level.0.webs, transform.translation.x, transform.translation.z, moving.body_radius, None, moving.web_pace);
+    let pace = gear_pace.map_or(1.0, |p| p.0)
+        * effects
+            .iter()
+            .next()
+            .map_or(1.0, |e| e.0.pace(&rules.effects) as f32);
+    let web = fb_level::webs::web_pace(
+        &level.0.webs,
+        transform.translation.x,
+        transform.translation.z,
+        moving.body_radius,
+        None,
+        moving.web_pace,
+    );
     // A raised shield slows them to a guarded walk, with no sprinting (`crate::combat::guard`).
-    let guard = if *guarding { crate::combat::guard::GUARD_PACE } else { 1.0 };
+    let guard = if *guarding {
+        crate::combat::guard::GUARD_PACE
+    } else {
+        1.0
+    };
     let sprinting = input.pressed(Action::Sprint) && stamina.0.can_exert() && !*guarding;
-    let speed = if sprinting { moving.hurry_speed } else { moving.walk_speed } * pace * web * guard * slowed.map_or(1.0, |s| s.0) * exhaustion.0.speed_multiplier_with(rules) * load.0.walk_multiplier_with(rules);
-    let input = Vec2::new(input.axis(Action::StepRight, Action::StepLeft), input.axis(Action::WalkForward, Action::WalkBack));
-    let (forward, right) = (floor(transform.forward().as_vec3()), floor(transform.right().as_vec3()));
+    let speed = if sprinting {
+        moving.hurry_speed
+    } else {
+        moving.walk_speed
+    } * pace
+        * web
+        * guard
+        * slowed.map_or(1.0, |s| s.0)
+        * exhaustion.0.speed_multiplier_with(rules)
+        * load.0.walk_multiplier_with(rules);
+    let input = Vec2::new(
+        input.axis(Action::StepRight, Action::StepLeft),
+        input.axis(Action::WalkForward, Action::WalkBack),
+    );
+    let (forward, right) = (
+        floor(transform.forward().as_vec3()),
+        floor(transform.right().as_vec3()),
+    );
     let wanted = (forward * input.y + right * input.x).normalize_or_zero() * speed;
-    locomotion.velocity.smooth_nudge(&wanted, moving.acceleration, dt);
+    locomotion
+        .velocity
+        .smooth_nudge(&wanted, moving.acceleration, dt);
 
     let from = floor(transform.translation);
     // A shut claim door stops the delver as rock does; the folk's routines never read it.
     let rock = blocked_by(&level.0, &blocked_cells);
     let blocked = |x: i32, y: i32| rock(x, y) || doors.as_deref().is_some_and(|d| d.shuts(x, y));
     let obstacles = obstacles.as_deref().map_or(&[][..], |o| &o.0[..]);
-    let to = slide_around(from, from + locomotion.velocity * dt, moving.body_radius, blocked, obstacles);
+    let to = slide_around(
+        from,
+        from + locomotion.velocity * dt,
+        moving.body_radius,
+        blocked,
+        obstacles,
+    );
     // Walking into a wall leaves only the speed along it.
     locomotion.velocity = (to - from) / dt;
     transform.translation.x = to.x;
     transform.translation.z = to.y;
-    gait.phase = (gait.phase + (to - from).length() / STRIDE * std::f32::consts::TAU) % std::f32::consts::TAU;
+    gait.phase = (gait.phase + (to - from).length() / STRIDE * std::f32::consts::TAU)
+        % std::f32::consts::TAU;
     gait.pace = (locomotion.velocity.length() / moving.walk_speed.max(1e-3)).min(1.5);
 }
 
 /// A small step bob of the head ([`Gait::bob`]).
-pub(crate) fn bob_head(tuning: Res<Tuning>, body: Single<&Gait, With<Player>>, mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
+pub(crate) fn bob_head(
+    tuning: Res<Tuning>,
+    body: Single<&Gait, With<Player>>,
+    mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
+) {
     let bob = body.bob() * tuning.view.head_bob;
     camera.translation = Vec3::new(BOB_SWAY * bob.x, EYE_HEIGHT - BOB_HEIGHT * bob.y, 0.0);
 }
@@ -286,7 +393,10 @@ fn floor(v: Vec3) -> Vec2 {
 }
 
 /// Whether grid cell `(x, y)` stops the body: rock in the level, or a cell in `blocked_cells`.
-pub fn blocked_by<'a>(level: &'a Level, blocked_cells: &'a BlockedCells) -> impl Fn(i32, i32) -> bool + 'a {
+pub fn blocked_by<'a>(
+    level: &'a Level,
+    blocked_cells: &'a BlockedCells,
+) -> impl Fn(i32, i32) -> bool + 'a {
     move |x, y| !level.is_open(x, y) || blocked_cells.0.contains(&(x, y))
 }
 
@@ -303,13 +413,21 @@ pub fn slide(from: Vec2, to: Vec2, radius: f32, blocked: impl Fn(i32, i32) -> bo
 
 /// [`slide`], and round `obstacles` as well: the body keeps out of them as it keeps out of
 /// rock, sliding round their edge.
-pub fn slide_around(from: Vec2, to: Vec2, radius: f32, blocked: impl Fn(i32, i32) -> bool, obstacles: &[Obstacle]) -> Vec2 {
+pub fn slide_around(
+    from: Vec2,
+    to: Vec2,
+    radius: f32,
+    blocked: impl Fn(i32, i32) -> bool,
+    obstacles: &[Obstacle],
+) -> Vec2 {
     let delta = to - from;
     let steps = (delta.length() / (radius * 0.5)).ceil().max(1.0) as u32;
     let step = delta / steps as f32;
     let mut at = from;
     for _ in 0..steps {
-        let Some(next) = resolve(at + step, at, radius, &blocked, obstacles) else { break };
+        let Some(next) = resolve(at + step, at, radius, &blocked, obstacles) else {
+            break;
+        };
         at = next;
     }
     at
@@ -318,7 +436,13 @@ pub fn slide_around(from: Vec2, to: Vec2, radius: f32, blocked: impl Fn(i32, i32
 /// Pushes `at` out of the blocked cells and obstacles around it, or `None` if it cannot get
 /// clear. `previous` is a clear spot nearby, used to choose a way out when the centre is
 /// inside rock or an obstacle.
-fn resolve(mut at: Vec2, previous: Vec2, radius: f32, blocked: &impl Fn(i32, i32) -> bool, obstacles: &[Obstacle]) -> Option<Vec2> {
+fn resolve(
+    mut at: Vec2,
+    previous: Vec2,
+    radius: f32,
+    blocked: &impl Fn(i32, i32) -> bool,
+    obstacles: &[Obstacle],
+) -> Option<Vec2> {
     for _ in 0..4 {
         let mut pushed = false;
         for (min, max) in blocked_cells_near(at, radius, blocked) {
@@ -328,7 +452,11 @@ fn resolve(mut at: Vec2, previous: Vec2, radius: f32, blocked: &impl Fn(i32, i32
             if distance >= radius {
                 continue;
             }
-            let normal = if distance > 1e-5 { offset / distance } else { exit_normal(previous, min, max) };
+            let normal = if distance > 1e-5 {
+                offset / distance
+            } else {
+                exit_normal(previous, min, max)
+            };
             at = nearest + normal * radius;
             pushed = true;
         }
@@ -347,18 +475,25 @@ fn resolve(mut at: Vec2, previous: Vec2, radius: f32, blocked: &impl Fn(i32, i32
 }
 
 /// The blocked cells a circle at `at` could touch, as world-space `(min, max)` rectangles.
-fn blocked_cells_near(at: Vec2, radius: f32, blocked: &impl Fn(i32, i32) -> bool) -> impl Iterator<Item = (Vec2, Vec2)> {
+fn blocked_cells_near(
+    at: Vec2,
+    radius: f32,
+    blocked: &impl Fn(i32, i32) -> bool,
+) -> impl Iterator<Item = (Vec2, Vec2)> {
     let low = ((at - radius) / CELL).floor().as_ivec2();
     let high = ((at + radius) / CELL).floor().as_ivec2();
     let cells: Vec<IVec2> = (low.y..=high.y)
         .flat_map(|y| (low.x..=high.x).map(move |x| IVec2::new(x, y)))
         .filter(|cell| blocked(cell.x, cell.y))
         .collect();
-    cells.into_iter().map(|cell| (cell.as_vec2() * CELL, (cell + 1).as_vec2() * CELL))
+    cells
+        .into_iter()
+        .map(|cell| (cell.as_vec2() * CELL, (cell + 1).as_vec2() * CELL))
 }
 
 fn overlaps_blocked(at: Vec2, radius: f32, blocked: &impl Fn(i32, i32) -> bool) -> bool {
-    blocked_cells_near(at, radius, blocked).any(|(min, max)| at.distance(at.clamp(min, max)) < radius - 1e-3)
+    blocked_cells_near(at, radius, blocked)
+        .any(|(min, max)| at.distance(at.clamp(min, max)) < radius - 1e-3)
 }
 
 /// For a centre that has ended up inside a cell: the face nearest `previous`, which was clear.
@@ -370,7 +505,11 @@ fn exit_normal(previous: Vec2, min: Vec2, max: Vec2) -> Vec2 {
         (max.y - previous.y, Vec2::Y),
     ];
     // The face `previous` is furthest outside of.
-    faces.into_iter().map(|(inside, normal)| (-inside, normal)).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(Vec2::Y, |f| f.1)
+    faces
+        .into_iter()
+        .map(|(inside, normal)| (-inside, normal))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or(Vec2::Y, |f| f.1)
 }
 
 #[cfg(test)]
@@ -394,7 +533,11 @@ mod tests {
         for _ in 0..frames {
             app.update();
         }
-        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+        app.world()
+            .get::<Transform>(body)
+            .unwrap()
+            .translation
+            .distance(start)
     }
 
     /// A level with W held and a delver spawned with the extra components `delver`: the app, the
@@ -403,7 +546,9 @@ mod tests {
         use bevy::time::TimeUpdateStrategy;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(1.0 / 60.0),
+            ))
             .insert_resource(CurrentLevel(fb_level::generate(1207, 1)))
             .init_resource::<Keymap>()
             .init_resource::<BlockedCells>()
@@ -415,8 +560,22 @@ mod tests {
         let (x, y, facing) = app.world().resource::<CurrentLevel>().0.start();
         let [wx, wy, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
         let start = Vec3::new(wx, wy, wz);
-        let body = app.world_mut().spawn((Player, Locomotion { yaw: facing.yaw(), ..default() }, Transform::from_translation(start).with_rotation(Quat::from_rotation_y(facing.yaw())), delver)).id();
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        let body = app
+            .world_mut()
+            .spawn((
+                Player,
+                Locomotion {
+                    yaw: facing.yaw(),
+                    ..default()
+                },
+                Transform::from_translation(start)
+                    .with_rotation(Quat::from_rotation_y(facing.yaw())),
+                delver,
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
         (app, body, start)
     }
 
@@ -430,12 +589,18 @@ mod tests {
         assert!(far(&tuning) > tuning.light.fog_end && far(&tuning) < tuning.light.fog_end + 100.0);
         // And it follows the tuning on a camera already spawned.
         let mut app = App::new();
-        app.insert_resource(tuning.clone()).add_systems(Update, widen_player_view);
-        let camera = app.world_mut().spawn((PlayerCamera, world_projection(&tuning))).id();
+        app.insert_resource(tuning.clone())
+            .add_systems(Update, widen_player_view);
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, world_projection(&tuning)))
+            .id();
         tuning.light.fog_end = 120.0;
         app.insert_resource(tuning.clone());
         app.update();
-        let Projection::Perspective(p) = app.world().get::<Projection>(camera).unwrap() else { panic!("not a perspective") };
+        let Projection::Perspective(p) = app.world().get::<Projection>(camera).unwrap() else {
+            panic!("not a perspective")
+        };
         assert_eq!(p.far, far(&tuning));
     }
 
@@ -446,12 +611,29 @@ mod tests {
         // The gear's pace is kept from the inventory; with none it is put back to 1, so hold it.
         for _ in 0..10 {
             usual_app.update();
-            quick_app.world_mut().get_mut::<GearPace>(quick_body).unwrap().0 = 1.2;
+            quick_app
+                .world_mut()
+                .get_mut::<GearPace>(quick_body)
+                .unwrap()
+                .0 = 1.2;
             quick_app.update();
         }
-        let usual = usual_app.world().get::<Transform>(usual_body).unwrap().translation.distance(start);
-        let quick = quick_app.world().get::<Transform>(quick_body).unwrap().translation.distance(start);
-        assert!((quick / usual - 1.2).abs() < 0.03, "{quick} against {usual}");
+        let usual = usual_app
+            .world()
+            .get::<Transform>(usual_body)
+            .unwrap()
+            .translation
+            .distance(start);
+        let quick = quick_app
+            .world()
+            .get::<Transform>(quick_body)
+            .unwrap()
+            .translation
+            .distance(start);
+        assert!(
+            (quick / usual - 1.2).abs() < 0.03,
+            "{quick} against {usual}"
+        );
     }
 
     /// How far the delver walks in `frames` frames, with a floor web laid along their way if
@@ -462,20 +644,34 @@ mod tests {
             let level = &mut app.world_mut().resource_mut::<CurrentLevel>().0;
             let (x, y, facing) = level.start();
             // Along the way they are walking, from before their feet to well past them.
-            let spot = fb_level::WebSpot { x: x as f32 + 0.5, y: y as f32 + 0.5, height: 0.0, yaw: facing.yaw(), size: 400.0, kind: fb_level::WebKind::Floor };
+            let spot = fb_level::WebSpot {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+                height: 0.0,
+                yaw: facing.yaw(),
+                size: 400.0,
+                kind: fb_level::WebKind::Floor,
+            };
             level.webs.push(spot);
         }
         for _ in 0..frames {
             app.update();
         }
-        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+        app.world()
+            .get::<Transform>(body)
+            .unwrap()
+            .translation
+            .distance(start)
     }
 
     #[test]
     fn a_delver_in_a_floor_web_covers_less_ground() {
         let (free, webbed) = (walked_through(30, false), walked_through(30, true));
         assert!(webbed < free, "{webbed} in the web, {free} out of it");
-        assert!((webbed / free - Tuning::default().moving.web_pace).abs() < 0.1, "{webbed} against {free}");
+        assert!(
+            (webbed / free - Tuning::default().moving.web_pace).abs() < 0.1,
+            "{webbed} against {free}"
+        );
     }
 
     #[test]
@@ -483,28 +679,52 @@ mod tests {
         let usual = walked(10, |_| {});
         let half = walked(10, |t| t.moving.walk_speed *= 0.5);
         assert!(usual > 1.0, "{usual}");
-        assert!((half / usual - 0.5).abs() < 0.02, "half the pace walks half as far: {half} against {usual}");
+        assert!(
+            (half / usual - 0.5).abs() < 0.02,
+            "half the pace walks half as far: {half} against {usual}"
+        );
     }
 
     /// How far the body walks in 30 frames with W and Hurry held, for a delver with `stamina`.
     fn hurried(stamina: fb_character::Stamina) -> f32 {
         let (mut app, body, start) = walking(|_| {}, DelverStamina(stamina));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
         for _ in 0..30 {
             app.update();
         }
-        app.world().get::<Transform>(body).unwrap().translation.distance(start)
+        app.world()
+            .get::<Transform>(body)
+            .unwrap()
+            .translation
+            .distance(start)
     }
 
     #[test]
     fn a_winded_delver_cannot_sprint_until_they_have_caught_their_breath() {
         let walked = walked(30, |_| {});
         let fresh = hurried(fb_character::Stamina::default());
-        assert!(fresh > walked * 1.3, "sprinting outpaces walking: {fresh} against {walked}");
-        let winded = hurried(fb_character::Stamina { value: 0.1, winded: true });
-        assert!((winded / walked - 1.0).abs() < 0.02, "winded, hurry only walks: {winded} against {walked}");
-        let recovered = hurried(fb_character::Stamina { value: 0.2, winded: false });
-        assert!((recovered / fresh - 1.0).abs() < 0.02, "{recovered} against {fresh}");
+        assert!(
+            fresh > walked * 1.3,
+            "sprinting outpaces walking: {fresh} against {walked}"
+        );
+        let winded = hurried(fb_character::Stamina {
+            value: 0.1,
+            winded: true,
+        });
+        assert!(
+            (winded / walked - 1.0).abs() < 0.02,
+            "winded, hurry only walks: {winded} against {walked}"
+        );
+        let recovered = hurried(fb_character::Stamina {
+            value: 0.2,
+            winded: false,
+        });
+        assert!(
+            (recovered / fresh - 1.0).abs() < 0.02,
+            "{recovered} against {fresh}"
+        );
     }
 
     fn exhausted(level: u32) -> Exhaustion {
@@ -516,25 +736,47 @@ mod tests {
         for frames in [10, 30, 60] {
             let usual = walked(frames, |_| {});
             let level_2 = walked_as(frames, |_| {}, exhausted(2));
-            assert!((level_2 / usual - 0.5).abs() < 0.02, "{frames} frames: {level_2} against {usual}");
-            assert!(walked_as(frames, |_| {}, exhausted(1)) / usual > 0.99, "level 1 does not slow");
+            assert!(
+                (level_2 / usual - 0.5).abs() < 0.02,
+                "{frames} frames: {level_2} against {usual}"
+            );
+            assert!(
+                walked_as(frames, |_| {}, exhausted(1)) / usual > 0.99,
+                "level 1 does not slow"
+            );
         }
     }
 
     #[test]
     fn a_raised_shield_slows_the_delver_and_stops_a_sprint() {
         use crate::combat::guard::{GUARD_PACE, Guard};
-        let guard = Guard { at: Vec2::ZERO, facing: Vec2::NEG_Y };
+        let guard = Guard {
+            at: Vec2::ZERO,
+            facing: Vec2::NEG_Y,
+        };
         let usual = walked(30, |_| {});
         let guarded = walked_as(30, |_| {}, guard);
-        assert!((guarded / usual - GUARD_PACE).abs() < 0.02, "{guarded} against {usual}");
+        assert!(
+            (guarded / usual - GUARD_PACE).abs() < 0.02,
+            "{guarded} against {usual}"
+        );
         let (mut app, body, start) = walking(|_| {}, guard);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
         for _ in 0..30 {
             app.update();
         }
-        let sprinted = app.world().get::<Transform>(body).unwrap().translation.distance(start);
-        assert!((sprinted / usual - GUARD_PACE).abs() < 0.02, "no sprint with the guard up: {sprinted} against {usual}");
+        let sprinted = app
+            .world()
+            .get::<Transform>(body)
+            .unwrap()
+            .translation
+            .distance(start);
+        assert!(
+            (sprinted / usual - GUARD_PACE).abs() < 0.02,
+            "no sprint with the guard up: {sprinted} against {usual}"
+        );
     }
 
     #[test]
@@ -543,7 +785,10 @@ mod tests {
         for frames in [10, 30, 60] {
             let usual = walked(frames, |_| {});
             let held = walked_as(frames, |_| {}, (exhausted(2), Slowed(HELD_PACE)));
-            assert!((held / usual - 0.5 * HELD_PACE).abs() < 0.01, "{frames} frames: {held} against {usual}");
+            assert!(
+                (held / usual - 0.5 * HELD_PACE).abs() < 0.01,
+                "{frames} frames: {held} against {usual}"
+            );
         }
     }
 
@@ -567,9 +812,18 @@ mod tests {
             let burdened = walked_as(frames, |_| {}, loaded(110.0));
             let encumbered = walked_as(frames, |_| {}, loaded(165.0));
             let both = walked_as(frames, |_| {}, (loaded(165.0), exhausted(2)));
-            assert!((burdened / usual - 0.9125).abs() < 0.01, "{burdened} against {usual}");
-            assert!((encumbered / usual - 0.65).abs() < 0.01, "{encumbered} against {usual}");
-            assert!((both / usual - 0.325).abs() < 0.01, "{both} against {usual}");
+            assert!(
+                (burdened / usual - 0.9125).abs() < 0.01,
+                "{burdened} against {usual}"
+            );
+            assert!(
+                (encumbered / usual - 0.65).abs() < 0.01,
+                "{encumbered} against {usual}"
+            );
+            assert!(
+                (both / usual - 0.325).abs() < 0.01,
+                "{both} against {usual}"
+            );
         }
     }
 
@@ -581,8 +835,17 @@ mod tests {
     /// A delver of strength 10 wearing a mail shirt made as heavy as `fraction` of what they can
     /// carry, and the shirt.
     fn laden(fraction: f32) -> (Character, Inventory, crate::inventory::ItemId) {
-        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        let delver = Character { attributes, ..Character::roll(4) };
+        let attributes = fb_character::Attributes {
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        let delver = Character {
+            attributes,
+            ..Character::roll(4)
+        };
         let mut mail = fb_items::roll_item("Mail", 1).unwrap();
         mail.profile.stats.weight = (150.0 + mail.profile.stats.carry) * fraction;
         let mut inventory = Inventory::default();
@@ -596,16 +859,30 @@ mod tests {
         let usual = walked(30, |_| {});
         // Edges at a third and two thirds of capacity: half of it is t = 0.25, 97.8% pace; 0.8 of
         // it is t = 0.7, 82.85%.
-        for (band, fraction, pace) in [(LoadBand::Burdened, 0.5, 0.978125), (LoadBand::Encumbered, 0.8, 0.8285)] {
+        for (band, fraction, pace) in [
+            (LoadBand::Burdened, 0.5, 0.978125),
+            (LoadBand::Encumbered, 0.8, 0.8285),
+        ] {
             let (delver, inventory, _) = laden(fraction);
             let (mut app, body, start) = walking(|_| {}, ());
             app.insert_resource(delver).insert_resource(inventory);
             for _ in 0..30 {
                 app.update();
             }
-            let walked = app.world().get::<Transform>(body).unwrap().translation.distance(start);
-            assert!((walked / usual - pace).abs() < 0.01, "{band:?}: {walked} against {usual}");
-            assert_eq!(app.world().get::<Load>(body).map(|l| l.0.band()), Some(band));
+            let walked = app
+                .world()
+                .get::<Transform>(body)
+                .unwrap()
+                .translation
+                .distance(start);
+            assert!(
+                (walked / usual - pace).abs() < 0.01,
+                "{band:?}: {walked} against {usual}"
+            );
+            assert_eq!(
+                app.world().get::<Load>(body).map(|l| l.0.band()),
+                Some(band)
+            );
         }
 
         let (delver, inventory, mail) = laden(1.2);
@@ -614,26 +891,60 @@ mod tests {
         for _ in 0..30 {
             app.update();
         }
-        assert_eq!(app.world().get::<Load>(body).map(|l| l.0.band()), Some(LoadBand::Overloaded));
-        assert_eq!(app.world().get::<Transform>(body).unwrap().translation.distance(start), 0.0, "overloaded");
+        assert_eq!(
+            app.world().get::<Load>(body).map(|l| l.0.band()),
+            Some(LoadBand::Overloaded)
+        );
+        assert_eq!(
+            app.world()
+                .get::<Transform>(body)
+                .unwrap()
+                .translation
+                .distance(start),
+            0.0,
+            "overloaded"
+        );
         app.world_mut().resource_mut::<Inventory>().forget(mail);
         for _ in 0..30 {
             app.update();
         }
-        assert_eq!(app.world().get::<Load>(body).map(|l| l.0.band()), Some(LoadBand::Light));
-        let moved = app.world().get::<Transform>(body).unwrap().translation.distance(start);
-        assert!((moved / usual - 1.0).abs() < 0.05, "{moved} against {usual}");
+        assert_eq!(
+            app.world().get::<Load>(body).map(|l| l.0.band()),
+            Some(LoadBand::Light)
+        );
+        let moved = app
+            .world()
+            .get::<Transform>(body)
+            .unwrap()
+            .translation
+            .distance(start);
+        assert!(
+            (moved / usual - 1.0).abs() < 0.05,
+            "{moved} against {usual}"
+        );
     }
 
     #[test]
     fn sensitivity_scales_mouse_look_and_invert_flips_it() {
         let usual = GameSettings::default();
         let turn = look_turn(Vec2::new(10.0, -5.0), &usual);
-        assert!((turn - Vec2::new(-10.0, 5.0) * LOOK_SENSITIVITY).length() < 1e-7, "right turns right, up looks up");
-        let quick = GameSettings { mouse_sensitivity: 2.0, ..usual };
+        assert!(
+            (turn - Vec2::new(-10.0, 5.0) * LOOK_SENSITIVITY).length() < 1e-7,
+            "right turns right, up looks up"
+        );
+        let quick = GameSettings {
+            mouse_sensitivity: 2.0,
+            ..usual
+        };
         assert!((look_turn(Vec2::new(10.0, -5.0), &quick) - turn * 2.0).length() < 1e-7);
-        let inverted = GameSettings { invert_mouse_y: true, ..usual };
-        assert_eq!(look_turn(Vec2::new(10.0, -5.0), &inverted), Vec2::new(turn.x, -turn.y));
+        let inverted = GameSettings {
+            invert_mouse_y: true,
+            ..usual
+        };
+        assert_eq!(
+            look_turn(Vec2::new(10.0, -5.0), &inverted),
+            Vec2::new(turn.x, -turn.y)
+        );
     }
 
     /// A map from rows of `#` (rock) and `.` (floor); outside it is rock.
@@ -642,7 +953,9 @@ mod tests {
             if x < 0 || y < 0 {
                 return true;
             }
-            rows.get(y as usize).and_then(|row| row.as_bytes().get(x as usize)).is_none_or(|&c| c == b'#')
+            rows.get(y as usize)
+                .and_then(|row| row.as_bytes().get(x as usize))
+                .is_none_or(|&c| c == b'#')
         }
     }
 
@@ -658,7 +971,14 @@ mod tests {
 
     #[test]
     fn the_bob_is_still_standing_and_dips_at_each_footfall() {
-        assert_eq!(Gait { phase: 1.3, pace: 0.0 }.bob(), Vec2::ZERO);
+        assert_eq!(
+            Gait {
+                phase: 1.3,
+                pace: 0.0
+            }
+            .bob(),
+            Vec2::ZERO
+        );
         let walking = |phase: f32| Gait { phase, pace: 1.0 }.bob();
         assert!(walking(0.0).abs_diff_eq(Vec2::ZERO, 1e-6));
         // Lowest twice a stride, swaying to one side then the other.
@@ -684,7 +1004,13 @@ mod tests {
             let end = slide(centre(2, 2), to, body_radius(), &blocked);
             assert!(clear(end, &blocked), "angle {i}: {end} overlaps rock");
             let inside = Vec2::splat(CELL + body_radius() - 1e-3);
-            assert!(end.cmpge(inside).all() && end.cmple(Vec2::splat(4.0 * CELL - body_radius() + 1e-3)).all(), "angle {i}: {end}");
+            assert!(
+                end.cmpge(inside).all()
+                    && end
+                        .cmple(Vec2::splat(4.0 * CELL - body_radius() + 1e-3))
+                        .all(),
+                "angle {i}: {end}"
+            );
         }
     }
 
@@ -701,8 +1027,16 @@ mod tests {
     #[test]
     fn inner_corners_hold_on_both_walls() {
         let blocked = map(ROOM);
-        let end = slide(centre(1, 1), centre(1, 1) - Vec2::splat(30.0), body_radius(), &blocked);
-        assert!(end.abs_diff_eq(Vec2::splat(CELL + body_radius()), 1e-3), "{end}");
+        let end = slide(
+            centre(1, 1),
+            centre(1, 1) - Vec2::splat(30.0),
+            body_radius(),
+            &blocked,
+        );
+        assert!(
+            end.abs_diff_eq(Vec2::splat(CELL + body_radius()), 1e-3),
+            "{end}"
+        );
     }
 
     #[test]
@@ -728,7 +1062,10 @@ mod tests {
         // (1, 2) and (2, 3) meet only at a corner, between rock (2, 2) and (1, 3).
         let end = slide(centre(1, 2), centre(2, 3), body_radius(), &blocked);
         assert!(clear(end, &blocked), "{end}");
-        assert!(end.x < 2.0 * CELL && end.y < 3.0 * CELL, "squeezed through to {end}");
+        assert!(
+            end.x < 2.0 * CELL && end.y < 3.0 * CELL,
+            "squeezed through to {end}"
+        );
     }
 
     #[test]
@@ -736,18 +1073,38 @@ mod tests {
         // One cell of rock between two rooms.
         let blocked = map(&["#####", "#.#.#", "#####"]);
         let end = slide(centre(1, 1), centre(3, 1), body_radius(), &blocked);
-        assert!(end.x <= 2.0 * CELL - body_radius() + 1e-3, "tunnelled to {end}");
-        let far = slide(centre(1, 1), centre(1, 1) + Vec2::new(10_000.0, 7.0), body_radius(), &blocked);
-        assert!(clear(far, &blocked) && far.x < 2.0 * CELL, "tunnelled to {far}");
+        assert!(
+            end.x <= 2.0 * CELL - body_radius() + 1e-3,
+            "tunnelled to {end}"
+        );
+        let far = slide(
+            centre(1, 1),
+            centre(1, 1) + Vec2::new(10_000.0, 7.0),
+            body_radius(),
+            &blocked,
+        );
+        assert!(
+            clear(far, &blocked) && far.x < 2.0 * CELL,
+            "tunnelled to {far}"
+        );
     }
 
     #[test]
     fn the_body_cannot_walk_through_a_circle_and_slides_round_it() {
         let open = |_: i32, _: i32| false;
-        let folk = [Obstacle::Circle { centre: Vec2::new(0.0, -20.0), radius: 2.5 }];
+        let folk = [Obstacle::Circle {
+            centre: Vec2::new(0.0, -20.0),
+            radius: 2.5,
+        }];
         let clear = |at: Vec2| !folk[0].overlaps(at, body_radius());
         // Straight at them: stopped short.
-        let end = slide_around(Vec2::ZERO, Vec2::new(0.0, -40.0), body_radius(), open, &folk);
+        let end = slide_around(
+            Vec2::ZERO,
+            Vec2::new(0.0, -40.0),
+            body_radius(),
+            open,
+            &folk,
+        );
         assert!(clear(end) && end.y > -20.0, "{end}");
         // Walking at them all the way, frame by frame, never gets through.
         let mut at = Vec2::ZERO;
@@ -763,13 +1120,20 @@ mod tests {
         }
         assert!(at.y < -30.0, "snagged at {at}");
         // Far from them nothing changes.
-        assert_eq!(slide_around(Vec2::ZERO, Vec2::new(5.0, 0.0), body_radius(), open, &folk), Vec2::new(5.0, 0.0));
+        assert_eq!(
+            slide_around(Vec2::ZERO, Vec2::new(5.0, 0.0), body_radius(), open, &folk),
+            Vec2::new(5.0, 0.0)
+        );
     }
 
     #[test]
     fn the_body_cannot_walk_through_a_turned_chest_and_slides_along_it() {
         let open = |_: i32, _: i32| false;
-        let chest = [Obstacle::Rect { centre: Vec2::new(0.0, -20.0), half: Vec2::new(4.5, 2.4), yaw: 0.3 }];
+        let chest = [Obstacle::Rect {
+            centre: Vec2::new(0.0, -20.0),
+            half: Vec2::new(4.5, 2.4),
+            yaw: 0.3,
+        }];
         let mut at = Vec2::ZERO;
         for _ in 0..200 {
             at = slide_around(at, at + Vec2::new(0.0, -0.5), body_radius(), open, &chest);
@@ -799,6 +1163,9 @@ mod tests {
         let from = centre(x as i32, y as i32);
         let to = centre(door.0, door.1);
         let end = slide(from, to, body_radius(), blocked_by(&level, &cells));
-        assert!(end.distance(from + (to - from).normalize() * (CELL / 2.0 - body_radius())) < 1e-3, "{end}");
+        assert!(
+            end.distance(from + (to - from).normalize() * (CELL / 2.0 - body_radius())) < 1e-3,
+            "{end}"
+        );
     }
 }

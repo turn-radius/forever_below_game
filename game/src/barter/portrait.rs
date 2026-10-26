@@ -37,7 +37,11 @@ pub struct Look {
 impl Look {
     /// The look of `person`, as [`crate::folk`] builds their figure.
     pub fn of(person: &Person) -> Look {
-        Look { spec: person.spec.clone(), gear: person.gear.clone(), dirt: person.dirt }
+        Look {
+            spec: person.spec.clone(),
+            gear: person.gear.clone(),
+            dirt: person.dirt,
+        }
     }
 
     /// The key of the figure this look dresses ([`figure_key`]).
@@ -70,7 +74,9 @@ pub fn stage_trader(
     mut cache: ResMut<FitCache>,
     mut spawner: ItemSpawner,
 ) {
-    let Some(session) = barter.session.as_ref() else { return };
+    let Some(session) = barter.session.as_ref() else {
+        return;
+    };
     let key = session.look.key();
     if stage.dressed.as_ref().is_some_and(|d| d != &key) {
         // Another trader: the old face goes at once, and nothing is drawn till the new one is fitted.
@@ -80,7 +86,9 @@ pub fn stage_trader(
         stage.camera = None;
         stage.dressed = None;
     }
-    if stage.dressed.as_ref() != Some(&key) && stage.fitting.as_ref().is_none_or(|f| f.key() != &key) {
+    if stage.dressed.as_ref() != Some(&key)
+        && stage.fitting.as_ref().is_none_or(|f| f.key() != &key)
+    {
         stage.fitting = Some(match cache.figure(&key) {
             Some(figure) => Fitting::ready(key.clone(), figure),
             None => {
@@ -92,13 +100,17 @@ pub fn stage_trader(
     if barter.portrait.is_none() {
         barter.portrait = Some(images.add(portrait_target()));
     }
-    let Some(mut fitting) = stage.fitting.take() else { return };
+    let Some(mut fitting) = stage.fitting.take() else {
+        return;
+    };
     let Some(figure) = fitting.poll() else {
         stage.fitting = Some(fitting);
         return;
     };
     cache.store_figure(fitting.key(), figure.clone());
-    let Some(image) = barter.portrait.clone() else { return };
+    let Some(image) = barter.portrait.clone() else {
+        return;
+    };
     if let Some(old) = stage.root.take() {
         commands.entity(old).despawn();
     }
@@ -114,15 +126,32 @@ pub fn stage_trader(
     // Lit as the doll is, so the portraits match.
     if let Some(bounds) = figure.bounds() {
         let key = studio_key(doll_view(bounds).0);
-        commands.spawn((Name::new("Trader key light"), key.0, key.1, layer.clone(), ChildOf(root)));
+        commands.spawn((
+            Name::new("Trader key light"),
+            key.0,
+            key.1,
+            layer.clone(),
+            ChildOf(root),
+        ));
     }
-    stage.camera = Some(spawn_portrait_camera(&mut commands, image, &figure, layer, root));
+    stage.camera = Some(spawn_portrait_camera(
+        &mut commands,
+        image,
+        &figure,
+        layer,
+        root,
+    ));
     stage.root = Some(root);
     stage.dressed = Some(fitting.key().clone());
 }
 
 /// Draws the portrait only while the barter's screen is open.
-pub fn show_trader(open: Res<ScreenOpen>, barter: Res<Barter>, stage: Res<TraderStage>, mut cameras: Query<&mut Camera>) {
+pub fn show_trader(
+    open: Res<ScreenOpen>,
+    barter: Res<Barter>,
+    stage: Res<TraderStage>,
+    mut cameras: Query<&mut Camera>,
+) {
     let shown = barter.active() && open.is(Screen::Inventory);
     if let Some(mut camera) = stage.camera.and_then(|c| cameras.get_mut(c).ok())
         && camera.is_active != shown
@@ -132,7 +161,11 @@ pub fn show_trader(open: Res<ScreenOpen>, barter: Res<Barter>, stage: Res<Trader
 }
 
 /// When the barter is over, takes the trader and its camera down and lets go of the texture.
-pub fn clear_trader(mut commands: Commands, mut barter: ResMut<Barter>, mut stage: ResMut<TraderStage>) {
+pub fn clear_trader(
+    mut commands: Commands,
+    mut barter: ResMut<Barter>,
+    mut stage: ResMut<TraderStage>,
+) {
     if barter.active() {
         return;
     }

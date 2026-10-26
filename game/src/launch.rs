@@ -16,8 +16,21 @@ pub enum AppState {
 
 /// The debug switches that open the game straight into the level: each shows or holds
 /// something in it (README, "Debug switches").
-pub const LEVEL_SWITCHES: [&str; 13] =
-    ["FB_DEBUG_POSE", "FB_DEBUG_CAMERA", "FB_DEBUG_HOVER", "FB_DEBUG_KIT", "FB_DROP", "FB_OPEN_INVENTORY", "FB_OPEN_CONTAINER", "FB_OPEN_MENU", "FB_OPEN_MAP", "FB_COMMISSION", "FB_READ", "FB_TEACH", "FB_TEACH_READ"];
+pub const LEVEL_SWITCHES: [&str; 13] = [
+    "FB_DEBUG_POSE",
+    "FB_DEBUG_CAMERA",
+    "FB_DEBUG_HOVER",
+    "FB_DEBUG_KIT",
+    "FB_DROP",
+    "FB_OPEN_INVENTORY",
+    "FB_OPEN_CONTAINER",
+    "FB_OPEN_MENU",
+    "FB_OPEN_MAP",
+    "FB_COMMISSION",
+    "FB_READ",
+    "FB_TEACH",
+    "FB_TEACH_READ",
+];
 
 /// What the command line asks of a run of the level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,9 +56,15 @@ impl Launch {
                     continue;
                 }
                 "--seed" => args.next().ok_or("--seed needs a number")?.as_str(),
-                other => other.strip_prefix("--seed=").ok_or_else(|| format!("unknown argument {other}"))?,
+                other => other
+                    .strip_prefix("--seed=")
+                    .ok_or_else(|| format!("unknown argument {other}"))?,
             };
-            launch.seed = Some(value.parse().map_err(|_| format!("--seed {value} is not a number"))?);
+            launch.seed = Some(
+                value
+                    .parse()
+                    .map_err(|_| format!("--seed {value} is not a number"))?,
+            );
         }
         Ok(launch)
     }
@@ -53,14 +72,20 @@ impl Launch {
     /// The state the game opens in. `switch_set` says whether an environment variable is set.
     pub fn opening(&self, switch_set: impl Fn(&str) -> bool) -> AppState {
         let straight_in = self.seed.is_some() || LEVEL_SWITCHES.iter().any(|name| switch_set(name));
-        if straight_in && !self.title { AppState::Delving } else { AppState::Title }
+        if straight_in && !self.title {
+            AppState::Delving
+        } else {
+            AppState::Title
+        }
     }
 }
 
 /// A seed from the clock, for what each run draws afresh: the music's order, a new delve's
 /// level. Whatever is generated from it is still a pure function of the seed it got.
 pub fn clock_seed() -> u32 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() ^ d.as_secs() as u32)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos() ^ d.as_secs() as u32)
 }
 
 /// Whether the environment variable `name` is set to anything but nothing.
@@ -99,19 +124,36 @@ mod tests {
     #[test]
     fn debug_switches_skip_the_title() {
         for switch in LEVEL_SWITCHES {
-            assert_eq!(Launch::default().opening(|name| name == switch), AppState::Delving, "{switch}");
+            assert_eq!(
+                Launch::default().opening(|name| name == switch),
+                AppState::Delving,
+                "{switch}"
+            );
         }
         // Switches that only change how things look or sound leave the title in place.
         for other in ["FB_SCREENSHOT", "FB_SETTINGS", "FB_FOLK"] {
-            assert_eq!(Launch::default().opening(|name| name == other), AppState::Title, "{other}");
+            assert_eq!(
+                Launch::default().opening(|name| name == other),
+                AppState::Title,
+                "{other}"
+            );
         }
     }
 
     #[test]
     fn title_wins_over_a_seed_and_switches() {
         let launch = Launch::parse(&args("--seed 7 --title")).unwrap();
-        assert_eq!(launch, Launch { seed: Some(7), title: true });
-        assert_eq!(launch.opening(|name| name == "FB_OPEN_MENU"), AppState::Title);
+        assert_eq!(
+            launch,
+            Launch {
+                seed: Some(7),
+                title: true
+            }
+        );
+        assert_eq!(
+            launch.opening(|name| name == "FB_OPEN_MENU"),
+            AppState::Title
+        );
     }
 
     #[test]

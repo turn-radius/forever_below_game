@@ -43,7 +43,11 @@ impl Canvas {
     /// A clear canvas `size` pixels square, `scale` pixels to a seal unit, with the seal's
     /// centre in its middle.
     pub fn new(size: u32, scale: f32) -> Self {
-        Canvas { size, scale, pixels: vec![[0.0; 4]; (size * size) as usize] }
+        Canvas {
+            size,
+            scale,
+            pixels: vec![[0.0; 4]; (size * size) as usize],
+        }
     }
 
     /// The pixel position of seal point `p` (seal units from the centre, y down).
@@ -71,7 +75,14 @@ impl Canvas {
 
     /// Draws a ring of radius `r` and line `width` (seal units) round the centre. `keep`
     /// says, by angle (radians, clockwise from +x), which parts of it are drawn.
-    pub fn ring(&mut self, centre: [f32; 2], r: f32, width: f32, ink: Ink, keep: impl Fn(f32) -> bool) {
+    pub fn ring(
+        &mut self,
+        centre: [f32; 2],
+        r: f32,
+        width: f32,
+        ink: Ink,
+        keep: impl Fn(f32) -> bool,
+    ) {
         let [cx, cy] = self.to_pixels(centre);
         let (r, half) = (r * self.scale, (width * self.scale * 0.5).max(0.5));
         let reach = r + half + 1.0;
@@ -166,7 +177,12 @@ impl Canvas {
 
     /// The pixels as 8-bit sRGB RGBA, straight alpha, row by row from the top.
     pub fn to_rgba8(&self) -> Vec<u8> {
-        self.pixels.iter().flat_map(|p| [p[0], p[1], p[2], p[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect()
+        self.pixels
+            .iter()
+            .flat_map(|p| {
+                [p[0], p[1], p[2], p[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            })
+            .collect()
     }
 
     /// Scales every pixel's opacity by `factor`, so overlapping shapes drawn solid can be
@@ -248,7 +264,11 @@ pub fn band_glyphs(text: &str, r: f32, advance: f32, reversed: bool) -> Vec<Glyp
             let angle = std::f32::consts::PI + along / r;
             (angle, angle + std::f32::consts::FRAC_PI_2)
         };
-        glyphs.push(Glyph { text: c, at: [angle.cos() * r, angle.sin() * r], turn });
+        glyphs.push(Glyph {
+            text: c,
+            at: [angle.cos() * r, angle.sin() * r],
+            turn,
+        });
     }
     glyphs
 }
@@ -261,7 +281,12 @@ fn polar(r: f32, a: f32) -> [f32; 2] {
 impl Seal {
     /// The seven points of the star (the plate's `V`), the first at the top.
     pub fn star_points(&self) -> [[f32; 2]; 7] {
-        std::array::from_fn(|i| polar(self.r * 0.7, -std::f32::consts::FRAC_PI_2 + i as f32 / 7.0 * std::f32::consts::TAU))
+        std::array::from_fn(|i| {
+            polar(
+                self.r * 0.7,
+                -std::f32::consts::FRAC_PI_2 + i as f32 / 7.0 * std::f32::consts::TAU,
+            )
+        })
     }
 
     /// The radius of the medallions at the star's points.
@@ -278,7 +303,13 @@ impl Seal {
     /// the centre, 0.07 at 55%, none at the edge, scaled to `inks.glow` at the centre.
     pub fn draw_glow(&self, canvas: &mut Canvas, inks: SealInks) {
         let k = inks.glow / 0.2;
-        let at = |t: f32| k * if t < 0.55 { 0.2 + (0.07 - 0.2) * t / 0.55 } else { 0.07 * (1.0 - (t - 0.55) / 0.45) };
+        let at = |t: f32| {
+            k * if t < 0.55 {
+                0.2 + (0.07 - 0.2) * t / 0.55
+            } else {
+                0.07 * (1.0 - (t - 0.55) / 0.45)
+            }
+        };
         canvas.radial([0.0, 0.0], self.r * 1.04, inks.gold, at);
     }
 
@@ -290,13 +321,23 @@ impl Seal {
         canvas.ring([0.0, 0.0], r - 4.0, 0.7, line, |_| true);
         for i in 0..180 {
             let a = i as f32 / 180.0 * std::f32::consts::TAU;
-            let l = if i % 15 == 0 { 11.0 } else if i % 5 == 0 { 7.0 } else { 3.5 };
+            let l = if i % 15 == 0 {
+                11.0
+            } else if i % 5 == 0 {
+                7.0
+            } else {
+                3.5
+            };
             canvas.line(polar(r - 3.0, a), polar(r - 3.0 - l, a), 0.9, line);
         }
         canvas.ring([0.0, 0.0], r - 38.0, 1.0, line, |_| true);
         for i in 0..56 {
             let size = if i % 4 == 0 { 1.8 } else { 1.0 };
-            canvas.disc(polar(r * 0.89, i as f32 / 56.0 * std::f32::consts::TAU), size, Ink::new(inks.gold, 0.55));
+            canvas.disc(
+                polar(r * 0.89, i as f32 / 56.0 * std::f32::consts::TAU),
+                size,
+                Ink::new(inks.gold, 0.55),
+            );
         }
     }
 
@@ -309,7 +350,9 @@ impl Seal {
         canvas.ring([0.0, 0.0], r * 0.76, 1.0, gold, |_| true);
         // Dashed 2 on, 5 off along the circle.
         let dashed = r * 0.86;
-        canvas.ring([0.0, 0.0], dashed, 0.8, line, |a| (a.rem_euclid(std::f32::consts::TAU) * dashed).rem_euclid(7.0) < 2.0);
+        canvas.ring([0.0, 0.0], dashed, 0.8, line, |a| {
+            (a.rem_euclid(std::f32::consts::TAU) * dashed).rem_euclid(7.0) < 2.0
+        });
         let v = self.star_points();
         let star: Vec<[f32; 2]> = (0..=7).map(|i| v[(i * 3) % 7]).collect();
         let star2: Vec<[f32; 2]> = (0..=7).map(|i| v[(i * 2) % 7]).collect();
@@ -325,7 +368,8 @@ impl Seal {
             let a = -std::f32::consts::FRAC_PI_2 + (i as f32 + 0.5) / 7.0 * std::f32::consts::TAU;
             // Open toward the rim: the arc leaves out 1.6 rad either side of outward.
             canvas.ring(polar(r * 0.585, a), r * 0.05, 1.0, gold, |b| {
-                let off = (b - a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                let off = (b - a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
                 off.abs() > 1.6
             });
         }
@@ -341,7 +385,13 @@ impl Seal {
     pub fn draw_inner(&self, canvas: &mut Canvas, inks: SealInks) {
         let ri = self.inner_r();
         canvas.ring([0.0, 0.0], ri, 1.1, Ink::new(inks.gold, 0.6), |_| true);
-        canvas.ring([0.0, 0.0], ri - 28.0, 0.8, Ink::new(inks.line, 0.55), |_| true);
+        canvas.ring(
+            [0.0, 0.0],
+            ri - 28.0,
+            0.8,
+            Ink::new(inks.line, 0.55),
+            |_| true,
+        );
     }
 
     /// The three turning bands, outer, middle and inner, each on a canvas `scale` pixels to
@@ -385,7 +435,12 @@ impl Seal {
 mod tests {
     use super::*;
 
-    const INKS: SealInks = SealInks { line: [0.5, 0.46, 0.4], gold: [0.66, 0.47, 0.18], page: [0.95, 0.93, 0.88], glow: 0.2 };
+    const INKS: SealInks = SealInks {
+        line: [0.5, 0.46, 0.4],
+        gold: [0.66, 0.47, 0.18],
+        page: [0.95, 0.93, 0.88],
+        glow: 0.2,
+    };
 
     #[test]
     fn rings_and_lines_land_where_they_are_drawn() {
@@ -402,7 +457,9 @@ mod tests {
         assert_eq!(canvas.alpha(70, 30), 0.0);
         // A ring keeps only the arcs asked for.
         let mut canvas = Canvas::new(101, 1.0);
-        canvas.ring([0.0, 0.0], 30.0, 2.0, Ink::new([1.0; 3], 1.0), |a| a.abs() < 1.0);
+        canvas.ring([0.0, 0.0], 30.0, 2.0, Ink::new([1.0; 3], 1.0), |a| {
+            a.abs() < 1.0
+        });
         assert!(canvas.alpha(80, 50) > 0.9 && canvas.alpha(20, 50) == 0.0);
     }
 
@@ -410,14 +467,27 @@ mod tests {
     fn the_seal_matches_the_plate_layout() {
         let seal = Seal { r: 264.0 };
         let v = seal.star_points();
-        assert!(v[0][0].abs() < 1e-3 && (v[0][1] + 0.7 * 264.0).abs() < 1e-3, "the first point is at the top");
+        assert!(
+            v[0][0].abs() < 1e-3 && (v[0][1] + 0.7 * 264.0).abs() < 1e-3,
+            "the first point is at the top"
+        );
         let [outer, middle, inner] = seal.layers(1.0, INKS);
         let c = outer.size / 2;
         // The outer ring at R, the medallion at the top point, the inner ring at 0.48 R.
-        assert!((263..=265).map(|d| outer.alpha(c + d, c)).fold(0.0, f32::max) > 0.3);
+        assert!(
+            (263..=265)
+                .map(|d| outer.alpha(c + d, c))
+                .fold(0.0, f32::max)
+                > 0.3
+        );
         assert!(middle.alpha(c, (c as f32 - 0.7 * 264.0) as u32) > 0.9);
         let ri = (0.48 * 264.0f32) as u32;
-        assert!((ri - 1..=ri + 1).map(|d| inner.alpha(c + d, c)).fold(0.0, f32::max) > 0.3);
+        assert!(
+            (ri - 1..=ri + 1)
+                .map(|d| inner.alpha(c + d, c))
+                .fold(0.0, f32::max)
+                > 0.3
+        );
         assert!(inner.alpha(c, c) == 0.0);
     }
 
@@ -429,7 +499,11 @@ mod tests {
         assert!(band.ends_with(" \u{b7} "));
         let seal = Seal { r: 264.0 };
         let [outer, middle, inner] = seal.bands([14.0, 12.0, 12.0]);
-        for (glyphs, r) in [(&outer, 238.0), (&middle, 264.0 * 0.82), (&inner, 264.0 * 0.48 - 14.0)] {
+        for (glyphs, r) in [
+            (&outer, 238.0),
+            (&middle, 264.0 * 0.82),
+            (&inner, 264.0 * 0.48 - 14.0),
+        ] {
             assert!(glyphs.len() > 30);
             for g in glyphs.iter() {
                 assert!(((g.at[0].powi(2) + g.at[1].powi(2)).sqrt() - r).abs() < 1e-2);

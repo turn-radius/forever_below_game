@@ -29,8 +29,8 @@ use fb_character::LoadBand;
 use fb_character::conditions::{Circumstances, Condition, ConditionKind, Severity, conditions};
 
 use crate::character::{Character, DelverEffects, DelverNeeds, DelverStamina, Load, modifier};
-use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::combat::Health;
+use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::combat::vitals::Constricted;
 use crate::exhaustion::Exhaustion;
 use crate::play::{DelveSystems, Player};
@@ -41,10 +41,21 @@ pub struct StatusPlugin;
 
 impl Plugin for StatusPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShownConditions>().init_resource::<ConditionIcons>().insert_resource(DebugConditions::from_env()).add_systems(
-            Update,
-            (spawn_row, hold_debug_conditions, read_conditions, draw_badges, show_card).chain().in_set(DelveSystems),
-        );
+        app.init_resource::<ShownConditions>()
+            .init_resource::<ConditionIcons>()
+            .insert_resource(DebugConditions::from_env())
+            .add_systems(
+                Update,
+                (
+                    spawn_row,
+                    hold_debug_conditions,
+                    read_conditions,
+                    draw_badges,
+                    show_card,
+                )
+                    .chain()
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -86,13 +97,36 @@ pub(crate) fn read_conditions(
     inventory: Option<Res<crate::inventory::Inventory>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
     rules: Option<Res<crate::rules::GameRules>>,
-    players: Query<(&DelverNeeds, &Exhaustion, &DelverStamina, &Load, Has<Constricted>, Option<&Slowed>, Option<&DelverEffects>, Option<&Health>), With<Player>>,
+    players: Query<
+        (
+            &DelverNeeds,
+            &Exhaustion,
+            &DelverStamina,
+            &Load,
+            Has<Constricted>,
+            Option<&Slowed>,
+            Option<&DelverEffects>,
+            Option<&Health>,
+        ),
+        With<Player>,
+    >,
     mut shown: ResMut<ShownConditions>,
 ) {
-    let Some((needs, exhaustion, stamina, load, held, slowed, effects, health)) = players.iter().next() else { return };
+    let Some((needs, exhaustion, stamina, load, held, slowed, effects, health)) =
+        players.iter().next()
+    else {
+        return;
+    };
     // Gear that mends faster (of Mending) shortens the time a hit point takes.
-    let points = character.as_deref().zip(inventory.as_deref()).map_or(0.0, |(c, i)| c.gear(i).recovery);
-    let recovery = tuning.as_deref().map_or_else(crate::tuning::RecoveryTuning::default, |t| t.recovery.clone());
+    let points = character
+        .as_deref()
+        .zip(inventory.as_deref())
+        .map_or(0.0, |(c, i)| c.gear(i).recovery);
+    let recovery = tuning
+        .as_deref()
+        .map_or_else(crate::tuning::RecoveryTuning::default, |t| {
+            t.recovery.clone()
+        });
     let mending = recovery.minutes_for(points);
     let now = Circumstances {
         needs: needs.0,
@@ -101,19 +135,31 @@ pub(crate) fn read_conditions(
         load: load.0,
         con_modifier: character.map_or(0, |c| modifier(c.constitution())),
         held_pace: held.then(|| slowed.map_or(1.0, |s| s.0 as f64)),
-        wounded_mending: health.filter(|h| h.hp < h.max && !h.is_down()).map(|_| mending),
+        wounded_mending: health
+            .filter(|h| h.hp < h.max && !h.is_down())
+            .map(|_| mending),
     };
     let none = fb_character::effect::Effects::default();
-    let list = conditions(&now, effects.map_or(&none, |e| &e.0), &crate::rules::GameRules::of(&rules).effects);
+    let list = conditions(
+        &now,
+        effects.map_or(&none, |e| &e.0),
+        &crate::rules::GameRules::of(&rules).effects,
+    );
     if shown.0 != list {
         shown.0 = list;
     }
 }
 
 /// Gives each new orb cluster its row of badges and the card above it, placed from the layout.
-fn spawn_row(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>, fonts: Option<Res<UiFonts>>) {
+fn spawn_row(
+    mut commands: Commands,
+    clusters: Query<Entity, Added<OrbCluster>>,
+    fonts: Option<Res<UiFonts>>,
+) {
     let layout = cluster_layout();
-    let font = fonts.map_or_else(TextFont::default, |f| TextFont::default().with_font(f.body.clone()));
+    let font = fonts.map_or_else(TextFont::default, |f| {
+        TextFont::default().with_font(f.body.clone())
+    });
     for cluster in &clusters {
         commands.entity(cluster).with_children(|cluster| {
             cluster
@@ -176,14 +222,25 @@ fn draw_badges(
     }
     let layout = cluster_layout();
     for (row, mut node, _) in &mut rows {
-        let display = if shown.0.is_empty() { Display::None } else { Display::Flex };
+        let display = if shown.0.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
         if node.display != display {
             node.display = display;
         }
         commands.entity(row).with_children(|row| {
             for (n, condition) in shown.0.iter().enumerate() {
                 let icon = icons.get(condition.kind, images.as_deref_mut());
-                badge(row, condition, crate::ui::hud(layout.badge), crate::ui::hud(layout.badge * 0.07), icon).insert(StatusBadge(n));
+                badge(
+                    row,
+                    condition,
+                    crate::ui::hud(layout.badge),
+                    crate::ui::hud(layout.badge * 0.07),
+                    icon,
+                )
+                .insert(StatusBadge(n));
             }
         });
     }
@@ -196,7 +253,11 @@ pub struct ConditionIcons(HashMap<ConditionKind, Handle<Image>>);
 impl ConditionIcons {
     /// The icon for `kind`, drawn into `images` the first time it is asked for. None without
     /// images (the logic tests).
-    pub fn get(&mut self, kind: ConditionKind, images: Option<&mut Assets<Image>>) -> Option<Handle<Image>> {
+    pub fn get(
+        &mut self,
+        kind: ConditionKind,
+        images: Option<&mut Assets<Image>>,
+    ) -> Option<Handle<Image>> {
         if let Some(icon) = self.0.get(&kind) {
             return Some(icon.clone());
         }
@@ -208,7 +269,13 @@ impl ConditionIcons {
 
 /// Spawns one condition's badge under `parent`: a disc `size` across with a `rim` in its
 /// severity's colour and its icon (if drawn) tinted to match.
-pub fn badge<'a>(parent: &'a mut ChildSpawnerCommands, condition: &Condition, size: Val, rim: Val, icon: Option<Handle<Image>>) -> EntityCommands<'a> {
+pub fn badge<'a>(
+    parent: &'a mut ChildSpawnerCommands,
+    condition: &Condition,
+    size: Val,
+    rim: Val,
+    icon: Option<Handle<Image>>,
+) -> EntityCommands<'a> {
     let colour = severity_colour(condition.severity);
     let mut badge = parent.spawn((
         Name::new(format!("{} badge", condition.name)),
@@ -227,7 +294,19 @@ pub fn badge<'a>(parent: &'a mut ChildSpawnerCommands, condition: &Condition, si
         Pickable::IGNORE,
     ));
     if let Some(icon) = icon {
-        badge.with_child((ImageNode { image: icon, color: colour.lighter(0.12), ..default() }, Node { width: percent(74), height: percent(74), ..default() }, Pickable::IGNORE));
+        badge.with_child((
+            ImageNode {
+                image: icon,
+                color: colour.lighter(0.12),
+                ..default()
+            },
+            Node {
+                width: percent(74),
+                height: percent(74),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ));
     }
     badge
 }
@@ -239,13 +318,27 @@ fn show_card(
     debug: Res<DebugConditions>,
     shown: Res<ShownConditions>,
     windows: Query<(&Window, &CursorOptions), With<PrimaryWindow>>,
-    badges: Query<(&StatusBadge, &ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
+    badges: Query<(
+        &StatusBadge,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &InheritedVisibility,
+    )>,
     mut cards: Query<(&mut Node, &mut Text, &mut TextColor), With<StatusCard>>,
 ) {
-    let cursor = windows.iter().next().filter(|(_, options)| options.grab_mode == CursorGrabMode::None).and_then(|(window, _)| window.physical_cursor_position());
+    let cursor = windows
+        .iter()
+        .next()
+        .filter(|(_, options)| options.grab_mode == CursorGrabMode::None)
+        .and_then(|(window, _)| window.physical_cursor_position());
     let over = debug.hover.or_else(|| {
         let point = cursor?;
-        badges.iter().find(|(_, node, transform, visible)| visible.get() && node.contains_point(**transform, point)).map(|(badge, ..)| badge.0)
+        badges
+            .iter()
+            .find(|(_, node, transform, visible)| {
+                visible.get() && node.contains_point(**transform, point)
+            })
+            .map(|(badge, ..)| badge.0)
     });
     let layout = cluster_layout();
     let condition = over.and_then(|n| shown.0.get(n).map(|c| (n, c)));
@@ -293,8 +386,12 @@ pub struct DebugConditions {
 impl DebugConditions {
     /// Reads `FB_CONDITIONS` and `FB_CONDITION_HOVER`.
     pub fn from_env() -> DebugConditions {
-        let mut debug = std::env::var("FB_CONDITIONS").map(|list| DebugConditions::parse(&list)).unwrap_or_default();
-        debug.hover = std::env::var("FB_CONDITION_HOVER").ok().and_then(|n| n.trim().parse().ok());
+        let mut debug = std::env::var("FB_CONDITIONS")
+            .map(|list| DebugConditions::parse(&list))
+            .unwrap_or_default();
+        debug.hover = std::env::var("FB_CONDITION_HOVER")
+            .ok()
+            .and_then(|n| n.trim().parse().ok());
         debug
     }
 
@@ -311,7 +408,16 @@ impl DebugConditions {
                 "sleep" | "sleepiness" => debug.sleepiness = share,
                 "exhaustion" => debug.exhaustion = value.trim().parse().ok(),
                 "winded" => debug.winded = true,
-                "poisoned" | "poison" => debug.poisoned = Some(value.trim().parse::<f64>().map_or(fb_character::poison::VENOM_POISONED_HOURS, |minutes| minutes.max(0.0) / 60.0)),
+                "poisoned" | "poison" => {
+                    debug.poisoned = Some(
+                        value
+                            .trim()
+                            .parse::<f64>()
+                            .map_or(fb_character::poison::VENOM_POISONED_HOURS, |minutes| {
+                                minutes.max(0.0) / 60.0
+                            }),
+                    )
+                }
                 "load" => {
                     let value = value.trim().to_ascii_lowercase();
                     debug.load = match value.as_str() {
@@ -319,7 +425,10 @@ impl DebugConditions {
                         "burdened" => Some(Load::sample(LoadBand::Burdened)),
                         "encumbered" => Some(Load::sample(LoadBand::Encumbered)),
                         "overloaded" => Some(Load::sample(LoadBand::Overloaded)),
-                        pounds => pounds.parse::<f32>().ok().map(|lb| Load::of(lb.max(0.0), 165.0)),
+                        pounds => pounds
+                            .parse::<f32>()
+                            .ok()
+                            .map(|lb| Load::of(lb.max(0.0), 165.0)),
                     }
                 }
                 other => {
@@ -333,7 +442,14 @@ impl DebugConditions {
     }
 
     fn holds_anything(&self) -> bool {
-        self.hunger.is_some() || self.thirst.is_some() || self.sleepiness.is_some() || self.exhaustion.is_some() || self.winded || self.load.is_some() || self.poisoned.is_some() || !self.effects.is_empty()
+        self.hunger.is_some()
+            || self.thirst.is_some()
+            || self.sleepiness.is_some()
+            || self.exhaustion.is_some()
+            || self.winded
+            || self.load.is_some()
+            || self.poisoned.is_some()
+            || !self.effects.is_empty()
     }
 }
 
@@ -343,7 +459,17 @@ impl DebugConditions {
 fn hold_debug_conditions(
     mut commands: Commands,
     debug: Res<DebugConditions>,
-    mut players: Query<(Entity, &mut DelverNeeds, &mut Exhaustion, &mut DelverStamina, &mut Load, Option<&DelverEffects>), With<Player>>,
+    mut players: Query<
+        (
+            Entity,
+            &mut DelverNeeds,
+            &mut Exhaustion,
+            &mut DelverStamina,
+            &mut Load,
+            Option<&DelverEffects>,
+        ),
+        With<Player>,
+    >,
 ) {
     if !debug.holds_anything() {
         return;
@@ -351,16 +477,28 @@ fn hold_debug_conditions(
     for (player, mut needs, mut exhaustion, mut stamina, mut load, effects) in &mut players {
         if debug.poisoned.is_some() || !debug.effects.is_empty() {
             let rules = fb_character::rules::defaults();
-            let mut held = debug.poisoned.map_or_else(DelverEffects::default, |hours| DelverEffects::poisoned_for(rules, hours));
+            let mut held = debug.poisoned.map_or_else(DelverEffects::default, |hours| {
+                DelverEffects::poisoned_for(rules, hours)
+            });
             for (id, intensity) in &debug.effects {
-                held.0.add(&rules.effects, id, *intensity, None, fb_character::effect::Source::Surroundings);
+                held.0.add(
+                    &rules.effects,
+                    id,
+                    *intensity,
+                    None,
+                    fb_character::effect::Source::Surroundings,
+                );
             }
             if effects != Some(&held) {
                 commands.entity(player).insert(held);
             }
         }
         let mut held = needs.0;
-        for (value, meter) in [(debug.hunger, &mut held.hunger), (debug.thirst, &mut held.thirst), (debug.sleepiness, &mut held.sleepiness)] {
+        for (value, meter) in [
+            (debug.hunger, &mut held.hunger),
+            (debug.thirst, &mut held.thirst),
+            (debug.sleepiness, &mut held.sleepiness),
+        ] {
             if let Some(value) = value {
                 meter.value = value;
             }
@@ -370,7 +508,10 @@ fn hold_debug_conditions(
             exhaustion.set_if_neq(Exhaustion(fb_character::Exhaustion::new(level)));
         }
         if debug.winded {
-            stamina.set_if_neq(DelverStamina(fb_character::Stamina { value: 0.05, winded: true }));
+            stamina.set_if_neq(DelverStamina(fb_character::Stamina {
+                value: 0.05,
+                winded: true,
+            }));
         }
         if let Some(held) = debug.load {
             load.set_if_neq(held);
@@ -384,7 +525,11 @@ fn icon_image(kind: ConditionKind) -> Image {
     let alpha = icon_alpha(kind, ICON_PX);
     let rgba = alpha.iter().flat_map(|&a| [255, 255, 255, a]).collect();
     Image::new(
-        Extent3d { width: ICON_PX, height: ICON_PX, depth_or_array_layers: 1 },
+        Extent3d {
+            width: ICON_PX,
+            height: ICON_PX,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         rgba,
         TextureFormat::Rgba8UnormSrgb,
@@ -431,42 +576,74 @@ pub fn icon_distance(kind: ConditionKind, p: Vec2) -> f32 {
     match kind {
         ConditionKind::Hunger => {
             let dome = circle(p, v(0.0, 0.25), 0.78).max(p.y - 0.5);
-            let scores = [-0.38, 0.0, 0.38].into_iter().map(|x| capsule(p, v(x - 0.1, -0.25), v(x + 0.1, 0.1), 0.07)).fold(f32::MAX, f32::min);
+            let scores = [-0.38, 0.0, 0.38]
+                .into_iter()
+                .map(|x| capsule(p, v(x - 0.1, -0.25), v(x + 0.1, 0.1), 0.07))
+                .fold(f32::MAX, f32::min);
             dome.max(-scores)
         }
         ConditionKind::Thirst => {
             let (centre, r, tip) = (v(0.0, 0.25), 0.5, v(0.0, -0.85));
             let angle = (r / centre.distance(tip)).asin();
             let (s, c) = angle.sin_cos();
-            let cone = ((p - tip).dot(v(c, -s))).max((p - tip).dot(v(-c, -s))).max(p.y - centre.y);
+            let cone = ((p - tip).dot(v(c, -s)))
+                .max((p - tip).dot(v(-c, -s)))
+                .max(p.y - centre.y);
             circle(p, centre, r).min(cone)
         }
-        ConditionKind::Sleepiness => circle(p, v(0.0, 0.0), 0.75).max(-circle(p, v(0.38, -0.28), 0.62)),
+        ConditionKind::Sleepiness => {
+            circle(p, v(0.0, 0.0), 0.75).max(-circle(p, v(0.38, -0.28), 0.62))
+        }
         ConditionKind::Exhaustion => {
             let top = polygon(p, &[v(-0.5, -0.68), v(0.5, -0.68), v(0.0, 0.02)]);
             let bottom = polygon(p, &[v(0.0, -0.02), v(0.5, 0.68), v(-0.5, 0.68)]);
-            let caps = capsule(p, v(-0.6, -0.8), v(0.6, -0.8), 0.08).min(capsule(p, v(-0.6, 0.8), v(0.6, 0.8), 0.08));
+            let caps = capsule(p, v(-0.6, -0.8), v(0.6, -0.8), 0.08).min(capsule(
+                p,
+                v(-0.6, 0.8),
+                v(0.6, 0.8),
+                0.08,
+            ));
             top.min(bottom).min(caps)
         }
         ConditionKind::Winded => {
-            let lines = capsule(p, v(-0.8, -0.42), v(0.35, -0.42), 0.09).min(capsule(p, v(-0.55, 0.0), v(0.55, 0.0), 0.09)).min(capsule(p, v(-0.8, 0.42), v(0.15, 0.42), 0.09));
+            let lines = capsule(p, v(-0.8, -0.42), v(0.35, -0.42), 0.09)
+                .min(capsule(p, v(-0.55, 0.0), v(0.55, 0.0), 0.09))
+                .min(capsule(p, v(-0.8, 0.42), v(0.15, 0.42), 0.09));
             let curl = ring(p, v(0.35, -0.62), 0.2, 0.17).max(-(p.x - 0.35));
             let curl_low = ring(p, v(0.55, -0.2), 0.2, 0.17).max(-(p.x - 0.55));
             lines.min(curl).min(curl_low)
         }
         ConditionKind::Load => {
-            let body = polygon(p, &[v(-0.42, -0.2), v(0.42, -0.2), v(0.72, 0.78), v(-0.72, 0.78)]);
+            let body = polygon(
+                p,
+                &[v(-0.42, -0.2), v(0.42, -0.2), v(0.72, 0.78), v(-0.72, 0.78)],
+            );
             body.min(ring(p, v(0.0, -0.48), 0.3, 0.17))
         }
-        ConditionKind::Held => ring(p, v(-0.32, 0.0), 0.42, 0.2).min(ring(p, v(0.32, 0.0), 0.42, 0.2)),
+        ConditionKind::Held => {
+            ring(p, v(-0.32, 0.0), 0.42, 0.2).min(ring(p, v(0.32, 0.0), 0.42, 0.2))
+        }
         ConditionKind::Poisoned => {
-            let flask = circle(p, v(0.0, 0.28), 0.52).min(capsule(p, v(0.0, -0.2), v(0.0, -0.6), 0.17)).min(capsule(p, v(-0.25, -0.7), v(0.25, -0.7), 0.09));
-            let bubbles = circle(p, v(-0.16, 0.36), 0.13).min(circle(p, v(0.2, 0.16), 0.09)).min(circle(p, v(0.08, 0.5), 0.07));
+            let flask = circle(p, v(0.0, 0.28), 0.52)
+                .min(capsule(p, v(0.0, -0.2), v(0.0, -0.6), 0.17))
+                .min(capsule(p, v(-0.25, -0.7), v(0.25, -0.7), 0.09));
+            let bubbles = circle(p, v(-0.16, 0.36), 0.13)
+                .min(circle(p, v(0.2, 0.16), 0.09))
+                .min(circle(p, v(0.08, 0.5), 0.07));
             flask.max(-bubbles)
         }
-        ConditionKind::Recovering => capsule(p, v(0.0, -0.62), v(0.0, 0.62), 0.2).min(capsule(p, v(-0.62, 0.0), v(0.62, 0.0), 0.2)),
+        ConditionKind::Recovering => capsule(p, v(0.0, -0.62), v(0.0, 0.62), 0.2).min(capsule(
+            p,
+            v(-0.62, 0.0),
+            v(0.62, 0.0),
+            0.2,
+        )),
         // Any other effect: a diamond with an open eye in it, until it has an icon of its own.
-        ConditionKind::Effect => polygon(p, &[v(0.0, -0.72), v(0.62, 0.0), v(0.0, 0.72), v(-0.62, 0.0)]).max(-circle(p, v(0.0, 0.0), 0.2)),
+        ConditionKind::Effect => polygon(
+            p,
+            &[v(0.0, -0.72), v(0.62, 0.0), v(0.0, 0.72), v(-0.62, 0.0)],
+        )
+        .max(-circle(p, v(0.0, 0.0), 0.2)),
     }
 }
 
@@ -477,7 +654,10 @@ pub fn icon_alpha(kind: ConditionKind, size: u32) -> Vec<u8> {
     (0..size * size)
         .map(|i| {
             let (x, y) = (i % size, i / size);
-            let p = Vec2::new((x as f32 + 0.5) * pixel - 1.0, (y as f32 + 0.5) * pixel - 1.0);
+            let p = Vec2::new(
+                (x as f32 + 0.5) * pixel - 1.0,
+                (y as f32 + 0.5) * pixel - 1.0,
+            );
             let cover = (0.5 - icon_distance(kind, p) / pixel).clamp(0.0, 1.0);
             (cover * 255.0).round() as u8
         })
@@ -509,9 +689,22 @@ mod tests {
         for kind in KINDS {
             let alpha = icon_alpha(kind, 32);
             let filled = alpha.iter().filter(|&&a| a > 127).count();
-            assert!(filled > 32 * 32 / 12 && filled < 32 * 32 * 2 / 3, "{kind:?}: {filled} of 1024 filled");
-            let edge = (0..32).flat_map(|i| [alpha[i], alpha[31 * 32 + i], alpha[i * 32], alpha[i * 32 + 31]]);
-            assert!(edge.into_iter().all(|a| a == 0), "{kind:?} keeps off the badge's rim");
+            assert!(
+                filled > 32 * 32 / 12 && filled < 32 * 32 * 2 / 3,
+                "{kind:?}: {filled} of 1024 filled"
+            );
+            let edge = (0..32).flat_map(|i| {
+                [
+                    alpha[i],
+                    alpha[31 * 32 + i],
+                    alpha[i * 32],
+                    alpha[i * 32 + 31],
+                ]
+            });
+            assert!(
+                edge.into_iter().all(|a| a == 0),
+                "{kind:?} keeps off the badge's rim"
+            );
         }
     }
 
@@ -529,14 +722,32 @@ mod tests {
 
     #[test]
     fn the_debug_list_reads_each_condition() {
-        let debug = DebugConditions::parse("hunger:0.8, winded,load:Encumbered,exhaustion:2,thirst:3,poisoned:30,bogus");
+        let debug = DebugConditions::parse(
+            "hunger:0.8, winded,load:Encumbered,exhaustion:2,thirst:3,poisoned:30,bogus",
+        );
         assert_eq!(
             debug,
-            DebugConditions { hunger: Some(0.8), thirst: Some(1.0), exhaustion: Some(2), winded: true, load: Some(Load::sample(LoadBand::Encumbered)), poisoned: Some(0.5), ..DebugConditions::default() }
+            DebugConditions {
+                hunger: Some(0.8),
+                thirst: Some(1.0),
+                exhaustion: Some(2),
+                winded: true,
+                load: Some(Load::sample(LoadBand::Encumbered)),
+                poisoned: Some(0.5),
+                ..DebugConditions::default()
+            }
         );
-        assert_eq!(DebugConditions::parse("poisoned").poisoned, Some(1.0), "an hour, as venom gives");
+        assert_eq!(
+            DebugConditions::parse("poisoned").poisoned,
+            Some(1.0),
+            "an hour, as venom gives"
+        );
         assert!(!DebugConditions::parse("").holds_anything());
-        assert_eq!(DebugConditions::parse("load:65").load, Some(Load::of(65.0, 165.0)), "pounds of a capacity of 165");
+        assert_eq!(
+            DebugConditions::parse("load:65").load,
+            Some(Load::of(65.0, 165.0)),
+            "pounds of a capacity of 165"
+        );
     }
 
     #[test]
@@ -544,16 +755,39 @@ mod tests {
         let (mut app, player) = delve();
         *app.world_mut().get_mut::<Load>(player).unwrap() = Load::of(65.0, 165.0);
         app.update();
-        let line = app.world().resource::<ShownConditions>().0.iter().find(|c| c.kind == ConditionKind::Load).map(|c| format!("{}: {}", c.name, c.effect));
-        assert_eq!(line.as_deref(), Some("Burdened: 65 lb, 39% of your capacity. Encumbered from 110 lb. Walking at 99.7% pace; sprinting tires you 1.01x as fast."));
+        let line = app
+            .world()
+            .resource::<ShownConditions>()
+            .0
+            .iter()
+            .find(|c| c.kind == ConditionKind::Load)
+            .map(|c| format!("{}: {}", c.name, c.effect));
+        assert_eq!(
+            line.as_deref(),
+            Some(
+                "Burdened: 65 lb, 39% of your capacity. Encumbered from 110 lb. Walking at 99.7% pace; sprinting tires you 1.01x as fast."
+            )
+        );
     }
 
     fn delve() -> (App, Entity) {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin)).insert_state(AppState::Delving).init_resource::<Character>().add_plugins(StatusPlugin);
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(AppState::Delving)
+            .init_resource::<Character>()
+            .add_plugins(StatusPlugin);
         app.insert_resource(DebugConditions::default());
         crate::play::run_delve_systems_while_delving(&mut app);
-        let player = app.world_mut().spawn((Player, DelverNeeds::default(), Exhaustion::default(), DelverStamina::default(), Load::default())).id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Player,
+                DelverNeeds::default(),
+                Exhaustion::default(),
+                DelverStamina::default(),
+                Load::default(),
+            ))
+            .id();
         app.world_mut().spawn((OrbCluster, Node::default()));
         app.update();
         (app, player)
@@ -561,7 +795,10 @@ mod tests {
 
     fn badges(app: &mut App) -> Vec<String> {
         let mut shown = app.world_mut().query::<(&StatusBadge, &Name)>();
-        let mut names: Vec<(usize, String)> = shown.iter(app.world()).map(|(b, n)| (b.0, n.to_string())).collect();
+        let mut names: Vec<(usize, String)> = shown
+            .iter(app.world())
+            .map(|(b, n)| (b.0, n.to_string()))
+            .collect();
         names.sort();
         names.into_iter().map(|(_, n)| n).collect()
     }
@@ -581,11 +818,19 @@ mod tests {
     #[test]
     fn venom_shows_a_poisoned_badge_with_the_minutes_left_until_it_wears_off() {
         let (mut app, player) = delve();
-        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 0.5));
+        app.world_mut()
+            .entity_mut(player)
+            .insert(DelverEffects::poisoned_for(
+                fb_character::rules::defaults(),
+                0.5,
+            ));
         app.update();
         app.update();
         assert_eq!(badges(&mut app), vec!["Poisoned badge".to_string()]);
-        assert_eq!(app.world().resource::<ShownConditions>().0[0].effect, "Attacking at disadvantage; wears off in 30 minutes");
+        assert_eq!(
+            app.world().resource::<ShownConditions>().0[0].effect,
+            "Attacking at disadvantage; wears off in 30 minutes"
+        );
         app.world_mut().entity_mut(player).remove::<DelverEffects>();
         app.update();
         app.update();
@@ -595,20 +840,45 @@ mod tests {
     #[test]
     fn badges_come_and_go_with_the_conditions() {
         let (mut app, player) = delve();
-        app.world_mut().get_mut::<DelverStamina>(player).unwrap().0.spend(1.0);
-        app.world_mut().get_mut::<DelverNeeds>(player).unwrap().0.hunger.value = 0.8;
+        app.world_mut()
+            .get_mut::<DelverStamina>(player)
+            .unwrap()
+            .0
+            .spend(1.0);
+        app.world_mut()
+            .get_mut::<DelverNeeds>(player)
+            .unwrap()
+            .0
+            .hunger
+            .value = 0.8;
         app.update();
         app.update();
-        assert_eq!(badges(&mut app), vec!["Winded badge".to_string(), "Famished badge".to_string()]);
+        assert_eq!(
+            badges(&mut app),
+            vec!["Winded badge".to_string(), "Famished badge".to_string()]
+        );
         assert_eq!(row_display(&mut app), Display::Flex);
-        app.world_mut().get_mut::<DelverStamina>(player).unwrap().0 = fb_character::Stamina::default();
+        app.world_mut().get_mut::<DelverStamina>(player).unwrap().0 =
+            fb_character::Stamina::default();
         app.update();
         app.update();
-        assert_eq!(badges(&mut app), vec!["Famished badge".to_string()], "winded clears as stamina returns");
-        app.world_mut().insert_resource(DebugConditions { hover: Some(0), ..DebugConditions::default() });
+        assert_eq!(
+            badges(&mut app),
+            vec!["Famished badge".to_string()],
+            "winded clears as stamina returns"
+        );
+        app.world_mut().insert_resource(DebugConditions {
+            hover: Some(0),
+            ..DebugConditions::default()
+        });
         app.update();
-        let mut cards = app.world_mut().query_filtered::<(&Node, &Text), With<StatusCard>>();
+        let mut cards = app
+            .world_mut()
+            .query_filtered::<(&Node, &Text), With<StatusCard>>();
         let (node, text) = cards.single(app.world()).unwrap();
-        assert_eq!((node.display, text.0.as_str()), (Display::Flex, "Famished: Sleep no longer eases exhaustion"));
+        assert_eq!(
+            (node.display, text.0.as_str()),
+            (Display::Flex, "Famished: Sleep no longer eases exhaustion")
+        );
     }
 }

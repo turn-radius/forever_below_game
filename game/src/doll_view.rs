@@ -17,7 +17,10 @@
 
 use armory::reflect::{Field, FieldKind};
 use armory::slider::Slider;
-use bevy::{camera::Exposure, mesh::skinning::SkinnedMeshInverseBindposes, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera};
+use bevy::{
+    camera::Exposure, mesh::skinning::SkinnedMeshInverseBindposes, prelude::*,
+    render::view::Tonemapping, ui::IsDefaultUiCamera,
+};
 use fb_body::{BodySpec, Folk};
 use fb_items::outfit::{Outfit, outfits};
 
@@ -59,8 +62,12 @@ impl Plugin for DollViewPlugin {
             .add_systems(
                 Update,
                 (
-                    (keys, show_figure.run_if(resource_changed::<DollChoice>)).chain().before(TweakPanelSystems),
-                    (drive_motion, spin, frame_camera, show_status).chain().after(TweakPanelSystems),
+                    (keys, show_figure.run_if(resource_changed::<DollChoice>))
+                        .chain()
+                        .before(TweakPanelSystems),
+                    (drive_motion, spin, frame_camera, show_status)
+                        .chain()
+                        .after(TweakPanelSystems),
                 ),
             );
     }
@@ -89,7 +96,16 @@ pub struct DollChoice {
 impl Default for DollChoice {
     /// A human fighter from seed 1207: a class outfit, so the doll holds a weapon.
     fn default() -> Self {
-        DollChoice { folk: Folk::Human, seed: 1207, outfit: outfit_index("fighter").unwrap_or(0), bare: false, body: None, without: None, wear: None, sex: None }
+        DollChoice {
+            folk: Folk::Human,
+            seed: 1207,
+            outfit: outfit_index("fighter").unwrap_or(0),
+            bare: false,
+            body: None,
+            without: None,
+            wear: None,
+            sex: None,
+        }
     }
 }
 
@@ -109,7 +125,12 @@ impl DollChoice {
                 Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
                 None => (arg, None),
             };
-            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| args.next())
+                    .ok_or(format!("{flag} needs a value"))
+            };
             match flag.as_str() {
                 // The walk's own, read by `DollMotion::from_args`.
                 "--doll" | "--walk" => {}
@@ -124,14 +145,21 @@ impl DollChoice {
                 }
                 "--without" => {
                     let slot = value()?;
-                    choice.without = Some(serde_json::from_str(&format!("{slot:?}")).map_err(|_| format!("--without: unknown slot {slot:?}"))?);
+                    choice.without = Some(
+                        serde_json::from_str(&format!("{slot:?}"))
+                            .map_err(|_| format!("--without: unknown slot {slot:?}"))?,
+                    );
                 }
                 "--wear" => {
                     let text = value()?;
                     for pair in text.split(',') {
-                        let (slot, base) = pair.split_once('=').ok_or(format!("--wear: {pair:?} is not slot=Base"))?;
-                        serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")).map_err(|_| format!("--wear: unknown slot {slot:?}"))?;
-                        fb_items::roll_item(base, 1).ok_or(format!("--wear: unknown item {base:?}"))?;
+                        let (slot, base) = pair
+                            .split_once('=')
+                            .ok_or(format!("--wear: {pair:?} is not slot=Base"))?;
+                        serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}"))
+                            .map_err(|_| format!("--wear: unknown slot {slot:?}"))?;
+                        fb_items::roll_item(base, 1)
+                            .ok_or(format!("--wear: unknown item {base:?}"))?;
                     }
                     choice.wear = Some(Box::leak(text.into_boxed_str()));
                 }
@@ -149,12 +177,21 @@ impl DollChoice {
                 }
                 "--seed" => {
                     let seed = value()?;
-                    choice.seed = seed.parse().map_err(|_| format!("--seed: {seed:?} is not a u32"))?;
+                    choice.seed = seed
+                        .parse()
+                        .map_err(|_| format!("--seed: {seed:?} is not a u32"))?;
                 }
                 "--outfit" => {
                     let key = value()?;
-                    let keys = || outfits().iter().map(|o| o.key.as_str()).collect::<Vec<_>>().join(", ");
-                    choice.outfit = outfit_index(&key).ok_or_else(|| format!("unknown outfit {key:?}; one of {}", keys()))?;
+                    let keys = || {
+                        outfits()
+                            .iter()
+                            .map(|o| o.key.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    choice.outfit = outfit_index(&key)
+                        .ok_or_else(|| format!("unknown outfit {key:?}; one of {}", keys()))?;
                 }
                 other => return Err(format!("unknown argument {other:?}")),
             }
@@ -168,11 +205,22 @@ impl DollChoice {
 
     /// The figure for this choice.
     pub fn figure(&self) -> Figure {
-        let mut worn = if self.bare { vec![] } else { self.outfit().roll(self.seed, self.folk.key()).worn };
+        let mut worn = if self.bare {
+            vec![]
+        } else {
+            self.outfit().roll(self.seed, self.folk.key()).worn
+        };
         worn.retain(|(slot, _)| Some(*slot) != self.without);
         for pair in self.wear.into_iter().flat_map(|w| w.split(',')) {
-            let Some((slot, base)) = pair.split_once('=') else { continue };
-            let (Ok(slot), Some(item)) = (serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")), fb_items::roll_item(base, self.seed)) else { continue };
+            let Some((slot, base)) = pair.split_once('=') else {
+                continue;
+            };
+            let (Ok(slot), Some(item)) = (
+                serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")),
+                fb_items::roll_item(base, self.seed),
+            ) else {
+                continue;
+            };
             worn.retain(|(s, _)| *s != slot);
             worn.push((slot, item));
         }
@@ -214,7 +262,10 @@ pub struct DollMotion {
 
 impl Default for DollMotion {
     fn default() -> Self {
-        DollMotion { walking: false, speed: 1.0 }
+        DollMotion {
+            walking: false,
+            speed: 1.0,
+        }
     }
 }
 
@@ -232,8 +283,13 @@ impl DollMotion {
             match flag.as_str() {
                 "--walk" => motion.walking = true,
                 "--speed" => {
-                    let text = inline.or_else(|| args.next()).ok_or("--speed needs a value")?;
-                    motion.speed = DOLL_SPEEDS.clamp(text.parse().map_err(|_| format!("--speed: {text:?} is not a number"))?);
+                    let text = inline
+                        .or_else(|| args.next())
+                        .ok_or("--speed needs a value")?;
+                    motion.speed = DOLL_SPEEDS.clamp(
+                        text.parse()
+                            .map_err(|_| format!("--speed: {text:?} is not a number"))?,
+                    );
                 }
                 _ => {}
             }
@@ -247,8 +303,27 @@ const DOLL_SPEEDS: Slider = Slider::new(0.0, 1.6, 0.05);
 
 impl Tweak for DollMotion {
     fn fields(&self) -> Vec<Field> {
-        let field = |name: &str, kind| Field { path: format!("gait.{name}"), section: "gait".into(), name: name.into(), kind };
-        vec![field("walking", FieldKind::Toggle { value: self.walking }), field("speed", FieldKind::Slider { value: self.speed, range: DOLL_SPEEDS })]
+        let field = |name: &str, kind| Field {
+            path: format!("gait.{name}"),
+            section: "gait".into(),
+            name: name.into(),
+            kind,
+        };
+        vec![
+            field(
+                "walking",
+                FieldKind::Toggle {
+                    value: self.walking,
+                },
+            ),
+            field(
+                "speed",
+                FieldKind::Slider {
+                    value: self.speed,
+                    range: DOLL_SPEEDS,
+                },
+            ),
+        ]
     }
 
     fn set_slider(&mut self, path: &str, value: f32) {
@@ -288,8 +363,15 @@ impl DollSpin {
                 None => (arg, None),
             };
             if flag == "--turn" {
-                let text = inline.or_else(|| args.next()).ok_or("--turn needs a value")?;
-                spin = DollSpin { angle: text.parse().map_err(|_| format!("--turn: {text:?} is not a number"))?, paused: true };
+                let text = inline
+                    .or_else(|| args.next())
+                    .ok_or("--turn needs a value")?;
+                spin = DollSpin {
+                    angle: text
+                        .parse()
+                        .map_err(|_| format!("--turn: {text:?} is not a number"))?,
+                    paused: true,
+                };
             }
         }
         Ok(spin)
@@ -345,7 +427,14 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
             BorderColor::all(LINE),
         ))
         .with_children(|panel| {
-            panel.spawn((Text::new("Walk"), UiFonts::style(&fonts.display_bold, 24.0, INK), Node { padding: UiRect::new(px(14), px(14), px(10), px(0)), ..default() }));
+            panel.spawn((
+                Text::new("Walk"),
+                UiFonts::style(&fonts.display_bold, 24.0, INK),
+                Node {
+                    padding: UiRect::new(px(14), px(14), px(10), px(0)),
+                    ..default()
+                },
+            ));
             panel_body(panel);
         });
     commands.spawn((
@@ -353,11 +442,21 @@ fn setup(mut commands: Commands, fonts: Res<UiFonts>) {
         Text::default(),
         TextFont::from_font_size(18.0),
         TextColor(PLATE_INK),
-        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(16.0),
+            left: px(20.0),
+            ..default()
+        },
     ));
 }
 
-fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<DollChoice>, mut spin: ResMut<DollSpin>, mut motion: ResMut<DollMotion>) {
+fn keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut choice: ResMut<DollChoice>,
+    mut spin: ResMut<DollSpin>,
+    mut motion: ResMut<DollMotion>,
+) {
     let pressed = |key| keys.just_pressed(key);
     if pressed(KeyCode::Tab) {
         let back = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -389,7 +488,11 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut choice: ResMut<DollChoice>, mut spi
 /// Sets the doll's pace from the panel: its natural pace times the slider while walking.
 fn drive_motion(motion: Res<DollMotion>, mut figures: Query<(&DollFigure, &mut Stride)>) {
     for (figure, mut stride) in &mut figures {
-        let speed = if motion.walking { figure.natural * motion.speed } else { 0.0 };
+        let speed = if motion.walking {
+            figure.natural * motion.speed
+        } else {
+            0.0
+        };
         if stride.speed != speed {
             stride.speed = speed;
         }
@@ -408,36 +511,75 @@ fn show_figure(
         commands.entity(entity).despawn();
     }
     let figure = choice.figure();
-    let Some((min, max)) = figure.bounds() else { return };
+    let Some((min, max)) = figure.bounds() else {
+        return;
+    };
     // Turn about the body's own axis (x = z = 0), centred in height on everything it holds.
     let centre = Vec3::new(0.0, (min.y + max.y) * 0.5, 0.0);
     let reach = min.xz().abs().max(max.xz().abs());
     let size = Vec3::new(reach.x * 2.0, max.y - min.y, reach.y * 2.0);
-    let pivot = commands.spawn((Pivot { size }, Transform::from_translation(centre), Visibility::default())).id();
+    let pivot = commands
+        .spawn((
+            Pivot { size },
+            Transform::from_translation(centre),
+            Visibility::default(),
+        ))
+        .id();
     // The figure is skinned (as the folk in the level are): its root carries the stride the panel
     // sets, a skeleton under it the joints and meshes.
     let root = commands
         .spawn((
             Name::new("Figure"),
-            DollFigure { natural: figure.gait.natural_speed() },
+            DollFigure {
+                natural: figure.gait.natural_speed(),
+            },
             Stride::default(),
             Transform::from_translation(-centre),
             Visibility::default(),
             ChildOf(pivot),
         ))
         .id();
-    let skeleton = commands.spawn((Name::new("Skeleton"), Transform::default(), Visibility::default(), ChildOf(root))).id();
-    let anim: FolkAnim = spawn_rigged(&mut spawner, &mut bindposes, &figure, skeleton, false, choice.seed);
+    let skeleton = commands
+        .spawn((
+            Name::new("Skeleton"),
+            Transform::default(),
+            Visibility::default(),
+            ChildOf(root),
+        ))
+        .id();
+    let anim: FolkAnim = spawn_rigged(
+        &mut spawner,
+        &mut bindposes,
+        &figure,
+        skeleton,
+        false,
+        choice.seed,
+    );
     if let Some(light) = figure.light {
-        let colour = Color::srgb(light.anchor.color.0, light.anchor.color.1, light.anchor.color.2);
+        let colour = Color::srgb(
+            light.anchor.color.0,
+            light.anchor.color.1,
+            light.anchor.color.2,
+        );
         let range = figure.body.height * HELD_LIGHT_REACH;
-        let lamp = Torch::flickering(point_light(colour, HELD_LIGHT_PEAK, range, &Exposure::INDOOR), light.anchor.flicker);
-        spawner.commands().spawn((lamp, Transform::from_translation(anim.in_joint(light.joint, light.at)), ChildOf(anim.joint(light.joint))));
+        let lamp = Torch::flickering(
+            point_light(colour, HELD_LIGHT_PEAK, range, &Exposure::INDOOR),
+            light.anchor.flicker,
+        );
+        spawner.commands().spawn((
+            lamp,
+            Transform::from_translation(anim.in_joint(light.joint, light.at)),
+            ChildOf(anim.joint(light.joint)),
+        ));
     }
     commands.entity(skeleton).insert(anim);
 }
 
-fn spin(time: Res<Time>, mut state: ResMut<DollSpin>, mut pivots: Query<&mut Transform, With<Pivot>>) {
+fn spin(
+    time: Res<Time>,
+    mut state: ResMut<DollSpin>,
+    mut pivots: Query<&mut Transform, With<Pivot>>,
+) {
     if !state.paused {
         state.angle = (state.angle + SPIN_SPEED * time.delta_secs()) % std::f32::consts::TAU;
     }
@@ -447,12 +589,20 @@ fn spin(time: Res<Time>, mut state: ResMut<DollSpin>, mut pivots: Query<&mut Tra
 }
 
 /// Stands the camera back from the pivot so the whole turning figure fills [`FILL`] of the view.
-fn frame_camera(pivots: Query<(&Pivot, &Transform), Without<DollCamera>>, mut cameras: Query<(&Projection, &mut Transform), With<DollCamera>>) {
-    let Some((pivot, at)) = pivots.iter().next() else { return };
+fn frame_camera(
+    pivots: Query<(&Pivot, &Transform), Without<DollCamera>>,
+    mut cameras: Query<(&Projection, &mut Transform), With<DollCamera>>,
+) {
+    let Some((pivot, at)) = pivots.iter().next() else {
+        return;
+    };
     for (projection, mut transform) in &mut cameras {
-        let Projection::Perspective(perspective) = projection else { continue };
+        let Projection::Perspective(perspective) = projection else {
+            continue;
+        };
         let distance = framing_distance(pivot.size, perspective, FILL);
-        let target = Transform::from_translation(at.translation + Vec3::Z * distance).looking_at(at.translation, Vec3::Y);
+        let target = Transform::from_translation(at.translation + Vec3::Z * distance)
+            .looking_at(at.translation, Vec3::Y);
         if *transform != target {
             *transform = target;
         }
@@ -467,7 +617,11 @@ fn show_status(choice: Res<DollChoice>, mut status: Query<&mut Text, With<Status
         "{}   seed {}   {}\nTab folk   Left/Right seed   Up/Down outfit   B bare   Space pause   W walk",
         choice.folk.race().label,
         choice.seed,
-        if choice.bare { "Bare" } else { &choice.outfit().label },
+        if choice.bare {
+            "Bare"
+        } else {
+            &choice.outfit().label
+        },
     );
     for mut text in &mut status {
         text.0.clone_from(&line);
@@ -485,10 +639,22 @@ mod tests {
     #[test]
     fn parses_the_command_line() {
         let choice = DollChoice::from_args(args("--doll --folk dwarf --seed 7")).unwrap();
-        assert_eq!((choice.folk, choice.seed, choice.outfit().key.as_str()), (Folk::Dwarf, 7, "fighter"));
+        assert_eq!(
+            (choice.folk, choice.seed, choice.outfit().key.as_str()),
+            (Folk::Dwarf, 7, "fighter")
+        );
         let choice = DollChoice::from_args(args("--folk=lizardfolk --outfit cleric")).unwrap();
-        assert_eq!((choice.folk, choice.outfit().key.as_str()), (Folk::Lizardfolk, "cleric"));
-        assert_eq!(DollChoice::from_args(vec!["--outfit".into(), "Freshly fallen".into()]).unwrap().outfit().key, "fallen");
+        assert_eq!(
+            (choice.folk, choice.outfit().key.as_str()),
+            (Folk::Lizardfolk, "cleric")
+        );
+        assert_eq!(
+            DollChoice::from_args(vec!["--outfit".into(), "Freshly fallen".into()])
+                .unwrap()
+                .outfit()
+                .key,
+            "fallen"
+        );
         assert!(DollChoice::from_args(args("--folk elf")).is_err());
         assert!(DollChoice::from_args(args("--outfit wizard")).is_err());
         assert!(DollChoice::from_args(args("--seed")).is_err());
@@ -496,22 +662,56 @@ mod tests {
 
     #[test]
     fn the_walk_comes_from_the_command_line() {
-        assert_eq!(DollMotion::from_args(args("--doll --folk dwarf")).unwrap(), DollMotion { walking: false, speed: 1.0 });
-        assert_eq!(DollMotion::from_args(args("--doll --walk --speed 0.5")).unwrap(), DollMotion { walking: true, speed: 0.5 });
-        assert_eq!(DollMotion::from_args(args("--walk --speed=9")).unwrap().speed, 1.6);
+        assert_eq!(
+            DollMotion::from_args(args("--doll --folk dwarf")).unwrap(),
+            DollMotion {
+                walking: false,
+                speed: 1.0
+            }
+        );
+        assert_eq!(
+            DollMotion::from_args(args("--doll --walk --speed 0.5")).unwrap(),
+            DollMotion {
+                walking: true,
+                speed: 0.5
+            }
+        );
+        assert_eq!(
+            DollMotion::from_args(args("--walk --speed=9"))
+                .unwrap()
+                .speed,
+            1.6
+        );
         assert!(DollMotion::from_args(args("--speed fast")).is_err());
-        assert_eq!(DollSpin::from_args(args("--doll --turn 1.5")).unwrap(), DollSpin { angle: 1.5, paused: true });
+        assert_eq!(
+            DollSpin::from_args(args("--doll --turn 1.5")).unwrap(),
+            DollSpin {
+                angle: 1.5,
+                paused: true
+            }
+        );
         assert!(!DollSpin::from_args(args("--doll")).unwrap().paused);
         assert!(DollChoice::from_args(args("--turn=0.5 --seed 7")).is_ok());
         assert!(DollChoice::from_args(args("--bare")).unwrap().bare);
-        assert_eq!(DollChoice::from_args(args("--sex female")).unwrap().sex, Some(fb_body::Sex::Female));
+        assert_eq!(
+            DollChoice::from_args(args("--sex female")).unwrap().sex,
+            Some(fb_body::Sex::Female)
+        );
         assert!(DollChoice::from_args(args("--sex both")).is_err());
-        let (woman, man) = (DollChoice::from_args(args("--sex female")).unwrap().spec(), DollChoice::from_args(args("--sex male")).unwrap().spec());
+        let (woman, man) = (
+            DollChoice::from_args(args("--sex female")).unwrap().spec(),
+            DollChoice::from_args(args("--sex male")).unwrap().spec(),
+        );
         assert!(woman.bust > man.bust && woman.beard == fb_body::Beard::None);
         let shaped = DollChoice::from_args(args("--body muscle=1,bust=0.5")).unwrap();
         assert_eq!((shaped.spec().muscle, shaped.spec().bust), (1.0, 0.5));
         assert!(DollChoice::from_args(args("--body wings=1")).is_err());
-        assert_eq!(DollChoice::from_args(args("--without back")).unwrap().without, Some(fb_items::Slot::Back));
+        assert_eq!(
+            DollChoice::from_args(args("--without back"))
+                .unwrap()
+                .without,
+            Some(fb_items::Slot::Back)
+        );
         assert!(DollChoice::from_args(args("--without tail")).is_err());
         // The choice leaves the walk's flags alone.
         assert!(DollChoice::from_args(args("--doll --walk --speed 0.5 --seed 7")).is_ok());
@@ -522,7 +722,13 @@ mod tests {
         let mut motion = DollMotion::default();
         motion.flip("gait.walking");
         motion.set_slider("gait.speed", 0.77);
-        assert_eq!(motion, DollMotion { walking: true, speed: 0.75 });
+        assert_eq!(
+            motion,
+            DollMotion {
+                walking: true,
+                speed: 0.75
+            }
+        );
         assert_eq!(Tweak::slider(&motion, "gait.speed"), Some(0.75));
         assert_eq!(motion.fields().len(), 2);
     }
@@ -538,14 +744,27 @@ mod tests {
         choice.step_outfit(1);
         assert_eq!(choice, start);
         choice.step_folk(-1);
-        assert_eq!(Some(&choice.folk), Folk::DENIZENS.last(), "Tab goes on through the denizens");
+        assert_eq!(
+            Some(&choice.folk),
+            Folk::DENIZENS.last(),
+            "Tab goes on through the denizens"
+        );
     }
 
     #[test]
     fn every_folk_renders_dressed_and_holding_a_weapon() {
         for folk in Folk::ALL {
-            let choice = DollChoice { folk, seed: 7, ..default() };
-            let weapon = choice.outfit().roll(7, folk.key()).item(fb_items::Slot::Mainhand).map(|i| i.title().to_string()).unwrap();
+            let choice = DollChoice {
+                folk,
+                seed: 7,
+                ..default()
+            };
+            let weapon = choice
+                .outfit()
+                .roll(7, folk.key())
+                .item(fb_items::Slot::Mainhand)
+                .map(|i| i.title().to_string())
+                .unwrap();
             let figure = choice.figure();
             assert!(figure.pieces.iter().any(|p| p.name == weapon), "{folk:?}");
             assert!(figure.pieces.len() >= 4, "{folk:?}: dressed");
@@ -554,7 +773,16 @@ mod tests {
 
     #[test]
     fn a_choice_looks_the_same_every_time() {
-        let choice = DollChoice { folk: Folk::Gnome, seed: 31, outfit: outfit_index("mage").unwrap(), bare: false, body: None, sex: None, without: None, wear: None };
+        let choice = DollChoice {
+            folk: Folk::Gnome,
+            seed: 31,
+            outfit: outfit_index("mage").unwrap(),
+            bare: false,
+            body: None,
+            sex: None,
+            without: None,
+            wear: None,
+        };
         assert_eq!(choice.figure().pieces, choice.figure().pieces);
     }
 }

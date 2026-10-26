@@ -36,10 +36,19 @@ pub struct GuardPlugin;
 
 impl Plugin for GuardPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<MissedDelver>().add_systems(Startup, load_block_sound).add_systems(
-            Update,
-            (raise_guard.before(super::swing::start_swing).before(super::shoot::shoot), take_blocks, guard_held.after(crate::carry::sway_held)).in_set(DelveSystems),
-        );
+        app.add_message::<MissedDelver>()
+            .add_systems(Startup, load_block_sound)
+            .add_systems(
+                Update,
+                (
+                    raise_guard
+                        .before(super::swing::start_swing)
+                        .before(super::shoot::shoot),
+                    take_blocks,
+                    guard_held.after(crate::carry::sway_held),
+                )
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -63,7 +72,10 @@ pub struct Guard {
 impl Guard {
     /// Facing the way `transform` does, where it stands.
     pub fn of(transform: &Transform) -> Guard {
-        Guard { at: transform.translation.xz(), facing: transform.forward().as_vec3().xz() }
+        Guard {
+            at: transform.translation.xz(),
+            facing: transform.forward().as_vec3().xz(),
+        }
     }
 
     /// Whether a blow from `from` (world `(x, z)`) comes at the raised shield ([`covers`]).
@@ -75,7 +87,10 @@ impl Guard {
 /// Whether what the off hand holds is a shield.
 pub fn holds_shield(inventory: &Inventory) -> bool {
     let slot = fb_items::Slot::Offhand;
-    inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| crate::character::is_shield(slot, item))
+    inventory
+        .worn(slot)
+        .and_then(|id| inventory.item(id))
+        .is_some_and(|item| crate::character::is_shield(slot, item))
 }
 
 /// Whether a delver at `at` facing `forward` (world `(x, z)`) covers a blow from `from` with a
@@ -97,13 +112,26 @@ fn raise_guard(
     cursor: Option<Single<&CursorOptions, With<PrimaryWindow>>>,
     inventory: Res<Inventory>,
     fallen: Option<Res<super::vitals::Fallen>>,
-    mut players: Query<(Entity, &Transform, Option<&Health>, Option<&DelverStamina>, Option<&mut Guard>, Has<Swing>), With<Player>>,
+    mut players: Query<
+        (
+            Entity,
+            &Transform,
+            Option<&Health>,
+            Option<&DelverStamina>,
+            Option<&mut Guard>,
+            Has<Swing>,
+        ),
+        With<Player>,
+    >,
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
     let held = (input.pressed(Action::Block) && looking) || crate::launch::env_set("FB_GUARD");
     let shield = holds_shield(&inventory);
     for (player, at, health, stamina, guard, swinging) in &mut players {
-        let able = !health.is_some_and(Health::is_down) && fallen.is_none() && stamina.is_none_or(|s| s.0.can_exert()) && !swinging;
+        let able = !health.is_some_and(Health::is_down)
+            && fallen.is_none()
+            && stamina.is_none_or(|s| s.0.can_exert())
+            && !swinging;
         let up = held && shield && able;
         match (up, guard) {
             (true, Some(mut guard)) => {
@@ -139,23 +167,42 @@ fn take_blocks(
     rules: Option<Res<crate::rules::GameRules>>,
     settings: Option<Res<crate::settings::GameSettings>>,
     tuning: Option<Res<crate::tuning::Tuning>>,
-    mut players: Query<(&Transform, Option<&mut DelverStamina>, Option<&crate::character::GearStamina>), With<Player>>,
+    mut players: Query<
+        (
+            &Transform,
+            Option<&mut DelverStamina>,
+            Option<&crate::character::GearStamina>,
+        ),
+        With<Player>,
+    >,
 ) {
     let rules = crate::rules::GameRules::of(&rules);
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     for miss in misses.read().filter(|m| m.blocked) {
-        let Some((at, stamina, gear)) = players.iter_mut().next() else { continue };
+        let Some((at, stamina, gear)) = players.iter_mut().next() else {
+            continue;
+        };
         if let Some(mut stamina) = stamina {
             let mut spent = stamina.0;
-            spent.spend_with(rules, rules.stamina.block_cost * gear.map_or(1.0, |g| g.cost as f64));
+            spent.spend_with(
+                rules,
+                rules.stamina.block_cost * gear.map_or(1.0, |g| g.cost as f64),
+            );
             stamina.0 = spent;
         }
         if let Some(sound) = &sound {
             // Where the shield is: a step from the delver toward the blow.
             let toward = (miss.attacker_pos - at.translation.xz()).normalize_or_zero();
             let on = at.translation + Vec3::new(toward.x, 0.0, toward.y) * 2.0;
-            crate::audio::play_at(&mut commands, "blow blocked", sound.0.clone(), on, &game, &tuning);
+            crate::audio::play_at(
+                &mut commands,
+                "blow blocked",
+                sound.0.clone(),
+                on,
+                &game,
+                &tuning,
+            );
         }
     }
 }
@@ -172,7 +219,10 @@ const RAISED_YAW: f32 = -1.15;
 pub fn raised(carried: Vec3, up: f32) -> (Quat, Vec3) {
     let up = up.clamp(0.0, 1.0);
     let ease = up * up * (3.0 - 2.0 * up);
-    (Quat::from_rotation_y(RAISED_YAW * ease), carried.lerp(RAISED_FIST, ease))
+    (
+        Quat::from_rotation_y(RAISED_YAW * ease),
+        carried.lerp(RAISED_FIST, ease),
+    )
 }
 
 /// Brings the off hand's shield up across the view while the guard is raised, and down again,
@@ -186,14 +236,21 @@ fn guard_held(
 ) {
     let target = if guards.iter().any(|g| g) { 1.0 } else { 0.0 };
     let step = time.delta_secs() / RAISE_TIME;
-    *up = if target > *up { (*up + step).min(target) } else { (*up - step).max(target) };
+    *up = if target > *up {
+        (*up + step).min(target)
+    } else {
+        (*up - step).max(target)
+    };
     if *up <= 0.0 {
         return;
     }
     let carried = crate::view_model::view_hold(fb_body::Hold::Shield, Side::Left).fist;
     let (turn, fist) = raised(carried, *up);
     for (item, mut transform, parent) in &mut held {
-        if item.hand == fb_items::Slot::Offhand && item.item.family() == armory::Family::Shield && view_models.contains(parent.parent()) {
+        if item.hand == fb_items::Slot::Offhand
+            && item.item.family() == armory::Family::Shield
+            && view_models.contains(parent.parent())
+        {
             transform.translation = fist + turn * (transform.translation - carried);
             transform.rotation = turn * transform.rotation;
         }
@@ -208,7 +265,10 @@ mod tests {
     fn a_raised_shield_covers_what_is_ahead_and_not_behind() {
         let (at, ahead) = (Vec2::ZERO, Vec2::new(0.0, -1.0));
         assert!(covers(at, ahead, Vec2::new(0.0, -5.0)));
-        assert!(covers(at, ahead, Vec2::new(2.0, -5.0)), "a little to the side");
+        assert!(
+            covers(at, ahead, Vec2::new(2.0, -5.0)),
+            "a little to the side"
+        );
         assert!(!covers(at, ahead, Vec2::new(5.0, 0.0)), "the flank");
         assert!(!covers(at, ahead, Vec2::new(0.0, 5.0)), "behind");
     }
@@ -229,15 +289,23 @@ mod tests {
     /// A delver holding `off` in the off hand, with right click down and the mouse taken.
     fn guarding(off: Option<&str>) -> (App, Entity) {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).init_resource::<crate::keymap::Keymap>().init_resource::<ButtonInput<MouseButton>>();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ButtonInput<MouseButton>>();
         let mut inventory = Inventory::default();
         if let Some(base) = off {
             let id = inventory.add(fb_items::roll_item(base, 3).unwrap());
             inventory.wear(id, fb_items::Slot::Offhand).unwrap();
         }
-        app.insert_resource(inventory).add_systems(Update, raise_guard);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
-        let delver = app.world_mut().spawn((Player, Transform::default(), DelverStamina::default())).id();
+        app.insert_resource(inventory)
+            .add_systems(Update, raise_guard);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        let delver = app
+            .world_mut()
+            .spawn((Player, Transform::default(), DelverStamina::default()))
+            .id();
         (app, delver)
     }
 
@@ -246,7 +314,9 @@ mod tests {
         let (mut app, delver) = guarding(Some("Shield"));
         app.update();
         assert!(app.world().entity(delver).contains::<Guard>());
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Right);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Right);
         app.update();
         assert!(!app.world().entity(delver).contains::<Guard>());
     }
@@ -264,25 +334,45 @@ mod tests {
     fn a_light_handed_shield_makes_a_block_cost_less() {
         let cost = |gear: Option<crate::character::GearStamina>| {
             let mut app = App::new();
-            app.add_plugins(MinimalPlugins).add_message::<MissedDelver>().add_systems(Update, take_blocks);
-            let delver = app.world_mut().spawn((Player, Transform::default(), DelverStamina::default())).id();
+            app.add_plugins(MinimalPlugins)
+                .add_message::<MissedDelver>()
+                .add_systems(Update, take_blocks);
+            let delver = app
+                .world_mut()
+                .spawn((Player, Transform::default(), DelverStamina::default()))
+                .id();
             if let Some(gear) = gear {
                 app.world_mut().entity_mut(delver).insert(gear);
             }
-            app.world_mut().write_message(MissedDelver { attacker: Entity::PLACEHOLDER, attacker_pos: Vec2::new(0.0, -5.0), blocked: true });
+            app.world_mut().write_message(MissedDelver {
+                attacker: Entity::PLACEHOLDER,
+                attacker_pos: Vec2::new(0.0, -5.0),
+                blocked: true,
+            });
             app.update();
             1.0 - app.world().get::<DelverStamina>(delver).unwrap().0.value
         };
         let usual = crate::rules::GameRules::of(&None).stamina.block_cost;
         assert!((cost(None) - usual).abs() < 1e-9);
-        assert!((cost(Some(crate::character::GearStamina { refill: 1.0, cost: 0.75 })) - usual * 0.75).abs() < 1e-6);
+        assert!(
+            (cost(Some(crate::character::GearStamina {
+                refill: 1.0,
+                cost: 0.75
+            })) - usual * 0.75)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
     fn a_winded_delver_drops_their_guard() {
         let (mut app, delver) = guarding(Some("Shield"));
         app.update();
-        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0.spend(1.0);
+        app.world_mut()
+            .get_mut::<DelverStamina>(delver)
+            .unwrap()
+            .0
+            .spend(1.0);
         app.update();
         assert!(!app.world().entity(delver).contains::<Guard>());
     }

@@ -16,12 +16,30 @@ pub const ASPECT: f32 = CREST_PX.y as f32 / CREST_PX.x as f32;
 
 /// The field of a shield with no arms: bare, so the cloth shows undyed, and no charge.
 pub fn plain_field() -> Field {
-    Field { painted: false, charge: armory::sections::device::Device::None, ..Field::default() }
+    Field {
+        painted: false,
+        charge: armory::sections::device::Device::None,
+        ..Field::default()
+    }
 }
 
 /// A node `w` wide showing the crest of `field`, a plain shield standing in until it is drawn.
-pub fn crest<'a>(parent: &'a mut ChildSpawnerCommands, icons: &mut Icons, field: &Field, w: f32) -> EntityCommands<'a> {
-    let mut crest = icons.spawn_crest(parent, field, Node { width: px(w), height: px(w * ASPECT), flex_shrink: 0.0, ..default() });
+pub fn crest<'a>(
+    parent: &'a mut ChildSpawnerCommands,
+    icons: &mut Icons,
+    field: &Field,
+    w: f32,
+) -> EntityCommands<'a> {
+    let mut crest = icons.spawn_crest(
+        parent,
+        field,
+        Node {
+            width: px(w),
+            height: px(w * ASPECT),
+            flex_shrink: 0.0,
+            ..default()
+        },
+    );
     crest.insert(Name::new("Crest"));
     crest
 }

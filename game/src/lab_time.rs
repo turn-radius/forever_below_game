@@ -12,7 +12,9 @@
 
 use std::collections::VecDeque;
 
-use fb_character::{Activity, Exhaustion, ExhaustionTimes, GameTime, Meter, MeterKind, Needs, modifier};
+use fb_character::{
+    Activity, Exhaustion, ExhaustionTimes, GameTime, Meter, MeterKind, Needs, modifier,
+};
 use fb_items::provision;
 
 use fb_character::rules::Rules;
@@ -28,10 +30,20 @@ pub const RATION: &str = "Bread";
 /// What Drink drinks: the tankard's water.
 pub const DRAUGHT: &str = "Tankard";
 /// The time buttons' steps, in game hours.
-pub const STEPS: [(&str, f64); 4] = [("+10 min", 10.0 / 60.0), ("+1 h", 1.0), ("+8 h", 8.0), ("+1 day", 24.0)];
+pub const STEPS: [(&str, f64); 4] = [
+    ("+10 min", 10.0 / 60.0),
+    ("+1 h", 1.0),
+    ("+8 h", 8.0),
+    ("+1 day", 24.0),
+];
 
 /// The activities the lab offers, in the panel's order.
-pub const ACTIVITIES: [Activity; 4] = [Activity::Resting, Activity::Walking, Activity::Exerting, Activity::Sleeping];
+pub const ACTIVITIES: [Activity; 4] = [
+    Activity::Resting,
+    Activity::Walking,
+    Activity::Exerting,
+    Activity::Sleeping,
+];
 
 /// An activity's word, lower case.
 pub fn activity_word(activity: Activity) -> &'static str {
@@ -46,7 +58,12 @@ pub fn activity_word(activity: Activity) -> &'static str {
 /// A game time as `Day 5 08:30`: the day, counting the first as day 1, then the hour and minute.
 pub fn clock_text(hours: f64) -> String {
     let seconds = (hours * 3600.0).round() as u64;
-    format!("Day {} {:02}:{:02}", seconds / 86_400 + 1, seconds / 3600 % 24, seconds / 60 % 60)
+    format!(
+        "Day {} {:02}:{:02}",
+        seconds / 86_400 + 1,
+        seconds / 3600 % 24,
+        seconds / 60 % 60
+    )
 }
 
 /// One line of the log: when a band or a level was crossed.
@@ -84,19 +101,38 @@ impl<'a> Pace<'a> {
     pub fn new(state: &'a LabState) -> Pace<'a> {
         let inventory = state.inventory();
         let rules = &state.ruleset.rules;
-        let exposures = crate::exposure::exposures(&inventory, &rules.effects, &surroundings(state, &inventory));
-        Pace { rules, activity: state.activity, gear: state.character.gear(&inventory), constitution: modifier(state.character.constitution()), exposures }
+        let exposures = crate::exposure::exposures(
+            &inventory,
+            &rules.effects,
+            &surroundings(state, &inventory),
+        );
+        Pace {
+            rules,
+            activity: state.activity,
+            gear: state.character.gear(&inventory),
+            constitution: modifier(state.character.constitution()),
+            exposures,
+        }
     }
 }
 
 /// The lab's surroundings: comfortable unless a level is chosen, then that level's chill against
 /// the character's worn warmth (and a lit flame in hand), and a brazier's warmth when they stand
 /// by one, as `crate::simulate` works them out for the delver.
-pub fn surroundings(state: &LabState, inventory: &crate::inventory::Inventory) -> crate::exposure::Surroundings {
-    let Some(depth) = state.depth else { return crate::exposure::Surroundings::default() };
+pub fn surroundings(
+    state: &LabState,
+    inventory: &crate::inventory::Inventory,
+) -> crate::exposure::Surroundings {
+    let Some(depth) = state.depth else {
+        return crate::exposure::Surroundings::default();
+    };
     let warmth = &state.ruleset.rules.warmth;
-    let flame = inventory.equipped().iter().any(|(slot, item)| matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Offhand) && item.shape.lit() == Some(true));
-    let fire = if state.by_fire { warmth.brazier } else { 0.0 } + if flame { warmth.held_flame } else { 0.0 };
+    let flame = inventory.equipped().iter().any(|(slot, item)| {
+        matches!(slot, fb_items::Slot::Mainhand | fb_items::Slot::Offhand)
+            && item.shape.lit() == Some(true)
+    });
+    let fire = if state.by_fire { warmth.brazier } else { 0.0 }
+        + if flame { warmth.held_flame } else { 0.0 };
     let worn = state.character.loadout(inventory).warmth().value();
     crate::exposure::Surroundings {
         shortfall: warmth.shortfall(state.character.warmth_need() as f64, depth, worn, fire),
@@ -125,7 +161,16 @@ pub struct TimeLab {
 impl Default for TimeLab {
     /// Fresh: the clock at 0, every meter at 0 and no exhaustion.
     fn default() -> Self {
-        TimeLab { clock: GameTime::default(), needs: Needs::default(), exhaustion: Exhaustion::default(), times: ExhaustionTimes::default(), log: VecDeque::new(), all: Vec::new(), effects: Default::default(), hp_lost: 0.0 }
+        TimeLab {
+            clock: GameTime::default(),
+            needs: Needs::default(),
+            exhaustion: Exhaustion::default(),
+            times: ExhaustionTimes::default(),
+            log: VecDeque::new(),
+            all: Vec::new(),
+            effects: Default::default(),
+            hp_lost: 0.0,
+        }
     }
 }
 
@@ -135,8 +180,19 @@ impl TimeLab {
         *self = TimeLab::default();
     }
 
-    fn note(&mut self, hours: f64, what: String, band: Option<(MeterKind, usize)>, level: Option<u32>) {
-        let crossing = Crossing { hours, what, band, level };
+    fn note(
+        &mut self,
+        hours: f64,
+        what: String,
+        band: Option<(MeterKind, usize)>,
+        level: Option<u32>,
+    ) {
+        let crossing = Crossing {
+            hours,
+            what,
+            band,
+            level,
+        };
         self.all.push(crossing.clone());
         self.log.push_back(crossing);
         while self.log.len() > LOG_LINES {
@@ -158,26 +214,51 @@ impl TimeLab {
         for _ in 0..(hours / MINUTE).round() as u32 {
             let (before, level, start) = (self.needs, self.exhaustion.level, self.clock.hours());
             // The gear's rates and the effects' on them, as the game puts them each step.
-            self.effects.apply_rates(&rules.effects, &mut self.needs, &pace.gear);
+            self.effects
+                .apply_rates(&rules.effects, &mut self.needs, &pace.gear);
             self.hp_lost += self.effects.hit_points_per_hour(&rules.effects) * MINUTE;
-            self.times.step_with(rules, &mut self.needs, &mut self.exhaustion, activity, MINUTE, con);
+            self.times.step_with(
+                rules,
+                &mut self.needs,
+                &mut self.exhaustion,
+                activity,
+                MINUTE,
+                con,
+            );
             self.effects.step(&rules.effects, MINUTE, &pace.exposures);
             self.clock.advance(MINUTE * 3600.0);
             // A minute is not exact in binary, so a meter that should land on a band's edge (0.5
             // after 8 hours) can fall a hair short of it; one within a trillionth is put on it.
-            for meter in [&mut self.needs.hunger, &mut self.needs.thirst, &mut self.needs.sleepiness] {
+            for meter in [
+                &mut self.needs.hunger,
+                &mut self.needs.thirst,
+                &mut self.needs.sleepiness,
+            ] {
                 let edge = (meter.value * 4.0).round() / 4.0;
                 if (meter.value - edge).abs() < 1e-12 {
                     meter.value = edge;
                 }
             }
-            for (was, now) in [(before.hunger, self.needs.hunger), (before.thirst, self.needs.thirst), (before.sleepiness, self.needs.sleepiness)] {
+            for (was, now) in [
+                (before.hunger, self.needs.hunger),
+                (before.thirst, self.needs.thirst),
+                (before.sleepiness, self.needs.sleepiness),
+            ] {
                 for (at, band) in band_crossings(rules, &was, &now, activity) {
-                    self.note(start + at, format!("{} → {}", name(now.kind), now.kind.word(band)), Some((now.kind, band)), None);
+                    self.note(
+                        start + at,
+                        format!("{} → {}", name(now.kind), now.kind.word(band)),
+                        Some((now.kind, band)),
+                        None,
+                    );
                 }
             }
             if self.exhaustion.level != level {
-                let what = if self.exhaustion.is_dead() { "Exhaustion 6, dead".to_string() } else { format!("Exhaustion {}", self.exhaustion.level) };
+                let what = if self.exhaustion.is_dead() {
+                    "Exhaustion 6, dead".to_string()
+                } else {
+                    format!("Exhaustion {}", self.exhaustion.level)
+                };
                 self.note(start + MINUTE, what, None, Some(self.exhaustion.level));
             }
         }
@@ -212,7 +293,12 @@ fn name(kind: MeterKind) -> &'static str {
 /// The bands `was` crossed on the way to `now` in one minute, each with the hours into the
 /// minute it crossed at: where the meter's value, rising or falling at its rate, meets the
 /// band's edge. The band reached is with each, in the order crossed.
-fn band_crossings(rules: &Rules, was: &Meter, now: &Meter, activity: Activity) -> Vec<(f64, usize)> {
+fn band_crossings(
+    rules: &Rules,
+    was: &Meter,
+    now: &Meter,
+    activity: Activity,
+) -> Vec<(f64, usize)> {
     let (from, to) = (was.band_with(rules), now.band_with(rules));
     let rate = now.effective_rate_with(rules, activity);
     let at = |band: usize| ((band as f64 * 0.25 - was.value) / rate).clamp(0.0, MINUTE);
@@ -273,8 +359,19 @@ mod tests {
         assert_eq!(needs.hunger.word(), "Peckish");
         needs.step(0.002, Activity::Walking);
         assert_eq!(needs.hunger.word(), "Hungry");
-        assert!((crossed(&lab, "Hunger → Hungry").unwrap() - 8.0).abs() < 1e-6, "{:?}", lab.log);
-        assert_eq!(lab.log.iter().find(|c| c.what == "Hunger → Hungry").unwrap().line(), "Day 1 08:00 Hunger → Hungry");
+        assert!(
+            (crossed(&lab, "Hunger → Hungry").unwrap() - 8.0).abs() < 1e-6,
+            "{:?}",
+            lab.log
+        );
+        assert_eq!(
+            lab.log
+                .iter()
+                .find(|c| c.what == "Hunger → Hungry")
+                .unwrap()
+                .line(),
+            "Day 1 08:00 Hunger → Hungry"
+        );
     }
 
     #[test]
@@ -305,8 +402,15 @@ mod tests {
         let mut lab = TimeLab::default();
         lab.needs.hunger.value = 1.0;
         // Thirst and sleep are kept out of it.
-        for key in ["needs/thirst_hours_to_full", "needs/sleepiness_hours_to_full"] {
-            crate::lab_rules::set_leaf(&mut state.ruleset, key, crate::lab_rules::Leaf::Float(1e15));
+        for key in [
+            "needs/thirst_hours_to_full",
+            "needs/sleepiness_hours_to_full",
+        ] {
+            crate::lab_rules::set_leaf(
+                &mut state.ruleset,
+                key,
+                crate::lab_rules::Leaf::Float(1e15),
+            );
         }
         lab.pass(&state, 95.0);
         assert_eq!(lab.exhaustion.level, 0, "none through day 4");
@@ -314,15 +418,28 @@ mod tests {
         assert_eq!(lab.exhaustion.level, 1);
         assert_eq!(crossed(&lab, "Exhaustion 1"), Some(96.0));
         assert_eq!(lab.log.back().unwrap().line(), "Day 5 00:00 Exhaustion 1");
-        assert_eq!(exhaustion_effect(fb_character::rules::defaults(), lab.exhaustion), "full speed");
+        assert_eq!(
+            exhaustion_effect(fb_character::rules::defaults(), lab.exhaustion),
+            "full speed"
+        );
     }
 
     #[test]
     fn two_of_plenty_push_hungry_later_by_1_over_07225() {
         let plenty = |state: &mut LabState| {
-            let seed = (1..3000).find(|&s| fb_items::roll_item("Belt", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "of Plenty"))).unwrap();
+            let seed = (1..3000)
+                .find(|&s| {
+                    fb_items::roll_item("Belt", s)
+                        .is_some_and(|i| i.affixes.iter().any(|a| a.name == "of Plenty"))
+                })
+                .unwrap();
             state.equip(Slot::Belt, "Belt", seed);
-            let ring = (1..3000).find(|&s| fb_items::roll_item("Ring", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "of Plenty"))).unwrap();
+            let ring = (1..3000)
+                .find(|&s| {
+                    fb_items::roll_item("Ring", s)
+                        .is_some_and(|i| i.affixes.iter().any(|a| a.name == "of Plenty"))
+                })
+                .unwrap();
             state.equip(Slot::Ring1, "Ring", ring);
         };
         let mut state = bare();
@@ -335,11 +452,21 @@ mod tests {
         plenty(&mut state);
         // Other affixes on the same items may slow hunger too, so switch the rest off.
         for lab in state.slots.iter_mut().filter(|s| s.base.is_some()) {
-            let kept = lab.roll().unwrap().affixes.iter().filter(|a| a.name != "of Plenty").map(|a| a.name.clone()).collect();
+            let kept = lab
+                .roll()
+                .unwrap()
+                .affixes
+                .iter()
+                .filter(|a| a.name != "of Plenty")
+                .map(|a| a.name.clone())
+                .collect();
             lab.off = kept;
         }
         let slowed = hungry(&state);
-        assert!((slowed / plain - 1.0 / 0.7225).abs() < 1e-3, "{slowed} against {plain}");
+        assert!(
+            (slowed / plain - 1.0 / 0.7225).abs() < 1e-3,
+            "{slowed} against {plain}"
+        );
     }
 
     #[test]
@@ -350,7 +477,11 @@ mod tests {
         lab.needs.sleepiness.value = 0.6;
         lab.pass(&state, 2.0);
         // 0.6 falls 1/8 an hour: to 0.5 at 0.8 h (Weary → Tired), to 0.25 after 2.8 h.
-        assert!((crossed(&lab, "Sleepiness → Tired").unwrap() - 0.8).abs() < 1e-6, "{:?}", lab.log);
+        assert!(
+            (crossed(&lab, "Sleepiness → Tired").unwrap() - 0.8).abs() < 1e-6,
+            "{:?}",
+            lab.log
+        );
         assert!((lab.needs.sleepiness.value - 0.35).abs() < 1e-9);
     }
 
@@ -362,8 +493,14 @@ mod tests {
         let (hunger, thirst) = (lab.needs.hunger.value, lab.needs.thirst.value);
         lab.eat();
         lab.drink();
-        assert!((lab.needs.hunger.value - (hunger - provision(RATION).unwrap().nutrition)).abs() < 1e-12);
-        assert!((lab.needs.thirst.value - (thirst - provision(DRAUGHT).unwrap().water).max(0.0)).abs() < 1e-12);
+        assert!(
+            (lab.needs.hunger.value - (hunger - provision(RATION).unwrap().nutrition)).abs()
+                < 1e-12
+        );
+        assert!(
+            (lab.needs.thirst.value - (thirst - provision(DRAUGHT).unwrap().water).max(0.0)).abs()
+                < 1e-12
+        );
         assert!(!lab.log.is_empty());
         lab.reset();
         assert_eq!(lab, TimeLab::default());
@@ -376,15 +513,33 @@ mod tests {
             state.activity = activity;
             let mut lab = TimeLab::default();
             lab.needs.sleepiness.value = 0.4;
-            let (mut needs, mut exhaustion, mut times) = (lab.needs, Exhaustion::default(), ExhaustionTimes::default());
+            let (mut needs, mut exhaustion, mut times) =
+                (lab.needs, Exhaustion::default(), ExhaustionTimes::default());
             times.step(&mut needs, &mut exhaustion, activity, 24.0, 0);
             lab.pass(&state, 24.0);
-            for (ours, real) in [(lab.needs.hunger, needs.hunger), (lab.needs.thirst, needs.thirst), (lab.needs.sleepiness, needs.sleepiness)] {
-                assert!((ours.value - real.value).abs() < 1e-9, "{activity:?} {:?}: {} against {}", ours.kind, ours.value, real.value);
+            for (ours, real) in [
+                (lab.needs.hunger, needs.hunger),
+                (lab.needs.thirst, needs.thirst),
+                (lab.needs.sleepiness, needs.sleepiness),
+            ] {
+                assert!(
+                    (ours.value - real.value).abs() < 1e-9,
+                    "{activity:?} {:?}: {} against {}",
+                    ours.kind,
+                    ours.value,
+                    real.value
+                );
             }
             assert_eq!(lab.exhaustion, exhaustion, "{activity:?}");
-            for (ours, real) in [(lab.times.starving, times.starving), (lab.times.dehydrated, times.dehydrated), (lab.times.spent, times.spent)] {
-                assert!((ours.hours - real.hours).abs() < 1e-9 && ours.levels == real.levels, "{activity:?}: {ours:?} against {real:?}");
+            for (ours, real) in [
+                (lab.times.starving, times.starving),
+                (lab.times.dehydrated, times.dehydrated),
+                (lab.times.spent, times.spent),
+            ] {
+                assert!(
+                    (ours.hours - real.hours).abs() < 1e-9 && ours.levels == real.levels,
+                    "{activity:?}: {ours:?} against {real:?}"
+                );
             }
             assert!((lab.times.sleep_hours - times.sleep_hours).abs() < 1e-9);
         }
@@ -394,7 +549,10 @@ mod tests {
     fn a_night_of_sleep_removes_a_level_and_the_lab_logs_it() {
         let mut state = bare();
         state.activity = Activity::Sleeping;
-        let mut lab = TimeLab { exhaustion: Exhaustion::new(1), ..Default::default() };
+        let mut lab = TimeLab {
+            exhaustion: Exhaustion::new(1),
+            ..Default::default()
+        };
         lab.pass(&state, 7.0);
         assert_eq!(lab.exhaustion.level, 1, "not before 8 hours");
         lab.pass(&state, 1.0);
@@ -406,17 +564,34 @@ mod tests {
     fn the_clock_reads_days_and_hours() {
         assert_eq!(clock_text(0.0), "Day 1 00:00");
         assert_eq!(clock_text(24.0 * 4.0 + 8.5), "Day 5 08:30");
-        assert_eq!(exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(2)), "speed ×0.5");
-        assert_eq!(exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(5)), "cannot move");
-        assert_eq!(exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(6)), "dead");
+        assert_eq!(
+            exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(2)),
+            "speed ×0.5"
+        );
+        assert_eq!(
+            exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(5)),
+            "cannot move"
+        );
+        assert_eq!(
+            exhaustion_effect(fb_character::rules::defaults(), Exhaustion::new(6)),
+            "dead"
+        );
     }
 
     #[test]
     fn time_passes_under_the_edited_rules() {
         let mut state = bare();
-        crate::lab_rules::set_leaf(&mut state.ruleset, "needs/hunger_hours_to_full", crate::lab_rules::Leaf::Float(8.0));
+        crate::lab_rules::set_leaf(
+            &mut state.ruleset,
+            "needs/hunger_hours_to_full",
+            crate::lab_rules::Leaf::Float(8.0),
+        );
         let mut lab = TimeLab::default();
         lab.pass(&state, 4.0);
-        assert_eq!(lab.needs.hunger.word(), "Hungry", "half of 8 hours, not of 16");
+        assert_eq!(
+            lab.needs.hunger.word(),
+            "Hungry",
+            "half of 8 hours, not of 16"
+        );
     }
 }

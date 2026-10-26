@@ -42,7 +42,18 @@ impl Plugin for FeedbackPlugin {
             .add_message::<Slain>()
             .init_resource::<Tuning>()
             .add_systems(Startup, load_creature_sounds)
-            .add_systems(Update, (give_creatures_health, take_blows, knock_back, flash, collapse).chain().in_set(DelveSystems));
+            .add_systems(
+                Update,
+                (
+                    give_creatures_health,
+                    take_blows,
+                    knock_back,
+                    flash,
+                    collapse,
+                )
+                    .chain()
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -128,10 +139,19 @@ impl Flinches<'_, '_> {
                 .children
                 .iter_descendants(target)
                 .filter_map(|e| self.materials.get(e).ok())
-                .filter_map(|m| self.toon.as_deref().and_then(|t| t.get(&m.0)).map(|t| (m.0.clone(), t.base.base_color, t.extension.glow)))
+                .filter_map(|m| {
+                    self.toon
+                        .as_deref()
+                        .and_then(|t| t.get(&m.0))
+                        .map(|t| (m.0.clone(), t.base.base_color, t.extension.glow))
+                })
                 .collect(),
         };
-        Flinch { left: combat.flash_time(), push, materials }
+        Flinch {
+            left: combat.flash_time(),
+            push,
+            materials,
+        }
     }
 }
 
@@ -206,7 +226,10 @@ pub struct CreatureSounds {
 /// is taken as it is.
 pub fn damage_to(critter: &Critter, blow: &Struck) -> u32 {
     if critter.spot.species.is_skeleton() && !blow.graze {
-        crate::creatures::skeletons::damage_taken(blow.damage, crate::creatures::skeletons::damage_type(blow.bludgeoning))
+        crate::creatures::skeletons::damage_taken(
+            blow.damage,
+            crate::creatures::skeletons::damage_type(blow.bludgeoning),
+        )
     } else {
         blow.damage
     }
@@ -225,10 +248,16 @@ fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>
 }
 
 /// Each creature's hit points: its stat block's (the average the SRD prints).
-pub fn give_creatures_health(mut commands: Commands, rules: Option<Res<crate::rules::GameRules>>, new: Query<(Entity, &Critter), Without<Health>>) {
+pub fn give_creatures_health(
+    mut commands: Commands,
+    rules: Option<Res<crate::rules::GameRules>>,
+    new: Query<(Entity, &Critter), Without<Health>>,
+) {
     let rules = crate::rules::GameRules::of(&rules);
     for (entity, critter) in &new {
-        commands.entity(entity).insert(Health::full(rules.creature(critter.spot.species).hit_points as i32));
+        commands.entity(entity).insert(Health::full(
+            rules.creature(critter.spot.species).hit_points as i32,
+        ));
     }
 }
 
@@ -250,31 +279,64 @@ pub fn take_blows(
 ) {
     let mut dice = dice;
     for blow in struck.read() {
-        let Ok((critter, at, mut health)) = creatures.get_mut(blow.target) else { continue };
+        let Ok((critter, at, mut health)) = creatures.get_mut(blow.target) else {
+            continue;
+        };
         let game = settings.as_deref().copied().unwrap_or_default();
         // Struck at all, shield or no, it turns on the delver whatever they shun.
         commands.entity(blow.target).insert(Aroused);
         // A skeleton's shield turns some blows from the front: a clash, no harm and no flinch.
-        if let Some(kit) = critter.kit.as_ref().filter(|_| critter.spot.species.is_skeleton()) {
+        if let Some(kit) = critter
+            .kit
+            .as_ref()
+            .filter(|_| critter.spot.species.is_skeleton())
+        {
             let roll = dice.as_deref_mut().map_or(1.0, |d| d.0.next_f64() as f32);
-            if kit.blocks(at.translation.xz(), at.rotation.to_euler(EulerRot::YXZ).0, blow.from, roll) {
+            if kit.blocks(
+                at.translation.xz(),
+                at.rotation.to_euler(EulerRot::YXZ).0,
+                blow.from,
+                roll,
+            ) {
                 if let Some(sounds) = &bone_sounds {
-                    crate::creatures::skeletons::play_at(&mut commands, "shield blocks", sounds.block.clone(), at.translation, &game, &tuning);
+                    crate::creatures::skeletons::play_at(
+                        &mut commands,
+                        "shield blocks",
+                        sounds.block.clone(),
+                        at.translation,
+                        &game,
+                        &tuning,
+                    );
                 }
-                callouts.write(Callout { target: blow.target, outcome: Outcome::Blocked });
+                callouts.write(Callout {
+                    target: blow.target,
+                    outcome: Outcome::Blocked,
+                });
                 continue;
             }
         }
         let damage = damage_to(critter, blow);
         let fell = health.hurt(damage);
-        callouts.write(Callout { target: blow.target, outcome: Outcome::of(blow, damage, fell) });
+        callouts.write(Callout {
+            target: blow.target,
+            outcome: Outcome::of(blow, damage, fell),
+        });
         let away = (at.translation.xz() - blow.from).normalize_or_zero();
         let push = away * knockback(&critter.creature) * tuning.combat.knockback_scale;
-        commands.entity(blow.target).insert(flinches.of(blow.target, push, &tuning.combat));
+        commands
+            .entity(blow.target)
+            .insert(flinches.of(blow.target, push, &tuning.combat));
         if critter.spot.species.is_skeleton() {
             // Its own clack of bone, never a rat's squeak or a snake's hiss.
             if let Some(sounds) = &bone_sounds {
-                crate::creatures::skeletons::play_at(&mut commands, "bones clack", sounds.hit.clone(), at.translation, &game, &tuning);
+                crate::creatures::skeletons::play_at(
+                    &mut commands,
+                    "bones clack",
+                    sounds.hit.clone(),
+                    at.translation,
+                    &game,
+                    &tuning,
+                );
             }
         } else if let Some(sounds) = &sounds {
             // A troll grunts under the blow: the dull thud, never a rat's squeak or a snake's hiss.
@@ -285,18 +347,38 @@ pub fn take_blows(
             } else {
                 sounds.hiss.clone()
             };
-            commands.spawn((Name::new("creature hurt"), AudioPlayer::new(sound), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
+            commands.spawn((
+                Name::new("creature hurt"),
+                AudioPlayer::new(sound),
+                crate::audio::sound_effect(&game, &tuning),
+                DespawnOnExit(crate::launch::AppState::Delving),
+            ));
         }
         if fell {
-            slain.write(Slain { target: blow.target, by_ally: blow.by_ally });
-            commands.entity(blow.target).insert(Corpse { since: 0.0, fell: *at }).remove::<Brain>();
+            slain.write(Slain {
+                target: blow.target,
+                by_ally: blow.by_ally,
+            });
+            commands
+                .entity(blow.target)
+                .insert(Corpse {
+                    since: 0.0,
+                    fell: *at,
+                })
+                .remove::<Brain>();
             info!("{} falls", critter.spot.species.stat_block().name);
         }
     }
 }
 
 /// What [`knock_back`] moves: a creature or a folk, flinching, and its body if it fell.
-type Pushed = (Option<&'static Critter>, Option<&'static Denizen>, &'static mut Flinch, &'static mut Transform, Option<&'static mut Corpse>);
+type Pushed = (
+    Option<&'static Critter>,
+    Option<&'static Denizen>,
+    &'static mut Flinch,
+    &'static mut Transform,
+    Option<&'static mut Corpse>,
+);
 
 /// Pushes a struck creature or folk back over its flash, round what is in the way (a folk round
 /// everything but the circle it stands in itself).
@@ -314,12 +396,17 @@ fn knock_back(
         if flinch.push == Vec2::ZERO || flinch.left <= 0.0 {
             continue;
         }
-        let Some(radius) = critter.map(body_radius).or(denizen.map(|d| d.radius)) else { continue };
+        let Some(radius) = critter.map(body_radius).or(denizen.map(|d| d.radius)) else {
+            continue;
+        };
         let share = (dt / flinch.left).min(1.0);
         let step = flinch.push * share;
         flinch.push -= step;
         let at = transform.translation.xz();
-        let own = |o: &&Obstacle| denizen.is_some() && matches!(o, Obstacle::Circle { centre, radius: r } if centre.distance(at) < 0.5 * radius && *r == radius);
+        let own = |o: &&Obstacle| {
+            denizen.is_some()
+                && matches!(o, Obstacle::Circle { centre, radius: r } if centre.distance(at) < 0.5 * radius && *r == radius)
+        };
         let others: Vec<Obstacle> = obstacles.0.iter().filter(|o| !own(o)).copied().collect();
         let to = slide_around(at, at + step, radius, &blocked, &others);
         transform.translation = Vec3::new(to.x, relief.floor_height(to.x, to.y), to.y);
@@ -332,14 +419,22 @@ fn knock_back(
 
 /// Lights a struck creature up, held then fading ([`flash_strength`]). The first frame shows it
 /// at full: the time is taken off after.
-fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creatures: Query<(Entity, &mut Flinch)>, toon: Option<ResMut<Assets<ToonMaterial>>>) {
+fn flash(
+    mut commands: Commands,
+    time: Res<Time>,
+    tuning: Res<Tuning>,
+    mut creatures: Query<(Entity, &mut Flinch)>,
+    toon: Option<ResMut<Assets<ToonMaterial>>>,
+) {
     let mut toon = toon;
     for (entity, mut flinch) in &mut creatures {
         let strength = flash_strength(flinch.left, &tuning.combat);
         if let Some(toon) = toon.as_deref_mut() {
             for (handle, colour, glow) in &flinch.materials {
                 if let Some(mut material) = toon.get_mut(handle) {
-                    material.base.base_color = colour.mix(&FLASH_COLOUR, FLASH_MIX * strength).with_alpha(colour.alpha());
+                    material.base.base_color = colour
+                        .mix(&FLASH_COLOUR, FLASH_MIX * strength)
+                        .with_alpha(colour.alpha());
                     material.extension.glow = glow + FLASH_GLOW * strength;
                 }
             }
@@ -362,7 +457,18 @@ fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creat
 /// Lays each body down once the flash's hold is over ([`collapse_share`]): a rat rolls onto its
 /// back about its middle, a centipede curls up where it stood, a snake goes slack.
 #[allow(clippy::type_complexity)]
-pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critter, &mut Corpse, &mut Transform, &mut Intent, Option<&crate::creatures::trolls::Troll>, Option<&mut crate::creatures::Flight>)>) {
+pub fn collapse(
+    time: Res<Time>,
+    tuning: Res<Tuning>,
+    mut bodies: Query<(
+        &Critter,
+        &mut Corpse,
+        &mut Transform,
+        &mut Intent,
+        Option<&crate::creatures::trolls::Troll>,
+        Option<&mut crate::creatures::Flight>,
+    )>,
+) {
     let hold = tuning.combat.flash_hold;
     for (critter, mut corpse, mut transform, mut intent, troll, flight) in &mut bodies {
         corpse.since += time.delta_secs();
@@ -370,9 +476,15 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
             continue;
         }
         // Limp: uncoiled and flat, the jaw a little open, the tongue lolling.
-        *intent = Intent { jaw: 0.35, tongue: 0.6, ..default() };
+        *intent = Intent {
+            jaw: 0.35,
+            tongue: 0.6,
+            ..default()
+        };
         match &critter.creature {
-            Creature::Rat(rat) => *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold)),
+            Creature::Rat(rat) => {
+                *transform = rolled_over(rat, &corpse.fell, collapse_share(corpse.since, hold))
+            }
             // It falls to pieces where it stood: the heap is all in the bones
             // (`fb_creatures::pose::skeleton_heap`), and the body stays upright on its feet.
             Creature::Skeleton(_) => {
@@ -386,7 +498,10 @@ pub fn collapse(time: Res<Time>, tuning: Res<Tuning>, mut bodies: Query<(&Critte
                 intent.fallen = share.max(1e-3);
                 *transform = laid_back(2.0 * troll.map_or(25.0, |t| t.height), &corpse.fell, share);
             }
-            Creature::Jackalope(jackalope) => *transform = tipped_over(jackalope, &corpse.fell, collapse_share(corpse.since, hold)),
+            Creature::Jackalope(jackalope) => {
+                *transform =
+                    tipped_over(jackalope, &corpse.fell, collapse_share(corpse.since, hold))
+            }
             Creature::Spider(spider) => {
                 let share = collapse_share(corpse.since, hold);
                 intent.fallen = share.max(1e-3);
@@ -418,11 +533,24 @@ const GRAVITY: f32 = 98.0;
 /// A bat `since` seconds after it was struck down: where it has dropped to from the height it
 /// was at, and how it lies (wings folded, turned over). It falls as anything does and stops on
 /// the floor with its back to it.
-pub fn fallen_bat(flight: &mut crate::creatures::Flight, since: f32) -> (f32, crate::creatures::Wings) {
+pub fn fallen_bat(
+    flight: &mut crate::creatures::Flight,
+    since: f32,
+) -> (f32, crate::creatures::Wings) {
     let from = *flight.fell_from.get_or_insert(flight.altitude);
     let rest = flight.lie;
     let altitude = (from - 0.5 * GRAVITY * since.max(0.0).powi(2)).max(rest);
-    (altitude, crate::creatures::Wings { altitude, roost: 0.0, power: 0.0, pitch: 0.0, bank: std::f32::consts::PI, tuck: 1.0 })
+    (
+        altitude,
+        crate::creatures::Wings {
+            altitude,
+            roost: 0.0,
+            power: 0.0,
+            pitch: 0.0,
+            bank: std::f32::consts::PI,
+            tuck: 1.0,
+        },
+    )
 }
 
 /// A giant spider that stood at `fell`, `share` of the way through turning onto its back: rolled
@@ -436,7 +564,11 @@ pub fn flipped_over(spider: &fb_creatures::SpiderState, fell: &Transform, share:
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.back_height()).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
-    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
+    Transform {
+        translation: fell.translation + fell.rotation * (local * fell.scale),
+        rotation: fell.rotation * roll,
+        ..*fell
+    }
 }
 
 /// A rat that stood at `fell`, `share` of the way through rolling onto its back: turned about
@@ -450,19 +582,31 @@ pub fn rolled_over(rat: &fb_creatures::RatState, fell: &Transform, share: f32) -
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.half_height).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
-    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
+    Transform {
+        translation: fell.translation + fell.rotation * (local * fell.scale),
+        rotation: fell.rotation * roll,
+        ..*fell
+    }
 }
 
 /// A jackalope that stood at `fell`, `share` of the way through toppling onto its side: turned
 /// about its length through its body's middle and lowered so its flank rests on the floor.
-pub fn tipped_over(jackalope: &fb_creatures::JackalopeState, fell: &Transform, share: f32) -> Transform {
+pub fn tipped_over(
+    jackalope: &fb_creatures::JackalopeState,
+    fell: &Transform,
+    share: f32,
+) -> Transform {
     let d = jackalope.dims();
     let s = share * share * (3.0 - 2.0 * share);
     let roll = Quat::from_rotation_z(0.5 * std::f32::consts::PI * s);
     let middle = Vec3::Y * d.centre_height;
     let drop = (d.centre_height - d.half_width).max(0.0) * s;
     let local = middle - roll * middle - Vec3::Y * drop;
-    Transform { translation: fell.translation + fell.rotation * (local * fell.scale), rotation: fell.rotation * roll, ..*fell }
+    Transform {
+        translation: fell.translation + fell.rotation * (local * fell.scale),
+        rotation: fell.rotation * roll,
+        ..*fell
+    }
 }
 
 /// A body of `height` (a folk's, a troll's) that stood at `fell`, `share` of the way through
@@ -473,7 +617,11 @@ pub fn laid_back(height: f32, fell: &Transform, share: f32) -> Transform {
     let s = share * share * (3.0 - 2.0 * share);
     let fall = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2 * s);
     let lift = Vec3::Y * (BACK_DEPTH * height * s * fell.scale.y);
-    Transform { translation: fell.translation + lift, rotation: fell.rotation * fall, ..*fell }
+    Transform {
+        translation: fell.translation + lift,
+        rotation: fell.rotation * fall,
+        ..*fell
+    }
 }
 
 /// How deep a lying body's back is below its centre line, as a share of its height. Our own.
@@ -495,8 +643,18 @@ mod tests {
         // Its body's middle stays over where it stood, and it rests on the floor, not in it.
         let middle = down.transform_point(Vec3::Y * rat.dims().centre_height);
         assert!(middle.xz().distance(fell.translation.xz()) < 0.5 * rat.dims().half_width);
-        let lowest = rat.build().rest_mesh().parts.iter().flat_map(|p| p.positions.clone()).map(|p| down.transform_point(Vec3::from_array(p)).y).fold(f32::MAX, f32::min);
-        assert!(lowest > -0.06 * rat.length && lowest < 0.1 * rat.length, "{lowest}");
+        let lowest = rat
+            .build()
+            .rest_mesh()
+            .parts
+            .iter()
+            .flat_map(|p| p.positions.clone())
+            .map(|p| down.transform_point(Vec3::from_array(p)).y)
+            .fold(f32::MAX, f32::min);
+        assert!(
+            lowest > -0.06 * rat.length && lowest < 0.1 * rat.length,
+            "{lowest}"
+        );
     }
 
     #[test]
@@ -518,7 +676,10 @@ mod tests {
         // The flash is still at full when the roll starts.
         assert_eq!(strength(time - hold + 1e-4), 1.0);
         // A longer hold holds longer.
-        let long = CombatTuning { flash_hold: 0.5, ..combat };
+        let long = CombatTuning {
+            flash_hold: 0.5,
+            ..combat
+        };
         assert_eq!(flash_strength(long.flash_time() - 0.4, &long), 1.0);
     }
 
@@ -548,12 +709,33 @@ mod tests {
                     assert_eq!(altitude, 14.0);
                 }
                 let Wings { bank, tuck, .. } = wings;
-                let world = rig.world(&pose::bat(&bat, &pose::BatPose { height: altitude, bank, tuck, time: 3.0, ..default() }));
-                let lowest = rig.bones.iter().zip(&world).flat_map(|(b, p)| b.mesh.parts.iter().flat_map(move |part| part.positions.iter().map(move |&v| p.point(v)[1]))).fold(f32::MAX, f32::min);
+                let world = rig.world(&pose::bat(
+                    &bat,
+                    &pose::BatPose {
+                        height: altitude,
+                        bank,
+                        tuck,
+                        time: 3.0,
+                        ..default()
+                    },
+                ));
+                let lowest = rig
+                    .bones
+                    .iter()
+                    .zip(&world)
+                    .flat_map(|(b, p)| {
+                        b.mesh.parts.iter().flat_map(move |part| {
+                            part.positions.iter().map(move |&v| p.point(v)[1])
+                        })
+                    })
+                    .fold(f32::MAX, f32::min);
                 if since >= 2.0 {
                     // Two seconds on it lies on the floor: its lowest point on it, none through it.
                     assert_eq!(altitude, flight.lie);
-                    assert!((-0.5..=1.0).contains(&lowest), "{species:?} lies with its lowest point {lowest} off the floor");
+                    assert!(
+                        (-0.5..=1.0).contains(&lowest),
+                        "{species:?} lies with its lowest point {lowest} off the floor"
+                    );
                 }
             }
         }

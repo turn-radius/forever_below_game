@@ -22,7 +22,9 @@ pub struct VoicePlugin;
 
 impl Plugin for VoicePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<DelverHurt>().add_systems(Startup, load_grunts).add_systems(Update, cry_out.in_set(DelveSystems));
+        app.add_message::<DelverHurt>()
+            .add_systems(Startup, load_grunts)
+            .add_systems(Update, cry_out.in_set(DelveSystems));
     }
 }
 
@@ -76,14 +78,24 @@ impl Grunts {
 
 fn load_grunts(mut commands: Commands, assets: Option<Res<AssetServer>>) {
     let Some(assets) = assets else { return };
-    let takes = |voice: &str| [1, 2, 3].map(|n| assets.load(format!("audio/grunt_{voice}_{n}.ogg")));
-    commands.insert_resource(Grunts { low: takes("low"), low_hard: assets.load("audio/grunt_low_hard.ogg"), high: takes("high"), high_hard: assets.load("audio/grunt_high_hard.ogg") });
+    let takes =
+        |voice: &str| [1, 2, 3].map(|n| assets.load(format!("audio/grunt_{voice}_{n}.ogg")));
+    commands.insert_resource(Grunts {
+        low: takes("low"),
+        low_hard: assets.load("audio/grunt_low_hard.ogg"),
+        high: takes("high"),
+        high_hard: assets.load("audio/grunt_high_hard.ogg"),
+    });
 }
 
 /// The delver's voice and how fast to play it: the high recording for a woman, the low for a
 /// man (or a delver with no sex chosen); smaller folk a little higher, bigger ones lower.
 pub fn voice_for(folk: Folk, sex: Option<Sex>) -> (Voice, f32) {
-    let voice = if sex == Some(Sex::Female) { Voice::High } else { Voice::Low };
+    let voice = if sex == Some(Sex::Female) {
+        Voice::High
+    } else {
+        Voice::Low
+    };
     let speed = match folk {
         Folk::Human => 1.0,
         Folk::Dwarf => 0.9,
@@ -110,7 +122,10 @@ pub fn grunt_for(hurt: DelverHurt, last: Option<usize>, roll: f64) -> (Grunt, f3
     }
     let others: Vec<usize> = (0..3).filter(|t| Some(*t) != last).collect();
     let take = others[((roll * others.len() as f64) as usize).min(others.len() - 1)];
-    (Grunt::Take(take), 0.6 + 0.4 * (share / HARD_SHARE).clamp(0.0, 1.0))
+    (
+        Grunt::Take(take),
+        0.6 + 0.4 * (share / HARD_SHARE).clamp(0.0, 1.0),
+    )
 }
 
 /// Cries out for the hardest blow that landed this frame.
@@ -125,8 +140,14 @@ fn cry_out(
     tuning: Option<Res<crate::tuning::Tuning>>,
     mut state: Local<(Option<usize>, Option<f32>, Option<Mulberry32>)>,
 ) {
-    let hardest = hurts.read().copied().filter(|h| h.damage > 0 || h.down).max_by_key(|h| (h.down, h.damage));
-    let (Some(hurt), Some(grunts)) = (hardest, grunts) else { return };
+    let hardest = hurts
+        .read()
+        .copied()
+        .filter(|h| h.damage > 0 || h.down)
+        .max_by_key(|h| (h.down, h.damage));
+    let (Some(hurt), Some(grunts)) = (hardest, grunts) else {
+        return;
+    };
     let now = time.elapsed_secs();
     let (last_take, last_at, rng) = &mut *state;
     if last_at.is_some_and(|at| now - at < GRUNT_GAP) {
@@ -138,7 +159,9 @@ fn cry_out(
         *last_take = Some(take);
     }
     *last_at = Some(now);
-    let (voice, speed) = character.as_deref().map_or((Voice::Low, 1.0), |c| voice_for(c.folk, c.sex));
+    let (voice, speed) = character
+        .as_deref()
+        .map_or((Voice::Low, 1.0), |c| voice_for(c.folk, c.sex));
     let game = settings.as_deref().copied().unwrap_or_default();
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     let (effect, playback) = crate::audio::sound_effect(&game, &tuning);
@@ -146,7 +169,15 @@ fn cry_out(
         Volume::Linear(v) => v * loudness,
         other => other.to_linear() * loudness,
     };
-    commands.spawn((Name::new("delver grunts"), AudioPlayer::new(grunts.get(voice, grunt)), effect, playback.with_volume(Volume::Linear(volume)).with_speed(speed), DespawnOnExit(AppState::Delving)));
+    commands.spawn((
+        Name::new("delver grunts"),
+        AudioPlayer::new(grunts.get(voice, grunt)),
+        effect,
+        playback
+            .with_volume(Volume::Linear(volume))
+            .with_speed(speed),
+        DespawnOnExit(AppState::Delving),
+    ));
 }
 
 #[cfg(test)]
@@ -154,21 +185,43 @@ mod tests {
     use super::*;
 
     fn hurt(damage: i32, max: i32) -> DelverHurt {
-        DelverHurt { damage, max, down: false }
+        DelverHurt {
+            damage,
+            max,
+            down: false,
+        }
     }
 
     #[test]
     fn a_big_share_or_a_fall_to_nothing_draws_the_hard_cry() {
         assert_eq!(grunt_for(hurt(3, 10), None, 0.5).0, Grunt::Hard);
-        assert_eq!(grunt_for(DelverHurt { damage: 1, max: 10, down: true }, None, 0.5).0, Grunt::Hard);
-        assert!(matches!(grunt_for(hurt(2, 10), None, 0.5).0, Grunt::Take(_)));
+        assert_eq!(
+            grunt_for(
+                DelverHurt {
+                    damage: 1,
+                    max: 10,
+                    down: true
+                },
+                None,
+                0.5
+            )
+            .0,
+            Grunt::Hard
+        );
+        assert!(matches!(
+            grunt_for(hurt(2, 10), None, 0.5).0,
+            Grunt::Take(_)
+        ));
     }
 
     #[test]
     fn a_take_never_comes_twice_running_and_a_harder_blow_is_louder() {
         for last in 0..3 {
             for roll in [0.0, 0.3, 0.6, 0.99] {
-                assert_ne!(grunt_for(hurt(1, 10), Some(last), roll).0, Grunt::Take(last));
+                assert_ne!(
+                    grunt_for(hurt(1, 10), Some(last), roll).0,
+                    Grunt::Take(last)
+                );
             }
         }
         assert!(grunt_for(hurt(2, 10), None, 0.5).1 > grunt_for(hurt(1, 10), None, 0.5).1);
@@ -176,7 +229,10 @@ mod tests {
 
     #[test]
     fn the_voice_follows_sex_and_folk() {
-        assert_eq!(voice_for(Folk::Human, Some(Sex::Female)), (Voice::High, 1.0));
+        assert_eq!(
+            voice_for(Folk::Human, Some(Sex::Female)),
+            (Voice::High, 1.0)
+        );
         assert_eq!(voice_for(Folk::Human, None).0, Voice::Low);
         assert!(voice_for(Folk::Gnome, Some(Sex::Male)).1 > 1.0);
         assert!(voice_for(Folk::Dwarf, Some(Sex::Male)).1 < 1.0);
@@ -185,13 +241,21 @@ mod tests {
     #[test]
     fn one_grunt_for_a_flurry_of_blows() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin)).insert_state(AppState::Delving).init_resource::<Grunts>().add_plugins(VoicePlugin);
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(AppState::Delving)
+            .init_resource::<Grunts>()
+            .add_plugins(VoicePlugin);
         app.update();
         for damage in [1, 2, 1] {
             app.world_mut().write_message(hurt(damage, 10));
         }
         app.update();
-        let count = |app: &mut App| app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
+        let count = |app: &mut App| {
+            app.world_mut()
+                .query::<&AudioPlayer>()
+                .iter(app.world())
+                .count()
+        };
         assert_eq!(count(&mut app), 1, "one grunt for the frame");
         app.world_mut().write_message(hurt(1, 10));
         app.update();

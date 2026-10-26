@@ -29,18 +29,21 @@ use fb_items::Slot;
 
 use super::callouts::{Callout, Outcome};
 use super::feedback::{Burned, Corpse, Struck};
-use super::{ArmourClass, HAND_HEIGHT, Health, RunDice, SwingKind, Target, Weapon, attack_roll, target_in_reach_from};
+use super::{
+    ArmourClass, HAND_HEIGHT, Health, RunDice, SwingKind, Target, Weapon, attack_roll,
+    target_in_reach_from,
+};
 use crate::carry::{HeldItem, ViewModelCamera};
-use crate::view_model::ViewHold;
 use crate::character::{Character, DelverStamina, modifier};
-use crate::creatures::{Bones, Critter, HitShape};
 use crate::creatures::behaviour::body_radius;
+use crate::creatures::{Bones, Critter, HitShape};
 use crate::folk::Denizen;
 use crate::folk_pose::FolkAnim;
 use crate::inventory::Inventory;
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Player, PlayerCamera, level_has_focus};
 use crate::settings::GameSettings;
+use crate::view_model::ViewHold;
 
 pub struct SwingPlugin;
 
@@ -54,9 +57,14 @@ impl Plugin for SwingPlugin {
             .add_systems(
                 Update,
                 (
-                    start_swing.run_if(level_has_focus).before(crate::player::take_cursor),
+                    start_swing
+                        .run_if(level_has_focus)
+                        .before(crate::player::take_cursor),
                     land_blows,
-                    (swing_held.after(crate::carry::sway_held), lean_into_blow.after(crate::player::bob_head)),
+                    (
+                        swing_held.after(crate::carry::sway_held),
+                        lean_into_blow.after(crate::player::bob_head),
+                    ),
                 )
                     .chain()
                     .in_set(DelveSystems),
@@ -68,7 +76,12 @@ impl Plugin for SwingPlugin {
 /// bludgeoning: a troll's regeneration stops at it (`crate::creatures::trolls`). A lantern's
 /// glass and an unlit or spent torch are not.
 pub fn flaming_blow(inventory: &Inventory, hand: Slot) -> bool {
-    inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
+    inventory
+        .worn(hand)
+        .and_then(|id| inventory.item(id))
+        .is_some_and(|item| {
+            item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true)
+        })
 }
 
 /// How long a swing takes, seconds, and when in it the blow lands. Our own: about two swings a
@@ -114,7 +127,16 @@ impl Swing {
     /// strike.
     pub fn new(weapon: Weapon) -> Swing {
         let strike = Strike::choices(weapon.kind)[0].0;
-        Swing { weapon, t: 0.0, rate: 1.0, landed: false, strike, toward: CROSSHAIR_AIM, flourish: Vec3::ZERO, hand: Slot::Mainhand }
+        Swing {
+            weapon,
+            t: 0.0,
+            rate: 1.0,
+            landed: false,
+            strike,
+            toward: CROSSHAIR_AIM,
+            flourish: Vec3::ZERO,
+            hand: Slot::Mainhand,
+        }
     }
 
     /// Goes on for `dt` real seconds, at its [`Swing::rate`].
@@ -134,14 +156,22 @@ impl Swing {
 
     /// The side of the view its hand is on.
     pub fn side(&self) -> Side {
-        if self.hand == Slot::Offhand { Side::Left } else { Side::Right }
+        if self.hand == Slot::Offhand {
+            Side::Left
+        } else {
+            Side::Right
+        }
     }
 
     /// The ability modifier its damage adds, from the Strength modifier: all of it for the main
     /// hand, and for the off hand only a penalty, as a two-weapon fighter's bonus attack has it
     /// (SRD 5.1 p. 95, "Two-Weapon Fighting").
     pub fn damage_modifier(&self, strength: i32) -> i32 {
-        if self.hand == Slot::Offhand { strength.min(0) } else { strength }
+        if self.hand == Slot::Offhand {
+            strength.min(0)
+        } else {
+            strength
+        }
     }
 
     /// The path an item held as `grip` follows.
@@ -171,7 +201,6 @@ pub struct SwingPractice {
 /// What the toast says when a winded delver tries to swing.
 const WINDED: &str = "Too winded to swing";
 
-
 /// A delver with no swing under way.
 type Ready = (With<Player>, Without<Swing>);
 
@@ -197,9 +226,22 @@ pub(super) fn start_swing(
     marksman: Option<Res<super::shoot::Marksman>>,
     mut dice: ResMut<RunDice>,
     (mut last, mut armed): (Local<Option<Strike>>, Local<bool>),
-    (practice, rules, fallen): (Option<Res<SwingPractice>>, Option<Res<crate::rules::GameRules>>, Option<Res<super::vitals::Fallen>>),
+    (practice, rules, fallen): (
+        Option<Res<SwingPractice>>,
+        Option<Res<crate::rules::GameRules>>,
+        Option<Res<super::vitals::Fallen>>,
+    ),
     mut toasts: crate::inventory::Toasts,
-    mut players: Query<(Entity, &Transform, Option<&Health>, &mut DelverStamina, Has<super::guard::Guard>), Ready>,
+    mut players: Query<
+        (
+            Entity,
+            &Transform,
+            Option<&Health>,
+            &mut DelverStamina,
+            Has<super::guard::Guard>,
+        ),
+        Ready,
+    >,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     strikeable: Strikeable,
 ) {
@@ -210,7 +252,8 @@ pub(super) fn start_swing(
     }
     let tapped = input.tapped(Action::Attack);
     let main = tapped && *armed;
-    let off = input.just_pressed(Action::Block) && looking && !super::guard::holds_shield(&inventory);
+    let off =
+        input.just_pressed(Action::Block) && looking && !super::guard::holds_shield(&inventory);
     if tapped || !input.pressed(Action::Attack) {
         *armed = false;
     }
@@ -226,7 +269,10 @@ pub(super) fn start_swing(
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
     // A bow or crossbow with something to shoot is shot, not swung (`super::shoot`), by left
     // click, or by right click with the off hand free to draw it.
-    if !practising && super::shoot::shoots(&inventory, marksman.as_deref()) && (hand == Slot::Mainhand || super::shoot::block_shoots(&inventory)) {
+    if !practising
+        && super::shoot::shoots(&inventory, marksman.as_deref())
+        && (hand == Slot::Mainhand || super::shoot::block_shoots(&inventory))
+    {
         return;
     }
     for (player, at, health, mut stamina, guarding) in &mut players {
@@ -250,16 +296,41 @@ pub(super) fn start_swing(
         let toward = eyes.iter().next().and_then(|eye| {
             let from = at.translation.xz();
             let combat = &tuning.combat;
-            let target = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), at.forward().as_vec3().xz(), weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets())?;
+            let target = target_in_reach_from(
+                from,
+                Some(at.translation.y + HAND_HEIGHT),
+                at.forward().as_vec3().xz(),
+                weapon.reach * combat.reach_scale,
+                combat.hit_cone(),
+                &strikeable.targets(),
+            )?;
             toward_target(eye, strikeable.points(target), &tuning.view)
         });
-        let flourish = Vec3::new(dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0), dice.0.range_f32(-1.0, 1.0));
-        let strike = practice.strike.unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
+        let flourish = Vec3::new(
+            dice.0.range_f32(-1.0, 1.0),
+            dice.0.range_f32(-1.0, 1.0),
+            dice.0.range_f32(-1.0, 1.0),
+        );
+        let strike = practice
+            .strike
+            .unwrap_or_else(|| Strike::roll(weapon.kind, *last, &mut dice.0));
         *last = Some(strike);
-        commands.entity(player).insert(Swing { strike, rate, toward: toward.unwrap_or(CROSSHAIR_AIM), flourish, hand, ..Swing::new(weapon) });
+        commands.entity(player).insert(Swing {
+            strike,
+            rate,
+            toward: toward.unwrap_or(CROSSHAIR_AIM),
+            flourish,
+            hand,
+            ..Swing::new(weapon)
+        });
         if let Some(sound) = &sound {
             let game = settings.as_deref().copied().unwrap_or_default();
-            commands.spawn((Name::new("swing"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &tuning), DespawnOnExit(crate::launch::AppState::Delving)));
+            commands.spawn((
+                Name::new("swing"),
+                AudioPlayer::new(sound.0.clone()),
+                crate::audio::sound_effect(&game, &tuning),
+                DespawnOnExit(crate::launch::AppState::Delving),
+            ));
         }
     }
 }
@@ -270,47 +341,108 @@ pub(super) fn start_swing(
 #[derive(bevy::ecs::system::SystemParam)]
 #[allow(clippy::type_complexity)]
 pub struct Strikeable<'w, 's> {
-    creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>), Without<Corpse>>,
-    folk: Query<'w, 's, (Entity, &'static Denizen, &'static Transform, Option<&'static Children>), Without<Corpse>>,
-    fallen_trolls: Query<'w, 's, (Entity, &'static Critter, &'static Transform, Option<&'static Bones>, &'static crate::creatures::trolls::Troll), With<Corpse>>,
+    creatures: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Critter,
+            &'static Transform,
+            Option<&'static Bones>,
+        ),
+        Without<Corpse>,
+    >,
+    folk: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Denizen,
+            &'static Transform,
+            Option<&'static Children>,
+        ),
+        Without<Corpse>,
+    >,
+    fallen_trolls: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Critter,
+            &'static Transform,
+            Option<&'static Bones>,
+            &'static crate::creatures::trolls::Troll,
+        ),
+        With<Corpse>,
+    >,
     anims: Query<'w, 's, &'static FolkAnim>,
     joints: Query<'w, 's, &'static GlobalTransform, With<crate::folk_pose::FolkJoint>>,
     shapes: Query<'w, 's, (&'static GlobalTransform, &'static HitShape)>,
 }
 
 /// The joints of a folk a blow heads for: the hips, the chest and the neck.
-const FOLK_AIM_JOINTS: [fb_body::Joint; 3] = [fb_body::Joint::Pelvis, fb_body::Joint::Chest, fb_body::Joint::Head];
+const FOLK_AIM_JOINTS: [fb_body::Joint; 3] = [
+    fb_body::Joint::Pelvis,
+    fb_body::Joint::Chest,
+    fb_body::Joint::Head,
+];
 
 impl Strikeable<'_, '_> {
     /// Every body a blow might land on, as circles on the floor.
     pub fn targets(&self) -> Vec<Target> {
-        let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
-        let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target::on_floor(entity, t.translation.xz(), denizen.radius));
+        let creatures = self
+            .creatures
+            .iter()
+            .flat_map(|(entity, critter, t, bones)| {
+                body_targets(entity, critter, t, bones, &self.shapes)
+            });
+        let folk = self.folk.iter().map(|(entity, denizen, t, _)| {
+            Target::on_floor(entity, t.translation.xz(), denizen.radius)
+        });
         creatures.chain(folk).collect()
     }
 
     /// The kind of creature `target` is, if it is one (folk are none).
     pub fn foe(&self, target: Entity) -> Option<fb_items::Foe> {
-        self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species.foe())
+        self.creatures
+            .get(target)
+            .ok()
+            .map(|(_, critter, ..)| critter.spot.species.foe())
     }
 
     /// The bodies of trolls that lie down and may yet rise, which a flame can still reach: fire
     /// stops their regeneration ([`crate::creatures::trolls`]). No other blow finds them.
     pub fn fallen_trolls(&self) -> Vec<Target> {
-        self.fallen_trolls.iter().filter(|(.., troll)| !troll.spent).flat_map(|(entity, critter, t, bones, _)| body_targets(entity, critter, t, bones, &self.shapes)).collect()
+        self.fallen_trolls
+            .iter()
+            .filter(|(.., troll)| !troll.spent)
+            .flat_map(|(entity, critter, t, bones, _)| {
+                body_targets(entity, critter, t, bones, &self.shapes)
+            })
+            .collect()
     }
 
     /// Whether a living creature's body is within `reach` of `at` (world `(x, z)`): a hostile
     /// close enough to give a ranged attack disadvantage (SRD 5.1 p. 95).
     pub fn hostile_within(&self, at: Vec2, reach: f32) -> bool {
-        self.creatures.iter().any(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes).iter().any(|b| b.centre.distance(at) - b.radius <= reach))
+        self.creatures.iter().any(|(entity, critter, t, bones)| {
+            body_targets(entity, critter, t, bones, &self.shapes)
+                .iter()
+                .any(|b| b.centre.distance(at) - b.radius <= reach)
+        })
     }
 
     /// Where segment `a` to `b` first meets a living body, as the share along it and whose body:
     /// a creature's, by its bones' spheres as they are posed, or a folk's, by spheres up the
     /// height of the circle they stand in. `thick` is the shaft's own thickness. Bodies in
     /// `skip` are passed through.
-    pub fn first_body_hit(&self, a: Vec3, b: Vec3, thick: f32, skip: &[Entity]) -> Option<(f32, Entity)> {
+    pub fn first_body_hit(
+        &self,
+        a: Vec3,
+        b: Vec3,
+        thick: f32,
+        skip: &[Entity],
+    ) -> Option<(f32, Entity)> {
         let mid = (a + b) * 0.5;
         let half = a.distance(b) * 0.5;
         let mut best: Option<(f32, Entity)> = None;
@@ -321,17 +453,30 @@ impl Strikeable<'_, '_> {
                 best = Some((t, entity));
             }
         };
-        for (entity, critter, root, bones) in self.creatures.iter().filter(|(e, ..)| !skip.contains(e)) {
+        for (entity, critter, root, bones) in
+            self.creatures.iter().filter(|(e, ..)| !skip.contains(e))
+        {
             if root.translation.distance(mid) > half + 40.0 {
                 continue;
             }
-            let spheres: Vec<(Vec3, f32)> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| self.shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).collect();
+            let spheres: Vec<(Vec3, f32)> = bones
+                .iter()
+                .flat_map(|b| b.0.iter())
+                .filter_map(|&bone| self.shapes.get(bone).ok())
+                .flat_map(|(at, shape)| shape.spheres(at))
+                .collect();
             if spheres.is_empty() {
                 let r = body_radius(critter);
-                consider(super::shoot::segment_sphere(a, b, root.translation + Vec3::Y * r, r + thick), entity);
+                consider(
+                    super::shoot::segment_sphere(a, b, root.translation + Vec3::Y * r, r + thick),
+                    entity,
+                );
             }
             for (centre, radius) in spheres {
-                consider(super::shoot::segment_sphere(a, b, centre, radius + thick), entity);
+                consider(
+                    super::shoot::segment_sphere(a, b, centre, radius + thick),
+                    entity,
+                );
             }
         }
         for (entity, denizen, root, _) in self.folk.iter().filter(|(e, ..)| !skip.contains(e)) {
@@ -342,7 +487,15 @@ impl Strikeable<'_, '_> {
             let count = (denizen.max.y / radius).ceil().max(1.0) as u32;
             for i in 0..=count {
                 let y = denizen.max.y * i as f32 / count as f32;
-                consider(super::shoot::segment_sphere(a, b, root.translation + Vec3::Y * y, radius + thick), entity);
+                consider(
+                    super::shoot::segment_sphere(
+                        a,
+                        b,
+                        root.translation + Vec3::Y * y,
+                        radius + thick,
+                    ),
+                    entity,
+                );
             }
         }
         best
@@ -353,13 +506,37 @@ impl Strikeable<'_, '_> {
     /// chest and neck (its middle with no skeleton).
     pub fn points(&self, target: Entity) -> Vec<Vec3> {
         if let Ok((_, critter, root, bones)) = self.creatures.get(target) {
-            let points: Vec<Vec3> = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| self.shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).map(|(centre, _)| centre).collect();
-            return if points.is_empty() { vec![root.translation + Vec3::Y * body_radius(critter)] } else { points };
+            let points: Vec<Vec3> = bones
+                .iter()
+                .flat_map(|b| b.0.iter())
+                .filter_map(|&bone| self.shapes.get(bone).ok())
+                .flat_map(|(at, shape)| shape.spheres(at))
+                .map(|(centre, _)| centre)
+                .collect();
+            return if points.is_empty() {
+                vec![root.translation + Vec3::Y * body_radius(critter)]
+            } else {
+                points
+            };
         }
-        let Ok((_, denizen, root, children)) = self.folk.get(target) else { return Vec::new() };
-        let anim = children.into_iter().flat_map(|c| c.iter()).find_map(|c| self.anims.get(c).ok());
-        let points: Vec<Vec3> = anim.iter().flat_map(|a| FOLK_AIM_JOINTS.map(|j| a.joint(j))).filter_map(|j| self.joints.get(j).ok()).map(GlobalTransform::translation).collect();
-        if points.is_empty() { vec![root.translation + Vec3::Y * 0.6 * denizen.max.y] } else { points }
+        let Ok((_, denizen, root, children)) = self.folk.get(target) else {
+            return Vec::new();
+        };
+        let anim = children
+            .into_iter()
+            .flat_map(|c| c.iter())
+            .find_map(|c| self.anims.get(c).ok());
+        let points: Vec<Vec3> = anim
+            .iter()
+            .flat_map(|a| FOLK_AIM_JOINTS.map(|j| a.joint(j)))
+            .filter_map(|j| self.joints.get(j).ok())
+            .map(GlobalTransform::translation)
+            .collect();
+        if points.is_empty() {
+            vec![root.translation + Vec3::Y * 0.6 * denizen.max.y]
+        } else {
+            points
+        }
     }
 }
 
@@ -368,11 +545,17 @@ impl Strikeable<'_, '_> {
 /// [`CROSSHAIR_AIM`]'s depth (the view model is drawn through a narrower field of view than
 /// the world). Kept toward the middle, so a creature at the edge of the view only bends the
 /// swing, never throws it off the screen. `None` if every point is behind the eye.
-pub fn toward_target(eye: &GlobalTransform, points: Vec<Vec3>, view: &crate::tuning::ViewTuning) -> Option<Vec3> {
+pub fn toward_target(
+    eye: &GlobalTransform,
+    points: Vec<Vec3>,
+    view: &crate::tuning::ViewTuning,
+) -> Option<Vec3> {
     let into_eye = eye.affine().inverse();
     let screen = points
         .into_iter()
-        .filter_map(|p| crate::view_model::on_screen(into_eye.transform_point3(p), view.world_fov_degrees))
+        .filter_map(|p| {
+            crate::view_model::on_screen(into_eye.transform_point3(p), view.world_fov_degrees)
+        })
         .min_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))?;
     let screen = screen.clamp(Vec2::splat(-TOWARD_LIMIT), Vec2::splat(TOWARD_LIMIT));
     let depth = -CROSSHAIR_AIM.z;
@@ -392,7 +575,16 @@ fn swing_rate(hand: Slot, inventory: &Inventory, character: &Character) -> f32 {
         return rate;
     }
     let stat = |slot: Slot, weapons_only: bool| {
-        inventory.worn(slot).and_then(|id| inventory.item(id)).map_or(1.0, |i| if !weapons_only || i.profile.stats.is_weapon() { i.profile.stats.attack_rate } else { 1.0 })
+        inventory
+            .worn(slot)
+            .and_then(|id| inventory.item(id))
+            .map_or(1.0, |i| {
+                if !weapons_only || i.profile.stats.is_weapon() {
+                    i.profile.stats.attack_rate
+                } else {
+                    1.0
+                }
+            })
     };
     rate / stat(Slot::Mainhand, false) * stat(hand, true)
 }
@@ -407,7 +599,15 @@ fn land_blows(
     character: Res<Character>,
     tuning: Res<crate::tuning::Tuning>,
     mut dice: ResMut<RunDice>,
-    mut players: Query<(Entity, &Transform, &mut Swing, Option<&crate::character::DelverEffects>), With<Player>>,
+    mut players: Query<
+        (
+            Entity,
+            &Transform,
+            &mut Swing,
+            Option<&crate::character::DelverEffects>,
+        ),
+        With<Player>,
+    >,
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     mut struck: MessageWriter<Struck>,
@@ -426,27 +626,85 @@ fn land_blows(
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
             let combat = &tuning.combat;
-            if let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+            if let Some(target) = target_in_reach_from(
+                from,
+                Some(at.translation.y + HAND_HEIGHT),
+                forward,
+                swing.weapon.reach * combat.reach_scale,
+                combat.hit_cone(),
+                &strikeable.targets(),
+            ) {
                 swung.write(SwungAt { target });
-                let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
+                let ac = armour
+                    .get(target)
+                    .copied()
+                    .unwrap_or(ArmourClass::UNARMOURED);
                 let odds = crate::character::DelverEffects::attack_odds(effects, rules);
-                let attack = attack_roll(rules, &swing.weapon, character.strength(), ac.0, odds, &mut dice.0);
+                let attack = attack_roll(
+                    rules,
+                    &swing.weapon,
+                    character.strength(),
+                    ac.0,
+                    odds,
+                    &mut dice.0,
+                );
                 info!("swing: {}", attack.line());
                 if attack.hit {
-                    let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
-                    let damage = rolled + super::bane_damage(&swing.weapon.bane, strikeable.foe(target), &mut dice.0);
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
-                    if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
+                    let rolled = swing.weapon.roll(
+                        swing.damage_modifier(modifier(character.strength())),
+                        &mut dice.0,
+                    );
+                    let damage = rolled
+                        + super::bane_damage(
+                            &swing.weapon.bane,
+                            strikeable.foe(target),
+                            &mut dice.0,
+                        );
+                    struck.write(Struck {
+                        target,
+                        damage,
+                        from,
+                        bludgeoning: swing.weapon.bludgeoning,
+                        critical: attack.natural == 20,
+                        by_ally: false,
+                        graze: false,
+                    });
+                    if inventory
+                        .as_deref()
+                        .is_some_and(|i| flaming_blow(i, swing.hand))
+                    {
                         burned.write(Burned { target });
                     }
-                } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
+                } else if let Some(damage) =
+                    fb_character::combat::graze(rules, &attack, &mut dice.0)
+                {
                     info!("swing: grazes for {damage}");
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true });
+                    struck.write(Struck {
+                        target,
+                        damage,
+                        from,
+                        bludgeoning: swing.weapon.bludgeoning,
+                        critical: false,
+                        by_ally: false,
+                        graze: true,
+                    });
                 } else {
-                    callouts.write(Callout { target, outcome: Outcome::Miss });
+                    callouts.write(Callout {
+                        target,
+                        outcome: Outcome::Miss,
+                    });
                 }
-            } else if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand))
-                && let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
+            } else if inventory
+                .as_deref()
+                .is_some_and(|i| flaming_blow(i, swing.hand))
+                && let Some(target) = target_in_reach_from(
+                    from,
+                    Some(at.translation.y + HAND_HEIGHT),
+                    forward,
+                    swing.weapon.reach * combat.reach_scale,
+                    combat.hit_cone(),
+                    &strikeable.fallen_trolls(),
+                )
             {
                 // A lit torch put to a troll lying down: nothing to roll against, it burns.
                 swung.write(SwungAt { target });
@@ -462,16 +720,35 @@ fn land_blows(
 /// A creature's body as a blow finds it: a circle on the floor under each sphere of each bone's
 /// [`HitShape`], where the last pose put it. A creature with no shaped bones is the circle it
 /// keeps clear ([`body_radius`]) about its root.
-pub fn body_targets(entity: Entity, critter: &Critter, root: &Transform, bones: Option<&Bones>, shapes: &Query<(&GlobalTransform, &HitShape)>) -> Vec<Target> {
+pub fn body_targets(
+    entity: Entity,
+    critter: &Critter,
+    root: &Transform,
+    bones: Option<&Bones>,
+    shapes: &Query<(&GlobalTransform, &HitShape)>,
+) -> Vec<Target> {
     let targets: Vec<Target> = bones
         .iter()
         .flat_map(|b| b.0.iter())
         .filter_map(|&bone| shapes.get(bone).ok())
         .flat_map(|(at, shape)| shape.spheres(at))
         // What flies is reached up and down as well as across: its spheres carry their height.
-        .map(|(centre, radius)| Target { entity, centre: centre.xz(), radius, height: critter.spot.species.is_flying().then_some(centre.y) })
+        .map(|(centre, radius)| Target {
+            entity,
+            centre: centre.xz(),
+            radius,
+            height: critter.spot.species.is_flying().then_some(centre.y),
+        })
         .collect();
-    if targets.is_empty() { vec![Target::on_floor(entity, root.translation.xz(), body_radius(critter))] } else { targets }
+    if targets.is_empty() {
+        vec![Target::on_floor(
+            entity,
+            root.translation.xz(),
+            body_radius(critter),
+        )]
+    } else {
+        targets
+    }
 }
 
 fn smoothstep(x: f32) -> f32 {
@@ -488,11 +765,18 @@ pub struct SwingPose {
 }
 
 impl SwingPose {
-    pub const REST: SwingPose = SwingPose { offset: Vec3::ZERO, turn: Quat::IDENTITY };
+    pub const REST: SwingPose = SwingPose {
+        offset: Vec3::ZERO,
+        turn: Quat::IDENTITY,
+    };
 
     /// Applied to `rest` (item space to view space) about `fist`, in view space.
     pub fn apply(&self, rest: Transform, fist: Vec3) -> Transform {
-        Transform { translation: fist + self.offset + self.turn * (rest.translation - fist), rotation: self.turn * rest.rotation, ..rest }
+        Transform {
+            translation: fist + self.offset + self.turn * (rest.translation - fist),
+            rotation: self.turn * rest.rotation,
+            ..rest
+        }
     }
 }
 
@@ -542,16 +826,31 @@ impl Strike {
         use Strike::*;
         match kind {
             SwingKind::Chop => &[(Overhead, 4), (HighRight, 3), (HighLeft, 2), (FromRight, 1)],
-            SwingKind::Slash => &[(HighRight, 3), (FromRight, 3), (HighLeft, 2), (FromLeft, 2), (Overhead, 1), (Rising, 1)],
+            SwingKind::Slash => &[
+                (HighRight, 3),
+                (FromRight, 3),
+                (HighLeft, 2),
+                (FromLeft, 2),
+                (Overhead, 1),
+                (Rising, 1),
+            ],
             SwingKind::Sweep => &[(FromRight, 3), (FromLeft, 3), (Overhead, 1), (Rising, 1)],
             SwingKind::Thrust | SwingKind::Punch => &[(Stab, 1)],
         }
     }
 
     /// A strike for a swing of `kind`: any but `last`, unless it is the only one.
-    pub fn roll(kind: SwingKind, last: Option<Strike>, rng: &mut procgen_rng::Mulberry32) -> Strike {
+    pub fn roll(
+        kind: SwingKind,
+        last: Option<Strike>,
+        rng: &mut procgen_rng::Mulberry32,
+    ) -> Strike {
         let all = Strike::choices(kind);
-        let fresh: Vec<(Strike, u32)> = all.iter().copied().filter(|&(s, _)| Some(s) != last).collect();
+        let fresh: Vec<(Strike, u32)> = all
+            .iter()
+            .copied()
+            .filter(|&(s, _)| Some(s) != last)
+            .collect();
         *rng.weighted(if fresh.is_empty() { all } else { &fresh })
     }
 }
@@ -575,9 +874,20 @@ impl Grip {
     pub fn of(rest: Transform, hold: ViewHold, point: Option<Vec3>) -> Grip {
         let tip = point.map_or(rest.translation, |p| rest.transform_point(p));
         let pointing = (tip - hold.fist).normalize_or(Vec3::Y);
-        let reach = if point.is_some() { (tip - hold.fist).length() } else { 0.0 };
-        let edge = (hold.turn * Vec3::NEG_Z).reject_from_normalized(pointing).normalize_or(pointing.any_orthonormal_vector());
-        Grip { fist: hold.fist, pointing, edge, reach }
+        let reach = if point.is_some() {
+            (tip - hold.fist).length()
+        } else {
+            0.0
+        };
+        let edge = (hold.turn * Vec3::NEG_Z)
+            .reject_from_normalized(pointing)
+            .normalize_or(pointing.any_orthonormal_vector());
+        Grip {
+            fist: hold.fist,
+            pointing,
+            edge,
+            reach,
+        }
     }
 
     /// The turn about the fist that lays the point along `pointing` with the edge toward `edge`
@@ -629,7 +939,12 @@ impl Sweep {
     /// The pose `angle` radians round the sweep from straight at where the blow heads.
     fn pose(&self, angle: f32) -> SwingPose {
         let turn = Quat::from_axis_angle(self.aim.cross(self.travel), angle) * self.square;
-        SwingPose { offset: self.centre + self.travel * angle.sin() * self.across + self.aim * (angle.cos() - 1.0) * SWEEP_DEPTH, turn }
+        SwingPose {
+            offset: self.centre
+                + self.travel * angle.sin() * self.across
+                + self.aim * (angle.cos() - 1.0) * SWEEP_DEPTH,
+            turn,
+        }
     }
 }
 
@@ -654,12 +969,23 @@ impl SwingPath {
     pub fn new(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
         let aim = (toward - grip.fist).normalize_or(Vec3::NEG_Z);
         let travel = strike.travel();
-        let travel = if side == Side::Left { Vec2::new(-travel.x, travel.y) } else { travel };
-        let travel = Vec2::from_angle(flourish.x * 0.3).rotate(travel).extend(0.0);
-        let travel = travel.reject_from_normalized(aim).normalize_or(aim.any_orthonormal_vector());
+        let travel = if side == Side::Left {
+            Vec2::new(-travel.x, travel.y)
+        } else {
+            travel
+        };
+        let travel = Vec2::from_angle(flourish.x * 0.3)
+            .rotate(travel)
+            .extend(0.0);
+        let travel = travel
+            .reject_from_normalized(aim)
+            .normalize_or(aim.any_orthonormal_vector());
         let square = grip.turn_to(aim, travel);
         let (back, through, sweep, hook) = if strike == Strike::Stab {
-            let back = SwingPose { offset: -aim * STAB_BACK - travel * STAB_HOOK, turn: square };
+            let back = SwingPose {
+                offset: -aim * STAB_BACK - travel * STAB_HOOK,
+                turn: square,
+            };
             // The fist is off to one side, so a point driven along the line from it lands off the
             // crosshair by the fist's offset; shift the throw so the point itself lands on it.
             let mut drive = aim * STAB_DRIVE;
@@ -667,18 +993,45 @@ impl SwingPath {
                 let point = grip.fist + drive + aim * grip.reach;
                 drive += toward * (point.z / toward.z) - point;
             }
-            let through = SwingPose { offset: drive, turn: square };
-            (back, through, None, back.offset.lerp(through.offset, 0.5) - travel * STAB_HOOK)
+            let through = SwingPose {
+                offset: drive,
+                turn: square,
+            };
+            (
+                back,
+                through,
+                None,
+                back.offset.lerp(through.offset, 0.5) - travel * STAB_HOOK,
+            )
         } else {
-            let centre = Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * SWEEP_PULL + aim * SWEEP_REACH;
-            let sweep = Sweep { aim, travel, square, centre, across: SWEEP_ACROSS * (1.0 + 0.2 * flourish.z) };
+            let centre =
+                Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * SWEEP_PULL + aim * SWEEP_REACH;
+            let sweep = Sweep {
+                aim,
+                travel,
+                square,
+                centre,
+                across: SWEEP_ACROSS * (1.0 + 0.2 * flourish.z),
+            };
             let (from, to) = (WOUND + 0.25 * flourish.y, FOLLOWED);
-            (sweep.pose(from), sweep.pose(to), Some((sweep, from, to)), Vec3::ZERO)
+            (
+                sweep.pose(from),
+                sweep.pose(to),
+                Some((sweep, from, to)),
+                Vec3::ZERO,
+            )
         };
         // Drawn back a little toward the eye first; recovered low.
         let draw = back.offset * 0.5 + Vec3::Z * 0.5;
         let settle = through.offset * 0.5 + Vec3::new(0.0, -1.5, 0.5);
-        SwingPath { back, through, sweep, draw, hook, settle }
+        SwingPath {
+            back,
+            through,
+            sweep,
+            draw,
+            hook,
+            settle,
+        }
     }
 
     /// The pose `t` seconds into the swing: drawn back, thrown through, recovered, each eased.
@@ -687,16 +1040,25 @@ impl SwingPath {
         let (rest, back, through) = (SwingPose::REST, self.back, self.through);
         if u < DRAWN {
             let s = smoothstep(u / DRAWN);
-            SwingPose { offset: quadratic(rest.offset, self.draw, back.offset, s), turn: rest.turn.slerp(back.turn, s) }
+            SwingPose {
+                offset: quadratic(rest.offset, self.draw, back.offset, s),
+                turn: rest.turn.slerp(back.turn, s),
+            }
         } else if u < THROWN {
             let s = smoothstep((u - DRAWN) / (THROWN - DRAWN));
             match self.sweep {
                 Some((sweep, from, to)) => sweep.pose(from + (to - from) * s),
-                None => SwingPose { offset: quadratic(back.offset, self.hook, through.offset, s), turn: back.turn.slerp(through.turn, s) },
+                None => SwingPose {
+                    offset: quadratic(back.offset, self.hook, through.offset, s),
+                    turn: back.turn.slerp(through.turn, s),
+                },
             }
         } else {
             let s = smoothstep((u - THROWN) / (1.0 - THROWN));
-            SwingPose { offset: quadratic(through.offset, self.settle, rest.offset, s), turn: through.turn.slerp(rest.turn, s) }
+            SwingPose {
+                offset: quadratic(through.offset, self.settle, rest.offset, s),
+                turn: through.turn.slerp(rest.turn, s),
+            }
         }
     }
 }
@@ -716,9 +1078,17 @@ pub fn lean(kind: SwingKind, t: f32) -> f32 {
 }
 
 /// Swings the swinging hand's item in the view, about its fist.
-pub(super) fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>, view_models: Query<(), With<ViewModelCamera>>) {
-    let Some(swing) = swings.iter().next() else { return };
-    let Some(hold) = swing.weapon.hold else { return };
+pub(super) fn swing_held(
+    swings: Query<&Swing, With<Player>>,
+    mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>,
+    view_models: Query<(), With<ViewModelCamera>>,
+) {
+    let Some(swing) = swings.iter().next() else {
+        return;
+    };
+    let Some(hold) = swing.weapon.hold else {
+        return;
+    };
     let hold = crate::view_model::view_hold(hold, swing.side());
     for (item, mut transform, parent) in &mut held {
         if item.hand == swing.hand && view_models.contains(parent.parent()) {
@@ -729,8 +1099,13 @@ pub(super) fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&
 }
 
 /// Leans the eye forward into each blow.
-pub(crate) fn lean_into_blow(swings: Query<&Swing, With<Player>>, mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>) {
-    let Some(swing) = swings.iter().next() else { return };
+pub(crate) fn lean_into_blow(
+    swings: Query<&Swing, With<Player>>,
+    mut cameras: Query<&mut Transform, (With<PlayerCamera>, Without<Player>)>,
+) {
+    let Some(swing) = swings.iter().next() else {
+        return;
+    };
     let forward = lean(swing.weapon.kind, swing.t);
     for mut camera in &mut cameras {
         let ahead = camera.rotation * Vec3::NEG_Z;
@@ -754,7 +1129,9 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<crate::inventory::Toast>()
             .add_systems(Update, start_swing);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         let delver = app.world_mut().spawn((Player, Transform::default())).id();
         (app, delver)
     }
@@ -762,19 +1139,42 @@ mod tests {
     /// A swinger with the hold tracker, a window whose mouse is free or taken, and the click not yet down.
     fn clicker(grabbed: bool) -> (App, Entity, Entity) {
         let (mut app, delver) = swinger();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
         app.init_resource::<crate::keymap::InputHolds>()
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(50),
+            ))
             .add_systems(Update, crate::keymap::track_holds.before(start_swing));
-        let mode = if grabbed { CursorGrabMode::Locked } else { CursorGrabMode::None };
-        let window = app.world_mut().spawn((PrimaryWindow, CursorOptions { grab_mode: mode, ..default() })).id();
+        let mode = if grabbed {
+            CursorGrabMode::Locked
+        } else {
+            CursorGrabMode::None
+        };
+        let window = app
+            .world_mut()
+            .spawn((
+                PrimaryWindow,
+                CursorOptions {
+                    grab_mode: mode,
+                    ..default()
+                },
+            ))
+            .id();
         (app, delver, window)
     }
 
     fn next_frame(app: &mut App) {
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
         app.update();
     }
 
@@ -782,11 +1182,18 @@ mod tests {
     fn a_click_that_takes_the_mouse_back_does_not_swing() {
         let (mut app, delver, window) = clicker(false);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        app.world_mut().get_mut::<CursorOptions>(window).unwrap().grab_mode = CursorGrabMode::Locked;
+        app.world_mut()
+            .get_mut::<CursorOptions>(window)
+            .unwrap()
+            .grab_mode = CursorGrabMode::Locked;
         next_frame(&mut app);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
         app.update();
         assert!(app.world().get::<Swing>(delver).is_none());
     }
@@ -795,24 +1202,38 @@ mod tests {
     fn a_short_click_swings_on_release_and_a_long_one_does_not() {
         let (mut app, delver, _) = clicker(true);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        assert!(app.world().get::<Swing>(delver).is_none(), "not on the way down");
+        assert!(
+            app.world().get::<Swing>(delver).is_none(),
+            "not on the way down"
+        );
         next_frame(&mut app);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
         app.update();
         assert!(app.world().get::<Swing>(delver).is_some());
 
         app.world_mut().entity_mut(delver).remove::<Swing>();
         next_frame(&mut app);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
         for _ in 0..8 {
             next_frame(&mut app);
         }
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
         app.update();
-        assert!(app.world().get::<Swing>(delver).is_none(), "a long click is a stab");
+        assert!(
+            app.world().get::<Swing>(delver).is_none(),
+            "a long click is a stab"
+        );
     }
 
     /// A clicker holding `main` and `off` (bases, or empty hands), right click pressed once.
@@ -826,7 +1247,9 @@ mod tests {
             }
         }
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
         app.update();
         app.world().get::<Swing>(delver).copied()
     }
@@ -834,24 +1257,53 @@ mod tests {
     #[test]
     fn right_click_swings_what_the_off_hand_holds() {
         let swing = right_click(Some("Sword"), Some("Dagger")).expect("right click swings");
-        assert_eq!((swing.hand, swing.side(), swing.weapon.kind), (Slot::Offhand, Side::Left, SwingKind::Thrust), "the dagger, not the sword");
+        assert_eq!(
+            (swing.hand, swing.side(), swing.weapon.kind),
+            (Slot::Offhand, Side::Left, SwingKind::Thrust),
+            "the dagger, not the sword"
+        );
         let torch = right_click(Some("Sword"), Some("Torch")).expect("a torch swings too");
         assert_eq!(torch.hand, Slot::Offhand);
-        assert_eq!(torch.weapon.kind, SwingKind::of(Some(&fb_items::roll_item("Torch", 3).unwrap().shape)));
+        assert_eq!(
+            torch.weapon.kind,
+            SwingKind::of(Some(&fb_items::roll_item("Torch", 3).unwrap().shape))
+        );
         let empty = right_click(Some("Sword"), None).expect("an empty off hand punches");
-        assert_eq!((empty.hand, empty.weapon.kind), (Slot::Offhand, SwingKind::Punch));
-        assert_eq!(right_click(Some("Sword"), Some("Shield")), None, "a shield is raised, not swung");
+        assert_eq!(
+            (empty.hand, empty.weapon.kind),
+            (Slot::Offhand, SwingKind::Punch)
+        );
+        assert_eq!(
+            right_click(Some("Sword"), Some("Shield")),
+            None,
+            "a shield is raised, not swung"
+        );
     }
 
     #[test]
     fn the_left_hand_throws_each_strike_mirrored() {
-        let grip = Grip { fist: Vec3::new(0.0, -5.0, -10.0), pointing: Vec3::Y, edge: Vec3::NEG_Z, reach: 5.0 };
-        for strike in [Strike::HighRight, Strike::FromRight, Strike::Rising, Strike::Stab] {
+        let grip = Grip {
+            fist: Vec3::new(0.0, -5.0, -10.0),
+            pointing: Vec3::Y,
+            edge: Vec3::NEG_Z,
+            reach: 5.0,
+        };
+        for strike in [
+            Strike::HighRight,
+            Strike::FromRight,
+            Strike::Rising,
+            Strike::Stab,
+        ] {
             let right = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
             let left = SwingPath::new(strike, Side::Left, grip, CROSSHAIR_AIM, Vec3::ZERO);
             for t in [0.1, 0.2, 0.3, 0.4] {
                 let (r, l) = (right.at(t).offset, left.at(t).offset);
-                assert!((r.x + l.x).abs() < 1e-4 && (r.y - l.y).abs() < 1e-4 && (r.z - l.z).abs() < 1e-4, "{strike:?} at {t}: {r} vs {l}");
+                assert!(
+                    (r.x + l.x).abs() < 1e-4
+                        && (r.y - l.y).abs() < 1e-4
+                        && (r.z - l.z).abs() < 1e-4,
+                    "{strike:?} at {t}: {r} vs {l}"
+                );
             }
         }
     }
@@ -859,15 +1311,24 @@ mod tests {
     #[test]
     fn an_off_hand_blow_adds_no_strength_bonus_but_keeps_a_penalty() {
         let main = Swing::new(Weapon::fist());
-        let off = Swing { hand: Slot::Offhand, ..main };
+        let off = Swing {
+            hand: Slot::Offhand,
+            ..main
+        };
         assert_eq!((main.damage_modifier(3), off.damage_modifier(3)), (3, 0));
-        assert_eq!((main.damage_modifier(-1), off.damage_modifier(-1)), (-1, -1));
+        assert_eq!(
+            (main.damage_modifier(-1), off.damage_modifier(-1)),
+            (-1, -1)
+        );
     }
 
     #[test]
     fn a_quick_swing_runs_and_lands_in_proportion() {
         let run = |rate: f32| {
-            let mut swing = Swing { rate, ..Swing::new(Weapon::fist()) };
+            let mut swing = Swing {
+                rate,
+                ..Swing::new(Weapon::fist())
+            };
             let (mut at, mut lands) = (0.0_f32, None);
             while !swing.is_over() {
                 swing.step(0.001);
@@ -879,9 +1340,15 @@ mod tests {
             (lands.unwrap(), at)
         };
         let (usual_lands, usual) = run(1.0);
-        assert!((usual_lands - LANDS).abs() < 0.003 && (usual - SWING_TIME).abs() < 0.003, "{usual_lands} {usual}");
+        assert!(
+            (usual_lands - LANDS).abs() < 0.003 && (usual - SWING_TIME).abs() < 0.003,
+            "{usual_lands} {usual}"
+        );
         let (lands, over) = run(1.1);
-        assert!((lands - LANDS / 1.1).abs() < 0.003 && (over - SWING_TIME / 1.1).abs() < 0.003, "{lands} {over}");
+        assert!(
+            (lands - LANDS / 1.1).abs() < 0.003 && (over - SWING_TIME / 1.1).abs() < 0.003,
+            "{lands} {over}"
+        );
     }
 
     #[test]
@@ -890,7 +1357,10 @@ mod tests {
             let (mut app, delver) = swinger();
             let mut sword = fb_items::roll_item("Sword", 3).unwrap();
             if let Some(name) = affix {
-                let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+                let affix = fb_items::tables::affixes()
+                    .iter()
+                    .find(|a| a.name == name)
+                    .unwrap();
                 affix.apply_to_stats(&mut sword.profile.stats);
                 sword.affixes.push(affix);
             }
@@ -910,7 +1380,10 @@ mod tests {
         let mut inventory = Inventory::default();
         let quick = |base: &str, name: &str| {
             let mut item = fb_items::roll_item(base, 3).unwrap();
-            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            let affix = fb_items::tables::affixes()
+                .iter()
+                .find(|a| a.name == name)
+                .unwrap();
             affix.apply_to_stats(&mut item.profile.stats);
             item.affixes.push(affix);
             item
@@ -918,7 +1391,10 @@ mod tests {
         let sword = inventory.add(quick("Sword", "of Swiftness"));
         inventory.wear(sword, Slot::Mainhand).unwrap();
         assert!((swing_rate(Slot::Mainhand, &inventory, &character) - 1.2).abs() < 1e-6);
-        assert!((swing_rate(Slot::Offhand, &inventory, &character) - 1.0).abs() < 1e-6, "a fist in the off hand");
+        assert!(
+            (swing_rate(Slot::Offhand, &inventory, &character) - 1.0).abs() < 1e-6,
+            "a fist in the off hand"
+        );
         let dagger = inventory.add(quick("Dagger", "Quick"));
         inventory.wear(dagger, Slot::Offhand).unwrap();
         assert!((swing_rate(Slot::Offhand, &inventory, &character) - 1.1).abs() < 1e-6);
@@ -930,18 +1406,27 @@ mod tests {
         app.update();
         assert!(app.world().get::<Swing>(delver).is_some());
         let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
-        assert!((value - (1.0 - fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+        assert!(
+            (value - (1.0 - fb_character::SWING_COST)).abs() < 1e-9,
+            "{value}"
+        );
         app.world_mut().entity_mut(delver).remove::<Swing>();
         app.update();
         let value = app.world().get::<DelverStamina>(delver).unwrap().0.value;
-        assert!((value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9, "{value}");
+        assert!(
+            (value - (1.0 - 2.0 * fb_character::SWING_COST)).abs() < 1e-9,
+            "{value}"
+        );
     }
 
     #[test]
     fn a_light_handed_sword_swings_for_less_stamina() {
         let (mut app, delver) = swinger();
         let mut sword = fb_items::roll_item("Sword", 3).unwrap();
-        let affix = fb_items::tables::affixes().iter().find(|a| a.name == "Light-handed").unwrap();
+        let affix = fb_items::tables::affixes()
+            .iter()
+            .find(|a| a.name == "Light-handed")
+            .unwrap();
         affix.apply_to_stats(&mut sword.profile.stats);
         sword.affixes.push(affix);
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
@@ -958,7 +1443,8 @@ mod tests {
         app.insert_resource(crate::combat::vitals::Fallen(1.0));
         app.update();
         assert!(app.world().get::<Swing>(delver).is_none());
-        app.world_mut().remove_resource::<crate::combat::vitals::Fallen>();
+        app.world_mut()
+            .remove_resource::<crate::combat::vitals::Fallen>();
         app.update();
         assert!(app.world().get::<Swing>(delver).is_some());
     }
@@ -968,7 +1454,9 @@ mod tests {
         let (mut app, delver, _) = clicker(true);
         app.insert_resource(crate::combat::vitals::Fallen(1.0));
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
         app.update();
         assert!(app.world().get::<Swing>(delver).is_none());
     }
@@ -976,11 +1464,21 @@ mod tests {
     #[test]
     fn a_winded_delver_cannot_swing() {
         let (mut app, delver) = swinger();
-        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina {
+            value: 0.05,
+            winded: true,
+        };
         app.update();
         assert!(app.world().get::<Swing>(delver).is_none());
-        assert_eq!(app.world().get::<DelverStamina>(delver).unwrap().0.value, 0.05, "refused, so no bite");
-        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.25, winded: false };
+        assert_eq!(
+            app.world().get::<DelverStamina>(delver).unwrap().0.value,
+            0.05,
+            "refused, so no bite"
+        );
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina {
+            value: 0.25,
+            winded: false,
+        };
         app.update();
         assert!(app.world().get::<Swing>(delver).is_some());
     }
@@ -988,7 +1486,10 @@ mod tests {
     #[test]
     fn a_winded_swing_says_so_once_while_the_line_shows() {
         let (mut app, delver) = swinger();
-        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.05, winded: true };
+        app.world_mut().get_mut::<DelverStamina>(delver).unwrap().0 = fb_character::Stamina {
+            value: 0.05,
+            winded: true,
+        };
         app.update();
         let (text, until) = {
             let toast = app.world().resource::<crate::inventory::Toast>();
@@ -996,13 +1497,28 @@ mod tests {
         };
         assert_eq!(text, WINDED);
         assert!(until > 0.0);
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        assert_eq!(app.world().resource::<crate::inventory::Toast>().until, until, "not said again while showing");
+        assert_eq!(
+            app.world().resource::<crate::inventory::Toast>().until,
+            until,
+            "not said again while showing"
+        );
     }
 
-    const STRIKES: [Strike; 6] = [Strike::Overhead, Strike::HighRight, Strike::HighLeft, Strike::FromRight, Strike::FromLeft, Strike::Rising];
+    const STRIKES: [Strike; 6] = [
+        Strike::Overhead,
+        Strike::HighRight,
+        Strike::HighLeft,
+        Strike::FromRight,
+        Strike::FromLeft,
+        Strike::Rising,
+    ];
 
     /// An item of `base` held in the main hand: where it rests, its grip, and its point.
     fn held(base: &str, seed: u32) -> (Transform, Grip, Vec3) {
@@ -1010,7 +1526,15 @@ mod tests {
         let spec = fb_body::BodySpec::roll(fb_body::Folk::Human, 1207);
         let item = fb_items::roll_item(base, seed).unwrap().shape;
         let held = &held_in_view(&spec, Some(&item), None, view.held_scale)[0];
-        (held.transform, Grip::of(held.transform, view_hold(held.hold, Side::Right), Some(held.point)), held.point)
+        (
+            held.transform,
+            Grip::of(
+                held.transform,
+                view_hold(held.hold, Side::Right),
+                Some(held.point),
+            ),
+            held.point,
+        )
     }
 
     /// Where the item's point is at `t` seconds into `path`.
@@ -1022,10 +1546,19 @@ mod tests {
     fn every_strike_draws_back_throws_through_and_comes_to_rest() {
         let (_, grip, _) = held("Sword", 9);
         for strike in STRIKES.into_iter().chain([Strike::Stab]) {
-            let path = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::new(0.7, -0.4, 0.5));
+            let path = SwingPath::new(
+                strike,
+                Side::Right,
+                grip,
+                CROSSHAIR_AIM,
+                Vec3::new(0.7, -0.4, 0.5),
+            );
             assert_eq!(path.at(0.0), SwingPose::REST, "{strike:?}");
             let end = path.at(SWING_TIME);
-            assert!(end.offset.length() < 1e-4 && end.turn.angle_between(Quat::IDENTITY) < 1e-3, "{strike:?}");
+            assert!(
+                end.offset.length() < 1e-4 && end.turn.angle_between(Quat::IDENTITY) < 1e-3,
+                "{strike:?}"
+            );
         }
         // The blow lands at the end of the throw.
         const { assert!(LANDS > DRAWN * SWING_TIME && LANDS <= THROWN * SWING_TIME) };
@@ -1036,12 +1569,24 @@ mod tests {
         let (rest, grip, point) = held("Sword", 9);
         for strike in STRIKES {
             let path = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
-            let (back, through) = (tip(&path, DRAWN * SWING_TIME, rest, grip, point), tip(&path, THROWN * SWING_TIME, rest, grip, point));
+            let (back, through) = (
+                tip(&path, DRAWN * SWING_TIME, rest, grip, point),
+                tip(&path, THROWN * SWING_TIME, rest, grip, point),
+            );
             // The point travels across the screen the strike's way, from drawn back to thrown.
             let moved = (through - back).xy().normalize();
-            assert!(moved.dot(strike.travel()) > 0.6, "{strike:?}: moved {moved}");
+            assert!(
+                moved.dot(strike.travel()) > 0.6,
+                "{strike:?}: moved {moved}"
+            );
             // It arcs: midway it is well off the straight line between.
-            let mid = tip(&path, (DRAWN + THROWN) * 0.5 * SWING_TIME, rest, grip, point);
+            let mid = tip(
+                &path,
+                (DRAWN + THROWN) * 0.5 * SWING_TIME,
+                rest,
+                grip,
+                point,
+            );
             assert!(mid.distance(back.lerp(through, 0.5)) > 2.0, "{strike:?}");
         }
     }
@@ -1052,9 +1597,14 @@ mod tests {
         for strike in STRIKES {
             let path = SwingPath::new(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
             let t = (DRAWN + THROWN) * 0.5 * SWING_TIME;
-            let going = (tip(&path, t + 0.005, rest, grip, point) - tip(&path, t, rest, grip, point)).normalize();
+            let going = (tip(&path, t + 0.005, rest, grip, point)
+                - tip(&path, t, rest, grip, point))
+            .normalize();
             let edge = path.at(t).turn * grip.edge;
-            assert!(edge.dot(going) > 0.9, "{strike:?}: edge {edge} going {going}");
+            assert!(
+                edge.dot(going) > 0.9,
+                "{strike:?}: edge {edge} going {going}"
+            );
         }
     }
 
@@ -1063,9 +1613,20 @@ mod tests {
         let (rest, grip, point) = held("Mace", 3);
         let left = Vec3::new(-8.0, 4.0, CROSSHAIR_AIM.z);
         for strike in STRIKES {
-            let at = |toward| tip(&SwingPath::new(strike, Side::Right, grip, toward, Vec3::ZERO), LANDS, rest, grip, point);
+            let at = |toward| {
+                tip(
+                    &SwingPath::new(strike, Side::Right, grip, toward, Vec3::ZERO),
+                    LANDS,
+                    rest,
+                    grip,
+                    point,
+                )
+            };
             let (ahead, aside) = (at(CROSSHAIR_AIM), at(left));
-            assert!(aside.x < ahead.x - 1.0 && aside.y > ahead.y, "{strike:?}: {aside} against {ahead}");
+            assert!(
+                aside.x < ahead.x - 1.0 && aside.y > ahead.y,
+                "{strike:?}: {aside} against {ahead}"
+            );
         }
     }
 
@@ -1076,22 +1637,45 @@ mod tests {
         for (base, seed) in [("Spear", 4), ("Spear", 9), ("Dagger", 5), ("Dagger", 1207)] {
             let (rest, grip, point) = held(base, seed);
             let along = (CROSSHAIR_AIM - grip.fist).normalize();
-            let off_line = |t: Transform, fist: Vec3| (t.transform_point(point) - fist).normalize().angle_between(along);
+            let off_line = |t: Transform, fist: Vec3| {
+                (t.transform_point(point) - fist)
+                    .normalize()
+                    .angle_between(along)
+            };
             if base == "Spear" {
-                assert!(off_line(rest, grip.fist) > 0.5, "{base} {seed}: at rest {}", off_line(rest, grip.fist));
+                assert!(
+                    off_line(rest, grip.fist) > 0.5,
+                    "{base} {seed}: at rest {}",
+                    off_line(rest, grip.fist)
+                );
             }
             // Drawn back, it is already turned point first down the line; thrown through, the
             // point is driven along it, and a spear's reaches the crosshair.
-            let path = SwingPath::new(Strike::Stab, Side::Right, grip, CROSSHAIR_AIM, Vec3::new(0.5, 0.5, 0.5));
+            let path = SwingPath::new(
+                Strike::Stab,
+                Side::Right,
+                grip,
+                CROSSHAIR_AIM,
+                Vec3::new(0.5, 0.5, 0.5),
+            );
             for phase in [DRAWN, THROWN] {
                 let pose = path.at(phase * SWING_TIME);
-                assert!(off_line(pose.apply(rest, grip.fist), grip.fist + pose.offset) < 0.02, "{base} {seed} at {phase}");
+                assert!(
+                    off_line(pose.apply(rest, grip.fist), grip.fist + pose.offset) < 0.02,
+                    "{base} {seed} at {phase}"
+                );
             }
             let thrown = tip(&path, THROWN * SWING_TIME, rest, grip, point);
-            assert!(thrown.z < rest.transform_point(point).z - 4.0, "{base} {seed}: driven ahead");
+            assert!(
+                thrown.z < rest.transform_point(point).z - 4.0,
+                "{base} {seed}: driven ahead"
+            );
             if base == "Spear" {
                 let screen = on_screen(thrown).unwrap();
-                assert!(screen.length() < 0.15, "{base} {seed}: point at {screen} on the screen");
+                assert!(
+                    screen.length() < 0.15,
+                    "{base} {seed}: point at {screen} on the screen"
+                );
             }
         }
     }
@@ -1109,26 +1693,50 @@ mod tests {
                 seen.insert(strike);
                 last = Some(strike);
             }
-            assert_eq!(seen.len(), Strike::choices(kind).len(), "{kind:?}: every strike thrown");
+            assert_eq!(
+                seen.len(),
+                Strike::choices(kind).len(),
+                "{kind:?}: every strike thrown"
+            );
         }
-        assert_eq!(Strike::roll(SwingKind::Thrust, Some(Strike::Stab), &mut rng), Strike::Stab);
+        assert_eq!(
+            Strike::roll(SwingKind::Thrust, Some(Strike::Stab), &mut rng),
+            Strike::Stab
+        );
     }
 
     #[test]
     fn a_blow_heads_for_the_creature_on_the_screen() {
         let view = crate::tuning::Tuning::default().view;
-        let eye = GlobalTransform::from(Transform::from_xyz(0.0, 15.0, 0.0).looking_to(Vec3::NEG_Z, Vec3::Y));
+        let eye = GlobalTransform::from(
+            Transform::from_xyz(0.0, 15.0, 0.0).looking_to(Vec3::NEG_Z, Vec3::Y),
+        );
         // Straight ahead is the crosshair.
         let ahead = toward_target(&eye, vec![Vec3::new(0.0, 15.0, -20.0)], &view).unwrap();
         assert!(ahead.abs_diff_eq(CROSSHAIR_AIM, 1e-3), "{ahead}");
         // Low and to the left is low and to the left, the nearest of a body's points chosen.
-        let low = toward_target(&eye, vec![Vec3::new(-6.0, 9.0, -20.0), Vec3::new(-3.0, 12.0, -20.0)], &view).unwrap();
+        let low = toward_target(
+            &eye,
+            vec![Vec3::new(-6.0, 9.0, -20.0), Vec3::new(-3.0, 12.0, -20.0)],
+            &view,
+        )
+        .unwrap();
         let screen = crate::view_model::on_screen(low, view.held_fov_degrees).unwrap();
-        let expected = crate::view_model::on_screen(Vec3::new(-3.0, -3.0, -20.0), view.world_fov_degrees).unwrap();
-        assert!(screen.abs_diff_eq(expected, 1e-3), "{screen} against {expected}");
+        let expected =
+            crate::view_model::on_screen(Vec3::new(-3.0, -3.0, -20.0), view.world_fov_degrees)
+                .unwrap();
+        assert!(
+            screen.abs_diff_eq(expected, 1e-3),
+            "{screen} against {expected}"
+        );
         // Far off to the side, it is held toward the middle; behind the eye, nothing.
         let wide = toward_target(&eye, vec![Vec3::new(-40.0, 15.0, -5.0)], &view).unwrap();
-        assert!(crate::view_model::on_screen(wide, view.held_fov_degrees).unwrap().x >= -TOWARD_LIMIT - 1e-4);
+        assert!(
+            crate::view_model::on_screen(wide, view.held_fov_degrees)
+                .unwrap()
+                .x
+                >= -TOWARD_LIMIT - 1e-4
+        );
         assert!(toward_target(&eye, vec![Vec3::new(0.0, 15.0, 10.0)], &view).is_none());
     }
 
@@ -1136,9 +1744,19 @@ mod tests {
     fn a_pose_turns_about_the_fist() {
         let fist = Vec3::new(5.0, -6.0, -9.5);
         let rest = Transform::from_translation(fist + Vec3::Y * 3.0);
-        let tipped = SwingPose { offset: Vec3::ZERO, turn: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2) }.apply(rest, fist);
+        let tipped = SwingPose {
+            offset: Vec3::ZERO,
+            turn: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+        }
+        .apply(rest, fist);
         // A quarter turn forward lays the head out ahead of the fist.
-        assert!(tipped.translation.abs_diff_eq(fist + Vec3::NEG_Z * 3.0, 1e-4), "{}", tipped.translation);
+        assert!(
+            tipped
+                .translation
+                .abs_diff_eq(fist + Vec3::NEG_Z * 3.0, 1e-4),
+            "{}",
+            tipped.translation
+        );
     }
 
     #[test]

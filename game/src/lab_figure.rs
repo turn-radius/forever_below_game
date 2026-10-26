@@ -71,7 +71,14 @@ impl Plugin for LabFigurePlugin {
             .init_resource::<FitCache>()
             .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
             .add_systems(PreStartup, make_image)
-            .add_systems(Update, (start_fitting.run_if(resource_changed::<LabState>), show_figure).chain());
+            .add_systems(
+                Update,
+                (
+                    start_fitting.run_if(resource_changed::<LabState>),
+                    show_figure,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -79,13 +86,22 @@ fn make_image(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let size = (FRAME * PIXELS_PER_POINT).round().as_uvec2();
     let mut image = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
     image.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
-    commands.insert_resource(LabFigure { image: Some(images.add(image)) });
+    commands.insert_resource(LabFigure {
+        image: Some(images.add(image)),
+    });
 }
 
 /// What the figure depends on: the body, and each worn thing as rolled and dressed.
 fn dressing(state: &LabState) -> (Dressed, Vec<(Slot, Item)>) {
-    let worn: Vec<(Slot, Item)> = state.items().into_iter().map(|(slot, rolled)| (slot, rolled.item)).collect();
-    (figure_key(&state.character.spec(), &worn, state.character.dirt), worn)
+    let worn: Vec<(Slot, Item)> = state
+        .items()
+        .into_iter()
+        .map(|(slot, rolled)| (slot, rolled.item))
+        .collect();
+    (
+        figure_key(&state.character.spec(), &worn, state.character.dirt),
+        worn,
+    )
 }
 
 /// Starts fitting the figure when the body or the gear has changed, or takes it from the cache
@@ -104,12 +120,22 @@ fn start_fitting(state: Res<LabState>, mut stage: ResMut<Stage>, mut cache: ResM
         return;
     }
     let (spec, dirt) = (state.character.spec(), state.character.dirt);
-    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &worn, dirt))));
+    stage.fitting = Some(Fitting::start(key, move || {
+        Arc::new(Figure::dress(&spec, &worn, dirt))
+    }));
 }
 
 /// Puts the fitted figure on the stage and points the camera at it.
-fn show_figure(mut commands: Commands, figure: Res<LabFigure>, mut stage: ResMut<Stage>, mut cache: ResMut<FitCache>, mut spawner: ItemSpawner) {
-    let Some(mut fitting) = stage.fitting.take() else { return };
+fn show_figure(
+    mut commands: Commands,
+    figure: Res<LabFigure>,
+    mut stage: ResMut<Stage>,
+    mut cache: ResMut<FitCache>,
+    mut spawner: ItemSpawner,
+) {
+    let Some(mut fitting) = stage.fitting.take() else {
+        return;
+    };
     let Some(dressed) = fitting.poll() else {
         stage.fitting = Some(fitting);
         return;
@@ -119,15 +145,38 @@ fn show_figure(mut commands: Commands, figure: Res<LabFigure>, mut stage: ResMut
     if let Some(old) = stage.figure.take() {
         commands.entity(old).despawn();
     }
-    let Some((min, max)) = dressed.bounds() else { return };
+    let Some((min, max)) = dressed.bounds() else {
+        return;
+    };
     let layer = RenderLayers::layer(DOLL_LAYER);
     let exposure = Exposure::INDOOR;
     let root = spawn_figure(&mut commands, &mut spawner, &dressed);
-    commands.entity(root).insert((Name::new("Lab figure"), Transform::from_translation(DOLL_STAGE), Propagate(layer.clone()), Propagate(NotShadowCaster)));
+    commands.entity(root).insert((
+        Name::new("Lab figure"),
+        Transform::from_translation(DOLL_STAGE),
+        Propagate(layer.clone()),
+        Propagate(NotShadowCaster),
+    ));
     if let Some(light) = dressed.light {
-        let colour = Color::srgb(light.anchor.color.0, light.anchor.color.1, light.anchor.color.2);
-        let lamp = Torch::flickering(point_light(colour, HELD_LIGHT_PEAK, dressed.body.height * HELD_LIGHT_REACH, &exposure), light.anchor.flicker);
-        commands.entity(root).with_child((lamp, Transform::from_translation(light.at), layer.clone()));
+        let colour = Color::srgb(
+            light.anchor.color.0,
+            light.anchor.color.1,
+            light.anchor.color.2,
+        );
+        let lamp = Torch::flickering(
+            point_light(
+                colour,
+                HELD_LIGHT_PEAK,
+                dressed.body.height * HELD_LIGHT_REACH,
+                &exposure,
+            ),
+            light.anchor.flicker,
+        );
+        commands.entity(root).with_child((
+            lamp,
+            Transform::from_translation(light.at),
+            layer.clone(),
+        ));
     }
     stage.figure = Some(root);
 
@@ -144,31 +193,52 @@ fn show_figure(mut commands: Commands, figure: Res<LabFigure>, mut stage: ResMut
         far: 2.0 * depth,
         ..OrthographicProjection::default_3d()
     });
-    let at = Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y);
+    let at =
+        Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y);
     match stage.camera {
         Some(camera) => {
             commands.entity(camera).insert((projection, at));
         }
         None => {
-            let Some(image) = figure.image.clone() else { return };
+            let Some(image) = figure.image.clone() else {
+                return;
+            };
             // Far off along the Armory key's direction, so its falloff is nearly flat over the figure.
             let distance = 12.0 * height;
             let range = 8.0 * distance;
-            let key = point_light(Color::WHITE, KEY_LEVEL / reach_falloff(distance, range), range, &exposure);
+            let key = point_light(
+                Color::WHITE,
+                KEY_LEVEL / reach_falloff(distance, range),
+                range,
+                &exposure,
+            );
             let camera = commands
                 .spawn((
                     Name::new("Lab figure camera"),
                     Camera3d::default(),
-                    Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
+                    Camera {
+                        order: -3,
+                        clear_color: ClearColorConfig::Custom(Color::NONE),
+                        ..default()
+                    },
                     RenderTarget::Image(image.into()),
                     projection,
                     exposure,
                     Tonemapping::Linear,
-                    AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+                    AmbientLight {
+                        color: StudioLight::ARMORY.ambient_color,
+                        brightness: StudioLight::ARMORY.ambient / exposure.exposure(),
+                        ..default()
+                    },
                     layer.clone(),
                     at,
                 ))
-                .with_child((Name::new("Lab figure key light"), key, Transform::from_translation(StudioLight::ARMORY.key_from() * distance), layer))
+                .with_child((
+                    Name::new("Lab figure key light"),
+                    key,
+                    Transform::from_translation(StudioLight::ARMORY.key_from() * distance),
+                    layer,
+                ))
                 .id();
             stage.camera = Some(camera);
         }

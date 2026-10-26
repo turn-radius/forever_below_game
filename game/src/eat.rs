@@ -10,21 +10,21 @@
 //! venom's Poisoned ([`fb_character::poison`]). The delver's needs are the [`DelverNeeds`] on the
 //! player; the game clock steps them in #229.
 
-use bevy::{ecs::system::SystemParam, prelude::*};
 use armory::families::food::Brew;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use fb_items::{Consume, Provision};
 use procgen_rng::Mulberry32;
 
+use crate::carry::FloorItem;
 use crate::character::{Character, DelverEffects, DelverNeeds, Reading};
 use crate::combat::{Health, RunDice};
+use crate::interact::{self, Slot, Verb};
+use crate::inventory::{FloorChanges, Hovered, Inventory, ItemId, Toast};
+use crate::keymap::{Action, ActionInput};
+use crate::play::{DelveSystems, Player, inventory_open};
 use crate::settings::GameSettings;
 use crate::tuning::Tuning;
 use crate::ui::OK;
-use crate::inventory::{FloorChanges, Hovered, Inventory, ItemId, Toast};
-use crate::carry::FloorItem;
-use crate::interact::{self, Slot, Verb};
-use crate::keymap::{Action, ActionInput};
-use crate::play::{DelveSystems, Player, inventory_open};
 
 pub struct EatPlugin;
 
@@ -32,9 +32,25 @@ impl Plugin for EatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HealGlow>()
             .add_systems(Startup, load_heal_sound)
-            .add_systems(Update, drink_nearest_healing.run_if(crate::play::level_has_focus).in_set(DelveSystems))
-            .add_systems(Update, act_on_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering).in_set(DelveSystems))
-            .add_systems(Update, (spawn_heal_glow, fade_heal_glow).chain().in_set(DelveSystems));
+            .add_systems(
+                Update,
+                drink_nearest_healing
+                    .run_if(crate::play::level_has_focus)
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                act_on_hovered
+                    .run_if(inventory_open)
+                    .run_if(crate::barter::not_bartering)
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                (spawn_heal_glow, fade_heal_glow)
+                    .chain()
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -71,14 +87,22 @@ fn load_heal_sound(mut commands: Commands, assets: Option<Res<AssetServer>>) {
 }
 
 /// A soft green node over each new view, clear until a draught is drunk.
-fn spawn_heal_glow(mut commands: Commands, new: Query<Entity, Added<crate::carry::ViewModelCamera>>) {
+fn spawn_heal_glow(
+    mut commands: Commands,
+    new: Query<Entity, Added<crate::carry::ViewModelCamera>>,
+) {
     for camera in &new {
         commands.spawn((
             Name::new("HealFlash"),
             HealFlash,
             DespawnOnExit(crate::launch::AppState::Delving),
             UiTargetCamera(camera),
-            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
             BackgroundColor(OK.with_alpha(0.0)),
             GlobalZIndex(50),
             Pickable::IGNORE,
@@ -86,7 +110,11 @@ fn spawn_heal_glow(mut commands: Commands, new: Query<Entity, Added<crate::carry
     }
 }
 
-fn fade_heal_glow(time: Res<Time<Real>>, mut glow: ResMut<HealGlow>, mut flashes: Query<&mut BackgroundColor, With<HealFlash>>) {
+fn fade_heal_glow(
+    time: Res<Time<Real>>,
+    mut glow: ResMut<HealGlow>,
+    mut flashes: Query<&mut BackgroundColor, With<HealFlash>>,
+) {
     glow.0 = (glow.0 - time.delta_secs()).max(0.0);
     let alpha = HEAL_FLASH_ALPHA * (glow.0 / HEAL_FLASH_TIME).clamp(0.0, 1.0);
     for mut colour in &mut flashes {
@@ -114,16 +142,36 @@ pub struct Consumed {
 /// Eats or drinks `id`: takes it out of the inventory, wherever it lies, and takes its
 /// nutrition and water off `needs`. A waterskin is drunk from instead: a swallow comes out of its
 /// fill and it stays. `None`, and nothing changed, if it is not food or drink.
-pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: ItemId) -> Option<Consumed> {
+pub fn consume(
+    inventory: &mut Inventory,
+    needs: &mut fb_character::Needs,
+    id: ItemId,
+) -> Option<Consumed> {
     let item = inventory.item(id)?;
     if item.can_sip() {
         let (name, base) = (item.title().to_string(), item.base.clone());
         let provision = inventory.sip(id)?;
         needs.consume(provision.nutrition, provision.water);
-        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true, brew: None, elixir: None });
+        return Some(Consumed {
+            how: Consume::Drink,
+            name,
+            provision,
+            base,
+            sipped: true,
+            brew: None,
+            elixir: None,
+        });
     }
     let (how, provision) = (item.consume()?, item.provision()?);
-    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false, brew: item.brew(), elixir: item.elixir() };
+    let done = Consumed {
+        how,
+        name: item.title().to_string(),
+        provision,
+        base: item.base.clone(),
+        sipped: false,
+        brew: item.brew(),
+        elixir: item.elixir(),
+    };
     inventory.forget(id);
     needs.consume(provision.nutrition, provision.water);
     Some(done)
@@ -184,7 +232,12 @@ impl Eating<'_, '_> {
             self.glow.0 = HEAL_FLASH_TIME;
             if let Some(sound) = &self.sound {
                 let game = self.settings.as_deref().copied().unwrap_or_default();
-                self.commands.spawn((Name::new("heal"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &self.tuning), DespawnOnExit(crate::launch::AppState::Delving)));
+                self.commands.spawn((
+                    Name::new("heal"),
+                    AudioPlayer::new(sound.0.clone()),
+                    crate::audio::sound_effect(&game, &self.tuning),
+                    DespawnOnExit(crate::launch::AppState::Delving),
+                ));
             }
         }
         if done.brew == Some(Brew::Antidote)
@@ -202,7 +255,9 @@ impl Eating<'_, '_> {
             && let Ok((player, effects)) = self.effects.single_mut()
         {
             let defs = &crate::rules::GameRules::of(&self.rules).effects;
-            let source = fb_character::effect::Source::Consumed { what: done.name.clone() };
+            let source = fb_character::effect::Source::Consumed {
+                what: done.name.clone(),
+            };
             match effects {
                 Some(mut effects) => {
                     // Warmth from within drives the cold out at once.
@@ -211,7 +266,9 @@ impl Eating<'_, '_> {
                             effects.0.remove(cold, None);
                         }
                     }
-                    effects.0.add(defs, elixir.effect, elixir.intensity, None, source);
+                    effects
+                        .0
+                        .add(defs, elixir.effect, elixir.intensity, None, source);
                 }
                 None => {
                     let mut fresh = fb_character::effect::Effects::default();
@@ -247,8 +304,13 @@ impl Eating<'_, '_> {
             return Some(format!("The {name} has nothing more to teach you"));
         }
         Some(match character.read(book) {
-            Reading::Learned { stat, score } => format!("You study the {name}. Your {} rises to {score}", fb_items::lesson::long_name(stat)),
-            Reading::AlreadyRead | Reading::NothingToLearn => format!("The {name} has nothing more to teach you"),
+            Reading::Learned { stat, score } => format!(
+                "You study the {name}. Your {} rises to {score}",
+                fb_items::lesson::long_name(stat)
+            ),
+            Reading::AlreadyRead | Reading::NothingToLearn => {
+                format!("The {name} has nothing more to teach you")
+            }
         })
     }
 }
@@ -256,18 +318,34 @@ impl Eating<'_, '_> {
 /// The healing draught nearest to hand among what is carried, never one lying underfoot or in a
 /// container not carried: a quickslot's first, then the belt's grid, then the pack's, then the
 /// bags inside those, breadth first.
-pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::Quickslots>) -> Option<ItemId> {
+pub fn nearest_healing(
+    inventory: &Inventory,
+    slots: Option<&crate::quickslots::Quickslots>,
+) -> Option<ItemId> {
     use fb_items::Slot;
-    let is_draught = |id: ItemId| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.base == HEALING_DRAUGHT);
+    let is_draught = |id: ItemId| {
+        inventory.is_carried(id)
+            && inventory
+                .item(id)
+                .is_some_and(|i| i.base == HEALING_DRAUGHT)
+    };
     if let Some(id) = slots.and_then(|s| s.0.iter().flatten().copied().find(|&id| is_draught(id))) {
         return Some(id);
     }
     let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Quiver];
-    let mut level: Vec<ItemId> = order.iter().filter_map(|&slot| inventory.worn(slot)).collect();
+    let mut level: Vec<ItemId> = order
+        .iter()
+        .filter_map(|&slot| inventory.worn(slot))
+        .collect();
     while !level.is_empty() {
         let mut inside = Vec::new();
         for container in level {
-            for entry in inventory.grid(container).map(|g| g.entries()).into_iter().flatten() {
+            for entry in inventory
+                .grid(container)
+                .map(|g| g.entries())
+                .into_iter()
+                .flatten()
+            {
                 if is_draught(entry.id) {
                     return Some(entry.id);
                 }
@@ -306,7 +384,13 @@ fn drink_nearest_healing(
     // From a quickslot, drink as the key does, so the slot moves on to the next draught.
     let slot = slots.as_deref().and_then(|s| s.slot_of(id));
     if let (Some(slots), Some(slot)) = (slots.as_mut(), slot) {
-        let line = crate::quickslots::use_slot(slot, slots, &mut inventory, &mut eating, &mut floor_changes);
+        let line = crate::quickslots::use_slot(
+            slot,
+            slots,
+            &mut inventory,
+            &mut eating,
+            &mut floor_changes,
+        );
         toast.say(line, now);
     } else if let Some(line) = eating.eat(&mut inventory, id) {
         toast.say(line, now);
@@ -341,7 +425,9 @@ fn act_on_hovered(
         return;
     }
     let Some((id, _)) = hovered.0 else { return };
-    let Some(target) = interact::item_target(&inventory, id) else { return };
+    let Some(target) = interact::item_target(&inventory, id) else {
+        return;
+    };
     let verbs = interact::verbs_for(&target, &interact::Delver::default());
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     if primary {
@@ -375,8 +461,14 @@ fn act_on_hovered(
             return;
         }
         let hung = if inventory.location(id) == Some(crate::inventory::Location::Loose) {
-            let (at, yaw) = floor.iter().find(|f| f.id == id).map_or((Vec2::ZERO, 0.0), |f| (Vec2::new(f.spot.x, f.spot.y), f.spot.yaw));
-            crate::inventory::equip_from_floor_in(&mut inventory, id, fb_items::Slot::Hip, at, yaw).map(|equipped| equipped.changes)
+            let (at, yaw) = floor
+                .iter()
+                .find(|f| f.id == id)
+                .map_or((Vec2::ZERO, 0.0), |f| {
+                    (Vec2::new(f.spot.x, f.spot.y), f.spot.yaw)
+                });
+            crate::inventory::equip_from_floor_in(&mut inventory, id, fb_items::Slot::Hip, at, yaw)
+                .map(|equipped| equipped.changes)
         } else {
             crate::inventory::equip(&mut inventory, id, fb_items::Slot::Hip)
         };
@@ -387,7 +479,12 @@ fn act_on_hovered(
     } else if verbs.get(Slot::Secondary) == Some(Verb::Equip)
         && inventory.location(id) == Some(crate::inventory::Location::Loose)
     {
-        let (at, yaw) = floor.iter().find(|f| f.id == id).map_or((Vec2::ZERO, 0.0), |f| (Vec2::new(f.spot.x, f.spot.y), f.spot.yaw));
+        let (at, yaw) = floor
+            .iter()
+            .find(|f| f.id == id)
+            .map_or((Vec2::ZERO, 0.0), |f| {
+                (Vec2::new(f.spot.x, f.spot.y), f.spot.yaw)
+            });
         match crate::inventory::equip_from_floor(&mut inventory, id, at, yaw) {
             Ok(equipped) => {
                 toast.say(equipped.message(&inventory, id), now);
@@ -395,7 +492,10 @@ fn act_on_hovered(
             }
             Err(refusal) => toast.say(refusal.reason(), now),
         }
-    } else if matches!(verbs.get(Slot::Secondary), Some(Verb::Equip | Verb::TakeOff)) {
+    } else if matches!(
+        verbs.get(Slot::Secondary),
+        Some(Verb::Equip | Verb::TakeOff)
+    ) {
         match crate::inventory::quick(&mut inventory, id) {
             Ok(changes) => floor_changes.0.extend(changes),
             Err(refusal) => toast.say(refusal.reason(), now),
@@ -408,10 +508,10 @@ mod tests {
     use super::*;
     use crate::keymap::Keymap;
     use crate::launch::AppState;
+    use crate::play::{Screen, ScreenOpen};
     use crate::tuning::Tuning;
     use bevy::input::ButtonInput;
     use bevy::state::app::StatesPlugin;
-    use crate::play::{Screen, ScreenOpen};
 
     fn item(base: &str) -> fb_items::Item {
         fb_items::roll_item(base, 5).unwrap()
@@ -435,7 +535,11 @@ mod tests {
         assert_eq!(needs.hunger.word(), "Hungry");
         let done = consume(&mut inventory, &mut needs, loaf).unwrap();
         assert_eq!(done.how, Consume::Eat);
-        assert!((needs.hunger.value - 0.15).abs() < 1e-9, "{}", needs.hunger.value);
+        assert!(
+            (needs.hunger.value - 0.15).abs() < 1e-9,
+            "{}",
+            needs.hunger.value
+        );
         assert!(inventory.item(loaf).is_none());
     }
 
@@ -490,7 +594,10 @@ mod tests {
         assert!(inventory.item(torch).is_some());
         let draught = inventory.add(item("Healing draught"));
         let done = consume(&mut inventory, &mut needs, draught).unwrap();
-        assert_eq!((done.base.as_str(), done.how), ("Healing draught", Consume::Drink));
+        assert_eq!(
+            (done.base.as_str(), done.how),
+            ("Healing draught", Consume::Drink)
+        );
         assert_eq!(needs.hunger.value, 0.5);
         assert!(inventory.item(draught).is_none());
     }
@@ -511,17 +618,26 @@ mod tests {
             .insert_resource(ScreenOpen(Some(Screen::Inventory)))
             .add_plugins(EatPlugin);
         crate::play::run_delve_systems_while_delving(&mut app);
-        let player = app.world_mut().spawn((Player, DelverNeeds(hungry(0.55)))).id();
+        let player = app
+            .world_mut()
+            .spawn((Player, DelverNeeds(hungry(0.55))))
+            .id();
         app.update();
         app.update();
         (app, player)
     }
 
     fn press_key(app: &mut App, key: KeyCode) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(key);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
     }
 
     fn press_u(app: &mut App) {
@@ -557,18 +673,39 @@ mod tests {
         let stat = item("Book").lesson().unwrap();
         let score = |app: &App| {
             let a = app.world().resource::<Character>().scores();
-            [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom][fb_items::lesson::LESSONS.iter().position(|&s| s == stat).unwrap()]
+            [
+                a.strength,
+                a.dexterity,
+                a.constitution,
+                a.intelligence,
+                a.wisdom,
+            ][fb_items::lesson::LESSONS
+                .iter()
+                .position(|&s| s == stat)
+                .unwrap()]
         };
         let before = score(&app);
         hover(&mut app, book);
         press_u(&mut app);
         assert_eq!(score(&app), before + 1);
         let said = app.world().resource::<Toast>().text.clone();
-        assert!(said.contains(fb_items::lesson::long_name(stat)) && said.contains(&format!("rises to {}", before + 1)), "{said}");
-        assert!(app.world().resource::<Inventory>().item(book).is_some(), "the book is kept");
+        assert!(
+            said.contains(fb_items::lesson::long_name(stat))
+                && said.contains(&format!("rises to {}", before + 1)),
+            "{said}"
+        );
+        assert!(
+            app.world().resource::<Inventory>().item(book).is_some(),
+            "the book is kept"
+        );
         press_u(&mut app);
         assert_eq!(score(&app), before + 1, "a book teaches a delver once");
-        assert!(app.world().resource::<Toast>().text.ends_with("has nothing more to teach you"));
+        assert!(
+            app.world()
+                .resource::<Toast>()
+                .text
+                .ends_with("has nothing more to teach you")
+        );
     }
 
     #[test]
@@ -578,19 +715,49 @@ mod tests {
         app.init_resource::<crate::record::WorldRecord>();
         let scroll = crate::reading::teaching_for_capture("minotaur:scroll:7", 0).unwrap();
         let teaching = scroll.teaching().unwrap().clone();
-        assert_eq!(crate::interact::use_of(&scroll), Some(crate::interact::Verb::Read));
+        assert_eq!(
+            crate::interact::use_of(&scroll),
+            Some(crate::interact::Verb::Read)
+        );
         let id = stow(&mut app, scroll);
         hover(&mut app, id);
         press_u(&mut app);
         let said = app.world().resource::<Toast>().text.clone();
-        assert!(said.starts_with(&format!("You learn {} words of Minotaur speech: ", teaching.words.len())), "{said}");
-        let lexicon = app.world().resource::<crate::record::WorldRecord>().lexicon().clone();
-        assert!(lexicon.known_share(DenizenKind::Minotaur) > 0.0 && lexicon.known_share(DenizenKind::Cyclops) == 0.0);
-        assert_eq!(lexicon.known_words(DenizenKind::Minotaur).len(), teaching.words.len());
-        assert!(app.world().resource::<Inventory>().item(id).is_some(), "the scroll is kept");
+        assert!(
+            said.starts_with(&format!(
+                "You learn {} words of Minotaur speech: ",
+                teaching.words.len()
+            )),
+            "{said}"
+        );
+        let lexicon = app
+            .world()
+            .resource::<crate::record::WorldRecord>()
+            .lexicon()
+            .clone();
+        assert!(
+            lexicon.known_share(DenizenKind::Minotaur) > 0.0
+                && lexicon.known_share(DenizenKind::Cyclops) == 0.0
+        );
+        assert_eq!(
+            lexicon.known_words(DenizenKind::Minotaur).len(),
+            teaching.words.len()
+        );
+        assert!(
+            app.world().resource::<Inventory>().item(id).is_some(),
+            "the scroll is kept"
+        );
         press_u(&mut app);
-        assert_eq!(app.world().resource::<Toast>().text, "You already know these words.");
-        assert_eq!(app.world().resource::<crate::record::WorldRecord>().lexicon(), &lexicon);
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You already know these words."
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::record::WorldRecord>()
+                .lexicon(),
+            &lexicon
+        );
     }
 
     #[test]
@@ -601,8 +768,15 @@ mod tests {
             let id = carry(&mut app, base);
             hover(&mut app, id);
             press_u(&mut app);
-            assert_eq!(app.world().resource::<Character>().learned, fb_character::AbilityBonus::default(), "{base}");
-            assert!(app.world().resource::<Inventory>().item(id).is_some(), "{base}");
+            assert_eq!(
+                app.world().resource::<Character>().learned,
+                fb_character::AbilityBonus::default(),
+                "{base}"
+            );
+            assert!(
+                app.world().resource::<Inventory>().item(id).is_some(),
+                "{base}"
+            );
         }
     }
 
@@ -620,10 +794,21 @@ mod tests {
         hover(&mut app, ring);
         press_key(&mut app, KeyCode::KeyG);
         let worn = app.world().resource::<Inventory>().location(ring);
-        assert!(matches!(worn, Some(crate::inventory::Location::Worn(fb_items::Slot::Ring1 | fb_items::Slot::Ring2))), "{worn:?}");
+        assert!(
+            matches!(
+                worn,
+                Some(crate::inventory::Location::Worn(
+                    fb_items::Slot::Ring1 | fb_items::Slot::Ring2
+                ))
+            ),
+            "{worn:?}"
+        );
         press_key(&mut app, KeyCode::KeyG);
         let back = app.world().resource::<Inventory>().location(ring);
-        assert!(matches!(back, Some(crate::inventory::Location::In { container, .. }) if container == pack), "{back:?}");
+        assert!(
+            matches!(back, Some(crate::inventory::Location::In { container, .. }) if container == pack),
+            "{back:?}"
+        );
     }
 
     #[test]
@@ -637,14 +822,23 @@ mod tests {
         };
         hover(&mut app, ring);
         press_key(&mut app, KeyCode::KeyG);
-        assert_eq!(app.world().resource::<FloorChanges>().0, vec![crate::inventory::FloorChange::SetDown(ring, 0.0)]);
-        assert_eq!(app.world().resource::<Inventory>().location(ring), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            app.world().resource::<FloorChanges>().0,
+            vec![crate::inventory::FloorChange::SetDown(ring, 0.0)]
+        );
+        assert_eq!(
+            app.world().resource::<Inventory>().location(ring),
+            Some(crate::inventory::Location::Loose)
+        );
     }
 
     #[test]
     fn g_over_a_good_that_cannot_be_worn_does_nothing() {
         let (mut app, _) = app();
-        let bread = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        let bread = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Bread"));
         let before = app.world().resource::<Inventory>().location(bread);
         hover(&mut app, bread);
         press_key(&mut app, KeyCode::KeyG);
@@ -655,14 +849,28 @@ mod tests {
     #[test]
     fn f_over_a_waterskin_drinks_a_swallow_and_keeps_the_skin() {
         let (mut app, player) = app();
-        app.world_mut().get_mut::<DelverNeeds>(player).unwrap().0.thirst.value = 0.8;
+        app.world_mut()
+            .get_mut::<DelverNeeds>(player)
+            .unwrap()
+            .0
+            .thirst
+            .value = 0.8;
         let skin = carry(&mut app, "Waterskin");
         hover(&mut app, skin);
         press_u(&mut app);
-        let thirst = app.world().get::<DelverNeeds>(player).unwrap().0.thirst.value;
+        let thirst = app
+            .world()
+            .get::<DelverNeeds>(player)
+            .unwrap()
+            .0
+            .thirst
+            .value;
         assert!((thirst - 0.55).abs() < 1e-6, "{thirst}");
         assert!(app.world().resource::<Inventory>().item(skin).is_some());
-        assert_eq!(app.world().resource::<Toast>().text, "You drink from the waterskin");
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You drink from the waterskin"
+        );
     }
 
     #[test]
@@ -671,19 +879,50 @@ mod tests {
         let torch = carry(&mut app, "Spare torch");
         hover(&mut app, torch);
         press_u(&mut app);
-        assert_eq!(app.world().resource::<Inventory>().item(torch).unwrap().shape.lit(), Some(true));
+        assert_eq!(
+            app.world()
+                .resource::<Inventory>()
+                .item(torch)
+                .unwrap()
+                .shape
+                .lit(),
+            Some(true)
+        );
         press_u(&mut app);
-        assert_eq!(app.world().resource::<Inventory>().item(torch).unwrap().shape.lit(), Some(false));
+        assert_eq!(
+            app.world()
+                .resource::<Inventory>()
+                .item(torch)
+                .unwrap()
+                .shape
+                .lit(),
+            Some(false)
+        );
     }
 
     #[test]
     fn f_over_a_tankard_quenches_thirst() {
         let (mut app, player) = app();
-        app.world_mut().get_mut::<DelverNeeds>(player).unwrap().0.thirst.value = 0.8;
+        app.world_mut()
+            .get_mut::<DelverNeeds>(player)
+            .unwrap()
+            .0
+            .thirst
+            .value = 0.8;
         let tankard = carry(&mut app, "Tankard");
         hover(&mut app, tankard);
         press_u(&mut app);
-        assert!((app.world().get::<DelverNeeds>(player).unwrap().0.thirst.value - 0.3).abs() < 1e-6);
+        assert!(
+            (app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .thirst
+                .value
+                - 0.3)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -695,14 +934,31 @@ mod tests {
         app.world_mut().resource_mut::<Hovered>().0 = Some((torch, Rect::default()));
         press_u(&mut app);
         assert!(app.world().resource::<Inventory>().item(torch).is_some());
-        assert!((app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value - 0.55).abs() < 1e-9);
+        assert!(
+            (app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .hunger
+                .value
+                - 0.55)
+                .abs()
+                < 1e-9
+        );
         // Over the loaf: eaten.
         app.world_mut().resource_mut::<Hovered>().0 = Some((loaf, Rect::default()));
         press_u(&mut app);
         assert!(app.world().resource::<Inventory>().item(loaf).is_none());
         let hunger = app.world().get::<DelverNeeds>(player).unwrap().0.hunger;
         assert!((hunger.value - 0.15).abs() < 1e-9, "{}", hunger.value);
-        assert!(app.world().resource::<Toast>().text.starts_with("You eat the "), "{}", app.world().resource::<Toast>().text);
+        assert!(
+            app.world()
+                .resource::<Toast>()
+                .text
+                .starts_with("You eat the "),
+            "{}",
+            app.world().resource::<Toast>().text
+        );
     }
 
     fn lying(app: &mut App, base: &str) -> ItemId {
@@ -718,8 +974,14 @@ mod tests {
         hover(&mut app, dagger);
         press_u(&mut app);
         let taken = app.world().resource::<Inventory>().location(dagger);
-        assert!(matches!((taken, pack), (Some(crate::inventory::Location::In { container, .. }), Some(crate::inventory::Location::In { container: bag, .. })) if container == bag), "{taken:?}");
-        assert_eq!(app.world().resource::<FloorChanges>().0, vec![crate::inventory::FloorChange::Lifted(dagger)]);
+        assert!(
+            matches!((taken, pack), (Some(crate::inventory::Location::In { container, .. }), Some(crate::inventory::Location::In { container: bag, .. })) if container == bag),
+            "{taken:?}"
+        );
+        assert_eq!(
+            app.world().resource::<FloorChanges>().0,
+            vec![crate::inventory::FloorChange::Lifted(dagger)]
+        );
     }
 
     #[test]
@@ -729,8 +991,21 @@ mod tests {
         let bread = lying(&mut app, "Bread");
         hover(&mut app, bread);
         press_u(&mut app);
-        assert!(matches!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::In { .. })));
-        assert!((app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value - 0.55).abs() < 1e-9);
+        assert!(matches!(
+            app.world().resource::<Inventory>().location(bread),
+            Some(crate::inventory::Location::In { .. })
+        ));
+        assert!(
+            (app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .hunger
+                .value
+                - 0.55)
+                .abs()
+                < 1e-9
+        );
     }
 
     #[test]
@@ -739,7 +1014,10 @@ mod tests {
         let dagger = lying(&mut app, "Dagger");
         hover(&mut app, dagger);
         press_u(&mut app);
-        assert_eq!(app.world().resource::<Inventory>().location(dagger), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(dagger),
+            Some(crate::inventory::Location::Loose)
+        );
         assert!(!app.world().resource::<Toast>().text.is_empty());
     }
 
@@ -751,14 +1029,20 @@ mod tests {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let sack = inventory.add(item("Sack"));
             let dagger = inventory.add(item("Dagger"));
-            let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.item(dagger).unwrap().profile.footprint)).unwrap();
+            let at = inventory
+                .grid(sack)
+                .and_then(|g| g.first_free(inventory.item(dagger).unwrap().profile.footprint))
+                .unwrap();
             inventory.put(dagger, sack, at).unwrap();
             (sack, dagger)
         };
         hover(&mut app, dagger);
         press_u(&mut app);
         let taken = app.world().resource::<Inventory>().location(dagger);
-        assert!(matches!(taken, Some(crate::inventory::Location::In { container, .. }) if container != sack), "{taken:?}");
+        assert!(
+            matches!(taken, Some(crate::inventory::Location::In { container, .. }) if container != sack),
+            "{taken:?}"
+        );
     }
 
     #[test]
@@ -774,9 +1058,23 @@ mod tests {
         hover(&mut app, new);
         press_key(&mut app, KeyCode::KeyG);
         let inventory = app.world().resource::<Inventory>();
-        assert_eq!(inventory.location(new), Some(crate::inventory::Location::Worn(fb_items::Slot::Head)));
-        assert!(matches!(inventory.location(old), Some(crate::inventory::Location::In { .. })), "{:?}", inventory.location(old));
-        assert!(app.world().resource::<Toast>().text.starts_with("Wearing "), "{}", app.world().resource::<Toast>().text);
+        assert_eq!(
+            inventory.location(new),
+            Some(crate::inventory::Location::Worn(fb_items::Slot::Head))
+        );
+        assert!(
+            matches!(
+                inventory.location(old),
+                Some(crate::inventory::Location::In { .. })
+            ),
+            "{:?}",
+            inventory.location(old)
+        );
+        assert!(
+            app.world().resource::<Toast>().text.starts_with("Wearing "),
+            "{}",
+            app.world().resource::<Toast>().text
+        );
     }
 
     #[test]
@@ -789,13 +1087,34 @@ mod tests {
             (old, inventory.add(item("Helm")))
         };
         let shape = app.world().resource::<Inventory>().item(new).unwrap();
-        let spot = fb_level::ItemSpot { x: 3.0, y: 4.0, yaw: 0.5, family: shape.shape.family(), seed: shape.seed };
-        app.world_mut().spawn(FloorItem { id: new, spot, min: Vec3::ZERO, max: Vec3::ONE });
+        let spot = fb_level::ItemSpot {
+            x: 3.0,
+            y: 4.0,
+            yaw: 0.5,
+            family: shape.shape.family(),
+            seed: shape.seed,
+        };
+        app.world_mut().spawn(FloorItem {
+            id: new,
+            spot,
+            min: Vec3::ZERO,
+            max: Vec3::ONE,
+        });
         hover(&mut app, new);
         press_key(&mut app, KeyCode::KeyG);
         let changes = app.world().resource::<FloorChanges>().0.clone();
-        assert!(changes.contains(&crate::inventory::FloorChange::SetDownAt(old, Vec2::new(3.0, 4.0), 0.5)), "{changes:?}");
-        assert!(changes.contains(&crate::inventory::FloorChange::Lifted(new)), "{changes:?}");
+        assert!(
+            changes.contains(&crate::inventory::FloorChange::SetDownAt(
+                old,
+                Vec2::new(3.0, 4.0),
+                0.5
+            )),
+            "{changes:?}"
+        );
+        assert!(
+            changes.contains(&crate::inventory::FloorChange::Lifted(new)),
+            "{changes:?}"
+        );
     }
 
     fn hurt(hp: i32) -> Health {
@@ -831,7 +1150,13 @@ mod tests {
         };
         assert_eq!(roll(7), roll(7));
         assert!((4..=10).contains(&roll(7)));
-        assert!((0..40).map(roll).collect::<std::collections::HashSet<_>>().len() > 1);
+        assert!(
+            (0..40)
+                .map(roll)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 1
+        );
     }
 
     #[test]
@@ -846,7 +1171,12 @@ mod tests {
     }
 
     fn glow_colour(app: &mut App) -> Srgba {
-        app.world_mut().query_filtered::<&BackgroundColor, With<HealFlash>>().single(app.world()).unwrap().0.to_srgba()
+        app.world_mut()
+            .query_filtered::<&BackgroundColor, With<HealFlash>>()
+            .single(app.world())
+            .unwrap()
+            .0
+            .to_srgba()
     }
 
     #[test]
@@ -854,7 +1184,9 @@ mod tests {
         let (mut app, player) = app();
         app.world_mut().entity_mut(player).insert(hurt(3));
         // A view for the flash to sit over.
-        app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER });
+        app.world_mut().spawn(crate::carry::ViewModelCamera {
+            follows: Entity::PLACEHOLDER,
+        });
         app.update();
         let draught = carry(&mut app, "Healing draught");
         app.world_mut().resource_mut::<Hovered>().0 = Some((draught, Rect::default()));
@@ -863,21 +1195,34 @@ mod tests {
         assert!((7..=12).contains(&hp), "{hp}");
         assert!(app.world().resource::<Inventory>().item(draught).is_none());
         let toast = app.world().resource::<Toast>().text.clone();
-        assert!(toast.starts_with("You drink the healing draught (+") && toast.contains(&format!("(+{})", hp - 3)), "{toast}");
+        assert!(
+            toast.starts_with("You drink the healing draught (+")
+                && toast.contains(&format!("(+{})", hp - 3)),
+            "{toast}"
+        );
         // The sound is at the effects volume.
         let want = crate::audio::effect_volume(&GameSettings::default(), &Tuning::default());
-        let playback: Vec<&PlaybackSettings> = app.world_mut().query_filtered::<&PlaybackSettings, With<crate::audio::SoundEffect>>().iter(app.world()).collect();
+        let playback: Vec<&PlaybackSettings> = app
+            .world_mut()
+            .query_filtered::<&PlaybackSettings, With<crate::audio::SoundEffect>>()
+            .iter(app.world())
+            .collect();
         assert_eq!(playback.len(), 1);
         assert_eq!(playback[0].volume, bevy::audio::Volume::Linear(want));
         // The flash is green.
         let colour = glow_colour(&mut app);
-        assert!(colour.alpha > 0.0 && colour.green > colour.red && colour.green > colour.blue, "{colour:?}");
+        assert!(
+            colour.alpha > 0.0 && colour.green > colour.red && colour.green > colour.blue,
+            "{colour:?}"
+        );
     }
 
     #[test]
     fn the_flash_fades_over_its_time() {
         let (mut app, _) = app();
-        app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER });
+        app.world_mut().spawn(crate::carry::ViewModelCamera {
+            follows: Entity::PLACEHOLDER,
+        });
         app.update();
         app.world_mut().resource_mut::<HealGlow>().0 = HEAL_FLASH_TIME;
         app.update();
@@ -904,7 +1249,10 @@ mod tests {
         assert!(app.world().resource::<Toast>().text.ends_with("(+0)"));
         // A plain Potion does not heal.
         app.world_mut().entity_mut(player).insert(hurt(3));
-        let potion = app.world_mut().resource_mut::<Inventory>().add(item("Potion"));
+        let potion = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Potion"));
         app.world_mut().resource_mut::<Hovered>().0 = Some((potion, Rect::default()));
         press_u(&mut app);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
@@ -913,18 +1261,38 @@ mod tests {
     #[test]
     fn an_antidote_ends_the_venom_and_leaves_other_effects() {
         let (mut app, player) = app();
-        let antidote = (0..200).map(item_seeded("Potion")).find(|p| p.brew() == Some(Brew::Antidote)).unwrap();
+        let antidote = (0..200)
+            .map(item_seeded("Potion"))
+            .find(|p| p.brew() == Some(Brew::Antidote))
+            .unwrap();
         let mut effects = DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0);
-        effects.0.add(&fb_character::rules::defaults().effects, "stinging_eyes", 0.8, None, fb_character::effect::Source::Surroundings);
+        effects.0.add(
+            &fb_character::rules::defaults().effects,
+            "stinging_eyes",
+            0.8,
+            None,
+            fb_character::effect::Source::Surroundings,
+        );
         app.world_mut().entity_mut(player).insert(effects);
         let id = stow(&mut app, antidote.clone());
         hover(&mut app, id);
         press_u(&mut app);
-        let left = app.world().get::<DelverEffects>(player).expect("their eyes still sting");
+        let left = app
+            .world()
+            .get::<DelverEffects>(player)
+            .expect("their eyes still sting");
         assert!(left.poisoned_hours().is_none() && left.0.get("stinging_eyes", None).is_some());
-        assert_eq!(app.world().resource::<Toast>().text, "You drink the antidote: the venom is gone");
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You drink the antidote: the venom is gone"
+        );
         // With the venom the only effect, the component goes too.
-        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
+        app.world_mut()
+            .entity_mut(player)
+            .insert(DelverEffects::poisoned_for(
+                fb_character::rules::defaults(),
+                1.0,
+            ));
         let id = stow(&mut app, antidote);
         hover(&mut app, id);
         press_u(&mut app);
@@ -940,7 +1308,10 @@ mod tests {
             let id = carry(&mut app, base);
             hover(&mut app, id);
             press_u(&mut app);
-            assert!(app.world().resource::<Inventory>().item(id).is_none(), "{base} is used up");
+            assert!(
+                app.world().resource::<Inventory>().item(id).is_none(),
+                "{base} is used up"
+            );
             let effects = app.world().get::<DelverEffects>(player).expect(base);
             assert!(effects.0.get(elixir.effect, None).is_some(), "{base}");
         }
@@ -951,8 +1322,14 @@ mod tests {
         press_u(&mut app);
         let effects = &app.world().get::<DelverEffects>(player).unwrap().0;
         assert!(effects.pace(defs) > 1.2);
-        assert_eq!(app.world().resource::<Toast>().text, "You drink the elixir of the hare: swift");
-        for (base, meter) in [("Elixir of Vigil", fb_character::MeterKind::Sleepiness), ("Elixir of Fasting", fb_character::MeterKind::Hunger)] {
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You drink the elixir of the hare: swift"
+        );
+        for (base, meter) in [
+            ("Elixir of Vigil", fb_character::MeterKind::Sleepiness),
+            ("Elixir of Fasting", fb_character::MeterKind::Hunger),
+        ] {
             let (mut drinker, player) = self::app();
             let id = carry(&mut drinker, base);
             hover(&mut drinker, id);
@@ -967,8 +1344,18 @@ mod tests {
         let defs = &fb_character::rules::defaults().effects;
         let (mut app, player) = app();
         let mut effects = fb_character::effect::Effects::default();
-        effects.add(defs, "cold", 1.0, None, fb_character::effect::Source::Consumed { what: "test".into() });
-        app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+        effects.add(
+            defs,
+            "cold",
+            1.0,
+            None,
+            fb_character::effect::Source::Consumed {
+                what: "test".into(),
+            },
+        );
+        app.world_mut()
+            .entity_mut(player)
+            .insert(DelverEffects(effects));
         let id = carry(&mut app, "Elixir of Embers");
         hover(&mut app, id);
         press_u(&mut app);
@@ -980,7 +1367,12 @@ mod tests {
     #[test]
     fn an_elixir_joins_the_effects_already_on_the_delver() {
         let (mut app, player) = app();
-        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
+        app.world_mut()
+            .entity_mut(player)
+            .insert(DelverEffects::poisoned_for(
+                fb_character::rules::defaults(),
+                1.0,
+            ));
         let id = carry(&mut app, "Elixir of Vigil");
         hover(&mut app, id);
         press_u(&mut app);
@@ -991,22 +1383,42 @@ mod tests {
     #[test]
     fn a_healing_potion_does_not_cure_the_venom() {
         let (mut app, player) = app();
-        app.world_mut().entity_mut(player).insert(DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0));
+        app.world_mut()
+            .entity_mut(player)
+            .insert(DelverEffects::poisoned_for(
+                fb_character::rules::defaults(),
+                1.0,
+            ));
         let draught = carry(&mut app, "Healing draught");
         hover(&mut app, draught);
         press_u(&mut app);
-        assert!(app.world().get::<DelverEffects>(player).is_some_and(|e| e.poisoned_hours().is_some()));
+        assert!(
+            app.world()
+                .get::<DelverEffects>(player)
+                .is_some_and(|e| e.poisoned_hours().is_some())
+        );
     }
 
     #[test]
     fn u_does_nothing_with_the_inventory_shut() {
         let (mut app, player) = app();
         app.world_mut().resource_mut::<ScreenOpen>().0 = None;
-        let loaf = app.world_mut().resource_mut::<Inventory>().add(item("Bread"));
+        let loaf = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item("Bread"));
         app.world_mut().resource_mut::<Hovered>().0 = Some((loaf, Rect::default()));
         press_u(&mut app);
         assert!(app.world().resource::<Inventory>().item(loaf).is_some());
-        assert_eq!(app.world().get::<DelverNeeds>(player).unwrap().0.hunger.value, 0.55);
+        assert_eq!(
+            app.world()
+                .get::<DelverNeeds>(player)
+                .unwrap()
+                .0
+                .hunger
+                .value,
+            0.55
+        );
     }
 
     fn on_the_level(app: &mut App) {
@@ -1018,7 +1430,10 @@ mod tests {
         let sack = stow(app, item("Sack"));
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         let draught = inventory.add(item(HEALING_DRAUGHT));
-        let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+        let at = inventory
+            .grid(sack)
+            .and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint))
+            .unwrap();
         inventory.put(draught, sack, at).unwrap();
         (sack, draught)
     }
@@ -1028,7 +1443,9 @@ mod tests {
         let (mut app, player) = app();
         on_the_level(&mut app);
         app.world_mut().entity_mut(player).insert(hurt(3));
-        app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER });
+        app.world_mut().spawn(crate::carry::ViewModelCamera {
+            follows: Entity::PLACEHOLDER,
+        });
         let (sack, draught) = draught_in_a_pouch(&mut app);
         press_key(&mut app, KeyCode::KeyH);
         let hp = app.world().get::<Health>(player).unwrap().hp;
@@ -1036,9 +1453,18 @@ mod tests {
         let inventory = app.world().resource::<Inventory>();
         assert!(inventory.item(draught).is_none());
         assert_eq!(inventory.contents_count(sack), 0);
-        assert!(app.world().resource::<Toast>().text.starts_with("You drink the healing draught (+"));
+        assert!(
+            app.world()
+                .resource::<Toast>()
+                .text
+                .starts_with("You drink the healing draught (+")
+        );
         assert!(app.world().resource::<HealGlow>().0 > 0.0);
-        let chimes = app.world_mut().query_filtered::<(), With<crate::audio::SoundEffect>>().iter(app.world()).count();
+        let chimes = app
+            .world_mut()
+            .query_filtered::<(), With<crate::audio::SoundEffect>>()
+            .iter(app.world())
+            .count();
         assert_eq!(chimes, 1);
     }
 
@@ -1054,7 +1480,10 @@ mod tests {
             let belt = inventory.add(item("Belt"));
             inventory.wear(belt, fb_items::Slot::Belt).unwrap();
             let draught = inventory.add(item(HEALING_DRAUGHT));
-            let at = inventory.grid(belt).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+            let at = inventory
+                .grid(belt)
+                .and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint))
+                .unwrap();
             inventory.put(draught, belt, at).unwrap();
             draught
         };
@@ -1075,7 +1504,10 @@ mod tests {
         app.world_mut().entity_mut(player).insert(hurt(3));
         let loaf = carry(&mut app, "Bread");
         press_key(&mut app, KeyCode::KeyH);
-        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You have no healing draught."
+        );
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
         assert!(app.world().resource::<Inventory>().item(loaf).is_some());
         assert_eq!(app.world().resource::<HealGlow>().0, 0.0);
@@ -1104,12 +1536,18 @@ mod tests {
             let lying = inventory.add(item(HEALING_DRAUGHT));
             let sack = inventory.add(item("Sack"));
             let boxed = inventory.add(item(HEALING_DRAUGHT));
-            let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.item(boxed).unwrap().profile.footprint)).unwrap();
+            let at = inventory
+                .grid(sack)
+                .and_then(|g| g.first_free(inventory.item(boxed).unwrap().profile.footprint))
+                .unwrap();
             inventory.put(boxed, sack, at).unwrap();
             (lying, boxed)
         };
         press_key(&mut app, KeyCode::KeyH);
-        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You have no healing draught."
+        );
         let inventory = app.world().resource::<Inventory>();
         assert!(inventory.item(lying).is_some() && inventory.item(boxed).is_some());
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
@@ -1123,7 +1561,10 @@ mod tests {
         for screen in [Some(Screen::Inventory), Some(Screen::Talk)] {
             app.world_mut().resource_mut::<ScreenOpen>().0 = screen;
             press_key(&mut app, KeyCode::KeyH);
-            assert!(app.world().resource::<Inventory>().item(draught).is_some(), "{screen:?}");
+            assert!(
+                app.world().resource::<Inventory>().item(draught).is_some(),
+                "{screen:?}"
+            );
             assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
             assert!(app.world().resource::<Toast>().text.is_empty());
         }
@@ -1132,8 +1573,18 @@ mod tests {
     #[test]
     fn drink_healing_is_bound_to_h_and_nothing_else_is() {
         let keymap = Keymap::default();
-        assert_eq!(keymap.inputs(Action::DrinkHealing), &[crate::keymap::Input::Key(KeyCode::KeyH)]);
-        let clashes = keymap.bindings.iter().filter(|b| b.action != Action::DrinkHealing && b.inputs.contains(&crate::keymap::Input::Key(KeyCode::KeyH))).count();
+        assert_eq!(
+            keymap.inputs(Action::DrinkHealing),
+            &[crate::keymap::Input::Key(KeyCode::KeyH)]
+        );
+        let clashes = keymap
+            .bindings
+            .iter()
+            .filter(|b| {
+                b.action != Action::DrinkHealing
+                    && b.inputs.contains(&crate::keymap::Input::Key(KeyCode::KeyH))
+            })
+            .count();
         assert_eq!(clashes, 0);
     }
 
@@ -1141,7 +1592,8 @@ mod tests {
     fn h_drinks_the_slotted_draught_and_the_slot_takes_the_next() {
         let (mut app, player) = app();
         on_the_level(&mut app);
-        app.world_mut().init_resource::<crate::quickslots::Quickslots>();
+        app.world_mut()
+            .init_resource::<crate::quickslots::Quickslots>();
         app.world_mut().entity_mut(player).insert(hurt(3));
         let a = stow(&mut app, item(HEALING_DRAUGHT));
         let c = stow(&mut app, item(HEALING_DRAUGHT));
@@ -1150,15 +1602,27 @@ mod tests {
             let belt = inventory.add(item("Belt"));
             inventory.wear(belt, fb_items::Slot::Belt).unwrap();
             let draught = inventory.add(item(HEALING_DRAUGHT));
-            let at = inventory.grid(belt).and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint)).unwrap();
+            let at = inventory
+                .grid(belt)
+                .and_then(|g| g.first_free(inventory.item(draught).unwrap().profile.footprint))
+                .unwrap();
             inventory.put(draught, belt, at).unwrap();
             draught
         };
-        app.world_mut().resource_mut::<crate::quickslots::Quickslots>().bind(2, a);
+        app.world_mut()
+            .resource_mut::<crate::quickslots::Quickslots>()
+            .bind(2, a);
         press_key(&mut app, KeyCode::KeyH);
         let inventory = app.world().resource::<Inventory>();
-        assert!(inventory.item(a).is_none() && inventory.item(b).is_some() && inventory.item(c).is_some());
-        let held = app.world().resource::<crate::quickslots::Quickslots>().get(2);
+        assert!(
+            inventory.item(a).is_none()
+                && inventory.item(b).is_some()
+                && inventory.item(c).is_some()
+        );
+        let held = app
+            .world()
+            .resource::<crate::quickslots::Quickslots>()
+            .get(2);
         assert!(held.is_some() && held != Some(a), "{held:?}");
     }
 
@@ -1166,13 +1630,22 @@ mod tests {
     fn h_ignores_a_slotted_draught_set_down_underfoot() {
         let (mut app, player) = app();
         on_the_level(&mut app);
-        app.world_mut().init_resource::<crate::quickslots::Quickslots>();
+        app.world_mut()
+            .init_resource::<crate::quickslots::Quickslots>();
         app.world_mut().entity_mut(player).insert(hurt(3));
         carry(&mut app, "Torch");
-        let lying = app.world_mut().resource_mut::<Inventory>().add(item(HEALING_DRAUGHT));
-        app.world_mut().resource_mut::<crate::quickslots::Quickslots>().bind(0, lying);
+        let lying = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item(HEALING_DRAUGHT));
+        app.world_mut()
+            .resource_mut::<crate::quickslots::Quickslots>()
+            .bind(0, lying);
         press_key(&mut app, KeyCode::KeyH);
-        assert_eq!(app.world().resource::<Toast>().text, "You have no healing draught.");
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            "You have no healing draught."
+        );
         assert!(app.world().resource::<Inventory>().item(lying).is_some());
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
     }

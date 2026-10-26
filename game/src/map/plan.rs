@@ -10,7 +10,7 @@
 use armory::build::scenery::Scenery;
 use fb_level::props::Prop;
 use fb_level::sight::Explored;
-use fb_level::{Cell, FloorFinish, Finishes, Level, LightKind, StairKind};
+use fb_level::{Cell, Finishes, FloorFinish, Level, LightKind, StairKind};
 
 /// Cells of blank page round the level.
 pub const MARGIN: f32 = 1.5;
@@ -37,7 +37,14 @@ pub const MOSS_TINT: [f32; 3] = [0.30, 0.78, 0.30];
 /// The colour of quarter `q` on the plan, cycling through colours that stand apart from the
 /// floors'.
 pub fn quarter_tint(q: usize) -> [f32; 3] {
-    const TINTS: [[f32; 3]; 6] = [[0.95, 0.35, 0.35], [0.35, 0.85, 0.95], [0.95, 0.55, 0.95], [0.95, 0.95, 0.40], [0.55, 0.60, 1.0], [1.0, 0.65, 0.30]];
+    const TINTS: [[f32; 3]; 6] = [
+        [0.95, 0.35, 0.35],
+        [0.35, 0.85, 0.95],
+        [0.95, 0.55, 0.95],
+        [0.95, 0.95, 0.40],
+        [0.55, 0.60, 1.0],
+        [1.0, 0.65, 0.30],
+    ];
     TINTS[q % TINTS.len()]
 }
 
@@ -45,7 +52,13 @@ pub fn quarter_tint(q: usize) -> [f32; 3] {
 /// moss in green by how thick it grows, and each quarter washed in its own colour (its corridors
 /// harder, so they read as its own), drawn along the edges where it meets another quarter, and
 /// round its rooms. The map shades only what the delver has seen; the level view shades all.
-pub fn shade_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, f: &Finishes, shade: impl Fn(i32, i32) -> bool) {
+pub fn shade_finishes(
+    canvas: &mut PlanCanvas,
+    frame: &PlanFrame,
+    level: &Level,
+    f: &Finishes,
+    shade: impl Fn(i32, i32) -> bool,
+) {
     let edge = (frame.px * 0.14).max(2.0);
     let inset = edge * 0.5;
     for y in 0..level.height as i32 {
@@ -54,22 +67,41 @@ pub fn shade_finishes(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level,
                 continue;
             }
             let Some(finish) = f.at(x, y) else { continue };
-            let (a, b) = (frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0));
+            let (a, b) = (
+                frame.at(x as f32, y as f32),
+                frame.at(x as f32 + 1.0, y as f32 + 1.0),
+            );
             canvas.rect(a, b, floor_tint(finish.floor), 0.5);
             canvas.rect(a, b, MOSS_TINT, finish.moss * 0.8);
             let Some(q) = f.quarter(x, y) else { continue };
             let room = level.room_at(x, y);
-            canvas.rect(a, b, quarter_tint(q), if room.is_some() { 0.13 } else { 0.30 });
+            canvas.rect(
+                a,
+                b,
+                quarter_tint(q),
+                if room.is_some() { 0.13 } else { 0.30 },
+            );
             // Each side that meets another quarter, or bounds the cell's room, drawn a little
             // inside so both sides show their own colour. Rock has no quarter; its walls are
             // drawn already.
-            let sides = [((0, -1), [a[0], a[1] + inset], [b[0], a[1] + inset]), ((0, 1), [a[0], b[1] - inset], [b[0], b[1] - inset]), ((-1, 0), [a[0] + inset, a[1]], [a[0] + inset, b[1]]), ((1, 0), [b[0] - inset, a[1]], [b[0] - inset, b[1]])];
+            let sides = [
+                ((0, -1), [a[0], a[1] + inset], [b[0], a[1] + inset]),
+                ((0, 1), [a[0], b[1] - inset], [b[0], b[1] - inset]),
+                ((-1, 0), [a[0] + inset, a[1]], [a[0] + inset, b[1]]),
+                ((1, 0), [b[0] - inset, a[1]], [b[0] - inset, b[1]]),
+            ];
             for ((dx, dy), p, r) in sides {
                 let (nx, ny) = (x + dx, y + dy);
                 let other_quarter = f.quarter(nx, ny).is_some_and(|n| n != q);
                 let room_edge = room.is_some() && level.room_at(nx, ny) != room;
                 if other_quarter || room_edge {
-                    canvas.line(p, r, edge, quarter_tint(q), if other_quarter { 0.95 } else { 0.9 });
+                    canvas.line(
+                        p,
+                        r,
+                        edge,
+                        quarter_tint(q),
+                        if other_quarter { 0.95 } else { 0.9 },
+                    );
                 }
             }
         }
@@ -86,7 +118,11 @@ pub struct PlanCanvas {
 
 impl PlanCanvas {
     pub fn new(width: u32, height: u32) -> Self {
-        PlanCanvas { width, height, pixels: vec![[0.0; 4]; (width * height) as usize] }
+        PlanCanvas {
+            width,
+            height,
+            pixels: vec![[0.0; 4]; (width * height) as usize],
+        }
     }
 
     /// Lays `rgb` at `alpha` over pixel `(x, y)`.
@@ -165,7 +201,13 @@ impl PlanCanvas {
             .iter()
             .flat_map(|p| {
                 let a = p[3];
-                let un = |c: f32| if a > 0.0 { (c / a).clamp(0.0, 1.0) } else { 0.0 };
+                let un = |c: f32| {
+                    if a > 0.0 {
+                        (c / a).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                };
                 [un(p[0]), un(p[1]), un(p[2]), a.clamp(0.0, 1.0)].map(|v| (v * 255.0).round() as u8)
             })
             .collect()
@@ -175,7 +217,9 @@ impl PlanCanvas {
 /// A small, steady wobble for the point `(x, y)` on the grid, -1..1 on each axis: where a hand
 /// would have drawn it, so lines meeting at a corner meet at the same wobbled point.
 fn wobble(x: f32, y: f32, seed: u32) -> (f32, f32) {
-    let h = |k: f32| ((x * 127.1 + y * 311.7 + k + seed as f32 * 0.013).sin() * 43_758.547).rem_euclid(1.0);
+    let h = |k: f32| {
+        ((x * 127.1 + y * 311.7 + k + seed as f32 * 0.013).sin() * 43_758.547).rem_euclid(1.0)
+    };
     (h(0.0) * 2.0 - 1.0, h(57.3) * 2.0 - 1.0)
 }
 
@@ -189,7 +233,10 @@ pub struct PlanFrame {
 impl PlanFrame {
     /// The frame for `level` at `px` pixels to a cell, with a margin round it.
     pub fn of(px: f32) -> Self {
-        PlanFrame { px, origin: [MARGIN * px, MARGIN * px] }
+        PlanFrame {
+            px,
+            origin: [MARGIN * px, MARGIN * px],
+        }
     }
 
     /// The picture's size for `level`.
@@ -211,7 +258,12 @@ pub fn draw_plan(level: &Level, explored: &Explored, px: f32) -> PlanCanvas {
 
 /// [`draw_plan`], with `under` drawn on the floor's wash and beneath the walls, for the level
 /// view's finishes.
-pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl FnOnce(&mut PlanCanvas, &PlanFrame)) -> PlanCanvas {
+pub fn draw_plan_with(
+    level: &Level,
+    explored: &Explored,
+    px: f32,
+    under: impl FnOnce(&mut PlanCanvas, &PlanFrame),
+) -> PlanCanvas {
     let frame = PlanFrame::of(px);
     let (w, h) = frame.size(level);
     let mut canvas = PlanCanvas::new(w, h);
@@ -228,13 +280,21 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
     for y in 0..level.height as i32 {
         for x in 0..level.width as i32 {
             if seen(x, y) {
-                canvas.rect(frame.at(x as f32, y as f32), frame.at(x as f32 + 1.0, y as f32 + 1.0), WASH, 0.9);
+                canvas.rect(
+                    frame.at(x as f32, y as f32),
+                    frame.at(x as f32 + 1.0, y as f32 + 1.0),
+                    WASH,
+                    0.9,
+                );
                 continue;
             }
             let beside = (-1..=1).any(|dy| (-1..=1).any(|dx| seen(x + dx, y + dy)));
             if level.cell(x, y) == Cell::Bars {
                 // Bars are drawn once a seen cell touches them, not hatched as rock.
-                if [(0, -1), (0, 1), (-1, 0), (1, 0)].iter().any(|&(dx, dy)| seen(x + dx, y + dy)) {
+                if [(0, -1), (0, 1), (-1, 0), (1, 0)]
+                    .iter()
+                    .any(|&(dx, dy)| seen(x + dx, y + dy))
+                {
                     bars(&mut canvas, &frame, level, x, y, ink);
                 }
             } else if beside && !level.is_open(x, y) {
@@ -252,12 +312,20 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
                 continue;
             }
             let (fx, fy) = (x as f32, y as f32);
-            let sides = [((0, -1), (fx, fy), (fx + 1.0, fy)), ((0, 1), (fx, fy + 1.0), (fx + 1.0, fy + 1.0)), ((-1, 0), (fx, fy), (fx, fy + 1.0)), ((1, 0), (fx + 1.0, fy), (fx + 1.0, fy + 1.0))];
+            let sides = [
+                ((0, -1), (fx, fy), (fx + 1.0, fy)),
+                ((0, 1), (fx, fy + 1.0), (fx + 1.0, fy + 1.0)),
+                ((-1, 0), (fx, fy), (fx, fy + 1.0)),
+                ((1, 0), (fx + 1.0, fy), (fx + 1.0, fy + 1.0)),
+            ];
             for ((dx, dy), a, b) in sides {
                 if level.is_open(x + dx, y + dy) || level.cell(x + dx, y + dy) == Cell::Bars {
                     continue;
                 }
-                let points: Vec<[f32; 2]> = (0..=3).map(|k| k as f32 / 3.0).map(|t| wobbled(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)).collect();
+                let points: Vec<[f32; 2]> = (0..=3)
+                    .map(|k| k as f32 / 3.0)
+                    .map(|t| wobbled(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t))
+                    .collect();
                 for pair in points.windows(2) {
                     canvas.line(pair[0], pair[1], ink, INK, 0.92);
                 }
@@ -278,13 +346,34 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
         let c = [e.x as f32 + 0.5, e.y as f32 + 0.5];
         let back = [c[0] - dx as f32 * 0.5, c[1] - dy as f32 * 0.5];
         let side = [dy as f32 * 0.45, dx as f32 * 0.45];
-        canvas.line(frame.at(back[0] - side[0], back[1] - side[1]), frame.at(back[0] + side[0], back[1] + side[1]), ink * 2.2, ACCENT, 1.0);
+        canvas.line(
+            frame.at(back[0] - side[0], back[1] - side[1]),
+            frame.at(back[0] + side[0], back[1] + side[1]),
+            ink * 2.2,
+            ACCENT,
+            1.0,
+        );
         let tip = [c[0] + dx as f32 * 0.3, c[1] + dy as f32 * 0.3];
         let tail = [c[0] - dx as f32 * 0.25, c[1] - dy as f32 * 0.25];
-        canvas.line(frame.at(tail[0], tail[1]), frame.at(tip[0], tip[1]), ink, ACCENT, 1.0);
+        canvas.line(
+            frame.at(tail[0], tail[1]),
+            frame.at(tip[0], tip[1]),
+            ink,
+            ACCENT,
+            1.0,
+        );
         for s in [1.0, -1.0] {
-            let wing = [tip[0] - dx as f32 * 0.2 + side[0] * 0.4 * s, tip[1] - dy as f32 * 0.2 + side[1] * 0.4 * s];
-            canvas.line(frame.at(tip[0], tip[1]), frame.at(wing[0], wing[1]), ink, ACCENT, 1.0);
+            let wing = [
+                tip[0] - dx as f32 * 0.2 + side[0] * 0.4 * s,
+                tip[1] - dy as f32 * 0.2 + side[1] * 0.4 * s,
+            ];
+            canvas.line(
+                frame.at(tip[0], tip[1]),
+                frame.at(wing[0], wing[1]),
+                ink,
+                ACCENT,
+                1.0,
+            );
         }
     }
 
@@ -297,10 +386,19 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
         let c = frame.at(stair.x as f32 + 0.5, stair.y as f32 + 0.5);
         let r = px * 0.36;
         canvas.rect([c[0] - r, c[1] - r], [c[0] + r, c[1] + r], INK, 0.9);
-        canvas.rect([c[0] - r + ink, c[1] - r + ink], [c[0] + r - ink, c[1] + r - ink], WASH, 1.0);
+        canvas.rect(
+            [c[0] - r + ink, c[1] - r + ink],
+            [c[0] + r - ink, c[1] + r - ink],
+            WASH,
+            1.0,
+        );
         for k in 0..3 {
             let t = (k as f32 + 0.5) / 3.0;
-            let half = r * if stair.kind == StairKind::Down { 0.85 - t * 0.5 } else { 0.35 + t * 0.5 };
+            let half = r * if stair.kind == StairKind::Down {
+                0.85 - t * 0.5
+            } else {
+                0.35 + t * 0.5
+            };
             let y = c[1] - r + t * 2.0 * r;
             canvas.line([c[0] - half, y], [c[0] + half, y], ink, INK, 0.9);
         }
@@ -315,34 +413,85 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
         match spot.prop {
             Prop::Container { .. } => {
                 let r = px * 0.2;
-                canvas.rect([c[0] - r, c[1] - r * 0.7], [c[0] + r, c[1] + r * 0.7], INK, 0.85);
-                canvas.rect([c[0] - r + ink, c[1] - r * 0.7 + ink], [c[0] + r - ink, c[1] + r * 0.7 - ink], WASH, 1.0);
+                canvas.rect(
+                    [c[0] - r, c[1] - r * 0.7],
+                    [c[0] + r, c[1] + r * 0.7],
+                    INK,
+                    0.85,
+                );
+                canvas.rect(
+                    [c[0] - r + ink, c[1] - r * 0.7 + ink],
+                    [c[0] + r - ink, c[1] + r * 0.7 - ink],
+                    WASH,
+                    1.0,
+                );
             }
-            Prop::Scenery { kind: Scenery::Pillar, .. } => canvas.disc(c, px * 0.2, INK, 0.9),
-            Prop::Scenery { kind: Scenery::Rubble, .. } => {
+            Prop::Scenery {
+                kind: Scenery::Pillar,
+                ..
+            } => canvas.disc(c, px * 0.2, INK, 0.9),
+            Prop::Scenery {
+                kind: Scenery::Rubble,
+                ..
+            } => {
                 for k in 0..4 {
                     let (wx, wy) = wobble(spot.x + k as f32, spot.y, 7);
-                    canvas.disc([c[0] + wx * px * 0.18, c[1] + wy * px * 0.18], px * 0.06, INK, 0.75);
+                    canvas.disc(
+                        [c[0] + wx * px * 0.18, c[1] + wy * px * 0.18],
+                        px * 0.06,
+                        INK,
+                        0.75,
+                    );
                 }
             }
-            Prop::Scenery { kind: Scenery::Bedroll, .. } => {
+            Prop::Scenery {
+                kind: Scenery::Bedroll,
+                ..
+            } => {
                 // Lying along its item X, turned by its yaw: a bar the length of the bedroll.
                 let along = [spot.yaw.cos(), -spot.yaw.sin()];
                 let half = px * 0.4;
-                canvas.line([c[0] - along[0] * half, c[1] - along[1] * half], [c[0] + along[0] * half, c[1] + along[1] * half], px * 0.2, INK, 0.6);
+                canvas.line(
+                    [c[0] - along[0] * half, c[1] - along[1] * half],
+                    [c[0] + along[0] * half, c[1] + along[1] * half],
+                    px * 0.2,
+                    INK,
+                    0.6,
+                );
             }
             // Drawn with its light below.
             Prop::Campfire { .. } => {}
-            Prop::Scenery { kind: Scenery::Bones, .. } => {
-                canvas.line([c[0] - px * 0.15, c[1] - px * 0.15], [c[0] + px * 0.15, c[1] + px * 0.15], ink, INK, 0.75);
-                canvas.line([c[0] - px * 0.15, c[1] + px * 0.15], [c[0] + px * 0.15, c[1] - px * 0.15], ink, INK, 0.75);
+            Prop::Scenery {
+                kind: Scenery::Bones,
+                ..
+            } => {
+                canvas.line(
+                    [c[0] - px * 0.15, c[1] - px * 0.15],
+                    [c[0] + px * 0.15, c[1] + px * 0.15],
+                    ink,
+                    INK,
+                    0.75,
+                );
+                canvas.line(
+                    [c[0] - px * 0.15, c[1] + px * 0.15],
+                    [c[0] + px * 0.15, c[1] - px * 0.15],
+                    ink,
+                    INK,
+                    0.75,
+                );
             }
             // Room furniture: a bar as wide as it is, along its item X and turned by its yaw, as thick as it is deep.
             Prop::Scenery { kind, .. } => {
                 let (hw, hd) = kind.footprint().unwrap_or((4.0, 4.0));
                 let along = [spot.yaw.cos(), -spot.yaw.sin()];
                 let half = px * hw / 20.0;
-                canvas.line([c[0] - along[0] * half, c[1] - along[1] * half], [c[0] + along[0] * half, c[1] + along[1] * half], px * hd * 2.0 / 20.0, INK, 0.6);
+                canvas.line(
+                    [c[0] - along[0] * half, c[1] - along[1] * half],
+                    [c[0] + along[0] * half, c[1] + along[1] * half],
+                    px * hd * 2.0 / 20.0,
+                    INK,
+                    0.6,
+                );
             }
         }
     }
@@ -363,7 +512,12 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
             LightKind::Glowcaps => {
                 for k in 0..3 {
                     let (wx, wy) = wobble(light.x, light.y + k as f32, 11);
-                    canvas.disc([c[0] + wx * px * 0.12, c[1] + wy * px * 0.12], px * 0.05, CAP, 0.95);
+                    canvas.disc(
+                        [c[0] + wx * px * 0.12, c[1] + wy * px * 0.12],
+                        px * 0.05,
+                        CAP,
+                        0.95,
+                    );
                 }
             }
         }
@@ -382,7 +536,13 @@ fn hatch(canvas: &mut PlanCanvas, frame: &PlanFrame, x: i32, y: i32, seed: u32) 
         let (a, b) = ([fx, fy + t * 2.0 + shift], [fx + t * 2.0 + shift, fy]);
         let clip = |p: [f32; 2]| [p[0].clamp(fx, fx + 1.0), p[1].clamp(fy, fy + 1.0)];
         let (a, b) = (clip(a), clip(b));
-        canvas.line(frame.at(a[0], a[1]), frame.at(b[0], b[1]), frame.px * 0.04 + 0.6, HATCH, 0.7);
+        canvas.line(
+            frame.at(a[0], a[1]),
+            frame.at(b[0], b[1]),
+            frame.px * 0.04 + 0.6,
+            HATCH,
+            0.7,
+        );
     }
 }
 
@@ -391,10 +551,19 @@ fn hatch(canvas: &mut PlanCanvas, frame: &PlanFrame, x: i32, y: i32, seed: u32) 
 fn door(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, x: i32, y: i32, ink: f32) {
     let across_x = level.is_open(x - 1, y) || level.is_open(x + 1, y);
     let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-    let (a, b) = if across_x { ((cx - 0.08, cy - 0.42), (cx + 0.08, cy + 0.42)) } else { ((cx - 0.42, cy - 0.08), (cx + 0.42, cy + 0.08)) };
+    let (a, b) = if across_x {
+        ((cx - 0.08, cy - 0.42), (cx + 0.08, cy + 0.42))
+    } else {
+        ((cx - 0.42, cy - 0.08), (cx + 0.42, cy + 0.08))
+    };
     let (pa, pb) = (frame.at(a.0, a.1), frame.at(b.0, b.1));
     canvas.rect(pa, pb, INK, 0.9);
-    canvas.rect([pa[0] + ink * 0.6, pa[1] + ink * 0.6], [pb[0] - ink * 0.6, pb[1] - ink * 0.6], WASH, 1.0);
+    canvas.rect(
+        [pa[0] + ink * 0.6, pa[1] + ink * 0.6],
+        [pb[0] - ink * 0.6, pb[1] - ink * 0.6],
+        WASH,
+        1.0,
+    );
 }
 
 #[cfg(test)]
@@ -407,13 +576,22 @@ mod tests {
         let px = 16.0;
         let frame = PlanFrame::of(px);
         let blank = draw_plan(&level, &Explored::new(&level), px);
-        assert!((0..blank.height).all(|y| (0..blank.width).all(|x| blank.alpha(x, y) == 0.0)), "nothing seen, nothing drawn");
+        assert!(
+            (0..blank.height).all(|y| (0..blank.width).all(|x| blank.alpha(x, y) == 0.0)),
+            "nothing seen, nothing drawn"
+        );
 
         let all = draw_plan(&level, &Explored::all(&level), px);
         assert_eq!((all.width, all.height), frame.size(&level));
         let room = level.rooms[0];
-        let middle = frame.at(room.x as f32 + room.w as f32 * 0.5, room.y as f32 + room.h as f32 * 0.5);
-        assert!(all.alpha(middle[0] as u32, middle[1] as u32) > 0.8, "a room's floor is washed");
+        let middle = frame.at(
+            room.x as f32 + room.w as f32 * 0.5,
+            room.y as f32 + room.h as f32 * 0.5,
+        );
+        assert!(
+            all.alpha(middle[0] as u32, middle[1] as u32) > 0.8,
+            "a room's floor is washed"
+        );
         // Its west wall is inked a little brighter than the wash.
         let wall = frame.at(room.x as f32, room.y as f32 + room.h as f32 * 0.5);
         assert!(all.alpha(wall[0] as u32, wall[1] as u32) > 0.8);
@@ -433,7 +611,15 @@ mod tests {
         let flagstone = |level: &Level, f: &Finishes| {
             (0..level.height as i32)
                 .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
-                .find(|&(x, y)| level.room_at(x, y).is_some() && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().all(|&(dx, dy)| level.room_at(x + dx, y + dy) == level.room_at(x, y)) && level.cell(x, y) == Cell::Floor && f.at(x, y).is_some_and(|c| c.floor == FloorFinish::Flagstone && c.moss < 0.05))
+                .find(|&(x, y)| {
+                    level.room_at(x, y).is_some()
+                        && [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                            .iter()
+                            .all(|&(dx, dy)| level.room_at(x + dx, y + dy) == level.room_at(x, y))
+                        && level.cell(x, y) == Cell::Floor
+                        && f.at(x, y)
+                            .is_some_and(|c| c.floor == FloorFinish::Flagstone && c.moss < 0.05)
+                })
         };
         let (level, f, (x, y)) = (1..40)
             .map(|seed| fb_level::generate(seed, 2))
@@ -446,16 +632,24 @@ mod tests {
         let px = 16.0;
         let frame = PlanFrame::of(px);
         let seen = Explored::all(&level);
-        let shaded = draw_plan_with(&level, &seen, px, |canvas, frame| shade_finishes(canvas, frame, &level, &f, |_, _| true));
+        let shaded = draw_plan_with(&level, &seen, px, |canvas, frame| {
+            shade_finishes(canvas, frame, &level, &f, |_, _| true)
+        });
         // It reads blue-grey: bluer than it is red.
         let [r, _, b, _] = colour_at(&shaded, &frame, x, y);
         assert!(b > r, "flagstone shaded blue-grey: {r} red, {b} blue");
         // Shading nothing leaves the plain plan.
         let plain = draw_plan(&level, &seen, px);
-        let none = draw_plan_with(&level, &seen, px, |canvas, frame| shade_finishes(canvas, frame, &level, &f, |_, _| false));
+        let none = draw_plan_with(&level, &seen, px, |canvas, frame| {
+            shade_finishes(canvas, frame, &level, &f, |_, _| false)
+        });
         assert_eq!(none, plain);
         // A cell not seen stays blank, finish or no.
-        let unseen = draw_plan_with(&level, &Explored::new(&level), px, |canvas, frame| shade_finishes(canvas, frame, &level, &f, |x, y| Explored::new(&level).is_seen(x, y)));
+        let unseen = draw_plan_with(&level, &Explored::new(&level), px, |canvas, frame| {
+            shade_finishes(canvas, frame, &level, &f, |x, y| {
+                Explored::new(&level).is_seen(x, y)
+            })
+        });
         assert!((0..unseen.height).all(|y| (0..unseen.width).all(|x| unseen.alpha(x, y) == 0.0)));
     }
 
@@ -463,7 +657,10 @@ mod tests {
     fn the_same_sight_draws_the_same_plan() {
         let level = fb_level::generate(7, 1);
         let explored = Explored::all(&level);
-        assert_eq!(draw_plan(&level, &explored, 12.0), draw_plan(&level, &explored, 12.0));
+        assert_eq!(
+            draw_plan(&level, &explored, 12.0),
+            draw_plan(&level, &explored, 12.0)
+        );
     }
 
     #[test]
@@ -485,15 +682,30 @@ mod tests {
             let p = frame.at(x, y);
             plan.alpha(p[0] as u32, p[1] as u32)
         };
-        let bar = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).find(|&(x, y)| level.cell(x, y) == Cell::Bars).expect("a cell block");
+        let bar = (0..level.height as i32)
+            .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+            .find(|&(x, y)| level.cell(x, y) == Cell::Bars)
+            .expect("a cell block");
         let arms = crate::level::geometry::bars::arms_of(&level, bar.0, bar.1);
         let (cx, cy) = (bar.0 as f32 + 0.5, bar.1 as f32 + 0.5);
-        assert!(crate::level::geometry::bars::ARMS.iter().enumerate().any(|(k, &(dx, dy))| arms[k] && ink_at(cx + dx as f32 * 0.25, cy + dy as f32 * 0.25) > 0.5), "bars are inked along their run");
-        let gate = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).find(|&(x, y)| level.cell(x, y) == Cell::Gate).expect("a gate");
-        assert!(ink_at(gate.0 as f32 + 0.5, gate.1 as f32 + 0.5) > 0.8, "a gate stands in floor");
+        assert!(
+            crate::level::geometry::bars::ARMS
+                .iter()
+                .enumerate()
+                .any(|(k, &(dx, dy))| arms[k]
+                    && ink_at(cx + dx as f32 * 0.25, cy + dy as f32 * 0.25) > 0.5),
+            "bars are inked along their run"
+        );
+        let gate = (0..level.height as i32)
+            .flat_map(|y| (0..level.width as i32).map(move |x| (x, y)))
+            .find(|&(x, y)| level.cell(x, y) == Cell::Gate)
+            .expect("a gate");
+        assert!(
+            ink_at(gate.0 as f32 + 0.5, gate.1 as f32 + 0.5) > 0.8,
+            "a gate stands in floor"
+        );
     }
 }
-
 
 /// The bars of a cell block: a thin line along each arm with a row of short ticks across it.
 fn bars(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, x: i32, y: i32, ink: f32) {
@@ -511,7 +723,13 @@ fn bars(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, x: i32, y: i3
         for t in [0.1, 0.3, 0.5] {
             let (px, py) = (cx + ux * t, cy + uy * t);
             let (sx, sy) = (uy.abs() * 0.14, ux.abs() * 0.14);
-            canvas.line(frame.at(px - sx, py - sy), frame.at(px + sx, py + sy), ink * 0.7, INK, 0.9);
+            canvas.line(
+                frame.at(px - sx, py - sy),
+                frame.at(px + sx, py + sy),
+                ink * 0.7,
+                INK,
+                0.9,
+            );
         }
     }
 }
@@ -524,10 +742,22 @@ fn gate(canvas: &mut PlanCanvas, frame: &PlanFrame, level: &Level, x: i32, y: i3
     let (ux, uy) = if spot.along_x { (1.0, 0.0) } else { (0.0, 1.0) };
     let (nx, ny) = (spot.into.0 as f32, spot.into.1 as f32);
     for s in [-1.0f32, 1.0] {
-        canvas.line(frame.at(cx + ux * s * 0.5, cy + uy * s * 0.5), frame.at(cx + ux * s * 0.34, cy + uy * s * 0.34), ink * 0.6, INK, 0.9);
+        canvas.line(
+            frame.at(cx + ux * s * 0.5, cy + uy * s * 0.5),
+            frame.at(cx + ux * s * 0.34, cy + uy * s * 0.34),
+            ink * 0.6,
+            INK,
+            0.9,
+        );
     }
     // The leaf, swung from the -x/-y jamb into the cell.
     let hinge = (cx - ux * 0.32, cy - uy * 0.32);
     let free = (hinge.0 + ux * 0.2 + nx * 0.5, hinge.1 + uy * 0.2 + ny * 0.5);
-    canvas.line(frame.at(hinge.0, hinge.1), frame.at(free.0, free.1), ink * 0.7, INK, 0.9);
+    canvas.line(
+        frame.at(hinge.0, hinge.1),
+        frame.at(free.0, free.1),
+        ink * 0.7,
+        INK,
+        0.9,
+    );
 }

@@ -50,9 +50,11 @@ use fb_items::Coins;
 use fb_items::scrap::EnchantingStock;
 use serde::{Deserialize, Serialize};
 
-use crate::camp::{PendingBed, SetCamp};
+use crate::camp::{Asleep, PendingBed, SetCamp};
 use crate::carry::FloorItem;
-use crate::character::{Character, ChosenDelver, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
+use crate::character::{
+    Character, ChosenDelver, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina,
+};
 use crate::combat::Health;
 use crate::combat::revival::Revives;
 use crate::combat::vitals::{Dying, Fallen};
@@ -189,8 +191,20 @@ pub struct LevelSignature {
 impl LevelSignature {
     /// The signature of `level` as generated.
     pub fn of(level: &fb_level::Level) -> LevelSignature {
-        let layout = serde_json::to_vec(&(&level.cells, &level.rooms, &level.props, &level.creatures, &level.folk, &level.items, &level.factions, &level.stairs)).unwrap_or_default();
-        let hash = layout.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+        let layout = serde_json::to_vec(&(
+            &level.cells,
+            &level.rooms,
+            &level.props,
+            &level.creatures,
+            &level.folk,
+            &level.items,
+            &level.factions,
+            &level.stairs,
+        ))
+        .unwrap_or_default();
+        let hash = layout.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+        });
         LevelSignature {
             depth: level.depth,
             level_seed: level.seed,
@@ -206,7 +220,11 @@ impl LevelSignature {
     /// The signatures of every level `record` holds, in the world of `run_seed`.
     pub fn of_record(run_seed: u32, record: &WorldRecord) -> Vec<LevelSignature> {
         let abyss = Abyss::new(run_seed);
-        record.levels.keys().map(|&depth| LevelSignature::of(&abyss.level_at(depth))).collect()
+        record
+            .levels
+            .keys()
+            .map(|&depth| LevelSignature::of(&abyss.level_at(depth)))
+            .collect()
     }
 }
 
@@ -214,7 +232,11 @@ impl SavedDelve {
     /// Whether every recorded level generates now as it did when it was recorded.
     pub fn check_levels(&self) -> Result<(), SaveError> {
         let now = LevelSignature::of_record(self.run_seed, &self.record);
-        if now == self.signatures { Ok(()) } else { Err(SaveError::Stale) }
+        if now == self.signatures {
+            Ok(())
+        } else {
+            Err(SaveError::Stale)
+        }
     }
 }
 
@@ -237,7 +259,10 @@ impl std::fmt::Display for SaveError {
         match self {
             SaveError::Io(error) => write!(f, "{error}"),
             SaveError::Unreadable(why) => write!(f, "{why}"),
-            SaveError::Version(version) => write!(f, "it is version {version}, and this game reads version {VERSION}"),
+            SaveError::Version(version) => write!(
+                f,
+                "it is version {version}, and this game reads version {VERSION}"
+            ),
             SaveError::Stale => write!(f, "its levels are not the ones this game generates"),
             SaveError::Missing(what) => write!(f, "there is no {what} to save"),
         }
@@ -276,13 +301,17 @@ pub fn read(path: &Path) -> Result<SavedDelve, SaveError> {
     struct Header {
         version: u32,
     }
-    let header: Header = serde_json::from_slice(&text).map_err(|e| SaveError::Unreadable(e.to_string()))?;
+    let header: Header =
+        serde_json::from_slice(&text).map_err(|e| SaveError::Unreadable(e.to_string()))?;
     if header.version != VERSION {
         return Err(SaveError::Version(header.version));
     }
-    let delve: SavedDelve = serde_json::from_slice(&text).map_err(|e| SaveError::Unreadable(e.to_string()))?;
+    let delve: SavedDelve =
+        serde_json::from_slice(&text).map_err(|e| SaveError::Unreadable(e.to_string()))?;
     if delve.delver.name.trim().is_empty() || delve.depth == 0 {
-        return Err(SaveError::Unreadable("the delver has no name or the depth is nought".into()));
+        return Err(SaveError::Unreadable(
+            "the delver has no name or the depth is nought".into(),
+        ));
     }
     Ok(delve)
 }
@@ -313,12 +342,19 @@ fn from_hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) || !text.is_ascii() {
         return None;
     }
-    (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok()).collect()
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
+        .collect()
 }
 
 /// The items of `record`, in the order [`walk`] numbers them: it, then what is in it, depth first.
 fn count_nodes(record: &ItemRecord) -> usize {
-    1 + record.contents.iter().map(|s| count_nodes(&s.item)).sum::<usize>()
+    1 + record
+        .contents
+        .iter()
+        .map(|s| count_nodes(&s.item))
+        .sum::<usize>()
 }
 
 /// Numbers the item `record` describes, which the inventory keeps as `id`, and everything in it:
@@ -326,10 +362,22 @@ fn count_nodes(record: &ItemRecord) -> usize {
 /// an item that is in the record but not in the inventory (one that could not be restored), so
 /// the numbering is the record's whichever side it is read on. Containers are matched to their
 /// contents by the cell they lie in.
-pub fn walk(inventory: &Inventory, id: Option<ItemId>, record: &ItemRecord, out: &mut Vec<Option<ItemId>>) {
+pub fn walk(
+    inventory: &Inventory,
+    id: Option<ItemId>,
+    record: &ItemRecord,
+    out: &mut Vec<Option<ItemId>>,
+) {
     out.push(id);
     for stowed in &record.contents {
-        let child = id.and_then(|id| inventory.grid(id)).and_then(|grid| grid.entries().iter().find(|e| e.at.x == stowed.x && e.at.y == stowed.y)).map(|e| e.id);
+        let child = id
+            .and_then(|id| inventory.grid(id))
+            .and_then(|grid| {
+                grid.entries()
+                    .iter()
+                    .find(|e| e.at.x == stowed.x && e.at.y == stowed.y)
+            })
+            .map(|e| e.id);
         if child.is_none() {
             // Everything under a missing item is missing too.
             out.extend(std::iter::repeat_n(None, count_nodes(&stowed.item)));
@@ -342,8 +390,13 @@ pub fn walk(inventory: &Inventory, id: Option<ItemId>, record: &ItemRecord, out:
 /// Everything about the delve that is not in the world record, from the live game; the world
 /// record is `record` (the current level just recorded). `bed` is the set camp they lie in.
 pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
-    world.get::<SetCamp>(bed).ok_or(SaveError::Missing("set camp"))?;
-    let camp = world.get::<FloorItem>(bed).map(|f| f.spot).ok_or(SaveError::Missing("camp on the floor"))?;
+    world
+        .get::<SetCamp>(bed)
+        .ok_or(SaveError::Missing("set camp"))?;
+    let camp = world
+        .get::<FloorItem>(bed)
+        .map(|f| f.spot)
+        .ok_or(SaveError::Missing("camp on the floor"))?;
     // The current level is recorded as if just left. The record the game goes on with is the one
     // it had: leaving the level writes it again.
     let before = world.resource::<WorldRecord>().clone();
@@ -363,13 +416,35 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
             }
         }
         let slots = world.resource::<Quickslots>().0;
-        let quickslots = slots.map(|bound| bound.and_then(|id| walked.iter().position(|w| *w == Some(id))).map(|n| n as u32));
+        let quickslots = slots.map(|bound| {
+            bound
+                .and_then(|id| walked.iter().position(|w| *w == Some(id)))
+                .map(|n| n as u32)
+        });
         let coins = inventory.coins();
-        SavedPack { worn, coins: [coins.gp, coins.sp, coins.cp], quickslots }
+        SavedPack {
+            worn,
+            coins: [coins.gp, coins.sp, coins.cp],
+            quickslots,
+        }
     };
     let body = {
-        let mut players = world.query_filtered::<(&Transform, &Locomotion, Option<&Health>, &DelverNeeds, &DelverStamina, &DelverMana, &Exhaustion, &ExhaustionTimes, &DelverRecovery, Option<&DelverEffects>), With<Player>>();
-        let (at, locomotion, health, needs, stamina, mana, exhaustion, times, recovery, effects) = players.single(world).map_err(|_| SaveError::Missing("delver"))?;
+        let mut players = world.query_filtered::<(
+            &Transform,
+            &Locomotion,
+            Option<&Health>,
+            &DelverNeeds,
+            &DelverStamina,
+            &DelverMana,
+            &Exhaustion,
+            &ExhaustionTimes,
+            &DelverRecovery,
+            Option<&DelverEffects>,
+        ), With<Player>>();
+        let (at, locomotion, health, needs, stamina, mana, exhaustion, times, recovery, effects) =
+            players
+                .single(world)
+                .map_err(|_| SaveError::Missing("delver"))?;
         let health = health.ok_or(SaveError::Missing("hit points"))?;
         SavedBody {
             at: at.translation.to_array(),
@@ -386,8 +461,17 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
             effects: effects.map(|e| e.0.clone()),
         }
     };
-    let mut explored: Vec<SavedExplored> =
-        world.resource::<ExploredLevels>().0.iter().map(|(&level_seed, seen)| SavedExplored { level_seed, width: seen.width, height: seen.height, bits: to_hex(&seen.to_bits()) }).collect();
+    let mut explored: Vec<SavedExplored> = world
+        .resource::<ExploredLevels>()
+        .0
+        .iter()
+        .map(|(&level_seed, seen)| SavedExplored {
+            level_seed,
+            width: seen.width,
+            height: seen.height,
+            bits: to_hex(&seen.to_bits()),
+        })
+        .collect();
     explored.sort_by_key(|e| e.level_seed);
     let signatures = LevelSignature::of_record(abyss.run_seed, &record);
     Ok(SavedDelve {
@@ -408,27 +492,59 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
 }
 
 /// A command: saves the delve now that the delver has lain down in `bed`, if this delve may
-/// save, and says so in the toast (a failed write says that, and sleep goes on).
+/// save, and says so in the toast and on the sleep's veil (a failed write says that, and sleep
+/// goes on).
 pub fn save_in_camp(bed: Entity) -> impl FnOnce(&mut World) {
     move |world: &mut World| {
         if !may_touch(world.get_resource::<Saveable>()) {
             return;
         }
-        let Some(path) = world.get_resource::<SaveFile>().and_then(|f| f.0.clone()) else { return };
+        let Some(path) = world.get_resource::<SaveFile>().and_then(|f| f.0.clone()) else {
+            return;
+        };
         let saved = gather(world, bed).and_then(|delve| write(&path, &delve));
-        let now = world.get_resource::<Time<Real>>().map_or(0.0, |t| t.elapsed_secs());
-        let line = match saved {
+        let now = world
+            .get_resource::<Time<Real>>()
+            .map_or(0.0, |t| t.elapsed_secs());
+        let outcome = match saved {
             Ok(()) => {
                 info!("save: the delve is saved to {}", path.display());
-                "Your delve is saved."
+                SaveOutcome::Saved
             }
             Err(error) => {
-                warn!("save: could not save the delve to {}: {error}", path.display());
-                "Your delve could not be saved."
+                warn!(
+                    "save: could not save the delve to {}: {error}",
+                    path.display()
+                );
+                SaveOutcome::Failed
             }
         };
         if let Some(mut toast) = world.get_resource_mut::<crate::inventory::Toast>() {
-            toast.say(line, now);
+            toast.say(outcome.line(), now);
+        }
+        // The sleep's veil falls over the toast within a second, so the sleep keeps the outcome
+        // for the veil to show.
+        if let Some(mut asleep) = world.get_resource_mut::<Asleep>()
+            && let Some(sleep) = asleep.0.as_mut()
+        {
+            sleep.saved = Some(outcome);
+        }
+    }
+}
+
+/// How a save went, for the lines that tell the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveOutcome {
+    Saved,
+    Failed,
+}
+
+impl SaveOutcome {
+    /// The line that says so.
+    pub fn line(self) -> &'static str {
+        match self {
+            SaveOutcome::Saved => "Your delve is saved.",
+            SaveOutcome::Failed => "Your delve could not be saved.",
         }
     }
 }
@@ -446,7 +562,8 @@ pub struct SavedGame {
 pub const SET_ASIDE_LINE: &str = "Your saved delve could not be read, and was set aside.";
 
 /// The title's line when a save's levels are not the ones this game generates, and it was set aside.
-pub const STALE_LINE: &str = "Your saved delve was made by an earlier version of the game, and was set aside.";
+pub const STALE_LINE: &str =
+    "Your saved delve was made by an earlier version of the game, and was set aside.";
 
 /// The title's line when an unreadable save could not even be moved.
 pub const UNREADABLE_LINE: &str = "Your saved delve could not be read.";
@@ -457,18 +574,37 @@ impl SavedGame {
     pub fn find(path: &Path) -> SavedGame {
         match read(path) {
             Ok(delve) => match delve.check_levels() {
-                Ok(()) => SavedGame { delve: Some(Box::new(delve)), unreadable: None },
+                Ok(()) => SavedGame {
+                    delve: Some(Box::new(delve)),
+                    unreadable: None,
+                },
                 Err(error) => {
                     warn!("save: {} is not for this game ({error})", path.display());
                     let aside = set_aside(path);
-                    SavedGame { delve: None, unreadable: Some(if aside.is_some() { STALE_LINE } else { UNREADABLE_LINE }) }
+                    SavedGame {
+                        delve: None,
+                        unreadable: Some(if aside.is_some() {
+                            STALE_LINE
+                        } else {
+                            UNREADABLE_LINE
+                        }),
+                    }
                 }
             },
-            Err(SaveError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => SavedGame::default(),
+            Err(SaveError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                SavedGame::default()
+            }
             Err(error) => {
                 warn!("save: {} cannot be read ({error})", path.display());
                 let aside = set_aside(path);
-                SavedGame { delve: None, unreadable: Some(if aside.is_some() { SET_ASIDE_LINE } else { UNREADABLE_LINE }) }
+                SavedGame {
+                    delve: None,
+                    unreadable: Some(if aside.is_some() {
+                        SET_ASIDE_LINE
+                    } else {
+                        UNREADABLE_LINE
+                    }),
+                }
             }
         }
     }
@@ -501,7 +637,10 @@ pub struct ResumeDelve(pub Box<SavedDelve>);
 pub fn begin_resume(commands: &mut Commands, next: &mut NextState<AppState>, saved: SavedDelve) {
     let mut level = Abyss::new(saved.run_seed).level_at(saved.depth);
     saved.record.apply_to(&mut level);
-    info!("save: {} resumes on depth {}", saved.delver.name, saved.depth);
+    info!(
+        "save: {} resumes on depth {}",
+        saved.delver.name, saved.depth
+    );
     commands.insert_resource(CurrentLevel(level));
     commands.insert_resource(ChosenDelver(Character::from(saved.delver.clone())));
     commands.insert_resource(Saveable(true));
@@ -517,10 +656,16 @@ struct SettleHitPoints(Health);
 /// Puts back everything a [`SavedDelve`] holds that [`begin_resume`] did not, on the first frame
 /// of the delve and before any system that plays runs ([`ResumeSet`]).
 pub fn restore_delve(world: &mut World) {
-    let Some(ResumeDelve(saved)) = world.remove_resource::<ResumeDelve>() else { return };
+    let Some(ResumeDelve(saved)) = world.remove_resource::<ResumeDelve>() else {
+        return;
+    };
     let saved = *saved;
     // The world and where in it.
-    *world.resource_mut::<Abyss>() = Abyss { run_seed: saved.run_seed, depth: saved.depth, arrival: Arrival::FromBelow };
+    *world.resource_mut::<Abyss>() = Abyss {
+        run_seed: saved.run_seed,
+        depth: saved.depth,
+        arrival: Arrival::FromBelow,
+    };
     *world.resource_mut::<WorldRecord>() = saved.record;
     world.resource_mut::<Enchanting>().0 = saved.enchanting;
     world.resource_mut::<GameClock>().jump_to(saved.clock);
@@ -528,17 +673,26 @@ pub fn restore_delve(world: &mut World) {
     let mut explored = world.resource_mut::<ExploredLevels>();
     explored.0.clear();
     for seen in &saved.explored {
-        match from_hex(&seen.bits).and_then(|bits| fb_level::sight::Explored::from_bits(seen.width, seen.height, &bits)) {
+        match from_hex(&seen.bits)
+            .and_then(|bits| fb_level::sight::Explored::from_bits(seen.width, seen.height, &bits))
+        {
             Some(cells) => {
                 explored.0.insert(seen.level_seed, cells);
             }
-            None => warn!("save: what the map saw of level {} is unreadable; it is forgotten", seen.level_seed),
+            None => warn!(
+                "save: what the map saw of level {} is unreadable; it is forgotten",
+                seen.level_seed
+            ),
         }
     }
     // The delver and what they carry.
     *world.resource_mut::<Character>() = Character::from(saved.delver);
     let mut inventory = Inventory::default();
-    inventory.set_coins(Coins { gp: saved.pack.coins[0], sp: saved.pack.coins[1], cp: saved.pack.coins[2] });
+    inventory.set_coins(Coins {
+        gp: saved.pack.coins[0],
+        sp: saved.pack.coins[1],
+        cp: saved.pack.coins[2],
+    });
     let mut walked: Vec<Option<ItemId>> = Vec::new();
     for (slot, record) in &saved.pack.worn {
         let Some(id) = restore_item(&mut inventory, record) else {
@@ -546,7 +700,10 @@ pub fn restore_delve(world: &mut World) {
             continue;
         };
         if inventory.wear(id, *slot).is_err() {
-            warn!("save: {} would not go back on at {slot:?}; it is dropped", record.name);
+            warn!(
+                "save: {} would not go back on at {slot:?}; it is dropped",
+                record.name
+            );
             inventory.forget(id);
             walked.extend(std::iter::repeat_n(None, count_nodes(record)));
             continue;
@@ -563,12 +720,16 @@ pub fn restore_delve(world: &mut World) {
     *world.resource_mut::<Quickslots>() = slots;
     // The body.
     let body = saved.body;
-    let health = Health { hp: body.hit_points, max: body.max_hit_points };
+    let health = Health {
+        hp: body.hit_points,
+        max: body.max_hit_points,
+    };
     let mut players = world.query_filtered::<Entity, With<Player>>();
     if let Ok(player) = players.single(world) {
         let mut player = world.entity_mut(player);
         player.insert((
-            Transform::from_translation(Vec3::from_array(body.at)).with_rotation(Quat::from_rotation_y(body.yaw)),
+            Transform::from_translation(Vec3::from_array(body.at))
+                .with_rotation(Quat::from_rotation_y(body.yaw)),
             health,
             DelverNeeds(body.needs),
             DelverStamina(body.stamina),
@@ -586,16 +747,27 @@ pub fn restore_delve(world: &mut World) {
             }
         }
         if let Some(mut locomotion) = player.get_mut::<Locomotion>() {
-            *locomotion = Locomotion { yaw: body.yaw, pitch: body.pitch, velocity: Vec2::ZERO };
+            *locomotion = Locomotion {
+                yaw: body.yaw,
+                pitch: body.pitch,
+                velocity: Vec2::ZERO,
+            };
         }
     }
     world.insert_resource(SettleHitPoints(health));
-    world.insert_resource(PendingBed { spot: saved.camp, waited: 0 });
+    world.insert_resource(PendingBed {
+        spot: saved.camp,
+        waited: 0,
+    });
 }
 
 /// Puts the delver's hit points back once the fitting of their maximum to their Constitution has
 /// had its look at the restored character.
-fn settle_hit_points(mut commands: Commands, settle: Res<SettleHitPoints>, mut players: Query<&mut Health, With<Player>>) {
+fn settle_hit_points(
+    mut commands: Commands,
+    settle: Res<SettleHitPoints>,
+    mut players: Query<&mut Health, With<Player>>,
+) {
     for mut health in &mut players {
         *health = settle.0;
     }
@@ -616,8 +788,15 @@ fn forget_save_on_death(saveable: Option<Res<Saveable>>, file: Option<Res<SaveFi
 /// Deletes the save at the lethal blow: the delver is brought to 0 hit points ([`Dying`] begins)
 /// with no revive left in this world, so quitting or crashing in the last gasp cannot keep it.
 /// With a revive left they may fall unconscious and come to, so nothing is deleted yet.
-fn forget_save_on_lethal_blow(saveable: Option<Res<Saveable>>, file: Option<Res<SaveFile>>, revives: Option<Res<Revives>>, rules: Option<Res<crate::rules::GameRules>>) {
-    let left = crate::rules::GameRules::of(&rules).revival.left(revives.map_or(0, |r| r.0));
+fn forget_save_on_lethal_blow(
+    saveable: Option<Res<Saveable>>,
+    file: Option<Res<SaveFile>>,
+    revives: Option<Res<Revives>>,
+    rules: Option<Res<crate::rules::GameRules>>,
+) {
+    let left = crate::rules::GameRules::of(&rules)
+        .revival
+        .left(revives.map_or(0, |r| r.0));
     if left == 0 {
         forget_save_on_death(saveable, file);
     }
@@ -642,11 +821,33 @@ impl Plugin for SavePlugin {
         app.init_resource::<Saveable>()
             .init_resource::<SavedGame>()
             .add_systems(OnEnter(AppState::Title), find_saved_game)
-            .configure_sets(Update, ResumeSet.before(DelveSystems).run_if(in_state(AppState::Delving)).run_if(resource_exists::<ResumeDelve>))
+            .configure_sets(
+                Update,
+                ResumeSet
+                    .before(DelveSystems)
+                    .run_if(in_state(AppState::Delving))
+                    .run_if(resource_exists::<ResumeDelve>),
+            )
             .add_systems(Update, restore_delve.in_set(ResumeSet))
-            .add_systems(Update, settle_hit_points.after(crate::combat::vitals::fit_hit_points).run_if(resource_exists::<SettleHitPoints>).in_set(DelveSystems))
-            .add_systems(Update, forget_save_on_death.run_if(resource_added::<Fallen>).in_set(DelveSystems))
-            .add_systems(Update, forget_save_on_lethal_blow.run_if(resource_added::<Dying>).in_set(DelveSystems))
+            .add_systems(
+                Update,
+                settle_hit_points
+                    .after(crate::combat::vitals::fit_hit_points)
+                    .run_if(resource_exists::<SettleHitPoints>)
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                forget_save_on_death
+                    .run_if(resource_added::<Fallen>)
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                forget_save_on_lethal_blow
+                    .run_if(resource_added::<Dying>)
+                    .in_set(DelveSystems),
+            )
             .add_systems(OnExit(AppState::Delving), end_saveable);
     }
 }
@@ -656,11 +857,18 @@ impl Plugin for SavePlugin {
 pub(crate) fn sample_delve() -> SavedDelve {
     let character = Character::roll(5);
     let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 1207);
-    record.levels.insert(1, crate::record::LevelRecord::default());
+    record
+        .levels
+        .insert(1, crate::record::LevelRecord::default());
     let signatures = LevelSignature::of_record(1207, &record);
     let bed = fb_items::roll_item("Tent", 9).unwrap();
     let sack = ItemRecord {
-        contents: vec![Stowed { x: 1, y: 0, turned: true, item: item_record(&fb_items::roll_item("Dagger", 4).unwrap()) }],
+        contents: vec![Stowed {
+            x: 1,
+            y: 0,
+            turned: true,
+            item: item_record(&fb_items::roll_item("Dagger", 4).unwrap()),
+        }],
         ..item_record(&fb_items::roll_item("Sack", 3).unwrap())
     };
     SavedDelve {
@@ -669,7 +877,17 @@ pub(crate) fn sample_delve() -> SavedDelve {
         depth: 3,
         delver: SavedDelver::from(&character),
         record,
-        pack: SavedPack { worn: vec![(fb_items::Slot::Belt, item_record(&fb_items::roll_item("Belt", 3).unwrap())), (fb_items::Slot::Back, sack)], coins: [1, 2, 3], quickslots: [None; SLOTS] },
+        pack: SavedPack {
+            worn: vec![
+                (
+                    fb_items::Slot::Belt,
+                    item_record(&fb_items::roll_item("Belt", 3).unwrap()),
+                ),
+                (fb_items::Slot::Back, sack),
+            ],
+            coins: [1, 2, 3],
+            quickslots: [None; SLOTS],
+        },
         body: SavedBody {
             at: [12.5, 0.0, 33.25],
             yaw: 1.5,
@@ -686,10 +904,24 @@ pub(crate) fn sample_delve() -> SavedDelve {
         },
         clock: GameTime::from_seconds(123_456.789),
         revives: 1,
-        enchanting: EnchantingStock { essence: 4, materials: [("iron".to_string(), 2)].into() },
+        enchanting: EnchantingStock {
+            essence: 4,
+            materials: [("iron".to_string(), 2)].into(),
+        },
         signatures,
-        explored: vec![SavedExplored { level_seed: 7, width: 8, height: 8, bits: to_hex(&[0xff, 0x00, 0x0f, 0, 0, 0, 0, 1]) }],
-        camp: fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed },
+        explored: vec![SavedExplored {
+            level_seed: 7,
+            width: 8,
+            height: 8,
+            bits: to_hex(&[0xff, 0x00, 0x0f, 0, 0, 0, 0, 1]),
+        }],
+        camp: fb_level::ItemSpot {
+            x: 4.5,
+            y: 9.25,
+            yaw: 0.5,
+            family: bed.shape.family(),
+            seed: bed.seed,
+        },
     }
 }
 
@@ -718,7 +950,10 @@ mod tests {
         again.depth = 4;
         write(&path, &again).unwrap();
         assert_eq!(read(&path).unwrap().depth, 4);
-        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(FILE_NAME)]);
     }
 
@@ -726,7 +961,11 @@ mod tests {
     fn the_version_is_written_first() {
         let path = scratch("version");
         write(&path, &sample()).unwrap();
-        assert!(std::fs::read_to_string(&path).unwrap().starts_with("{\"version\":1,"));
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("{\"version\":1,")
+        );
     }
 
     #[test]
@@ -740,25 +979,43 @@ mod tests {
             ("empty", vec![]),
             ("garbled", {
                 let mut garbled = whole.clone();
-                garbled.iter_mut().skip(40).step_by(7).for_each(|b| *b = b'#');
+                garbled
+                    .iter_mut()
+                    .skip(40)
+                    .step_by(7)
+                    .for_each(|b| *b = b'#');
                 garbled
             }),
             ("not text", vec![0xff, 0xfe, 0x00, 0x9f]),
             ("another document", br#"{"hello":"world"}"#.to_vec()),
-            ("no depth", String::from_utf8(whole.clone()).unwrap().replacen("\"depth\":3", "\"depth\":0", 1).into_bytes()),
+            (
+                "no depth",
+                String::from_utf8(whole.clone())
+                    .unwrap()
+                    .replacen("\"depth\":3", "\"depth\":0", 1)
+                    .into_bytes(),
+            ),
         ] {
             std::fs::write(&path, bytes).unwrap();
-            assert!(matches!(read(&path), Err(SaveError::Unreadable(_))), "{what}");
+            assert!(
+                matches!(read(&path), Err(SaveError::Unreadable(_))),
+                "{what}"
+            );
         }
         std::fs::remove_file(&path).unwrap();
-        assert!(matches!(read(&path), Err(SaveError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound));
+        assert!(
+            matches!(read(&path), Err(SaveError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound)
+        );
     }
 
     #[test]
     fn a_save_of_another_version_is_refused_not_guessed_at() {
         let path = scratch("other");
         write(&path, &sample()).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap().replacen("\"version\":1", "\"version\":2", 1);
+        let text =
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .replacen("\"version\":1", "\"version\":2", 1);
         std::fs::write(&path, text).unwrap();
         assert!(matches!(read(&path), Err(SaveError::Version(2))));
     }
@@ -790,7 +1047,10 @@ mod tests {
 
     #[test]
     fn hex_comes_back_and_nonsense_does_not() {
-        assert_eq!(from_hex(&to_hex(&[0, 1, 0xab, 0xff])), Some(vec![0, 1, 0xab, 0xff]));
+        assert_eq!(
+            from_hex(&to_hex(&[0, 1, 0xab, 0xff])),
+            Some(vec![0, 1, 0xab, 0xff])
+        );
         assert_eq!(from_hex("abc"), None);
         assert_eq!(from_hex("zz"), None);
         assert_eq!(from_hex("é1"), None);
@@ -802,9 +1062,17 @@ mod tests {
         let outer = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
         let inner = inventory.add(fb_items::roll_item("Sack", 4).unwrap());
         let dagger = inventory.add(fb_items::roll_item("Dagger", 5).unwrap());
-        let at = inventory.grid(outer).unwrap().first_free(inventory.footprint(inner).unwrap()).unwrap();
+        let at = inventory
+            .grid(outer)
+            .unwrap()
+            .first_free(inventory.footprint(inner).unwrap())
+            .unwrap();
         inventory.put(inner, outer, at).unwrap();
-        let at = inventory.grid(inner).unwrap().first_free(inventory.footprint(dagger).unwrap()).unwrap();
+        let at = inventory
+            .grid(inner)
+            .unwrap()
+            .first_free(inventory.footprint(dagger).unwrap())
+            .unwrap();
         inventory.put(dagger, inner, at).unwrap();
         let record = record_item(&inventory, outer).unwrap();
         (inventory, outer, record, inner, dagger)
@@ -825,7 +1093,10 @@ mod tests {
         assert_eq!(again.len(), 3);
         assert!(again.iter().all(Option::is_some));
         assert_ne!(again[0], walked[0]);
-        let names: Vec<_> = again.iter().map(|id| other.item(id.unwrap()).unwrap().base.clone()).collect();
+        let names: Vec<_> = again
+            .iter()
+            .map(|id| other.item(id.unwrap()).unwrap().base.clone())
+            .collect();
         assert_eq!(names, ["Sack", "Sack", "Dagger"]);
         // What could not be put back leaves its place in the numbering.
         let mut missing = Vec::new();
@@ -837,7 +1108,10 @@ mod tests {
     #[test]
     fn a_save_goes_beside_the_settings_file() {
         if std::env::var_os("FB_SAVE_FILE").is_none() {
-            assert_eq!(SaveFile::default_path(), SettingsFile::default_path().map(|s| s.with_file_name(FILE_NAME)));
+            assert_eq!(
+                SaveFile::default_path(),
+                SettingsFile::default_path().map(|s| s.with_file_name(FILE_NAME))
+            );
         }
     }
 
@@ -856,7 +1130,12 @@ mod tests {
             let path = scratch(&format!("death-{saveable}"));
             write(&path, &sample()).unwrap();
             let mut app = App::new();
-            app.insert_resource(SaveFile(Some(path.clone()))).insert_resource(Saveable(saveable)).add_systems(Update, forget_save_on_death.run_if(resource_added::<Fallen>));
+            app.insert_resource(SaveFile(Some(path.clone())))
+                .insert_resource(Saveable(saveable))
+                .add_systems(
+                    Update,
+                    forget_save_on_death.run_if(resource_added::<Fallen>),
+                );
             app.update();
             assert!(path.exists(), "nothing has fallen");
             app.insert_resource(Fallen(1.0));
@@ -868,16 +1147,27 @@ mod tests {
     #[test]
     fn a_save_is_found_for_the_title_or_set_aside_with_one_line() {
         let path = scratch("find");
-        assert_eq!(SavedGame::find(&path), SavedGame::default(), "no file, no save, no line");
+        assert_eq!(
+            SavedGame::find(&path),
+            SavedGame::default(),
+            "no file, no save, no line"
+        );
         write(&path, &sample()).unwrap();
         let found = SavedGame::find(&path);
         assert_eq!(found.delve.as_deref(), Some(&sample()));
         assert_eq!(found.unreadable, None);
         std::fs::write(&path, "{ \"version\": 1, \"depth\"").unwrap();
         let found = SavedGame::find(&path);
-        assert_eq!((found.delve, found.unreadable), (None, Some(SET_ASIDE_LINE)));
+        assert_eq!(
+            (found.delve, found.unreadable),
+            (None, Some(SET_ASIDE_LINE))
+        );
         assert!(!path.exists() && path.with_file_name(ASIDE_NAME).exists());
-        assert_eq!(SavedGame::find(&path), SavedGame::default(), "and it is not met again");
+        assert_eq!(
+            SavedGame::find(&path),
+            SavedGame::default(),
+            "and it is not met again"
+        );
     }
 
     #[test]
@@ -886,9 +1176,17 @@ mod tests {
         let mut delve = sample();
         assert_eq!(delve.signatures.len(), 1);
         write(&path, &delve).unwrap();
-        assert_eq!(SavedGame::find(&path).delve.as_deref(), Some(&delve), "as made, it is found");
+        assert_eq!(
+            SavedGame::find(&path).delve.as_deref(),
+            Some(&delve),
+            "as made, it is found"
+        );
         // A generator changed since: the level's layout, or its counts, are not what was recorded.
-        for change in [|s: &mut LevelSignature| s.hash ^= 1, |s: &mut LevelSignature| s.folk += 1, |s: &mut LevelSignature| s.level_seed += 1] {
+        for change in [
+            |s: &mut LevelSignature| s.hash ^= 1,
+            |s: &mut LevelSignature| s.folk += 1,
+            |s: &mut LevelSignature| s.level_seed += 1,
+        ] {
             delve.signatures[0] = sample().signatures[0].clone();
             change(&mut delve.signatures[0]);
             write(&path, &delve).unwrap();
@@ -908,12 +1206,19 @@ mod tests {
                 .insert_resource(Saveable(true))
                 .insert_resource(Revives(revives))
                 .init_resource::<crate::rules::GameRules>()
-                .add_systems(Update, forget_save_on_lethal_blow.run_if(resource_added::<Dying>));
+                .add_systems(
+                    Update,
+                    forget_save_on_lethal_blow.run_if(resource_added::<Dying>),
+                );
             app.update();
             assert!(path.exists());
             app.insert_resource(Dying(5.0));
             app.update();
-            assert_eq!(!path.exists(), gone, "revives {revives}: gone in the last gasp, before any Fallen");
+            assert_eq!(
+                !path.exists(),
+                gone,
+                "revives {revives}: gone in the last gasp, before any Fallen"
+            );
         }
     }
 }

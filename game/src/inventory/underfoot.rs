@@ -42,25 +42,54 @@ pub fn set_down_around<'a>(
     let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
     let ids: Vec<ItemId> = items.map(|item| inventory.add(item.clone())).collect();
     // What goes in a holder set down with it (an archer's arrows in its quiver) stays in it.
-    let holders: Vec<ItemId> = ids.iter().copied().filter(|&id| inventory.item(id).and_then(|i| i.profile.holds.as_ref()).is_some_and(|g| !g.accepts.is_empty())).collect();
+    let holders: Vec<ItemId> = ids
+        .iter()
+        .copied()
+        .filter(|&id| {
+            inventory
+                .item(id)
+                .and_then(|i| i.profile.holds.as_ref())
+                .is_some_and(|g| !g.accepts.is_empty())
+        })
+        .collect();
     let loose: Vec<ItemId> = ids
         .into_iter()
         .filter(|&id| {
-            let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
+            let footprint = inventory
+                .footprint(id)
+                .unwrap_or(Footprint { cols: 1, rows: 1 });
             !holders.iter().any(|&holder| {
-                holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) && inventory.grid(holder).and_then(|g| g.first_free(footprint)).is_some_and(|at| inventory.put(id, holder, at).is_ok())
+                holder != id
+                    && inventory
+                        .item(id)
+                        .is_some_and(|item| inventory.accepts(holder, item))
+                    && inventory
+                        .grid(holder)
+                        .and_then(|g| g.first_free(footprint))
+                        .is_some_and(|at| inventory.put(id, holder, at).is_ok())
             })
         })
         .collect();
     let count = loose.len().max(1);
     let first = rng.range_f32(0.0, std::f32::consts::TAU);
     for (i, id) in loose.into_iter().enumerate() {
-        let Some(item) = inventory.item(id) else { continue };
-        let radius = crate::carry::floor_radius(&crate::carry::item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), floor_scale).min(CELL * 0.5 - 0.5);
+        let Some(item) = inventory.item(id) else {
+            continue;
+        };
+        let radius = crate::carry::floor_radius(
+            &crate::carry::item_points(&item.shape.build()),
+            fb_items::profile::stands_on_base(&item.shape),
+            floor_scale,
+        )
+        .min(CELL * 0.5 - 0.5);
         let angle = first + i as f32 / count as f32 * std::f32::consts::TAU;
         let want = centre + Vec2::from_angle(angle) * (SHED_RING + radius + 0.8 * (i % 2) as f32);
         let spot = crate::player::slide_around(centre, want, radius, &blocked, obstacles);
-        changes.0.push(FloorChange::SetDownAt(id, spot / CELL, rng.range_f32(0.0, std::f32::consts::TAU)));
+        changes.0.push(FloorChange::SetDownAt(
+            id,
+            spot / CELL,
+            rng.range_f32(0.0, std::f32::consts::TAU),
+        ));
     }
 }
 
@@ -77,7 +106,10 @@ pub struct Underfoot {
 
 impl Default for Underfoot {
     fn default() -> Self {
-        Underfoot { grid: Grid::new(UNDERFOOT_COLS, UNDERFOOT_ROWS), bags: Vec::new() }
+        Underfoot {
+            grid: Grid::new(UNDERFOOT_COLS, UNDERFOOT_ROWS),
+            bags: Vec::new(),
+        }
     }
 }
 
@@ -97,7 +129,11 @@ pub fn lay_out_underfoot(mut nearby: Vec<Nearby>) -> Underfoot {
     nearby.retain(|n| n.distance <= REACH);
     nearby.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.id.cmp(&b.id)));
     Underfoot {
-        grid: Grid::pack(UNDERFOOT_COLS, UNDERFOOT_ROWS, nearby.iter().map(|n| (n.id, n.footprint))),
+        grid: Grid::pack(
+            UNDERFOOT_COLS,
+            UNDERFOOT_ROWS,
+            nearby.iter().map(|n| (n.id, n.footprint)),
+        ),
         bags: nearby.iter().filter(|n| n.bag).map(|n| n.id).collect(),
     }
 }
@@ -120,13 +156,20 @@ pub fn track_underfoot(
     if !open.is(crate::play::Screen::Inventory) {
         return;
     }
-    let Some(eye) = eyes.iter().next().map(GlobalTransform::translation) else { return };
+    let Some(eye) = eyes.iter().next().map(GlobalTransform::translation) else {
+        return;
+    };
     let nearby = floor
         .iter()
         .filter_map(|(item, transform)| {
             let footprint = inventory.footprint(item.id)?;
             let centre = transform.transform_point((item.min + item.max) * 0.5);
-            Some(Nearby { id: item.id, footprint, distance: centre.distance(eye), bag: inventory.grid(item.id).is_some() })
+            Some(Nearby {
+                id: item.id,
+                footprint,
+                distance: centre.distance(eye),
+                bag: inventory.grid(item.id).is_some(),
+            })
         })
         .collect();
     underfoot.set_if_neq(lay_out_underfoot(nearby));
@@ -181,7 +224,17 @@ pub fn apply_floor_changes(
             }
             FloorChange::SetDown(id, aside) => {
                 if let Some(eye) = eyes.iter().next() {
-                    set_down(&mut spawner, &inventory, level, &blocked_cells, &obstacles, eye, id, aside, &tuning);
+                    set_down(
+                        &mut spawner,
+                        &inventory,
+                        level,
+                        &blocked_cells,
+                        &obstacles,
+                        eye,
+                        id,
+                        aside,
+                        &tuning,
+                    );
                 }
             }
             FloorChange::SetDownAt(id, at, yaw) => {
@@ -189,7 +242,14 @@ pub fn apply_floor_changes(
             }
             FloorChange::SetDownCamp(id) => {
                 if let Some(eye) = eyes.iter().next() {
-                    crate::carry::set_camp_down_unchecked(&mut spawner, &inventory, level, eye, id, &tuning);
+                    crate::carry::set_camp_down_unchecked(
+                        &mut spawner,
+                        &inventory,
+                        level,
+                        eye,
+                        id,
+                        &tuning,
+                    );
                 }
             }
         }
@@ -211,12 +271,25 @@ pub fn drop_hovered(
     if !input.just_pressed(Action::Drop) || !inventory.is_carried(id) {
         return;
     }
-    let Some(size) = inventory.footprint(id) else { return };
+    let Some(size) = inventory.footprint(id) else {
+        return;
+    };
     let target = match underfoot.grid.first_free(size) {
-        Some(at) => Target::Cell { view: GridView::Underfoot, cell: IVec2::new(at.x as i32, at.y as i32) },
+        Some(at) => Target::Cell {
+            view: GridView::Underfoot,
+            cell: IVec2::new(at.x as i32, at.y as i32),
+        },
         None => Target::Level,
     };
-    let drag = Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
+    let drag = Drag {
+        id,
+        grab: IVec2::ZERO,
+        size,
+        turned: false,
+        press: Vec2::ZERO,
+        active: true,
+        target: None,
+    };
     if let Ok(set_down) = drop_at(&mut inventory, &drag, target, underfoot.grid.cols) {
         changes.0.extend(set_down);
     }
@@ -224,17 +297,29 @@ pub fn drop_hovered(
 
 /// For captures (`FB_DEBUG_KIT`): a few frames in, once the eye has settled, a sack holding a
 /// couple of things and a loose thing beside it are set down in front of the delver.
-pub fn set_down_debug_kit(mut inventory: ResMut<Inventory>, mut changes: ResMut<FloorChanges>, mut frames: Local<u32>) {
+pub fn set_down_debug_kit(
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut frames: Local<u32>,
+) {
     *frames += 1;
     if *frames != 4 {
         return;
     }
-    let Some(sack) = fb_items::roll_item("Sack", 41) else { return };
+    let Some(sack) = fb_items::roll_item("Sack", 41) else {
+        return;
+    };
     let sack = inventory.add(sack);
     for (base, seed) in [("Waterskin", 5), ("Rope", 9), ("Glowcap", 3)] {
         if let Some(item) = fb_items::roll_item(base, seed) {
             let id = inventory.add(item);
-            let at = inventory.grid(sack).and_then(|g| g.first_free(inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 })));
+            let at = inventory.grid(sack).and_then(|g| {
+                g.first_free(
+                    inventory
+                        .footprint(id)
+                        .unwrap_or(Footprint { cols: 1, rows: 1 }),
+                )
+            });
             if at.is_none_or(|at| inventory.put(id, sack, at).is_err()) {
                 inventory.forget(id);
             }
@@ -269,13 +354,37 @@ fn stock_for_capture(spec: &str) -> Vec<fb_items::Item> {
     use fb_faction::{Profession, Style, Tier, Trade};
     let mut parts = spec.split('/');
     let key = |label: &str| label.replace(' ', "_");
-    let (Some(profession), Some(tier)) = (parts.next(), parts.next()) else { return vec![] };
-    let Some(profession) = Profession::TRADES.into_iter().find(|p| key(p.label()).starts_with(profession)) else { return vec![] };
-    let Some(tier) = Tier::ALL.into_iter().find(|t| t.label() == tier) else { return vec![] };
-    let style = parts.next().and_then(|name| Style::ARMOUR.into_iter().chain(Style::WEAPONS).find(|s| key(s.label()) == name));
+    let (Some(profession), Some(tier)) = (parts.next(), parts.next()) else {
+        return vec![];
+    };
+    let Some(profession) = Profession::TRADES
+        .into_iter()
+        .find(|p| key(p.label()).starts_with(profession))
+    else {
+        return vec![];
+    };
+    let Some(tier) = Tier::ALL.into_iter().find(|t| t.label() == tier) else {
+        return vec![];
+    };
+    let style = parts.next().and_then(|name| {
+        Style::ARMOUR
+            .into_iter()
+            .chain(Style::WEAPONS)
+            .find(|s| key(s.label()) == name)
+    });
     let depth = parts.next().and_then(|d| d.parse().ok()).unwrap_or(1);
-    let Some(shop) = (Trade { profession, tier, style }).shop("Bera", "the Ash Choir") else { return vec![] };
-    fb_items::stock::stock(&shop, depth, 7).into_iter().take(3).collect()
+    let Some(shop) = (Trade {
+        profession,
+        tier,
+        style,
+    })
+    .shop("Bera", "the Ash Choir") else {
+        return vec![];
+    };
+    fb_items::stock::stock(&shop, depth, 7)
+        .into_iter()
+        .take(3)
+        .collect()
 }
 
 /// The item one `FB_DROP` entry names (`base[:rarity]`).
@@ -285,7 +394,9 @@ fn item_for_capture(entry: &str) -> Option<fb_items::Item> {
     if let Some(base) = entry.strip_suffix("+set") {
         return item_for_capture(base).and_then(|item| fb_items::camp::set_up(&item));
     }
-    let (base, rarity) = entry.split_once(':').map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
+    let (base, rarity) = entry
+        .split_once(':')
+        .map_or((entry, None), |(b, r)| (b, Some(r.trim().to_lowercase())));
     let wanted = match rarity.as_deref() {
         None | Some("") => None,
         Some("common") => Some(Rarity::Common),
@@ -297,12 +408,18 @@ fn item_for_capture(entry: &str) -> Option<fb_items::Item> {
             return None;
         }
     };
-    (1..20_000).filter_map(|seed| fb_items::roll_item_with(base.trim(), seed, fb_items::Odds::loot(8))).find(|item| wanted.is_none_or(|r| item.rarity == r))
+    (1..20_000)
+        .filter_map(|seed| fb_items::roll_item_with(base.trim(), seed, fb_items::Odds::loot(8)))
+        .find(|item| wanted.is_none_or(|r| item.rarity == r))
 }
 
 /// For captures (`FB_DROP`): a few frames in, sets each item [`drops_for_capture`] names down
 /// in front of the delver, spread from left to right.
-pub fn set_down_for_capture(mut inventory: ResMut<Inventory>, mut changes: ResMut<FloorChanges>, mut frames: Local<u32>) {
+pub fn set_down_for_capture(
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    mut frames: Local<u32>,
+) {
     *frames += 1;
     if *frames != 4 {
         return;
@@ -312,8 +429,16 @@ pub fn set_down_for_capture(mut inventory: ResMut<Inventory>, mut changes: ResMu
     for (i, item) in drops.into_iter().enumerate() {
         let set_camp = item.is_set_camp();
         let id = inventory.add(item);
-        let aside = if count > 1 { (i as f32 / (count - 1) as f32 * 2.0 - 1.0) * crate::carry::DROP_SPREAD } else { 0.0 };
-        changes.0.push(if set_camp { FloorChange::SetDownCamp(id) } else { FloorChange::SetDown(id, aside) });
+        let aside = if count > 1 {
+            (i as f32 / (count - 1) as f32 * 2.0 - 1.0) * crate::carry::DROP_SPREAD
+        } else {
+            0.0
+        };
+        changes.0.push(if set_camp {
+            FloorChange::SetDownCamp(id)
+        } else {
+            FloorChange::SetDown(id, aside)
+        });
     }
 }
 
@@ -322,16 +447,28 @@ mod tests {
     use super::*;
 
     fn near(id: u32, cols: u8, rows: u8, distance: f32, bag: bool) -> Nearby {
-        Nearby { id: ItemId(id), footprint: Footprint { cols, rows }, distance, bag }
+        Nearby {
+            id: ItemId(id),
+            footprint: Footprint { cols, rows },
+            distance,
+            bag,
+        }
     }
 
     #[test]
     fn only_what_is_in_reach_lies_underfoot_nearest_first() {
-        let underfoot = lay_out_underfoot(vec![near(1, 1, 1, 15.0, false), near(2, 2, 2, 8.0, true), near(3, 1, 1, REACH + 1.0, false)]);
+        let underfoot = lay_out_underfoot(vec![
+            near(1, 1, 1, 15.0, false),
+            near(2, 2, 2, 8.0, true),
+            near(3, 1, 1, REACH + 1.0, false),
+        ]);
         let ids: Vec<ItemId> = underfoot.grid.entries().iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![ItemId(2), ItemId(1)]);
         assert_eq!(underfoot.bags, vec![ItemId(2)]);
-        assert_eq!((underfoot.grid.cols, underfoot.grid.rows), (UNDERFOOT_COLS, UNDERFOOT_ROWS));
+        assert_eq!(
+            (underfoot.grid.cols, underfoot.grid.rows),
+            (UNDERFOOT_COLS, UNDERFOOT_ROWS)
+        );
         assert_eq!(lay_out_underfoot(vec![]), Underfoot::default());
     }
 
@@ -365,7 +502,15 @@ mod tests {
 
     fn drag_of(inventory: &Inventory, id: ItemId) -> Drag {
         let size = inventory.footprint(id).unwrap();
-        Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None }
+        Drag {
+            id,
+            grab: IVec2::ZERO,
+            size,
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        }
     }
 
     /// Lets `id` go at `target` as the screen does, then applies what that changes.
@@ -375,17 +520,26 @@ mod tests {
             let drag = drag_of(&inventory, id);
             drop_at(&mut inventory, &drag, target, UNDERFOOT_COLS).unwrap()
         };
-        app.world_mut().resource_mut::<FloorChanges>().0.extend(change);
+        app.world_mut()
+            .resource_mut::<FloorChanges>()
+            .0
+            .extend(change);
         app.update();
     }
 
     fn floor_items(app: &mut App) -> Vec<(Entity, ItemId, Transform)> {
         let mut floor = app.world_mut().query::<(Entity, &FloorItem, &Transform)>();
-        floor.iter(app.world()).map(|(e, f, t)| (e, f.id, *t)).collect()
+        floor
+            .iter(app.world())
+            .map(|(e, f, t)| (e, f.id, *t))
+            .collect()
     }
 
     fn dagger() -> fb_items::Item {
-        (1..500).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|d| d.profile.footprint == Footprint { cols: 1, rows: 2 }).unwrap()
+        (1..500)
+            .filter_map(|s| fb_items::roll_item("Dagger", s))
+            .find(|d| d.profile.footprint == Footprint { cols: 1, rows: 2 })
+            .unwrap()
     }
 
     #[test]
@@ -394,16 +548,32 @@ mod tests {
         let knife = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let knife = inventory.add(dagger());
-            inventory.put(knife, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(knife, pack, Placement::new(0, 0, false))
+                .unwrap();
             knife
         };
-        drop(&mut app, knife, Target::Cell { view: GridView::Underfoot, cell: IVec2::new(5, 1) });
-        assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::Loose));
+        drop(
+            &mut app,
+            knife,
+            Target::Cell {
+                view: GridView::Underfoot,
+                cell: IVec2::new(5, 1),
+            },
+        );
+        assert_eq!(
+            app.world().resource::<Inventory>().location(knife),
+            Some(Location::Loose)
+        );
         let floor = floor_items(&mut app);
         assert_eq!(floor.len(), 1);
         let (_, id, at) = floor[0];
         assert_eq!(id, knife);
-        assert!(at.translation.distance(eye.translation()) < REACH, "{}", at.translation);
+        assert!(
+            at.translation.distance(eye.translation()) < REACH,
+            "{}",
+            at.translation
+        );
         // Dropped on the right of the grid, it lies to the right of straight ahead.
         let right = eye.right().as_vec3();
         assert!((at.translation - eye.translation()).dot(right) > 1.0);
@@ -419,17 +589,43 @@ mod tests {
         let knife = app.world_mut().resource_mut::<Inventory>().add(dagger());
         app.world_mut()
             .run_system_once(
-                move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
-                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &eye, knife, 0.0, &crate::tuning::Tuning::default());
+                move |mut spawner: ItemSpawner,
+                      inventory: Res<Inventory>,
+                      mut level: ResMut<CurrentLevel>,
+                      blocked: Res<BlockedCells>| {
+                    set_down(
+                        &mut spawner,
+                        &inventory,
+                        &mut level.0,
+                        &blocked,
+                        &Obstacles::default(),
+                        &eye,
+                        knife,
+                        0.0,
+                        &crate::tuning::Tuning::default(),
+                    );
                 },
             )
             .unwrap();
         let (entity, ..) = floor_items(&mut app)[0];
-        drop(&mut app, knife, Target::Cell { view: GridView::Container(pack), cell: IVec2::new(3, 2) });
+        drop(
+            &mut app,
+            knife,
+            Target::Cell {
+                view: GridView::Container(pack),
+                cell: IVec2::new(3, 2),
+            },
+        );
         assert!(app.world().get_entity(entity).is_err());
         assert!(floor_items(&mut app).is_empty());
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
-        assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::In { container: pack, at: Placement::new(3, 2, false) }));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(knife),
+            Some(Location::In {
+                container: pack,
+                at: Placement::new(3, 2, false)
+            })
+        );
     }
 
     #[test]
@@ -438,26 +634,48 @@ mod tests {
         let (sack, knife) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
-            inventory.put(sack, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(sack, pack, Placement::new(0, 0, false))
+                .unwrap();
             let knife = inventory.add(dagger());
-            inventory.put(knife, sack, Placement::new(1, 1, false)).unwrap();
+            inventory
+                .put(knife, sack, Placement::new(1, 1, false))
+                .unwrap();
             (sack, knife)
         };
         drop(&mut app, sack, Target::Level);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(inventory.location(sack), Some(Location::Loose));
-        assert_eq!(inventory.location(knife), Some(Location::In { container: sack, at: Placement::new(1, 1, false) }));
+        assert_eq!(
+            inventory.location(knife),
+            Some(Location::In {
+                container: sack,
+                at: Placement::new(1, 1, false)
+            })
+        );
         assert!(!inventory.is_carried(knife));
         // It lies underfoot, and opens there as its own grid.
         let (_, id, at) = floor_items(&mut app)[0];
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(id, sack);
-        let nearby = Nearby { id, footprint: inventory.footprint(id).unwrap(), distance: at.translation.distance(eye.translation()), bag: true };
+        let nearby = Nearby {
+            id,
+            footprint: inventory.footprint(id).unwrap(),
+            distance: at.translation.distance(eye.translation()),
+            bag: true,
+        };
         let underfoot = lay_out_underfoot(vec![nearby]);
         assert_eq!(underfoot.bags, vec![sack]);
         assert!(underfoot.grid.get(sack).is_some());
         // Picked up again, it still holds the knife.
-        drop(&mut app, sack, Target::Cell { view: GridView::Container(pack), cell: IVec2::new(4, 0) });
+        drop(
+            &mut app,
+            sack,
+            Target::Cell {
+                view: GridView::Container(pack),
+                cell: IVec2::new(4, 0),
+            },
+        );
         let inventory = app.world().resource::<Inventory>();
         assert!(inventory.is_carried(knife));
         assert_eq!(inventory.contents_count(sack), 1);
@@ -470,23 +688,41 @@ mod tests {
         let torch = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let torch = inventory.add(fb_items::roll_item("Torch", 1).unwrap());
-            inventory.put(torch, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(torch, pack, Placement::new(0, 0, false))
+                .unwrap();
             torch
         };
-        drop(&mut app, torch, Target::Cell { view: GridView::Underfoot, cell: IVec2::new(2, 0) });
+        drop(
+            &mut app,
+            torch,
+            Target::Cell {
+                view: GridView::Underfoot,
+                cell: IVec2::new(2, 0),
+            },
+        );
         let floor = floor_items(&mut app);
         assert_eq!(floor.len(), 1);
         let to = floor[0].2.translation - eye.translation();
-        let (ahead, aside) = (to.dot(eye.forward().as_vec3()), to.dot(eye.right().as_vec3()));
+        let (ahead, aside) = (
+            to.dot(eye.forward().as_vec3()),
+            to.dot(eye.right().as_vec3()),
+        );
         // In front, within a tenth of a metre of the line straight ahead.
-        assert!(ahead > 1.0 && aside.abs() <= 1.0, "ahead {ahead}, aside {aside}");
+        assert!(
+            ahead > 1.0 && aside.abs() <= 1.0,
+            "ahead {ahead}, aside {aside}"
+        );
     }
 
     #[test]
     fn columns_spread_drops_left_to_right() {
         assert!(aside_for_column(0, 6) < 0.0 && aside_for_column(5, 6) > 0.0);
         assert!(aside_for_column(0, 6).abs() <= crate::carry::DROP_SPREAD);
-        assert!((aside_for_column(2, 6) + aside_for_column(3, 6)).abs() < 1e-5, "symmetric about the middle");
+        assert!(
+            (aside_for_column(2, 6) + aside_for_column(3, 6)).abs() < 1e-5,
+            "symmetric about the middle"
+        );
     }
 
     /// The floor app with the drop key wired in and the inventory open; `hover` sets the item
@@ -497,8 +733,12 @@ mod tests {
             .init_resource::<Hovered>()
             .init_resource::<Underfoot>()
             .init_resource::<ButtonInput<KeyCode>>()
-            .insert_resource(crate::keymap::ActiveContext(crate::keymap::Context::Inventory))
-            .insert_resource(crate::play::ScreenOpen(Some(crate::play::Screen::Inventory)))
+            .insert_resource(crate::keymap::ActiveContext(
+                crate::keymap::Context::Inventory,
+            ))
+            .insert_resource(crate::play::ScreenOpen(Some(
+                crate::play::Screen::Inventory,
+            )))
             .add_systems(Update, drop_hovered.before(apply_floor_changes));
         (app, pack, eye)
     }
@@ -508,10 +748,16 @@ mod tests {
     }
 
     fn press_x(app: &mut App) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyX);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyX);
         app.update();
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyX);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::KeyX);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
     }
 
     #[test]
@@ -520,15 +766,29 @@ mod tests {
         let torch = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let torch = inventory.add(fb_items::roll_item("Torch", 1).unwrap());
-            inventory.put(torch, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(torch, pack, Placement::new(0, 0, false))
+                .unwrap();
             torch
         };
         press_x(&mut app);
-        assert!(floor_items(&mut app).is_empty(), "nothing hovered, nothing dropped");
-        assert_eq!(app.world().resource::<Inventory>().location(torch), Some(Location::In { container: pack, at: Placement::new(0, 0, false) }));
+        assert!(
+            floor_items(&mut app).is_empty(),
+            "nothing hovered, nothing dropped"
+        );
+        assert_eq!(
+            app.world().resource::<Inventory>().location(torch),
+            Some(Location::In {
+                container: pack,
+                at: Placement::new(0, 0, false)
+            })
+        );
         hover(&mut app, torch);
         press_x(&mut app);
-        assert_eq!(app.world().resource::<Inventory>().location(torch), Some(Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(torch),
+            Some(Location::Loose)
+        );
         let floor = floor_items(&mut app);
         assert_eq!(floor.len(), 1);
         assert_eq!(floor[0].1, torch);
@@ -541,16 +801,26 @@ mod tests {
         let (sack, knife) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
-            inventory.put(sack, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(sack, pack, Placement::new(0, 0, false))
+                .unwrap();
             let knife = inventory.add(dagger());
-            inventory.put(knife, sack, Placement::new(1, 1, false)).unwrap();
+            inventory
+                .put(knife, sack, Placement::new(1, 1, false))
+                .unwrap();
             (sack, knife)
         };
         hover(&mut app, sack);
         press_x(&mut app);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(inventory.location(sack), Some(Location::Loose));
-        assert_eq!(inventory.location(knife), Some(Location::In { container: sack, at: Placement::new(1, 1, false) }));
+        assert_eq!(
+            inventory.location(knife),
+            Some(Location::In {
+                container: sack,
+                at: Placement::new(1, 1, false)
+            })
+        );
         assert_eq!(floor_items(&mut app).len(), 1);
     }
 
@@ -565,7 +835,10 @@ mod tests {
         };
         hover(&mut app, ring);
         press_x(&mut app);
-        assert_eq!(app.world().resource::<Inventory>().location(ring), Some(Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(ring),
+            Some(Location::Loose)
+        );
         assert_eq!(floor_items(&mut app).len(), 1);
     }
 
@@ -575,15 +848,25 @@ mod tests {
         let torch = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let torch = inventory.add(fb_items::roll_item("Torch", 1).unwrap());
-            inventory.put(torch, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(torch, pack, Placement::new(0, 0, false))
+                .unwrap();
             torch
         };
-        let full = Grid::pack(UNDERFOOT_COLS, UNDERFOOT_ROWS, (100..100 + UNDERFOOT_COLS as u32 * UNDERFOOT_ROWS as u32).map(|n| (ItemId(n), Footprint { cols: 1, rows: 1 })));
+        let full = Grid::pack(
+            UNDERFOOT_COLS,
+            UNDERFOOT_ROWS,
+            (100..100 + UNDERFOOT_COLS as u32 * UNDERFOOT_ROWS as u32)
+                .map(|n| (ItemId(n), Footprint { cols: 1, rows: 1 })),
+        );
         assert!(full.first_free(Footprint { cols: 1, rows: 1 }).is_none());
         app.world_mut().resource_mut::<Underfoot>().grid = full;
         hover(&mut app, torch);
         press_x(&mut app);
-        assert_eq!(app.world().resource::<Inventory>().location(torch), Some(Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(torch),
+            Some(Location::Loose)
+        );
         assert_eq!(floor_items(&mut app).len(), 1);
     }
 }

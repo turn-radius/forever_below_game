@@ -95,7 +95,10 @@ impl Topic {
     /// The line the panel lists it by for this speaker: a denizen faction's topic is named for it.
     pub fn label_for(self, speaker: &Speaker) -> String {
         match self {
-            Topic::Faction(i) => speaker.denizen_factions.get(i as usize).map_or_else(|| self.label().to_string(), |f| format!("The {}", f.name.trim_start_matches("the "))),
+            Topic::Faction(i) => speaker.denizen_factions.get(i as usize).map_or_else(
+                || self.label().to_string(),
+                |f| format!("The {}", f.name.trim_start_matches("the ")),
+            ),
             _ => self.label().to_string(),
         }
     }
@@ -175,7 +178,14 @@ pub struct MasterRumour {
 /// beyond talk; the level; the way out.
 pub fn topics(speaker: &Speaker) -> Vec<Topic> {
     if speaker.denizen.is_some() {
-        return vec![Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest];
+        return vec![
+            Topic::Who,
+            Topic::Level,
+            Topic::Threats,
+            Topic::Trade,
+            Topic::Service(Service::Barter),
+            Topic::Quest,
+        ];
     }
     let mut list = vec![Topic::Who];
     if let Some(trade) = speaker.trade {
@@ -184,8 +194,14 @@ pub fn topics(speaker: &Speaker) -> Vec<Topic> {
             list.push(Topic::Service(Service::Barter));
         }
         match trade.profession {
-            Profession::Armorer | Profession::Weaponsmith | Profession::Bowyer | Profession::Tentmaker => list.push(Topic::Service(Service::Commission)),
-            Profession::Enchanter => list.extend([Topic::Service(Service::Enchant), Topic::Service(Service::Scrap)]),
+            Profession::Armorer
+            | Profession::Weaponsmith
+            | Profession::Bowyer
+            | Profession::Tentmaker => list.push(Topic::Service(Service::Commission)),
+            Profession::Enchanter => list.extend([
+                Topic::Service(Service::Enchant),
+                Topic::Service(Service::Scrap),
+            ]),
             _ => {}
         }
     }
@@ -233,15 +249,22 @@ pub fn barter_refusal(speaker: &Speaker) -> String {
 
 /// The symbols a denizen's lines use besides a folk's: the sound it makes.
 fn denizen_extras(speaker: &Speaker) -> Vec<(&'static str, String)> {
-    let Some(kind) = speaker.denizen else { return Vec::new() };
-    vec![("sound", say(speaker, &format!("dn_sound_{}", kind.key()), 0x14, &[]))]
+    let Some(kind) = speaker.denizen else {
+        return Vec::new();
+    };
+    vec![(
+        "sound",
+        say(speaker, &format!("dn_sound_{}", kind.key()), 0x14, &[]),
+    )]
 }
 
 /// The words a denizen's `topic` line needs (`None` is the greeting): the topic's core words of
 /// its tongue plus the line's own extras listed in data/talk.json as `needs_<line>`. Empty for a
 /// folk, whose lines the delver always reads.
 pub fn line_needs(speaker: &Speaker, topic: Option<Topic>) -> Vec<Word> {
-    let Some(kind) = speaker.denizen else { return Vec::new() };
+    let Some(kind) = speaker.denizen else {
+        return Vec::new();
+    };
     let (tongue_topic, line) = match topic {
         None => (tongue::Topic::Greeting, "dn_greet"),
         Some(t) => match (t.tongue_topic(), t) {
@@ -253,8 +276,13 @@ pub fn line_needs(speaker: &Speaker, topic: Option<Topic>) -> Vec<Word> {
             _ => return Vec::new(),
         },
     };
-    let extra: Vec<&str> = grammar().symbols.get(&format!("needs_{line}")).map(|v| v.iter().map(String::as_str).collect()).unwrap_or_default();
-    tongue::needs_with(kind, tongue_topic, &extra).unwrap_or_else(|e| panic!("data/talk.json, needs_{line}: {e}"))
+    let extra: Vec<&str> = grammar()
+        .symbols
+        .get(&format!("needs_{line}"))
+        .map(|v| v.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    tongue::needs_with(kind, tongue_topic, &extra)
+        .unwrap_or_else(|e| panic!("data/talk.json, needs_{line}: {e}"))
 }
 
 /// The seed a denizen's `topic` line is shown in glyphs from (`None` is the greeting): the
@@ -280,7 +308,9 @@ pub fn answer(speaker: &Speaker, topic: Topic, rumour: Option<&MasterRumour>) ->
         Topic::Level => level(speaker),
         Topic::WayOut => way_out(speaker, rumour),
         Topic::Faction(i) => faction_line(speaker, i),
-        Topic::Strange => strange_tale(speaker).unwrap_or_else(|| say(speaker, "not_yet", 0x05, &[])),
+        Topic::Strange => {
+            strange_tale(speaker).unwrap_or_else(|| say(speaker, "not_yet", 0x05, &[]))
+        }
         Topic::Threats | Topic::Quest => say(speaker, "not_yet", 0x05, &[]),
     }
 }
@@ -297,18 +327,34 @@ fn denizen_answer(speaker: &Speaker, topic: Topic) -> String {
         Topic::Quest => "dn_quest",
         _ => "not_yet",
     };
-    say(speaker, symbol, 0x30 + topic.salt(), &denizen_extras(speaker))
+    say(
+        speaker,
+        symbol,
+        0x30 + topic.salt(),
+        &denizen_extras(speaker),
+    )
 }
 
 /// What a folk at or below the denizens' depth says of the denizen faction at `index` on their
 /// level: who they are from the `knows_<kind>` origins of data/rumours.json, then whether they
 /// are friendly or dangerous to the delver.
 fn faction_line(speaker: &Speaker, index: u8) -> String {
-    let Some(known) = speaker.denizen_factions.get(index as usize) else { return say(speaker, "not_yet", 0x05, &[]) };
+    let Some(known) = speaker.denizen_factions.get(index as usize) else {
+        return say(speaker, "not_yet", 0x05, &[]);
+    };
     let mut rng = Mulberry32::new(speaker.seed ^ 0x6B4E ^ (index as u32).wrapping_mul(0x9E37));
-    let bound = Grammar { symbols: [("faction".to_string(), vec![known.name.clone()])].into_iter().collect() };
+    let bound = Grammar {
+        symbols: [("faction".to_string(), vec![known.name.clone()])]
+            .into_iter()
+            .collect(),
+    };
     let key = format!("knows_{}", known.kind.key());
-    let who = expand_with(&fb_items::tongues::grammar().merged(&bound), &format!("#{key}#"), &mut rng).unwrap_or_else(|e| panic!("data/rumours.json, {key}: {e}"));
+    let who = expand_with(
+        &fb_items::tongues::grammar().merged(&bound),
+        &format!("#{key}#"),
+        &mut rng,
+    )
+    .unwrap_or_else(|e| panic!("data/rumours.json, {key}: {e}"));
     let who = who.split_whitespace().collect::<Vec<_>>().join(" ");
     let band = match known.band {
         Band::Hostile => "dn_band_hostile",
@@ -336,7 +382,12 @@ pub fn strange_tale(speaker: &Speaker) -> Option<String> {
 }
 
 fn who(speaker: &Speaker) -> String {
-    let mut text = say(speaker, &format!("who_{}", speaker.intention.key()), 0x03, &[]);
+    let mut text = say(
+        speaker,
+        &format!("who_{}", speaker.intention.key()),
+        0x03,
+        &[],
+    );
     match speaker.trade {
         Some(trade) if trade.profession == Profession::Guard => {
             text.push(' ');
@@ -344,7 +395,12 @@ fn who(speaker: &Speaker) -> String {
         }
         Some(trade) => {
             text.push(' ');
-            text.push_str(&say(speaker, "who_calling", 0x04, &[("calling", calling(&trade))]));
+            text.push_str(&say(
+                speaker,
+                "who_calling",
+                0x04,
+                &[("calling", calling(&trade))],
+            ));
         }
         None => {}
     }
@@ -352,7 +408,9 @@ fn who(speaker: &Speaker) -> String {
 }
 
 fn trade(speaker: &Speaker) -> String {
-    let Some(trade) = speaker.trade else { return say(speaker, "not_yet", 0x06, &[]) };
+    let Some(trade) = speaker.trade else {
+        return say(speaker, "not_yet", 0x06, &[]);
+    };
     let key = match trade.profession {
         Profession::Armorer => "trade_armorer",
         Profession::Weaponsmith => "trade_weaponsmith",
@@ -364,7 +422,11 @@ fn trade(speaker: &Speaker) -> String {
         Profession::Guard => "trade_guard",
     };
     if trade.profession == Profession::Guard {
-        return format!("{} {}", say(speaker, key, 0x07, &[]), guard_traders(speaker));
+        return format!(
+            "{} {}",
+            say(speaker, key, 0x07, &[]),
+            guard_traders(speaker)
+        );
     }
     let tier = match trade.tier {
         Tier::Novice => "tier_novice",
@@ -388,15 +450,30 @@ fn guard_traders(speaker: &Speaker) -> String {
     }
     let mut rng = Mulberry32::new(speaker.seed ^ 0x7A);
     let (name, profession, place) = rng.pick(&speaker.traders).clone();
-    say(speaker, "guard_traders", 0x09, &[("trader", name), ("trader_calling", profession.label().to_string()), ("trader_place", place)])
+    say(
+        speaker,
+        "guard_traders",
+        0x09,
+        &[
+            ("trader", name),
+            ("trader_calling", profession.label().to_string()),
+            ("trader_place", place),
+        ],
+    )
 }
 
 /// Where `other` stands, as one at `from` would point to it: "in the market, past the hall". A
 /// guard stands at the hall door, so every room but the hall itself is past it.
-pub fn place_of(level: &fb_level::Level, from: &fb_level::FolkSpot, other: &fb_level::FolkSpot) -> String {
+pub fn place_of(
+    level: &fb_level::Level,
+    from: &fb_level::FolkSpot,
+    other: &fb_level::FolkSpot,
+) -> String {
     use fb_level::RoomRole;
     let room_of = |s: &fb_level::FolkSpot| level.room_at(s.x as i32, s.y as i32);
-    let Some(there) = room_of(other) else { return "somewhere on our ground".to_string() };
+    let Some(there) = room_of(other) else {
+        return "somewhere on our ground".to_string();
+    };
     let roles = level.roles_of(there);
     let named = [
         (RoomRole::Market, "in the market"),
@@ -405,9 +482,15 @@ pub fn place_of(level: &fb_level::Level, from: &fb_level::FolkSpot, other: &fb_l
         (RoomRole::Store, "among the stores"),
         (RoomRole::Hall, "here in the hall"),
     ];
-    let Some(&(_, text)) = named.iter().find(|(r, _)| roles.contains(r)) else { return "somewhere on our ground".to_string() };
+    let Some(&(_, text)) = named.iter().find(|(r, _)| roles.contains(r)) else {
+        return "somewhere on our ground".to_string();
+    };
     let at_hall = room_of(from).is_some_and(|h| level.roles_of(h).contains(&RoomRole::Hall));
-    if at_hall && !roles.contains(&RoomRole::Hall) { format!("{text}, past the hall") } else { text.to_string() }
+    if at_hall && !roles.contains(&RoomRole::Hall) {
+        format!("{text}, past the hall")
+    } else {
+        text.to_string()
+    }
 }
 
 fn level(speaker: &Speaker) -> String {
@@ -417,14 +500,40 @@ fn level(speaker: &Speaker) -> String {
         [only] => only.clone(),
         [init @ .., last] => format!("{} and {last}", init.join(", ")),
     };
-    let extras = [("factions", list), ("count", count_word(names.len())), ("ordinal", ordinal(speaker.depth))];
-    say(speaker, if names.len() <= 1 { "level_alone" } else { "level" }, 0x0A, &extras)
+    let extras = [
+        ("factions", list),
+        ("count", count_word(names.len())),
+        ("ordinal", ordinal(speaker.depth)),
+    ];
+    say(
+        speaker,
+        if names.len() <= 1 {
+            "level_alone"
+        } else {
+            "level"
+        },
+        0x0A,
+        &extras,
+    )
 }
 
 fn way_out(speaker: &Speaker, rumour: Option<&MasterRumour>) -> String {
     if let Some(m) = rumour {
-        let levels = if m.levels == 1 { "one level".to_string() } else { format!("{} levels", count_word(m.levels as usize).to_lowercase()) };
-        return say(speaker, "way_master", 0x0B, &[("master_calling", m.calling.clone()), ("master_faction", m.faction.clone()), ("master_levels", levels)]);
+        let levels = if m.levels == 1 {
+            "one level".to_string()
+        } else {
+            format!("{} levels", count_word(m.levels as usize).to_lowercase())
+        };
+        return say(
+            speaker,
+            "way_master",
+            0x0B,
+            &[
+                ("master_calling", m.calling.clone()),
+                ("master_faction", m.faction.clone()),
+                ("master_levels", levels),
+            ],
+        );
     }
     say(speaker, "way_out", 0x0B, &[])
 }
@@ -437,13 +546,21 @@ pub fn knows_a_master(speaker: &Speaker) -> bool {
 
 /// "one" to "twelve", then the figure.
 pub fn count_word(n: usize) -> String {
-    const WORDS: [&str; 13] = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve"];
-    WORDS.get(n).map_or_else(|| n.to_string(), |w| w.to_string())
+    const WORDS: [&str; 13] = [
+        "No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+        "Eleven", "Twelve",
+    ];
+    WORDS
+        .get(n)
+        .map_or_else(|| n.to_string(), |w| w.to_string())
 }
 
 /// "first", "second" ... "tenth", then "11th".
 pub fn ordinal(n: u32) -> String {
-    const WORDS: [&str; 10] = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
+    const WORDS: [&str; 10] = [
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+        "tenth",
+    ];
     if let Some(word) = n.checked_sub(1).and_then(|i| WORDS.get(i as usize)) {
         return (*word).to_string();
     }
@@ -460,12 +577,18 @@ pub fn ordinal(n: u32) -> String {
 /// The shipped grammar.
 pub fn grammar() -> &'static Grammar {
     static DATA: OnceLock<Grammar> = OnceLock::new();
-    DATA.get_or_init(|| Grammar::from_json(include_str!("../../../data/talk.json")).expect("data/talk.json parses"))
+    DATA.get_or_init(|| {
+        Grammar::from_json(include_str!("../../../data/talk.json")).expect("data/talk.json parses")
+    })
 }
 
 /// The symbols every line may use, from the speaker.
 fn base(speaker: &Speaker) -> Vec<(&'static str, String)> {
-    let mut symbols = vec![("name", speaker.name.clone()), ("folk", speaker.folk.to_lowercase()), ("faction", speaker.faction.clone())];
+    let mut symbols = vec![
+        ("name", speaker.name.clone()),
+        ("folk", speaker.folk.to_lowercase()),
+        ("faction", speaker.faction.clone()),
+    ];
     if let Some(trade) = speaker.trade {
         symbols.push(("calling", calling(&trade)));
     }
@@ -477,7 +600,12 @@ fn base(speaker: &Speaker) -> Vec<(&'static str, String)> {
 fn say(speaker: &Speaker, symbol: &str, salt: u32, extra: &[(&'static str, String)]) -> String {
     let mut symbols = base(speaker);
     symbols.extend(extra.iter().cloned());
-    let overlay = Grammar { symbols: symbols.into_iter().map(|(k, v)| (k.to_string(), vec![v])).collect() };
+    let overlay = Grammar {
+        symbols: symbols
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), vec![v]))
+            .collect(),
+    };
     let grammar = grammar().merged(&overlay);
     let mut rng = Mulberry32::new(speaker.seed.wrapping_mul(0x9E37_79B1) ^ salt);
     expand_with(&grammar, &format!("#{symbol}#"), &mut rng).unwrap_or_else(|_| "...".to_string())
@@ -498,26 +626,61 @@ mod tests {
             trade,
             seed: 4242,
             depth: 3,
-            level_factions: vec!["the Ash Choir".into(), "the Scale Court".into(), "the Lantern-keepers".into()],
-            traders: vec![("Borin Ironhand".into(), Profession::Armorer, "in the market, past the hall".into())],
+            level_factions: vec![
+                "the Ash Choir".into(),
+                "the Scale Court".into(),
+                "the Lantern-keepers".into(),
+            ],
+            traders: vec![(
+                "Borin Ironhand".into(),
+                Profession::Armorer,
+                "in the market, past the hall".into(),
+            )],
             denizen: None,
             denizen_factions: Vec::new(),
         }
     }
 
     fn smith() -> Trade {
-        Trade { profession: Profession::Weaponsmith, tier: Tier::Apprentice, style: Some(Style::Blades) }
+        Trade {
+            profession: Profession::Weaponsmith,
+            tier: Tier::Apprentice,
+            style: Some(Style::Blades),
+        }
     }
 
     /// Every symbol a line refers to is defined, for every folk, whatever the level.
     #[test]
     fn the_grammar_is_sound_with_the_symbols_a_speaker_supplies() {
         let mut symbols = base(&speaker(Some(smith()), Band::Neutral));
-        symbols.extend(["trader", "trader_calling", "trader_place", "factions", "count", "ordinal", "master_calling", "master_faction", "master_levels", "sound"].map(|k| (k, "x".to_string())));
-        let overlay = Grammar { symbols: symbols.into_iter().map(|(k, v)| (k.to_string(), vec![v])).collect() };
+        symbols.extend(
+            [
+                "trader",
+                "trader_calling",
+                "trader_place",
+                "factions",
+                "count",
+                "ordinal",
+                "master_calling",
+                "master_faction",
+                "master_levels",
+                "sound",
+            ]
+            .map(|k| (k, "x".to_string())),
+        );
+        let overlay = Grammar {
+            symbols: symbols
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), vec![v]))
+                .collect(),
+        };
         let grammar = grammar().merged(&overlay);
         for symbol in starts::START_SYMBOLS {
-            assert!(grammar.problems(&format!("#{symbol}#")).is_empty(), "{symbol}: {:?}", grammar.problems(&format!("#{symbol}#")));
+            assert!(
+                grammar.problems(&format!("#{symbol}#")).is_empty(),
+                "{symbol}: {:?}",
+                grammar.problems(&format!("#{symbol}#"))
+            );
         }
         assert!(grammar.problems("#greet_neutral#").is_empty());
     }
@@ -526,14 +689,40 @@ mod tests {
     #[test]
     fn every_line_expands() {
         for seed in 0..40 {
-            for trade in [None, Some(smith()), Some(Trade::guard()), Some(Trade { profession: Profession::Enchanter, tier: Tier::Master, style: None })] {
+            for trade in [
+                None,
+                Some(smith()),
+                Some(Trade::guard()),
+                Some(Trade {
+                    profession: Profession::Enchanter,
+                    tier: Tier::Master,
+                    style: None,
+                }),
+            ] {
                 for band in [Band::Neutral, Band::Friendly, Band::Allied, Band::Wary] {
-                    let s = Speaker { seed, ..speaker(trade, band) };
-                    let rumour = MasterRumour { calling: "master alchemist".into(), faction: "the Scale Court".into(), levels: 8 };
-                    let mut lines = vec![greeting(&s), wary_line(&s), answer(&s, Topic::Who, None), answer(&s, Topic::Level, None), answer(&s, Topic::WayOut, None), answer(&s, Topic::WayOut, Some(&rumour))];
+                    let s = Speaker {
+                        seed,
+                        ..speaker(trade, band)
+                    };
+                    let rumour = MasterRumour {
+                        calling: "master alchemist".into(),
+                        faction: "the Scale Court".into(),
+                        levels: 8,
+                    };
+                    let mut lines = vec![
+                        greeting(&s),
+                        wary_line(&s),
+                        answer(&s, Topic::Who, None),
+                        answer(&s, Topic::Level, None),
+                        answer(&s, Topic::WayOut, None),
+                        answer(&s, Topic::WayOut, Some(&rumour)),
+                    ];
                     lines.extend(topics(&s).into_iter().map(|t| answer(&s, t, None)));
                     for line in lines {
-                        assert!(!line.contains("...") && !line.contains('#') && !line.is_empty(), "seed {seed}: {line:?}");
+                        assert!(
+                            !line.contains("...") && !line.contains('#') && !line.is_empty(),
+                            "seed {seed}: {line:?}"
+                        );
                     }
                 }
             }
@@ -548,17 +737,28 @@ mod tests {
             s.denizen = Some(DenizenKind::Minotaur);
             s.seed = seed;
             for line in [spit_line(&s), wary_line(&s), barter_refusal(&s)] {
-                assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
+                assert!(
+                    line.contains("minotaur") && !line.contains('#') && !line.contains("..."),
+                    "{line}"
+                );
                 assert!(line.starts_with("The minotaur"), "{line}");
             }
             let mut allowed = vec![
                 "The minotaur shakes its head at your words; you don't share enough of its speech to trade.".to_string(),
                 "The minotaur regards your coin without understanding, shakes its head, and turns it over; you don't know enough of its speech to trade.".to_string(),
             ];
-            for sound in ["a low bellow", "a rumble deep in its chest", "a snort of hot breath"] {
+            for sound in [
+                "a low bellow",
+                "a rumble deep in its chest",
+                "a snort of hot breath",
+            ] {
                 allowed.push(format!("The minotaur {sound} and pushes your hand away; you can't make yourself understood well enough to trade."));
             }
-            assert!(allowed.contains(&barter_refusal(&s)), "{}", barter_refusal(&s));
+            assert!(
+                allowed.contains(&barter_refusal(&s)),
+                "{}",
+                barter_refusal(&s)
+            );
             assert_eq!(spit_line(&s), spit_line(&s));
         }
     }
@@ -567,18 +767,40 @@ mod tests {
     fn every_denizen_line_expands_and_names_real_words() {
         for kind in DenizenKind::ALL {
             for band in [Band::Neutral, Band::Friendly, Band::Allied] {
-                let s = Speaker { denizen: Some(kind), folk: kind.label().into(), band, ..speaker(None, band) };
+                let s = Speaker {
+                    denizen: Some(kind),
+                    folk: kind.label().into(),
+                    band,
+                    ..speaker(None, band)
+                };
                 let topics = topics(&s);
-                assert_eq!(topics, [Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest]);
+                assert_eq!(
+                    topics,
+                    [
+                        Topic::Who,
+                        Topic::Level,
+                        Topic::Threats,
+                        Topic::Trade,
+                        Topic::Service(Service::Barter),
+                        Topic::Quest
+                    ]
+                );
                 let mut lines = vec![greeting(&s)];
                 lines.extend(topics.iter().map(|t| answer(&s, *t, None)));
                 for line in lines {
-                    assert!(!line.contains("...") && !line.contains('#') && !line.is_empty(), "{kind:?}: {line:?}");
+                    assert!(
+                        !line.contains("...") && !line.contains('#') && !line.is_empty(),
+                        "{kind:?}: {line:?}"
+                    );
                 }
                 // The core words plus the line's extras, none unknown (a bad key panics).
                 assert!(line_needs(&s, None).len() >= tongue::CORE_WORDS);
                 assert!(line_needs(&s, Some(Topic::Who)).len() > tongue::CORE_WORDS);
-                assert!(line_needs(&s, Some(Topic::Quest)).iter().any(|w| w.key == "reward"));
+                assert!(
+                    line_needs(&s, Some(Topic::Quest))
+                        .iter()
+                        .any(|w| w.key == "reward")
+                );
             }
         }
     }
@@ -588,12 +810,22 @@ mod tests {
         let s = speaker(Some(smith()), Band::Friendly);
         assert_eq!(greeting(&s), greeting(&s.clone()));
         assert_eq!(answer(&s, Topic::Who, None), answer(&s, Topic::Who, None));
-        assert_eq!(answer(&s, Topic::Trade, None), answer(&s, Topic::Trade, None));
+        assert_eq!(
+            answer(&s, Topic::Trade, None),
+            answer(&s, Topic::Trade, None)
+        );
     }
 
     #[test]
     fn different_folk_do_not_all_say_the_same() {
-        let greetings: std::collections::HashSet<String> = (0..30).map(|seed| greeting(&Speaker { seed, ..speaker(None, Band::Neutral) })).collect();
+        let greetings: std::collections::HashSet<String> = (0..30)
+            .map(|seed| {
+                greeting(&Speaker {
+                    seed,
+                    ..speaker(None, Band::Neutral)
+                })
+            })
+            .collect();
         assert!(greetings.len() > 3, "{greetings:?}");
     }
 
@@ -603,35 +835,102 @@ mod tests {
         assert_eq!(reception(Band::Wary, false), Reception::Turns);
         for band in [Band::Neutral, Band::Friendly, Band::Allied] {
             assert_eq!(reception(band, false), Reception::Talks);
-            assert_eq!(reception(band, true), Reception::Spits, "a folk who turned on the delver will not talk");
+            assert_eq!(
+                reception(band, true),
+                Reception::Spits,
+                "a folk who turned on the delver will not talk"
+            );
         }
-        assert_eq!(spit_line(&speaker(None, Band::Hostile)), "Hilda Stonefoot spits at your feet.");
+        assert_eq!(
+            spit_line(&speaker(None, Band::Hostile)),
+            "Hilda Stonefoot spits at your feet."
+        );
     }
 
     #[test]
     fn trades_add_their_topics() {
-        let labels = |t| topics(&speaker(t, Band::Neutral)).into_iter().map(Topic::label).collect::<Vec<_>>();
+        let labels = |t| {
+            topics(&speaker(t, Band::Neutral))
+                .into_iter()
+                .map(Topic::label)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(labels(None), ["Who are you?", "This level", "The way out"]);
-        assert_eq!(labels(Some(smith())), ["Who are you?", "Your trade", "Barter", "Commission", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None })), ["Who are you?", "Your trade", "Enchant", "Scrap", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade { profession: Profession::GeneralGoods, tier: Tier::Novice, style: None })), ["Who are you?", "Your trade", "Barter", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade::guard())), ["Who are you?", "Your trade", "This level", "The way out"]);
+        assert_eq!(
+            labels(Some(smith())),
+            [
+                "Who are you?",
+                "Your trade",
+                "Barter",
+                "Commission",
+                "This level",
+                "The way out"
+            ]
+        );
+        assert_eq!(
+            labels(Some(Trade {
+                profession: Profession::Enchanter,
+                tier: Tier::Expert,
+                style: None
+            })),
+            [
+                "Who are you?",
+                "Your trade",
+                "Enchant",
+                "Scrap",
+                "This level",
+                "The way out"
+            ]
+        );
+        assert_eq!(
+            labels(Some(Trade {
+                profession: Profession::GeneralGoods,
+                tier: Tier::Novice,
+                style: None
+            })),
+            [
+                "Who are you?",
+                "Your trade",
+                "Barter",
+                "This level",
+                "The way out"
+            ]
+        );
+        assert_eq!(
+            labels(Some(Trade::guard())),
+            ["Who are you?", "Your trade", "This level", "The way out"]
+        );
     }
 
     #[test]
     fn services_are_not_yet() {
         let s = speaker(Some(smith()), Band::Neutral);
-        assert_eq!(answer(&s, Topic::Service(Service::Commission), None), "Not yet.");
+        assert_eq!(
+            answer(&s, Topic::Service(Service::Commission), None),
+            "Not yet."
+        );
     }
 
     #[test]
     fn a_guard_names_a_trader_of_its_faction_or_says_there_is_none() {
         let guard = speaker(Some(Trade::guard()), Band::Neutral);
         let said = answer(&guard, Topic::Trade, None);
-        assert!(said.contains("Borin Ironhand") && said.contains("armorer"), "{said}");
-        let none = Speaker { traders: Vec::new(), ..guard };
+        assert!(
+            said.contains("Borin Ironhand") && said.contains("armorer"),
+            "{said}"
+        );
+        let none = Speaker {
+            traders: Vec::new(),
+            ..guard
+        };
         let said = answer(&none, Topic::Trade, None);
-        assert!(!said.contains("Borin") && (said.contains("no trade") || said.contains("no market") || said.contains("Nobody")), "{said}");
+        assert!(
+            !said.contains("Borin")
+                && (said.contains("no trade")
+                    || said.contains("no market")
+                    || said.contains("Nobody")),
+            "{said}"
+        );
     }
 
     #[test]
@@ -651,9 +950,18 @@ mod tests {
 
     #[test]
     fn a_rumoured_master_is_named() {
-        let rumour = MasterRumour { calling: "master weaponsmith (blades)".into(), faction: "the Scale Court".into(), levels: 5 };
+        let rumour = MasterRumour {
+            calling: "master weaponsmith (blades)".into(),
+            faction: "the Scale Court".into(),
+            levels: 5,
+        };
         let said = answer(&speaker(None, Band::Neutral), Topic::WayOut, Some(&rumour));
-        assert!(said.contains("master weaponsmith (blades)") && said.contains("the Scale Court") && said.contains("five levels"), "{said}");
+        assert!(
+            said.contains("master weaponsmith (blades)")
+                && said.contains("the Scale Court")
+                && said.contains("five levels"),
+            "{said}"
+        );
     }
 
     #[test]
@@ -668,10 +976,46 @@ mod tests {
     mod starts {
         /// The symbols a line is started from.
         pub const START_SYMBOLS: [&str; 40] = [
-            "greet_neutral", "greet_friendly", "greet_allied", "wary", "who_way_out", "who_trade", "who_worship", "who_plunder", "who_calling", "who_guard", "trade_armorer", "trade_weaponsmith",
-            "trade_bowyer", "trade_tentmaker", "trade_general_goods", "trade_alchemist", "trade_enchanter", "trade_guard", "guard_traders", "guard_no_traders", "tier_novice", "tier_master", "level",
-            "level_alone", "way_out", "way_master", "not_yet", "dn_spit", "dn_wary", "dn_greet", "dn_greet_friendly", "dn_greet_allied", "dn_kin", "dn_place", "dn_threat", "dn_trade", "dn_quest",
-            "dn_barter_refused", "dn_band_hostile", "dn_sound_minotaur",
+            "greet_neutral",
+            "greet_friendly",
+            "greet_allied",
+            "wary",
+            "who_way_out",
+            "who_trade",
+            "who_worship",
+            "who_plunder",
+            "who_calling",
+            "who_guard",
+            "trade_armorer",
+            "trade_weaponsmith",
+            "trade_bowyer",
+            "trade_tentmaker",
+            "trade_general_goods",
+            "trade_alchemist",
+            "trade_enchanter",
+            "trade_guard",
+            "guard_traders",
+            "guard_no_traders",
+            "tier_novice",
+            "tier_master",
+            "level",
+            "level_alone",
+            "way_out",
+            "way_master",
+            "not_yet",
+            "dn_spit",
+            "dn_wary",
+            "dn_greet",
+            "dn_greet_friendly",
+            "dn_greet_allied",
+            "dn_kin",
+            "dn_place",
+            "dn_threat",
+            "dn_trade",
+            "dn_quest",
+            "dn_barter_refused",
+            "dn_band_hostile",
+            "dn_sound_minotaur",
         ];
     }
 }

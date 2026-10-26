@@ -26,7 +26,13 @@ pub const MAX_WINDOW_SCALE: f32 = 2.0;
 pub const MIN_PX: f32 = 12.0;
 
 pub(super) fn add(app: &mut App) {
-    app.add_systems(Update, (refresh_crests, place_crests).chain().after(super::screen::build_screen).in_set(DelveSystems));
+    app.add_systems(
+        Update,
+        (refresh_crests, place_crests)
+            .chain()
+            .after(super::screen::build_screen)
+            .in_set(DelveSystems),
+    );
 }
 
 /// The layer the marks sit in, a child of the plan picture drawn beneath the delver's marker.
@@ -65,15 +71,27 @@ const CLEAR_CELLS: f32 = 1.5;
 /// one clear of the seen stairs, so it is always on ground of its own claim, even where the
 /// claim is split over rooms and the mean falls in rock.
 pub fn claim_marks(level: &Level, seen: &Explored) -> Vec<Mark> {
-    let stairs: Vec<Vec2> = level.stairs.iter().filter(|s| seen.is_seen(s.x as i32, s.y as i32)).map(|s| Vec2::new(s.x as f32 + 0.5, s.y as f32 + 0.5)).collect();
-    let clearance = |at: Vec2| stairs.iter().map(|s| s.distance(at)).fold(f32::INFINITY, f32::min);
+    let stairs: Vec<Vec2> = level
+        .stairs
+        .iter()
+        .filter(|s| seen.is_seen(s.x as i32, s.y as i32))
+        .map(|s| Vec2::new(s.x as f32 + 0.5, s.y as f32 + 0.5))
+        .collect();
+    let clearance = |at: Vec2| {
+        stairs
+            .iter()
+            .map(|s| s.distance(at))
+            .fold(f32::INFINITY, f32::min)
+    };
     level
         .claims
         .iter()
         .filter_map(|claim| {
             let mut cells = Vec::new();
             for &room in &claim.rooms {
-                let Some(room) = level.rooms.get(room) else { continue };
+                let Some(room) = level.rooms.get(room) else {
+                    continue;
+                };
                 for y in room.y..room.y + room.h {
                     for x in room.x..room.x + room.w {
                         if seen.is_seen(x as i32, y as i32) {
@@ -86,17 +104,32 @@ pub fn claim_marks(level: &Level, seen: &Explored) -> Vec<Mark> {
                 return None;
             }
             let mean = cells.iter().sum::<Vec2>() / cells.len() as f32;
-            let nearest = |from: &[Vec2]| from.iter().copied().min_by(|a, b| a.distance_squared(mean).total_cmp(&b.distance_squared(mean)));
-            let clear: Vec<Vec2> = cells.iter().copied().filter(|&c| clearance(c) >= CLEAR_CELLS).collect();
+            let nearest = |from: &[Vec2]| {
+                from.iter().copied().min_by(|a, b| {
+                    a.distance_squared(mean)
+                        .total_cmp(&b.distance_squared(mean))
+                })
+            };
+            let clear: Vec<Vec2> = cells
+                .iter()
+                .copied()
+                .filter(|&c| clearance(c) >= CLEAR_CELLS)
+                .collect();
             let at = nearest(&clear).or_else(|| nearest(&cells))?;
-            Some(Mark { faction: claim.faction, at, clearance: clearance(at) })
+            Some(Mark {
+                faction: claim.faction,
+                at,
+                clearance: clearance(at),
+            })
         })
         .collect()
 }
 
 /// A crest's width in screen pixels at map scale `scale` in a window of `size`.
 pub fn crest_width(scale: f32, size: Vec2) -> f32 {
-    let window = (size.x / 1280.0).min(size.y / 720.0).clamp(1.0, MAX_WINDOW_SCALE);
+    let window = (size.x / 1280.0)
+        .min(size.y / 720.0)
+        .clamp(1.0, MAX_WINDOW_SCALE);
     (scale * WIDTH_CELLS).clamp(WIDTH_PX.0, WIDTH_PX.1) * window
 }
 
@@ -125,34 +158,67 @@ fn refresh_crests(
     if !open.is(Screen::Map) {
         return;
     }
-    let (Some(level), Some(abyss)) = (level, abyss) else { return };
-    let Some((layer, mut state)) = layers.iter_mut().next() else { return };
+    let (Some(level), Some(abyss)) = (level, abyss) else {
+        return;
+    };
+    let Some((layer, mut state)) = layers.iter_mut().next() else {
+        return;
+    };
     let seen = explored.get(&level.0);
     let met = |f: Faction| record.as_ref().is_some_and(|r| r.standings.has_met(f));
     let met_here = level.0.claims.iter().filter(|c| met(c.faction)).count();
-    let key = (level.0.seed, seen.map_or(0, Explored::count), met_here, abyss.run_seed);
+    let key = (
+        level.0.seed,
+        seen.map_or(0, Explored::count),
+        met_here,
+        abyss.run_seed,
+    );
     if state.key == Some(key) {
         return;
     }
     state.key = Some(key);
-    let marks = seen.map(|seen| claim_marks(&level.0, seen)).unwrap_or_default();
+    let marks = seen
+        .map(|seen| claim_marks(&level.0, seen))
+        .unwrap_or_default();
     let world = World::new(abyss.run_seed);
-    commands.entity(layer).despawn_related::<Children>().with_children(|layer| {
-        for mark in marks {
-            let field = if met(mark.faction) { world.faction(mark.faction).field } else { plain_field() };
-            let mut shield = crest(layer, &mut icons, &field, WIDTH_PX.0);
-            shield.insert((CrestMark { at: mark.at, clearance: mark.clearance }, Pickable::IGNORE));
-            shield.entry::<Node>().and_modify(|mut n| n.position_type = PositionType::Absolute);
-        }
-    });
+    commands
+        .entity(layer)
+        .despawn_related::<Children>()
+        .with_children(|layer| {
+            for mark in marks {
+                let field = if met(mark.faction) {
+                    world.faction(mark.faction).field
+                } else {
+                    plain_field()
+                };
+                let mut shield = crest(layer, &mut icons, &field, WIDTH_PX.0);
+                shield.insert((
+                    CrestMark {
+                        at: mark.at,
+                        clearance: mark.clearance,
+                    },
+                    Pickable::IGNORE,
+                ));
+                shield
+                    .entry::<Node>()
+                    .and_modify(|mut n| n.position_type = PositionType::Absolute);
+            }
+        });
 }
 
 /// Sizes and lays the marks where the view puts them.
-fn place_crests(open: Res<ScreenOpen>, view: Res<MapView>, screens: Query<&ComputedNode, With<MapScreen>>, mut marks: Query<(&CrestMark, &mut Node)>) {
+fn place_crests(
+    open: Res<ScreenOpen>,
+    view: Res<MapView>,
+    screens: Query<&ComputedNode, With<MapScreen>>,
+    mut marks: Query<(&CrestMark, &mut Node)>,
+) {
     if !open.is(Screen::Map) {
         return;
     }
-    let Some(size) = screens.iter().next().map(screen_size) else { return };
+    let Some(size) = screens.iter().next().map(screen_size) else {
+        return;
+    };
     if size.x <= 0.0 {
         return;
     }
@@ -160,7 +226,8 @@ fn place_crests(open: Res<ScreenOpen>, view: Res<MapView>, screens: Query<&Compu
     for (mark, mut node) in &mut marks {
         let w = fit_to_stairs(width, mark.clearance, view.scale);
         let h = w * ASPECT;
-        let corner = (mark.at + Vec2::splat(super::plan::MARGIN)) * view.scale - Vec2::new(w, h) * 0.5;
+        let corner =
+            (mark.at + Vec2::splat(super::plan::MARGIN)) * view.scale - Vec2::new(w, h) * 0.5;
         node.left = px(corner.x);
         node.top = px(corner.y);
         node.width = px(w);
@@ -184,14 +251,26 @@ mod tests {
 
     fn room_cells(level: &Level, room: usize) -> Vec<(i32, i32)> {
         let r = level.rooms[room];
-        (r.y..r.y + r.h).flat_map(|y| (r.x..r.x + r.w).map(move |x| (x as i32, y as i32))).collect()
+        (r.y..r.y + r.h)
+            .flat_map(|y| (r.x..r.x + r.w).map(move |x| (x as i32, y as i32)))
+            .collect()
     }
 
     fn see(level: &Level, seen: &mut Explored, cells: &[(i32, i32)]) {
         // Marks cells through the one door the type gives: `look` from each cell's middle.
         for &(x, y) in cells {
-            let eye = fb_level::sight::Eye { x: x as f32 + 0.5, y: y as f32 + 0.5, forward: (1.0, 0.0), half_fov: 3.2, range: 0.6 };
-            let lamp = [fb_level::sight::Lamp { x: x as f32 + 0.5, y: y as f32 + 0.5, reach: 0.6 }];
+            let eye = fb_level::sight::Eye {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+                forward: (1.0, 0.0),
+                half_fov: 3.2,
+                range: 0.6,
+            };
+            let lamp = [fb_level::sight::Lamp {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+                reach: 0.6,
+            }];
             seen.look(level, &eye, &lamp);
         }
     }
@@ -205,7 +284,9 @@ mod tests {
     /// Whether `at` is the middle of a seen cell in a room of `claim`.
     fn on_seen_ground(level: &Level, claim: &fb_level::Claim, seen: &Explored, at: Vec2) -> bool {
         let (x, y) = (at.x.floor() as i32, at.y.floor() as i32);
-        seen.is_seen(x, y) && (at.x - x as f32 - 0.5).abs() < 1e-4 && claim.rooms.iter().any(|&r| level.rooms[r].contains(x, y))
+        seen.is_seen(x, y)
+            && (at.x - x as f32 - 0.5).abs() < 1e-4
+            && claim.rooms.iter().any(|&r| level.rooms[r].contains(x, y))
     }
 
     #[test]
@@ -215,9 +296,15 @@ mod tests {
             let all = Explored::all(&level);
             let marks = claim_marks(&level, &all);
             for claim in &level.claims {
-                let Some(mark) = marks.iter().find(|m| m.faction == claim.faction) else { continue };
+                let Some(mark) = marks.iter().find(|m| m.faction == claim.faction) else {
+                    continue;
+                };
                 // Two claims of one faction are told apart by the room they hold.
-                let own = level.claims.iter().filter(|c| c.faction == claim.faction).any(|c| on_seen_ground(&level, c, &all, mark.at));
+                let own = level
+                    .claims
+                    .iter()
+                    .filter(|c| c.faction == claim.faction)
+                    .any(|c| on_seen_ground(&level, c, &all, mark.at));
                 assert!(own, "seed {seed}: mark {} off its claim", mark.at);
             }
             assert_eq!(marks, claim_marks(&level, &all), "deterministic");
@@ -229,11 +316,25 @@ mod tests {
         let mut level = level_with_claims();
         let corner = |i: usize| Vec2::new(level.rooms[i].x as f32, level.rooms[i].y as f32);
         // One claim over the two rooms furthest apart.
-        let (a, b) = (0..level.rooms.len()).flat_map(|a| (0..a).map(move |b| (a, b))).max_by(|&(a, b), &(c, d)| corner(a).distance(corner(b)).total_cmp(&corner(c).distance(corner(d)))).unwrap();
+        let (a, b) = (0..level.rooms.len())
+            .flat_map(|a| (0..a).map(move |b| (a, b)))
+            .max_by(|&(a, b), &(c, d)| {
+                corner(a)
+                    .distance(corner(b))
+                    .total_cmp(&corner(c).distance(corner(d)))
+            })
+            .unwrap();
         level.claims[0].rooms = vec![a, b];
         let all = Explored::all(&level);
-        let mark = *claim_marks(&level, &all).iter().find(|m| m.faction == level.claims[0].faction).unwrap();
-        assert!(on_seen_ground(&level, &level.claims[0], &all, mark.at), "{}", mark.at);
+        let mark = *claim_marks(&level, &all)
+            .iter()
+            .find(|m| m.faction == level.claims[0].faction)
+            .unwrap();
+        assert!(
+            on_seen_ground(&level, &level.claims[0], &all, mark.at),
+            "{}",
+            mark.at
+        );
     }
 
     #[test]
@@ -245,12 +346,24 @@ mod tests {
         see(&level, &mut seen, &[cell]);
         let marks = claim_marks(&level, &seen);
         for mark in &marks {
-            let owner = level.claims.iter().find(|c| c.faction == mark.faction).unwrap();
+            let owner = level
+                .claims
+                .iter()
+                .find(|c| c.faction == mark.faction)
+                .unwrap();
             assert!(on_seen_ground(&level, owner, &seen, mark.at), "{}", mark.at);
         }
         for other in &level.claims[1..] {
-            if other.rooms.iter().all(|&r| room_cells(&level, r).iter().all(|&(x, y)| !seen.is_seen(x, y))) {
-                assert!(marks.iter().all(|m| m.faction != other.faction || other.faction == claim.faction));
+            if other.rooms.iter().all(|&r| {
+                room_cells(&level, r)
+                    .iter()
+                    .all(|&(x, y)| !seen.is_seen(x, y))
+            }) {
+                assert!(
+                    marks
+                        .iter()
+                        .all(|m| m.faction != other.faction || other.faction == claim.faction)
+                );
             }
         }
     }
@@ -258,7 +371,11 @@ mod tests {
     #[test]
     fn a_crest_shrinks_to_keep_off_a_stair_and_never_moves() {
         let scale = 40.0;
-        assert_eq!(fit_to_stairs(58.0, f32::INFINITY, scale), 58.0, "no stair, no change");
+        assert_eq!(
+            fit_to_stairs(58.0, f32::INFINITY, scale),
+            58.0,
+            "no stair, no change"
+        );
         let beside = fit_to_stairs(58.0, 1.6, scale);
         assert!(beside < 58.0 && beside >= MIN_PX, "{beside}");
         // Its reach, middle to corner, stays short of the stair's cell.
@@ -289,7 +406,10 @@ mod tests {
     /// The marks on the layer: the picture each shows and where it stands.
     fn shown(app: &mut App) -> Vec<(AssetId<Image>, Vec2)> {
         let mut q = app.world_mut().query::<(&ImageNode, &CrestMark)>();
-        let mut v: Vec<_> = q.iter(app.world()).map(|(i, m)| (i.image.id(), m.at)).collect();
+        let mut v: Vec<_> = q
+            .iter(app.world())
+            .map(|(i, m)| (i.image.id(), m.at))
+            .collect();
         v.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.1.y.total_cmp(&b.1.y)));
         v
     }
@@ -302,15 +422,31 @@ mod tests {
         let before = shown(&mut app);
         let plain = before[0].0;
         assert_eq!(before.len(), level.claims.len());
-        assert!(before.iter().all(|(i, _)| *i == plain), "one plain shield for every unmet claim");
+        assert!(
+            before.iter().all(|(i, _)| *i == plain),
+            "one plain shield for every unmet claim"
+        );
         // Meeting one faction swaps its marks for its crest, and only its.
-        app.world_mut().resource_mut::<WorldRecord>().standings.meet(first);
+        app.world_mut()
+            .resource_mut::<WorldRecord>()
+            .standings
+            .meet(first);
         app.update();
         let after = shown(&mut app);
         let held_by = |f| level.claims.iter().filter(|c| c.faction == f).count();
-        assert_eq!(after.iter().filter(|(i, _)| *i != plain).count(), held_by(first));
-        assert_eq!(after.iter().filter(|(i, _)| *i == plain).count(), level.claims.len() - held_by(first));
-        assert_eq!(before.iter().map(|m| m.1).collect::<Vec<_>>(), after.iter().map(|m| m.1).collect::<Vec<_>>(), "they stand where they did");
+        assert_eq!(
+            after.iter().filter(|(i, _)| *i != plain).count(),
+            held_by(first)
+        );
+        assert_eq!(
+            after.iter().filter(|(i, _)| *i == plain).count(),
+            level.claims.len() - held_by(first)
+        );
+        assert_eq!(
+            before.iter().map(|m| m.1).collect::<Vec<_>>(),
+            after.iter().map(|m| m.1).collect::<Vec<_>>(),
+            "they stand where they did"
+        );
     }
 
     #[test]
@@ -320,13 +456,23 @@ mod tests {
         level.claims[1].faction = faction;
         let mut app = marked(level.clone(), Explored::all(&level));
         let plain = shown(&mut app)[0].0;
-        app.world_mut().resource_mut::<WorldRecord>().standings.meet(faction);
+        app.world_mut()
+            .resource_mut::<WorldRecord>()
+            .standings
+            .meet(faction);
         app.update();
         let marks = shown(&mut app);
         let crests = marks.iter().filter(|(i, _)| *i != plain).count();
-        assert_eq!(crests, level.claims.iter().filter(|c| c.faction == faction).count());
+        assert_eq!(
+            crests,
+            level.claims.iter().filter(|c| c.faction == faction).count()
+        );
         assert!(crests >= 2);
-        let own: Vec<_> = marks.iter().filter(|(i, _)| *i != plain).map(|m| m.0).collect();
+        let own: Vec<_> = marks
+            .iter()
+            .filter(|(i, _)| *i != plain)
+            .map(|m| m.0)
+            .collect();
         assert!(own.iter().all(|i| *i == own[0]), "both wear the same arms");
     }
 
@@ -339,7 +485,10 @@ mod tests {
         let mut more = Explored::new(&level);
         see(&level, &mut more, &[cell]);
         if more.count() > 0 {
-            app.world_mut().resource_mut::<ExploredLevels>().0.insert(level.seed, more);
+            app.world_mut()
+                .resource_mut::<ExploredLevels>()
+                .0
+                .insert(level.seed, more);
             app.update();
             assert_eq!(shown(&mut app).len(), 1);
         }
@@ -349,10 +498,21 @@ mod tests {
     fn the_crest_scales_with_the_zoom_and_the_window() {
         let small = Vec2::new(1280.0, 720.0);
         let big = Vec2::new(2560.0, 1440.0);
-        assert_eq!(crest_width(8.0, small), WIDTH_PX.0, "never smaller than reads");
+        assert_eq!(
+            crest_width(8.0, small),
+            WIDTH_PX.0,
+            "never smaller than reads"
+        );
         assert_eq!(crest_width(72.0, small), WIDTH_PX.1);
         assert!(crest_width(20.0, small) > WIDTH_PX.0);
-        assert!((crest_width(40.0, big) - 2.0 * crest_width(40.0, small)).abs() < 1e-3, "a bigger window, bigger crests");
-        assert_eq!(crest_width(40.0, Vec2::new(1000.0, 600.0)), crest_width(40.0, small), "no smaller than at 1280 by 720");
+        assert!(
+            (crest_width(40.0, big) - 2.0 * crest_width(40.0, small)).abs() < 1e-3,
+            "a bigger window, bigger crests"
+        );
+        assert_eq!(
+            crest_width(40.0, Vec2::new(1000.0, 600.0)),
+            crest_width(40.0, small),
+            "no smaller than at 1280 by 720"
+        );
     }
 }

@@ -55,11 +55,17 @@ use fb_level::{CELL, ItemSpot, Level};
 
 use crate::character::Character;
 use crate::fitting::Fitting;
-use crate::inventory::{FloorChanges, Inventory, ItemId, Toast, doll::lit_slot, equip_from_floor, equip_from_floor_in, header::ToastText, underfoot::apply_floor_changes};
-use crate::light::{Torch, cast_shadows, point_light};
+use crate::inventory::{
+    FloorChanges, Inventory, ItemId, Toast, doll::lit_slot, equip_from_floor, equip_from_floor_in,
+    header::ToastText, underfoot::apply_floor_changes,
+};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::play::{BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player, PlayerCamera, ScreenOpen, level_has_focus};
+use crate::light::{Torch, cast_shadows, point_light};
+use crate::play::{
+    BlockedCells, CurrentLevel, DelveSystems, EYE_HEIGHT, Obstacle, Obstacles, Player,
+    PlayerCamera, ScreenOpen, level_has_focus,
+};
 use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::record::{WorldRecord, restore_item};
@@ -147,21 +153,40 @@ impl Plugin for CarryPlugin {
             .init_resource::<FloorChanges>()
             // Only a delve that opens at startup can lack a player; one begun from the title
             // spawns its own on entering.
-            .add_systems(PostStartup, spawn_stand_in_camera.run_if(in_state(AppState::Delving)).run_if(no_player_camera))
-            .add_systems(PostUpdate, hold_debug_pose.before(TransformSystems::Propagate).in_set(DelveSystems))
+            .add_systems(
+                PostStartup,
+                spawn_stand_in_camera
+                    .run_if(in_state(AppState::Delving))
+                    .run_if(no_player_camera),
+            )
+            .add_systems(
+                PostUpdate,
+                hold_debug_pose
+                    .before(TransformSystems::Propagate)
+                    .in_set(DelveSystems),
+            )
             .add_systems(
                 Update,
                 (
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
-                    (widen_view_models, rescale_floor_items, reshimmer_floor_items).run_if(resource_changed::<Tuning>),
+                    (
+                        widen_view_models,
+                        rescale_floor_items,
+                        reshimmer_floor_items,
+                    )
+                        .run_if(resource_changed::<Tuning>),
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
                     upright_held_flames.after(sway_held),
                     swing_hip,
-                    (aim, (pick_up, equip_aimed.before(apply_floor_changes)).run_if(level_has_focus)).chain(),
+                    (
+                        aim,
+                        (pick_up, equip_aimed.before(apply_floor_changes)).run_if(level_has_focus),
+                    )
+                        .chain(),
                     hide_hud_under_screens.run_if(resource_exists::<ScreenOpen>),
                 )
                     .in_set(DelveSystems),
@@ -189,19 +214,27 @@ pub fn item_light(item: &Item) -> Option<LightAnchor> {
 /// [`item_light`] of a rolled item, its reach scaled by its light affixes (Gleaming, Smoky:
 /// [`fb_items::Item::light_factor`]), as it lights the level.
 pub fn rolled_light(item: &fb_items::Item) -> Option<LightAnchor> {
-    item_light(&item.shape).map(|anchor| LightAnchor { radius: anchor.radius * item.light_factor(), ..anchor })
+    item_light(&item.shape).map(|anchor| LightAnchor {
+        radius: anchor.radius * item.light_factor(),
+        ..anchor
+    })
 }
 
 /// The [`fb_items::Item::light_factor`] of what is worn in `slot`, 1 with nothing there.
 fn light_factor_in(inventory: &Inventory, slot: fb_items::Slot) -> f32 {
-    inventory.worn(slot).and_then(|id| inventory.item(id)).map_or(1.0, fb_items::Item::light_factor)
+    inventory
+        .worn(slot)
+        .and_then(|id| inventory.item(id))
+        .map_or(1.0, fb_items::Item::light_factor)
 }
 
 /// The first burning torch rolled at or after `seed` ([`fb_items::roll_item`]).
 pub fn lit_torch(seed: u32) -> fb_items::Item {
     (0..u32::MAX)
         .map(|k| seed.wrapping_add(k))
-        .find_map(|s| fb_items::roll_item("Torch", s).filter(|item| item_light(&item.shape).is_some()))
+        .find_map(|s| {
+            fb_items::roll_item("Torch", s).filter(|item| item_light(&item.shape).is_some())
+        })
         .expect("some seed rolls a burning torch")
 }
 
@@ -219,7 +252,11 @@ pub fn carried_lights(inventory: &Inventory) -> Vec<(fb_items::Slot, ItemId)> {
     [Slot::Mainhand, Slot::Offhand, Slot::Hip]
         .into_iter()
         .filter_map(|slot| Some((slot, inventory.worn(slot)?)))
-        .filter(|&(_, id)| inventory.item(id).is_some_and(|item| item_light(&item.shape).is_some()))
+        .filter(|&(_, id)| {
+            inventory
+                .item(id)
+                .is_some_and(|item| item_light(&item.shape).is_some())
+        })
         .collect()
 }
 
@@ -232,7 +269,10 @@ pub fn appearance_of(item: &Item) -> ItemAppearance {
         _ => 1.0,
     };
     ItemAppearance {
-        palette: ItemPalette { materials: item.palette(), ..ItemPalette::ARMORY },
+        palette: ItemPalette {
+            materials: item.palette(),
+            ..ItemPalette::ARMORY
+        },
         condition: item.condition(),
         seed: item.seed(),
         etching: item.etching(),
@@ -262,12 +302,22 @@ pub fn lie_down(size: Vec3, stands: bool) -> Quat {
 /// `yaw` about +Y, drawn `scale` times its size (`floor_item_scale`,
 /// [`crate::tuning::ViewTuning`]), centred over `at` on the floor (y = 0) with its lowest point
 /// touching it. `points` are its item-space vertices. `None` for an item with no vertices.
-pub fn rest_on_floor(points: &[Vec3], stands: bool, at: Vec3, yaw: f32, scale: f32) -> Option<Transform> {
+pub fn rest_on_floor(
+    points: &[Vec3],
+    stands: bool,
+    at: Vec3,
+    yaw: f32,
+    scale: f32,
+) -> Option<Transform> {
     let (min, max) = bounds(points.iter().copied())?;
     let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min, stands);
     let (min, max) = bounds(points.iter().map(|&p| rotation * p * scale))?;
     let centre = (min + max) * 0.5;
-    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(scale) })
+    Some(Transform {
+        translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z),
+        rotation,
+        scale: Vec3::splat(scale),
+    })
 }
 
 /// `rest` (from [`rest_on_floor`] over `at`) drawn at `scale` instead: everything it places
@@ -275,12 +325,22 @@ pub fn rest_on_floor(points: &[Vec3], stands: bool, at: Vec3, yaw: f32, scale: f
 /// point on the floor.
 pub fn rescale_on_floor(rest: Transform, at: Vec3, scale: f32) -> Transform {
     let anchor = Vec3::new(at.x, 0.0, at.z);
-    let ratio = if rest.scale.x.abs() > 1e-6 { scale / rest.scale.x } else { 1.0 };
-    Transform { translation: anchor + (rest.translation - anchor) * ratio, scale: Vec3::splat(scale), ..rest }
+    let ratio = if rest.scale.x.abs() > 1e-6 {
+        scale / rest.scale.x
+    } else {
+        1.0
+    };
+    Transform {
+        translation: anchor + (rest.translation - anchor) * ratio,
+        scale: Vec3::splat(scale),
+        ..rest
+    }
 }
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
-    points.fold(None, |acc, p| Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p)))))
+    points.fold(None, |acc, p| {
+        Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p))))
+    })
 }
 
 /// Distance along a ray from `origin` in unit direction `dir` to where it enters the box
@@ -317,11 +377,17 @@ pub struct AimBuffer {
 
 impl AimBuffer {
     /// Only what the line itself passes through.
-    pub const EXACT: AimBuffer = AimBuffer { angle: 0.0, min_radius: 0.0 };
+    pub const EXACT: AimBuffer = AimBuffer {
+        angle: 0.0,
+        min_radius: 0.0,
+    };
 
     /// The buffer the tuning gives.
     pub fn of(tuning: &Tuning) -> AimBuffer {
-        AimBuffer { angle: tuning.view.aim_buffer_degrees.max(0.0).to_radians(), min_radius: tuning.view.aim_min_radius.max(0.0) }
+        AimBuffer {
+            angle: tuning.view.aim_buffer_degrees.max(0.0).to_radians(),
+            min_radius: tuning.view.aim_min_radius.max(0.0),
+        }
     }
 
     /// How far off the line, in world units, something `along` units out may lie.
@@ -360,27 +426,47 @@ pub struct AimScore {
 /// `world_from_item` (rigid or evenly scaled): an exact hit within `reach`, or else the box's
 /// nearest point to the line, if that is ahead, within `reach` of the eye and within `buffer`
 /// of the line. `None` if it is not aimed at.
-pub fn aim_score(origin: Vec3, dir: Vec3, reach: f32, buffer: AimBuffer, world_from_item: Transform, min: Vec3, max: Vec3) -> Option<AimScore> {
+pub fn aim_score(
+    origin: Vec3,
+    dir: Vec3,
+    reach: f32,
+    buffer: AimBuffer,
+    world_from_item: Transform,
+    min: Vec3,
+    max: Vec3,
+) -> Option<AimScore> {
     let world_from_local = world_from_item.compute_affine();
     let inverse = world_from_local.inverse();
     let local_origin = inverse.transform_point3(origin);
     // Left unnormalised, so the distance along it stays in world units under a scale.
     let local_dir = inverse.transform_vector3(dir);
     if let Some(t) = ray_box(local_origin, local_dir, min, max).filter(|&t| t <= reach) {
-        return Some(AimScore { angle: 0.0, distance: t });
+        return Some(AimScore {
+            angle: 0.0,
+            distance: t,
+        });
     }
     if buffer == AimBuffer::EXACT {
         return None;
     }
     let world_per_local = local_dir.length().recip();
-    let local_q = segment_box_closest(local_origin, local_dir * world_per_local, reach / world_per_local, min, max);
+    let local_q = segment_box_closest(
+        local_origin,
+        local_dir * world_per_local,
+        reach / world_per_local,
+        min,
+        max,
+    );
     let q = world_from_local.transform_point3(local_q);
     let along = (q - origin).dot(dir);
     let off = (q - origin - dir * along).length();
     if along <= 0.0 || q.distance(origin) > reach || off > buffer.radius_at(along) {
         return None;
     }
-    Some(AimScore { angle: off.atan2(along), distance: along })
+    Some(AimScore {
+        angle: off.atan2(along),
+        distance: along,
+    })
 }
 
 /// Which of `targets` (each a world-from-item transform, rigid or evenly scaled, and its
@@ -396,8 +482,15 @@ pub fn nearest_aimed<T: Copy>(
 ) -> Option<(T, AimScore)> {
     targets
         .into_iter()
-        .filter_map(|(id, world_from_item, min, max)| aim_score(origin, dir, reach, buffer, world_from_item, min, max).map(|score| (id, score)))
-        .min_by(|a, b| a.1.angle.total_cmp(&b.1.angle).then(a.1.distance.total_cmp(&b.1.distance)))
+        .filter_map(|(id, world_from_item, min, max)| {
+            aim_score(origin, dir, reach, buffer, world_from_item, min, max)
+                .map(|score| (id, score))
+        })
+        .min_by(|a, b| {
+            a.1.angle
+                .total_cmp(&b.1.angle)
+                .then(a.1.distance.total_cmp(&b.1.distance))
+        })
 }
 
 /// An item lying in the level, with its item-space bounds for picking. The item itself is in
@@ -451,17 +544,35 @@ impl HeldKey {
             off: inventory.worn(fb_items::Slot::Offhand),
             lights: {
                 let lit = carried_lights(inventory);
-                [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip].map(|slot| lit.iter().find(|(s, _)| *s == slot).map(|(_, id)| *id))
+                [
+                    fb_items::Slot::Mainhand,
+                    fb_items::Slot::Offhand,
+                    fb_items::Slot::Hip,
+                ]
+                .map(|slot| lit.iter().find(|(s, _)| *s == slot).map(|(_, id)| *id))
             },
-            burn: [fb_items::Slot::Mainhand, fb_items::Slot::Offhand, fb_items::Slot::Hip]
-                .map(|slot| inventory.worn(slot).and_then(|id| inventory.item(id)).filter(|i| i.shape.lit() == Some(true)).map_or(0, |i| crate::inventory::char_bucket(&i.shape))),
+            burn: [
+                fb_items::Slot::Mainhand,
+                fb_items::Slot::Offhand,
+                fb_items::Slot::Hip,
+            ]
+            .map(|slot| {
+                inventory
+                    .worn(slot)
+                    .and_then(|id| inventory.item(id))
+                    .filter(|i| i.shape.lit() == Some(true))
+                    .map_or(0, |i| crate::inventory::char_bucket(&i.shape))
+            }),
             hip: inventory.worn(fb_items::Slot::Hip),
             belt: inventory.worn(fb_items::Slot::Belt),
-            loaded: inventory.worn(fb_items::Slot::Mainhand).and_then(|id| inventory.item(id)).map_or(0, |i| match &i.shape {
-                armory::Item::Bow(s) => u8::from(s.arrow.on),
-                armory::Item::Crossbow(s) => u8::from(s.arrow.on) + 2 * u8::from(s.spanned),
-                _ => 0,
-            }),
+            loaded: inventory
+                .worn(fb_items::Slot::Mainhand)
+                .and_then(|id| inventory.item(id))
+                .map_or(0, |i| match &i.shape {
+                    armory::Item::Bow(s) => u8::from(s.arrow.on),
+                    armory::Item::Crossbow(s) => u8::from(s.arrow.on) + 2 * u8::from(s.spanned),
+                    _ => 0,
+                }),
             body: (character.folk, character.body_seed),
         }
     }
@@ -547,22 +658,34 @@ impl HeldBuilt {
     /// again, which is quick, where fitting from scratch takes a while. `None` if anything
     /// else differs.
     fn with_loaded(&self, wanted: HeldWanted, inventory: &Inventory) -> Option<HeldBuilt> {
-        let same_but_loaded = HeldKey { loaded: wanted.key.loaded, ..self.wanted.key } == wanted.key;
+        let same_but_loaded = HeldKey {
+            loaded: wanted.key.loaded,
+            ..self.wanted.key
+        } == wanted.key;
         if !same_but_loaded || self.wanted.key.loaded == wanted.key.loaded {
             return None;
         }
         let shape = inventory.item(wanted.key.main?)?.shape.clone();
         let mut fit = (*self.fit).clone();
-        let hand = fit.hands.iter_mut().find(|h| h.hand == fb_items::Slot::Mainhand)?;
+        let hand = fit
+            .hands
+            .iter_mut()
+            .find(|h| h.hand == fb_items::Slot::Mainhand)?;
         hand.mesh = shape.build();
         hand.item = shape;
-        Some(HeldBuilt { wanted, fit: std::sync::Arc::new(fit) })
+        Some(HeldBuilt {
+            wanted,
+            fit: std::sync::Arc::new(fit),
+        })
     }
 
     /// Fits and builds what `wanted` holds on a body of `spec` wearing `worn` (a list that
     /// holds the items in the hands and at the hip).
     fn fit(wanted: HeldWanted, spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> HeldBuilt {
-        HeldBuilt { wanted, fit: std::sync::Arc::new(HeldFit::fit(spec, worn)) }
+        HeldBuilt {
+            wanted,
+            fit: std::sync::Arc::new(HeldFit::fit(spec, worn)),
+        }
     }
 }
 
@@ -571,11 +694,20 @@ impl HeldFit {
     /// holds the items in the hands and at the hip).
     pub fn fit(spec: &BodySpec, worn: &[(fb_items::Slot, Item)]) -> HeldFit {
         use fb_items::Slot;
-        let held = |slot| worn.iter().find(|(s, _)| *s == slot).map(|(_, item)| item.clone());
+        let held = |slot| {
+            worn.iter()
+                .find(|(s, _)| *s == slot)
+                .map(|(_, item)| item.clone())
+        };
 
         // Fit hands by extracting fist, grip, and rotation from fitting (scale-independent placement)
         let hands = {
-            let fitted = crate::view_model::held_in_view(spec, held(Slot::Mainhand).as_ref(), held(Slot::Offhand).as_ref(), 1.0);
+            let fitted = crate::view_model::held_in_view(
+                spec,
+                held(Slot::Mainhand).as_ref(),
+                held(Slot::Offhand).as_ref(),
+                1.0,
+            );
             let mut result = Vec::new();
 
             // Weapons fitted by held_in_view
@@ -584,7 +716,11 @@ impl HeldFit {
                 let item = h.item.clone();
                 let mesh = item.build();
                 let point = Some(h.point);
-                let placement = HeldPlacement { fist: h.fist, grip: h.grip, rotation: h.transform.rotation };
+                let placement = HeldPlacement {
+                    fist: h.fist,
+                    grip: h.grip,
+                    rotation: h.transform.rotation,
+                };
                 result.push((hand, item, placement, point, mesh));
             }
 
@@ -604,13 +740,22 @@ impl HeldFit {
                 let (flame, rotation) = held_pose(&item, slot);
                 let mesh = item.build();
                 let grip = Vec3::from_array(anchor.position);
-                let placement = HeldPlacement { fist: flame, grip, rotation };
+                let placement = HeldPlacement {
+                    fist: flame,
+                    grip,
+                    rotation,
+                };
                 result.push((slot, item, placement, None, mesh));
             }
 
-            result.into_iter()
-                .map(|(hand, item, placement, point, mesh)| {
-                    BuiltHand { hand, item, placement, point, mesh }
+            result
+                .into_iter()
+                .map(|(hand, item, placement, point, mesh)| BuiltHand {
+                    hand,
+                    item,
+                    placement,
+                    point,
+                    mesh,
                 })
                 .collect()
         };
@@ -639,7 +784,8 @@ pub struct Carrying {
 impl Carrying {
     /// The carried light, if the view model holds one: the first of its lights.
     pub fn light(&self) -> Option<ItemId> {
-        self.held.and_then(|h| h.lights.into_iter().flatten().next())
+        self.held
+            .and_then(|h| h.lights.into_iter().flatten().next())
     }
 }
 
@@ -660,7 +806,11 @@ pub struct HeldSway {
 
 impl HeldSway {
     pub fn new(rest: Transform) -> Self {
-        HeldSway { rest, look: None, lag: Vec2::ZERO }
+        HeldSway {
+            rest,
+            look: None,
+            lag: Vec2::ZERO,
+        }
     }
 
     /// Follows the look turning to `look` (`(yaw, pitch)`, radians) over `dt` seconds: the lag
@@ -673,10 +823,15 @@ impl HeldSway {
         let turned = self.look.map_or(Vec2::ZERO, |last| {
             let d = look - last;
             // Yaw wraps; take the short way round.
-            Vec2::new((d.x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI, d.y)
+            Vec2::new(
+                (d.x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI,
+                d.y,
+            )
         });
         self.look = Some(look);
-        let target = (turned / dt * HELD_LAG_SECONDS).clamp(Vec2::splat(-HELD_LAG_MAX), Vec2::splat(HELD_LAG_MAX));
+        let target = (turned / dt * HELD_LAG_SECONDS)
+            .clamp(Vec2::splat(-HELD_LAG_MAX), Vec2::splat(HELD_LAG_MAX));
         self.lag.smooth_nudge(&target, HELD_LAG_RATE, dt);
     }
 
@@ -688,7 +843,11 @@ impl HeldSway {
         let bob = gait.bob() * HELD_BOB * bob;
         let trail = Quat::from_euler(EulerRot::YXZ, -self.lag.x, -self.lag.y, 0.0);
         let held = self.rest.translation + Vec3::new(bob.x, -bob.y, 0.0);
-        Transform { translation: trail * held, rotation: trail * self.rest.rotation, ..self.rest }
+        Transform {
+            translation: trail * held,
+            rotation: trail * self.rest.rotation,
+            ..self.rest
+        }
     }
 }
 
@@ -696,7 +855,10 @@ impl HeldSway {
 /// +Y, pitch up from level.
 fn yaw_pitch(eye: &GlobalTransform) -> Vec2 {
     let forward = eye.forward().as_vec3();
-    Vec2::new((-forward.x).atan2(-forward.z), forward.y.clamp(-1.0, 1.0).asin())
+    Vec2::new(
+        (-forward.x).atan2(-forward.z),
+        forward.y.clamp(-1.0, 1.0).asin(),
+    )
 }
 
 /// The camera that draws the view model over the world. It stands on [`VIEW_MODEL_STAGE`],
@@ -731,7 +893,9 @@ pub struct DebugPose {
 
 impl DebugPose {
     fn from_env() -> Option<String> {
-        std::env::var("FB_DEBUG_POSE").ok().filter(|v| !v.is_empty())
+        std::env::var("FB_DEBUG_POSE")
+            .ok()
+            .filter(|v| !v.is_empty())
     }
 
     /// The pose for `FB_DEBUG_POSE`'s value `spec` in `level`.
@@ -740,13 +904,25 @@ impl DebugPose {
         let mut values = spec.split(',').map(|v| v.trim().parse::<f32>().ok());
         let (x, y, yaw, pitch) = match (values.next().flatten(), values.next().flatten()) {
             (Some(x), Some(y)) if spec.contains(',') => {
-                let yaw = values.next().flatten().map_or(facing.yaw(), f32::to_radians);
-                (x, y, yaw, values.next().flatten().unwrap_or(0.0).to_radians())
+                let yaw = values
+                    .next()
+                    .flatten()
+                    .map_or(facing.yaw(), f32::to_radians);
+                (
+                    x,
+                    y,
+                    yaw,
+                    values.next().flatten().unwrap_or(0.0).to_radians(),
+                )
             }
             _ => (sx as f32 + 0.5, sy as f32 + 0.5, facing.yaw(), 0.0),
         };
         let (x, y) = Self::standable(level, x, y);
-        DebugPose { at: Vec3::new(x * CELL, 0.0, y * CELL), yaw, pitch }
+        DebugPose {
+            at: Vec3::new(x * CELL, 0.0, y * CELL),
+            yaw,
+            pitch,
+        }
     }
 
     /// The grid point `(x, y)` if the delver could stand there, else the middle of the nearest cell
@@ -762,12 +938,16 @@ impl DebugPose {
             .flat_map(|dy| (-range..=range).map(move |dx| (cx + dx, cy + dy)))
             .filter(|&(nx, ny)| level.is_open(nx, ny))
             .min_by(|a, b| {
-                let d = |c: &(i32, i32)| (c.0 as f32 + 0.5 - x).powi(2) + (c.1 as f32 + 0.5 - y).powi(2);
+                let d = |c: &(i32, i32)| {
+                    (c.0 as f32 + 0.5 - x).powi(2) + (c.1 as f32 + 0.5 - y).powi(2)
+                };
                 d(a).total_cmp(&d(b))
             });
         match nearest {
             Some((nx, ny)) => {
-                warn!("FB_DEBUG_POSE {x},{y} is in rock; standing in the middle of the nearest open cell, {nx},{ny}");
+                warn!(
+                    "FB_DEBUG_POSE {x},{y} is in rock; standing in the middle of the nearest open cell, {nx},{ny}"
+                );
                 (nx as f32 + 0.5, ny as f32 + 0.5)
             }
             None => (x, y),
@@ -776,7 +956,12 @@ impl DebugPose {
 
     /// The eye's world transform in this pose.
     pub fn eye(&self) -> Transform {
-        Transform::from_translation(self.at + Vec3::Y * EYE_HEIGHT).with_rotation(Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0))
+        Transform::from_translation(self.at + Vec3::Y * EYE_HEIGHT).with_rotation(Quat::from_euler(
+            EulerRot::YXZ,
+            self.yaw,
+            self.pitch,
+            0.0,
+        ))
     }
 }
 
@@ -812,7 +997,9 @@ fn hold_debug_pose(
     mut cameras: Query<(&mut Transform, Option<&ChildOf>), With<PlayerCamera>>,
     mut bodies: Query<&mut Transform, (With<Player>, Without<PlayerCamera>)>,
 ) {
-    let Some(spec) = DebugPose::from_env() else { return };
+    let Some(spec) = DebugPose::from_env() else {
+        return;
+    };
     let pose = DebugPose::parse(&level.0, &spec);
     for (mut camera, parent) in &mut cameras {
         match parent.and_then(|p| bodies.get_mut(p.parent()).ok()) {
@@ -849,8 +1036,16 @@ pub(crate) fn lay_out_items(
     // generated. Once a depth is recorded its record is the truth: rolling its loot again would
     // bring back what was taken.
     if let Some(saved) = record.as_deref().and_then(|r| r.level(level.0.depth)) {
-        if saved.floor.iter().map(|f| f.spot).ne(level.0.items.iter().copied()) {
-            warn!("the floor of depth {} disagrees with its record; laying out the record", level.0.depth);
+        if saved
+            .floor
+            .iter()
+            .map(|f| f.spot)
+            .ne(level.0.items.iter().copied())
+        {
+            warn!(
+                "the floor of depth {} disagrees with its record; laying out the record",
+                level.0.depth
+            );
         }
         for lying in &saved.floor {
             if let Some(id) = restore_item(&mut inventory, &lying.item) {
@@ -864,7 +1059,10 @@ pub(crate) fn lay_out_items(
     // (`crate::staged`).
     // It rolls for the luck the delver wears as they come to the level.
     let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
-    let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0, odds)).map(Vec::into_iter);
+    let mut ahead = staged
+        .as_mut()
+        .and_then(|s| s.take_items(&level.0, odds))
+        .map(Vec::into_iter);
     let lore = level.0.lore();
     for spot in &level.0.items {
         let rolled = match ahead.as_mut() {
@@ -883,32 +1081,66 @@ pub(crate) fn lay_out_items(
 
 /// The item's item-space vertices.
 pub fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
-    mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect()
+    mesh.parts
+        .iter()
+        .flat_map(|p| &p.positions)
+        .map(|&p| Vec3::from_array(p))
+        .collect()
 }
 
 /// Spawns item `id` resting on the floor at `spot` as a [`FloorItem`], drawn with its own
 /// palette, dressed condition and etching at the tuning's floor scale, with its light if it
 /// gives one. `None` for an item with no vertices or one the inventory does not know.
-pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
+pub fn spawn_floor_item(
+    spawner: &mut ItemSpawner,
+    inventory: &Inventory,
+    id: ItemId,
+    spot: ItemSpot,
+    tuning: &Tuning,
+) -> Option<Entity> {
     let mesh = inventory.item(id)?.shape.build();
     spawn_floor_item_shaped(spawner, inventory, id, mesh, spot, tuning)
 }
 
 /// [`spawn_floor_item`] for an item whose `mesh` is built already.
-pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, mesh: armory::ItemMesh, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
+pub fn spawn_floor_item_shaped(
+    spawner: &mut ItemSpawner,
+    inventory: &Inventory,
+    id: ItemId,
+    mesh: armory::ItemMesh,
+    spot: ItemSpot,
+    tuning: &Tuning,
+) -> Option<Entity> {
     let item = inventory.item(id)?;
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, floor_scale_of(item, tuning))?;
+    let transform = rest_on_floor(
+        &points,
+        fb_items::profile::stands_on_base(&item.shape),
+        at,
+        spot.yaw,
+        floor_scale_of(item, tuning),
+    )?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = rolled_light(item);
-    let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
+    let appearance = ItemAppearance {
+        shimmer: floor_shimmer(item, tuning),
+        ..appearance_of(&item.shape)
+    };
     let mut root = spawner.spawn(&mesh, &appearance);
-    root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
+    root.insert((
+        transform,
+        Name::new(item.title().to_string()),
+        FloorItem { id, spot, min, max },
+    ));
     // A bedroll or tent set down covers the floor it was checked against (`crate::camp`), and a
     // tent blocks the way as a prop does, from a child at the middle of what it covers.
     if let Some(camp) = item.camp().filter(|_| item.is_set_camp()) {
-        let site = crate::camp::Site { centre: at.xz(), half: Vec2::new(max.x - min.x, max.z - min.z) * 0.5, yaw: spot.yaw };
+        let site = crate::camp::Site {
+            centre: at.xz(),
+            half: Vec2::new(max.x - min.x, max.z - min.z) * 0.5,
+            yaw: spot.yaw,
+        };
         let set = crate::camp::SetCamp::new(camp, &item.shape, site, min, max);
         root.insert(set);
         // What stops the way is the canvas, round the item's origin, not the ropes and pegs.
@@ -923,7 +1155,10 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
         let mut flame = transform.transform_point(Vec3::from_array(anchor.position));
         flame.y = flame.y.max(FLOOR_LIGHT_HEIGHT);
         let at = transform.compute_affine().inverse().transform_point3(flame);
-        root.insert(Propagate(NotShadowCaster)).with_child((given_light(anchor, Exposure::INDOOR, &tuning.light), Transform::from_translation(at)));
+        root.insert(Propagate(NotShadowCaster)).with_child((
+            given_light(anchor, Exposure::INDOOR, &tuning.light),
+            Transform::from_translation(at),
+        ));
     }
     Some(root.id())
 }
@@ -932,7 +1167,11 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
 /// bedroll or tent set down, which is drawn at its own size so it covers the floor it was
 /// checked against (`crate::camp`).
 pub fn floor_scale_of(item: &fb_items::Item, tuning: &Tuning) -> f32 {
-    if item.is_set_camp() { 1.0 } else { tuning.view.floor_item_scale }
+    if item.is_set_camp() {
+        1.0
+    } else {
+        tuning.view.floor_item_scale
+    }
 }
 
 /// The shimmer an item lying on the floor is drawn with: a legendary's in the legendary colour
@@ -941,7 +1180,10 @@ pub fn floor_scale_of(item: &fb_items::Item, tuning: &Tuning) -> f32 {
 /// else. Only floor items are drawn with it, so it stops once picked up.
 pub fn floor_shimmer(item: &fb_items::Item, tuning: &Tuning) -> Shimmer {
     if item.rarity == fb_items::Rarity::Legendary {
-        Shimmer::new(rarity_color(fb_items::Rarity::Legendary), tuning.view.legendary_shimmer.max(0.0))
+        Shimmer::new(
+            rarity_color(fb_items::Rarity::Legendary),
+            tuning.view.legendary_shimmer.max(0.0),
+        )
     } else {
         Shimmer::default()
     }
@@ -956,10 +1198,14 @@ fn reshimmer_floor_items(
     mut materials: ResMut<Assets<ToonMaterial>>,
 ) {
     for (floor, children) in &items {
-        let Some(item) = inventory.item(floor.id) else { continue };
+        let Some(item) = inventory.item(floor.id) else {
+            continue;
+        };
         let shimmer = floor_shimmer(item, &tuning);
         for part in children.iter().filter_map(|child| parts.get(child).ok()) {
-            if materials.get(&part.0).is_some_and(|m| m.extension.shimmer != shimmer)
+            if materials
+                .get(&part.0)
+                .is_some_and(|m| m.extension.shimmer != shimmer)
                 && let Some(mut material) = materials.get_mut(&part.0)
             {
                 material.extension.shimmer = shimmer;
@@ -985,10 +1231,23 @@ pub fn floor_radius(points: &[Vec3], stands: bool, scale: f32) -> f32 {
 /// body slides along walls and round obstacles ([`slide_around`]). The radius is
 /// held under half a cell so an item fits down a one-cell corridor. `aside` moves the spot to
 /// the right (negative to the left), held within [`DROP_SPREAD`].
-pub fn drop_spot(feet: Vec2, forward: Vec2, aside: f32, radius: f32, blocked: impl Fn(i32, i32) -> bool, obstacles: &[Obstacle]) -> Vec2 {
+pub fn drop_spot(
+    feet: Vec2,
+    forward: Vec2,
+    aside: f32,
+    radius: f32,
+    blocked: impl Fn(i32, i32) -> bool,
+    obstacles: &[Obstacle],
+) -> Vec2 {
     let radius = radius.min(CELL * 0.5 - 0.5);
     let right = Vec2::new(-forward.y, forward.x);
-    slide_around(feet, feet + forward * DROP_DISTANCE + right * aside.clamp(-DROP_SPREAD, DROP_SPREAD), radius, blocked, obstacles)
+    slide_around(
+        feet,
+        feet + forward * DROP_DISTANCE + right * aside.clamp(-DROP_SPREAD, DROP_SPREAD),
+        radius,
+        blocked,
+        obstacles,
+    )
 }
 
 /// Sets loose item `id` down in front of the eye ([`drop_spot`]), into the level data too so it
@@ -1008,8 +1267,19 @@ pub fn set_down(
     let item = inventory.item(id)?;
     // Straight down, the top of the head points the way the body faces.
     let forward = crate::camp::facing(eye);
-    let radius = floor_radius(&item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), tuning.view.floor_item_scale);
-    let at = drop_spot(eye.translation().xz(), forward, aside, radius, blocked_by(level, blocked_cells), &obstacles.0) / CELL;
+    let radius = floor_radius(
+        &item_points(&item.shape.build()),
+        fb_items::profile::stands_on_base(&item.shape),
+        tuning.view.floor_item_scale,
+    );
+    let at = drop_spot(
+        eye.translation().xz(),
+        forward,
+        aside,
+        radius,
+        blocked_by(level, blocked_cells),
+        &obstacles.0,
+    ) / CELL;
     // Laid square to the player's view.
     let yaw = (-forward.x).atan2(-forward.y);
     set_down_at(spawner, inventory, level, id, at, yaw, tuning)
@@ -1019,20 +1289,54 @@ pub fn set_down(
 /// eye puts it, without asking whether the place takes it ([`crate::camp::check_site`]). Only
 /// for captures (`FB_DROP=Tent+set`); the player's own set-down checks first
 /// ([`crate::camp::lay_out`]). `None` if it is not a set camp.
-pub fn set_camp_down_unchecked(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut Level, eye: &GlobalTransform, id: ItemId, tuning: &Tuning) -> Option<Entity> {
+pub fn set_camp_down_unchecked(
+    spawner: &mut ItemSpawner,
+    inventory: &Inventory,
+    level: &mut Level,
+    eye: &GlobalTransform,
+    id: ItemId,
+    tuning: &Tuning,
+) -> Option<Entity> {
     let item = inventory.item(id)?;
     let (half, _) = crate::camp::footprint(item).filter(|_| item.is_set_camp())?;
-    let site = crate::camp::site_ahead(eye.translation().xz(), crate::camp::facing(eye), half, crate::camp::gap_for(item.camp()?));
-    set_down_at(spawner, inventory, level, id, site.centre / CELL, site.yaw, tuning)
+    let site = crate::camp::site_ahead(
+        eye.translation().xz(),
+        crate::camp::facing(eye),
+        half,
+        crate::camp::gap_for(item.camp()?),
+    );
+    set_down_at(
+        spawner,
+        inventory,
+        level,
+        id,
+        site.centre / CELL,
+        site.yaw,
+        tuning,
+    )
 }
 
 /// Sets loose item `id` down at `at` on the floor (cells), turned `yaw`, into the level data
 /// too so it stays where it was left, and spawns it there. `None` if it has no vertices.
-pub fn set_down_at(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut Level, id: ItemId, at: Vec2, yaw: f32, tuning: &Tuning) -> Option<Entity> {
+pub fn set_down_at(
+    spawner: &mut ItemSpawner,
+    inventory: &Inventory,
+    level: &mut Level,
+    id: ItemId,
+    at: Vec2,
+    yaw: f32,
+    tuning: &Tuning,
+) -> Option<Entity> {
     let item = inventory.item(id)?;
     // For anything that came from a level spot, the spot rolls the same item again
     // ([`fb_items::roll_loot`]); what is spawned is the item itself.
-    let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
+    let spot = ItemSpot {
+        x: at.x,
+        y: at.y,
+        yaw,
+        family: item.shape.family(),
+        seed: item.seed,
+    };
     level.items.push(spot);
     spawn_floor_item(spawner, inventory, id, spot, tuning)
 }
@@ -1048,16 +1352,31 @@ pub fn lift(commands: &mut Commands, level: &mut Level, entity: Entity, floor: &
 
 /// A flickering point light in `anchor`'s colour and flicker (times the tuning's
 /// `flicker_depth`), `peak` times full close up and reaching `range` units.
-fn anchor_light(anchor: &LightAnchor, peak: f32, range: f32, exposure: &Exposure, light: &LightTuning) -> PointLight {
+fn anchor_light(
+    anchor: &LightAnchor,
+    peak: f32,
+    range: f32,
+    exposure: &Exposure,
+    light: &LightTuning,
+) -> PointLight {
     let color = Color::srgb(anchor.color.0, anchor.color.1, anchor.color.2);
-    Torch::flickering(point_light(color, peak, range, exposure), anchor.flicker * light.flicker_depth)
+    Torch::flickering(
+        point_light(color, peak, range, exposure),
+        anchor.flicker * light.flicker_depth,
+    )
 }
 
 /// An anchor's light in the world: `torch_peak` close up, bright out to its radius and dim to
 /// `torch_reach` times it ([`LightTuning`]), and shadowed, so it never reaches through rock into
 /// the next corridor.
 pub fn world_light(anchor: &LightAnchor, exposure: &Exposure, light: &LightTuning) -> PointLight {
-    cast_shadows(anchor_light(anchor, light.torch_peak, anchor.radius * light.torch_reach, exposure, light))
+    cast_shadows(anchor_light(
+        anchor,
+        light.torch_peak,
+        anchor.radius * light.torch_reach,
+        exposure,
+        light,
+    ))
 }
 
 /// On a lit thing's light in the world ([`world_light`]): what it is the light of, so it can be
@@ -1069,13 +1388,23 @@ pub struct GivenLight {
 }
 
 /// A lit thing's light in the world, with what it is the light of.
-pub fn given_light(anchor: LightAnchor, exposure: Exposure, light: &LightTuning) -> (PointLight, GivenLight) {
-    (world_light(&anchor, &exposure, light), GivenLight { anchor, exposure })
+pub fn given_light(
+    anchor: LightAnchor,
+    exposure: Exposure,
+    light: &LightTuning,
+) -> (PointLight, GivenLight) {
+    (
+        world_light(&anchor, &exposure, light),
+        GivenLight { anchor, exposure },
+    )
 }
 
 /// Lights every lit thing's light again when the tuning changes (in hand, on the floor, held by
 /// folk), and each new one as it appears, so one spawned without the tuning to hand follows it.
-fn relight_given_lights(tuning: Res<Tuning>, mut lights: Query<(Ref<GivenLight>, &mut PointLight)>) {
+fn relight_given_lights(
+    tuning: Res<Tuning>,
+    mut lights: Query<(Ref<GivenLight>, &mut PointLight)>,
+) {
     for (given, mut light) in &mut lights {
         if !tuning.is_changed() && !given.is_added() {
             continue;
@@ -1085,7 +1414,10 @@ fn relight_given_lights(tuning: Res<Tuning>, mut lights: Query<(Ref<GivenLight>,
 }
 
 /// Redraws every floor item at the tuning's floor scale, about where it rests.
-fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut Transform), Without<crate::camp::SetCamp>>) {
+fn rescale_floor_items(
+    tuning: Res<Tuning>,
+    mut items: Query<(&FloorItem, &mut Transform), Without<crate::camp::SetCamp>>,
+) {
     let scale = tuning.view.floor_item_scale;
     for (floor, mut transform) in &mut items {
         if transform.scale.x != scale {
@@ -1097,11 +1429,18 @@ fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut T
 
 /// The view model camera's projection for `tuning`.
 fn view_model_projection(tuning: &Tuning) -> Projection {
-    Projection::from(PerspectiveProjection { fov: tuning.view.held_fov_degrees.to_radians(), near: 0.05, ..default() })
+    Projection::from(PerspectiveProjection {
+        fov: tuning.view.held_fov_degrees.to_radians(),
+        near: 0.05,
+        ..default()
+    })
 }
 
 /// Keeps every view model camera's field of view to the tuning's.
-fn widen_view_models(tuning: Res<Tuning>, mut cameras: Query<&mut Projection, With<ViewModelCamera>>) {
+fn widen_view_models(
+    tuning: Res<Tuning>,
+    mut cameras: Query<&mut Projection, With<ViewModelCamera>>,
+) {
     let fov = tuning.view.held_fov_degrees.to_radians();
     for mut projection in &mut cameras {
         if let Projection::Perspective(perspective) = &mut *projection
@@ -1113,7 +1452,11 @@ fn widen_view_models(tuning: Res<Tuning>, mut cameras: Query<&mut Projection, Wi
 }
 
 /// How a camera draws, which the view model camera copies from the player camera.
-type CameraLook = (Option<&'static Exposure>, Option<&'static Tonemapping>, Option<&'static Msaa>);
+type CameraLook = (
+    Option<&'static Exposure>,
+    Option<&'static Tonemapping>,
+    Option<&'static Msaa>,
+);
 
 /// Gives each new [`PlayerCamera`] its view model camera, on the stage, and the HUD. What it
 /// carries is [`carry_light`]'s.
@@ -1130,13 +1473,21 @@ fn equip_player_camera(
                 ViewModelCamera { follows: camera },
                 crate::render::ScreenInkExempt,
                 Camera3d::default(),
-                Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+                Camera {
+                    order: 1,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
                 view_model_projection(&tuning),
                 exposure,
                 tonemapping.copied().unwrap_or(Tonemapping::Linear),
                 msaa.copied().unwrap_or_default(),
                 // The level's ambient does not reach the stage; a little warm fill of its own.
-                AmbientLight { color: Torch::COLOR, brightness: 0.06 / exposure.exposure(), ..default() },
+                AmbientLight {
+                    color: Torch::COLOR,
+                    brightness: 0.06 / exposure.exposure(),
+                    ..default()
+                },
                 RenderLayers::layer(VIEW_MODEL_LAYER),
                 Transform::from_translation(VIEW_MODEL_STAGE),
             ))
@@ -1144,9 +1495,15 @@ fn equip_player_camera(
         if std::env::var_os("FB_DEBUG_LIGHT").is_some() {
             // The player camera's debug light (`crate::player`), on the stage too, so what is
             // held can be seen without a light in hand.
-            commands.spawn((point_light(Color::WHITE, 0.5, 200.0, &exposure), RenderLayers::layer(VIEW_MODEL_LAYER), ChildOf(view_model)));
+            commands.spawn((
+                point_light(Color::WHITE, 0.5, 200.0, &exposure),
+                RenderLayers::layer(VIEW_MODEL_LAYER),
+                ChildOf(view_model),
+            ));
         }
-        commands.entity(camera).insert((Equipped, Carrying::default()));
+        commands
+            .entity(camera)
+            .insert((Equipped, Carrying::default()));
         spawn_hud(&mut commands, view_model, fonts.as_deref());
     }
 }
@@ -1158,7 +1515,11 @@ fn equip_player_camera(
 /// holds them (`crate::view_model`).
 pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
     let left = hand == fb_items::Slot::Offhand;
-    let flame = if left { HELD_FLAME * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_FLAME };
+    let flame = if left {
+        HELD_FLAME * Vec3::new(-1.0, 1.0, 1.0)
+    } else {
+        HELD_FLAME
+    };
     // A lantern, candle or chamberstick stands on its base: flame straight up.
     let upright = matches!(item, Item::Lantern(_) | Item::Sundry(_));
     let lean = if upright { 0.0 } else { 0.22 };
@@ -1173,7 +1534,11 @@ pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
 pub fn stage_light_at(anchor: &LightAnchor, rest: Transform, hand: fb_items::Slot) -> Vec3 {
     let scale = rest.scale.x;
     let flame = rest.transform_point(Vec3::from_array(anchor.position));
-    let toward_eye = if side_of(hand) == fb_body::OFF_HAND { HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_LIGHT_OFFSET };
+    let toward_eye = if side_of(hand) == fb_body::OFF_HAND {
+        HELD_LIGHT_OFFSET * Vec3::new(-1.0, 1.0, 1.0)
+    } else {
+        HELD_LIGHT_OFFSET
+    };
     // As far off the flame, for the item's size, as before it was drawn larger.
     flame + toward_eye * scale
 }
@@ -1182,14 +1547,33 @@ pub fn stage_light_at(anchor: &LightAnchor, rest: Transform, hand: fb_items::Slo
 /// size: each item fitted to the delver's body as on the doll and carried into the view
 /// (`crate::view_model`), or, for a lit thing no hold fits, held by its flame ([`held_pose`]).
 /// Other things a hand might hold that no hold fits are not drawn.
-pub fn held_items(inventory: &Inventory, character: &Character, scale: f32) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
+pub fn held_items(
+    inventory: &Inventory,
+    character: &Character,
+    scale: f32,
+) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
     use fb_items::Slot;
-    let shape = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).map(|item| item.shape.clone());
-    held_items_of(&character.spec(), shape(Slot::Mainhand), shape(Slot::Offhand), scale)
+    let shape = |slot| {
+        inventory
+            .worn(slot)
+            .and_then(|id| inventory.item(id))
+            .map(|item| item.shape.clone())
+    };
+    held_items_of(
+        &character.spec(),
+        shape(Slot::Mainhand),
+        shape(Slot::Offhand),
+        scale,
+    )
 }
 
 /// [`held_items`] for the items in the main and off hand of a body of `spec`.
-fn held_items_of(spec: &BodySpec, main: Option<Item>, off: Option<Item>, scale: f32) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
+fn held_items_of(
+    spec: &BodySpec,
+    main: Option<Item>,
+    off: Option<Item>,
+    scale: f32,
+) -> Vec<(fb_items::Slot, Item, Transform, Option<Vec3>)> {
     use fb_items::Slot;
     let fitted = held_in_view(spec, main.as_ref(), off.as_ref(), scale);
     [(Slot::Mainhand, main), (Slot::Offhand, off)]
@@ -1201,7 +1585,16 @@ fn held_items_of(spec: &BodySpec, main: Option<Item>, off: Option<Item>, scale: 
             let item = item?;
             let anchor = item_light(&item)?;
             let (flame, rotation) = held_pose(&item, hand);
-            Some((hand, item, Transform { translation: flame - rotation * Vec3::from_array(anchor.position) * scale, rotation, scale: Vec3::splat(scale) }, None))
+            Some((
+                hand,
+                item,
+                Transform {
+                    translation: flame - rotation * Vec3::from_array(anchor.position) * scale,
+                    rotation,
+                    scale: Vec3::splat(scale),
+                },
+                None,
+            ))
         })
         .collect()
 }
@@ -1223,24 +1616,46 @@ pub(crate) fn show_held(
     character: Res<Character>,
     tuning: Res<Tuning>,
     mut cache: ResMut<crate::fitting::FitCache>,
-    mut cameras: Query<(Entity, &mut Carrying, Option<&Exposure>, Option<&ChildOf>), With<PlayerCamera>>,
+    mut cameras: Query<
+        (Entity, &mut Carrying, Option<&Exposure>, Option<&ChildOf>),
+        With<PlayerCamera>,
+    >,
     view_models: Query<(Entity, &ViewModelCamera)>,
     mut spawner: ItemSpawner,
 ) {
-    let wanted = HeldWanted { key: HeldKey::of(&inventory, &character) };
+    let wanted = HeldWanted {
+        key: HeldKey::of(&inventory, &character),
+    };
     let scale = tuning.view.held_scale;
     for (camera, mut carrying, exposure, body) in &mut cameras {
-        let Some((view_model, _)) = view_models.iter().find(|(_, v)| v.follows == camera) else { continue };
-        if carrying.fitting.as_ref().is_some_and(|f| *f.key() != wanted) {
+        let Some((view_model, _)) = view_models.iter().find(|(_, v)| v.follows == camera) else {
+            continue;
+        };
+        if carrying
+            .fitting
+            .as_ref()
+            .is_some_and(|f| *f.key() != wanted)
+        {
             carrying.fitting = None;
         }
-        let quick = carrying.built.as_ref().filter(|b| b.wanted != wanted).and_then(|b| b.with_loaded(wanted, &inventory));
+        let quick = carrying
+            .built
+            .as_ref()
+            .filter(|b| b.wanted != wanted)
+            .and_then(|b| b.with_loaded(wanted, &inventory));
         if quick.is_some() {
             carrying.fitting = None;
         }
         let mut fresh = quick;
-        if fresh.is_none() && carrying.built.as_ref().is_none_or(|b| b.wanted != wanted) && carrying.fitting.is_none() {
-            let worn: Vec<(fb_items::Slot, Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.shape.clone())).collect();
+        if fresh.is_none()
+            && carrying.built.as_ref().is_none_or(|b| b.wanted != wanted)
+            && carrying.fitting.is_none()
+        {
+            let worn: Vec<(fb_items::Slot, Item)> = inventory
+                .equipped()
+                .into_iter()
+                .map(|(slot, item)| (slot, item.shape.clone()))
+                .collect();
             let spec = character.spec();
             if wanted.key.main.is_none() && wanted.key.off.is_none() && wanted.key.hip.is_none() {
                 // Nothing to fit: no wait.
@@ -1252,7 +1667,9 @@ pub(crate) fn show_held(
                     fresh = Some(HeldBuilt { wanted, fit });
                 } else {
                     carrying.fit_key = key;
-                    carrying.fitting = Some(Fitting::start(wanted, move || std::sync::Arc::new(HeldFit::fit(&spec, &worn))));
+                    carrying.fitting = Some(Fitting::start(wanted, move || {
+                        std::sync::Arc::new(HeldFit::fit(&spec, &worn))
+                    }));
                 }
             }
         }
@@ -1270,14 +1687,19 @@ pub(crate) fn show_held(
         if let Some(fresh) = fresh {
             carrying.built = Some(std::sync::Arc::new(fresh));
         }
-        let Some(built) = carrying.built.clone() else { continue };
+        let Some(built) = carrying.built.clone() else {
+            continue;
+        };
         for entity in carrying.entities.drain(..) {
             commands.entity(entity).try_despawn();
         }
         carrying.held = Some(built.wanted.key);
         let exposure = exposure.copied().unwrap_or_default();
         let view_layer = RenderLayers::layer(VIEW_MODEL_LAYER);
-        let lit: Vec<fb_items::Slot> = carried_lights(&inventory).into_iter().map(|(slot, _)| slot).collect();
+        let lit: Vec<fb_items::Slot> = carried_lights(&inventory)
+            .into_iter()
+            .map(|(slot, _)| slot)
+            .collect();
         for hand in &built.hands {
             let mut root = spawner.spawn(&hand.mesh, &appearance_of(&hand.item));
             let transform = Transform {
@@ -1287,7 +1709,11 @@ pub(crate) fn show_held(
             };
             root.insert((
                 Name::new(format!("Held {}", hand.item.family().key())),
-                HeldItem { item: hand.item.clone(), hand: hand.hand, point: hand.point },
+                HeldItem {
+                    item: hand.item.clone(),
+                    hand: hand.hand,
+                    point: hand.point,
+                },
                 crate::render::flame::FlameUp::default(),
                 crate::render::flame::FlameFacing(Vec3::NEG_Z),
                 HeldSway::new(transform),
@@ -1299,11 +1725,29 @@ pub(crate) fn show_held(
             if !lit.contains(&hand.hand) {
                 continue;
             }
-            let Some(anchor) = item_light(&hand.item) else { continue };
+            let Some(anchor) = item_light(&hand.item) else {
+                continue;
+            };
             let at = stage_light_at(&anchor, transform, hand.hand);
-            let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(at), view_layer.clone(), ChildOf(view_model))).id();
-            let reach = LightAnchor { radius: anchor.radius * light_factor_in(&inventory, hand.hand), ..anchor };
-            let world = commands.spawn((given_light(reach, exposure, &tuning.light), Transform::from_translation(WORLD_FLAME), ChildOf(camera))).id();
+            let stage_light = commands
+                .spawn((
+                    anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light),
+                    Transform::from_translation(at),
+                    view_layer.clone(),
+                    ChildOf(view_model),
+                ))
+                .id();
+            let reach = LightAnchor {
+                radius: anchor.radius * light_factor_in(&inventory, hand.hand),
+                ..anchor
+            };
+            let world = commands
+                .spawn((
+                    given_light(reach, exposure, &tuning.light),
+                    Transform::from_translation(WORLD_FLAME),
+                    ChildOf(camera),
+                ))
+                .id();
             carrying.entities.extend([stage_light, world]);
         }
         // A lantern at the hip hangs from the body in the level, not on the stage; lit and
@@ -1314,18 +1758,42 @@ pub(crate) fn show_held(
                 Some(body) => (body.parent(), hip.hook),
                 None => (camera, hip.hook - Vec3::Y * EYE_HEIGHT),
             };
-            let pivot = commands.spawn((Name::new("Hip lantern"), HipSwing, Transform::from_translation(hook), Visibility::default(), ChildOf(parent))).id();
-            let carried = lit.contains(&fb_items::Slot::Hip).then(|| item_light(&hip.item)).flatten();
+            let pivot = commands
+                .spawn((
+                    Name::new("Hip lantern"),
+                    HipSwing,
+                    Transform::from_translation(hook),
+                    Visibility::default(),
+                    ChildOf(parent),
+                ))
+                .id();
+            let carried = lit
+                .contains(&fb_items::Slot::Hip)
+                .then(|| item_light(&hip.item))
+                .flatten();
             // The lantern and its light go through the spawner's own commands, after the pivot's.
             let mut lantern = spawner.spawn(mesh, &appearance_of(&hip.item));
             lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
             if let Some(anchor) = carried {
-                let reach = LightAnchor { radius: anchor.radius * light_factor_in(&inventory, fb_items::Slot::Hip), ..anchor };
-                lantern.with_child((given_light(reach, exposure, &tuning.light),Transform::from_translation(Vec3::from_array(anchor.position))));
+                let reach = LightAnchor {
+                    radius: anchor.radius * light_factor_in(&inventory, fb_items::Slot::Hip),
+                    ..anchor
+                };
+                lantern.with_child((
+                    given_light(reach, exposure, &tuning.light),
+                    Transform::from_translation(Vec3::from_array(anchor.position)),
+                ));
             }
             carrying.entities.push(pivot);
             let Some(anchor) = carried else { continue };
-            let stage_light = commands.spawn((anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light), Transform::from_translation(HIP_STAGE_LIGHT), view_layer, ChildOf(view_model))).id();
+            let stage_light = commands
+                .spawn((
+                    anchor_light(&anchor, HELD_PEAK, HELD_REACH, &exposure, &tuning.light),
+                    Transform::from_translation(HIP_STAGE_LIGHT),
+                    view_layer,
+                    ChildOf(view_model),
+                ))
+                .id();
             carrying.entities.push(stage_light);
         }
     }
@@ -1352,8 +1820,15 @@ fn swing_hip(mut pivots: Query<(&mut Transform, &ChildOf), With<HipSwing>>, gait
 #[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving))]
 pub struct Hud;
 
-pub(crate) fn hide_hud_under_screens(open: Res<ScreenOpen>, mut huds: Query<&mut Visibility, With<Hud>>) {
-    let shown = if open.0.is_some() { Visibility::Hidden } else { Visibility::Inherited };
+pub(crate) fn hide_hud_under_screens(
+    open: Res<ScreenOpen>,
+    mut huds: Query<&mut Visibility, With<Hud>>,
+) {
+    let shown = if open.0.is_some() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
     for mut visibility in &mut huds {
         visibility.set_if_neq(shown);
     }
@@ -1365,7 +1840,12 @@ fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
             Name::new("HUD"),
             Hud,
             UiTargetCamera(camera),
-            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
             Pickable::IGNORE,
         ))
         .with_children(|hud| {
@@ -1377,7 +1857,11 @@ fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
                     top: percent(50),
                     width: px(6),
                     height: px(6),
-                    margin: UiRect { left: px(-3), top: px(-3), ..default() },
+                    margin: UiRect {
+                        left: px(-3),
+                        top: px(-3),
+                        ..default()
+                    },
                     border: UiRect::all(px(1)),
                     border_radius: BorderRadius::MAX,
                     ..default()
@@ -1390,12 +1874,29 @@ fn spawn_hud(commands: &mut Commands, camera: Entity, fonts: Option<&UiFonts>) {
             // with a dark shadow so it reads on lit stone and in the dark alike. It sits just above
             // the orb cluster and quick bar, so the two never overlap at any window size.
             hud.spawn((
-                Node { position_type: PositionType::Absolute, width: percent(100), bottom: crate::ui::hud(toast_lift()), justify_content: JustifyContent::Center, ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: percent(100),
+                    bottom: crate::ui::hud(toast_lift()),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
                 Pickable::IGNORE,
             ))
             .with_children(|row| {
-                let font = fonts.map_or_else(TextFont::default, |f| TextFont::from_font_size(20.0).with_font(f.body.clone()));
-                row.spawn((ToastText, Text::default(), font, TextColor(BRIGHT), TextShadow { offset: Vec2::new(1.5, 1.5), color: BG.with_alpha(0.9) }));
+                let font = fonts.map_or_else(TextFont::default, |f| {
+                    TextFont::from_font_size(20.0).with_font(f.body.clone())
+                });
+                row.spawn((
+                    ToastText,
+                    Text::default(),
+                    font,
+                    TextColor(BRIGHT),
+                    TextShadow {
+                        offset: Vec2::new(1.5, 1.5),
+                        color: BG.with_alpha(0.9),
+                    },
+                ));
             });
         });
 }
@@ -1428,11 +1929,20 @@ fn follow_player_camera(
 fn upright_held_flames(
     view_models: Query<&ViewModelCamera>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut held: Query<(&HeldItem, &ChildOf, &mut crate::render::flame::FlameUp, &mut crate::render::flame::FlameFacing)>,
+    mut held: Query<(
+        &HeldItem,
+        &ChildOf,
+        &mut crate::render::flame::FlameUp,
+        &mut crate::render::flame::FlameFacing,
+    )>,
 ) {
     for (item, parent, mut up, mut facing) in &mut held {
-        let Ok(view_model) = view_models.get(parent.parent()) else { continue };
-        let Ok(eye) = eyes.get(view_model.follows) else { continue };
+        let Ok(view_model) = view_models.get(parent.parent()) else {
+            continue;
+        };
+        let Ok(eye) = eyes.get(view_model.follows) else {
+            continue;
+        };
         let world_up = eye.rotation().inverse() * Vec3::Y;
         if up.0 != world_up {
             up.0 = world_up;
@@ -1445,8 +1955,13 @@ fn upright_held_flames(
         let side = eye.right().as_vec3();
         let right = Vec3::new(side.x, 0.0, side.z);
         if ahead.length() > 1e-3 && right.length() > 1e-3 {
-            let outward = if item.hand == fb_items::Slot::Offhand { -1.0 } else { 1.0 };
-            let ahead = eye.rotation().inverse() * crate::render::flame::held_facing(ahead.normalize(), right.normalize(), outward);
+            let outward = if item.hand == fb_items::Slot::Offhand {
+                -1.0
+            } else {
+                1.0
+            };
+            let ahead = eye.rotation().inverse()
+                * crate::render::flame::held_facing(ahead.normalize(), right.normalize(), outward);
             if facing.0 != ahead {
                 facing.0 = ahead;
             }
@@ -1463,9 +1978,16 @@ pub(crate) fn sway_held(
     gaits: Query<&Gait>,
 ) {
     for (mut sway, mut transform, parent) in &mut held {
-        let Ok(view_model) = view_models.get(parent.parent()) else { continue };
-        let Ok((eye, body)) = eyes.get(view_model.follows) else { continue };
-        let gait = body.and_then(|b| gaits.get(b.parent()).ok()).copied().unwrap_or_default();
+        let Ok(view_model) = view_models.get(parent.parent()) else {
+            continue;
+        };
+        let Ok((eye, body)) = eyes.get(view_model.follows) else {
+            continue;
+        };
+        let gait = body
+            .and_then(|b| gaits.get(b.parent()).ok())
+            .copied()
+            .unwrap_or_default();
         sway.follow(yaw_pitch(eye), time.delta_secs());
         *transform = sway.transform(gait, tuning.view.head_bob);
     }
@@ -1484,16 +2006,31 @@ pub(crate) fn aim(
     };
     let targets = items
         .iter()
-        .map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max))
-        .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)));
-    let hit = nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity);
+        .map(|(entity, transform, floor)| {
+            (entity, transform.compute_transform(), floor.min, floor.max)
+        })
+        .chain(containers.iter().map(|(entity, transform, piece)| {
+            (entity, transform.compute_transform(), piece.min, piece.max)
+        }));
+    let hit = nearest_aimed(
+        eye.translation(),
+        eye.forward().as_vec3(),
+        REACH,
+        AimBuffer::of(&tuning),
+        targets,
+    )
+    .map(|(entity, _)| entity);
     if aimed.0 != hit {
         aimed.0 = hit;
     }
 }
 
 /// What `slot` does to the floor item `id`, from the Interactable lookup ([`crate::interact`]).
-fn floor_verb(inventory: &Inventory, id: ItemId, slot: crate::interact::Slot) -> Option<crate::interact::Verb> {
+fn floor_verb(
+    inventory: &Inventory,
+    id: ItemId,
+    slot: crate::interact::Slot,
+) -> Option<crate::interact::Verb> {
     let target = crate::interact::item_target(inventory, id)?;
     crate::interact::verbs_for(&target, &crate::interact::Delver::default()).get(slot)
 }
@@ -1513,13 +2050,20 @@ pub(crate) fn pick_up(
     }
     let Some(entity) = aimed.0 else { return };
     let Ok(floor) = items.get(entity) else { return };
-    if floor_verb(&inventory, floor.id, crate::interact::Slot::Primary) != Some(crate::interact::Verb::Take) {
+    if floor_verb(&inventory, floor.id, crate::interact::Slot::Primary)
+        != Some(crate::interact::Verb::Take)
+    {
         return;
     }
     match inventory.pick_up(floor.id) {
         Ok(()) => {
             aimed.0 = None;
-            lift(&mut commands, &mut level.bypass_change_detection().0, entity, floor);
+            lift(
+                &mut commands,
+                &mut level.bypass_change_detection().0,
+                entity,
+                floor,
+            );
         }
         Err(refusal) => info!("{}", refusal.reason()),
     }
@@ -1545,14 +2089,24 @@ pub(crate) fn equip_aimed(
     if !hang && !input.just_pressed(Action::Secondary) {
         return;
     }
-    let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else { return };
-    let (act, verb) = if hang { (Act::Special, Verb::HangAtHip) } else { (Act::Secondary, Verb::Equip) };
+    let Some(floor) = aimed.0.and_then(|entity| items.get(entity).ok()) else {
+        return;
+    };
+    let (act, verb) = if hang {
+        (Act::Special, Verb::HangAtHip)
+    } else {
+        (Act::Secondary, Verb::Equip)
+    };
     if floor_verb(&inventory, floor.id, act) != Some(verb) {
         return;
     }
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     let (at, yaw) = (Vec2::new(floor.spot.x, floor.spot.y), floor.spot.yaw);
-    let equipped = if hang { equip_from_floor_in(&mut inventory, floor.id, fb_items::Slot::Hip, at, yaw) } else { equip_from_floor(&mut inventory, floor.id, at, yaw) };
+    let equipped = if hang {
+        equip_from_floor_in(&mut inventory, floor.id, fb_items::Slot::Hip, at, yaw)
+    } else {
+        equip_from_floor(&mut inventory, floor.id, at, yaw)
+    };
     match equipped {
         Ok(equipped) => {
             aimed.0 = None;
@@ -1600,9 +2154,21 @@ mod tests {
     fn laid_size(item: &fb_items::Item) -> (Vec3, Transform) {
         let points = item_points(&item.shape.build());
         let at = Vec3::new(30.0, 0.0, 30.0);
-        let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, 0.4, floor_scale()).unwrap();
+        let transform = rest_on_floor(
+            &points,
+            fb_items::profile::stands_on_base(&item.shape),
+            at,
+            0.4,
+            floor_scale(),
+        )
+        .unwrap();
         let (min, max) = bounds(points.iter().map(|&p| transform.transform_point(p))).unwrap();
-        assert!(close(min.y, 0.0), "{}: floats or sinks to {}", item.title(), min.y);
+        assert!(
+            close(min.y, 0.0),
+            "{}: floats or sinks to {}",
+            item.title(),
+            min.y
+        );
         (max - min, transform)
     }
 
@@ -1612,12 +2178,18 @@ mod tests {
             for family in [Family::Crossbow, Family::Bow, Family::Shield] {
                 let item = fb_items::roll_loot(family, seed, fb_items::Odds::default()).unwrap();
                 let (size, _) = laid_size(&item);
-                assert!(size.y <= size.x.min(size.z) + 1e-3, "{family:?} {seed}: stands {size}");
+                assert!(
+                    size.y <= size.x.min(size.z) + 1e-3,
+                    "{family:?} {seed}: stands {size}"
+                );
             }
             for family in [Family::Bags, Family::Feet, Family::Lantern] {
                 let item = fb_items::roll_loot(family, seed, fb_items::Odds::default()).unwrap();
                 let (_, transform) = laid_size(&item);
-                assert!((transform.rotation * Vec3::Y).y > 0.99, "{family:?} {seed}: laid down");
+                assert!(
+                    (transform.rotation * Vec3::Y).y > 0.99,
+                    "{family:?} {seed}: laid down"
+                );
             }
         }
     }
@@ -1625,11 +2197,20 @@ mod tests {
     #[test]
     fn items_rest_on_the_floor_at_their_spot() {
         let box_points: Vec<Vec3> = (0..8)
-            .map(|i| Vec3::new(if i & 1 == 0 { -1.0 } else { 1.5 }, if i & 2 == 0 { -2.0 } else { 7.0 }, if i & 4 == 0 { -0.2 } else { 0.3 }))
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 == 0 { -1.0 } else { 1.5 },
+                    if i & 2 == 0 { -2.0 } else { 7.0 },
+                    if i & 4 == 0 { -0.2 } else { 0.3 },
+                )
+            })
             .collect();
         let at = Vec3::new(40.0, 0.0, 60.0);
         let transform = rest_on_floor(&box_points, false, at, 0.7, floor_scale()).unwrap();
-        let placed: Vec<Vec3> = box_points.iter().map(|&p| transform.transform_point(p)).collect();
+        let placed: Vec<Vec3> = box_points
+            .iter()
+            .map(|&p| transform.transform_point(p))
+            .collect();
         let (min, max) = bounds(placed.into_iter()).unwrap();
         assert!(close(min.y, 0.0), "{min}");
         assert!(max.y < 1.0, "a long thing lies down: {max}");
@@ -1639,35 +2220,72 @@ mod tests {
         // thin side (0.5 deep) lies down, that much times the scale high.
         assert_eq!(transform.scale, Vec3::splat(floor_scale()));
         assert!(close(max.y - min.y, 0.5 * floor_scale()), "{min} {max}");
-        assert!(close(floor_radius(&box_points, false, floor_scale()), 4.5 * floor_scale()));
+        assert!(close(
+            floor_radius(&box_points, false, floor_scale()),
+            4.5 * floor_scale()
+        ));
         // Drawn at another scale it still rests at its spot, as if it had been laid there so.
         let twice = rescale_on_floor(transform, at, 2.0);
         let laid = rest_on_floor(&box_points, false, at, 0.7, 2.0).unwrap();
-        assert!(twice.translation.abs_diff_eq(laid.translation, 1e-4) && twice.scale == laid.scale, "{twice:?}");
+        assert!(
+            twice.translation.abs_diff_eq(laid.translation, 1e-4) && twice.scale == laid.scale,
+            "{twice:?}"
+        );
         // The pickup box grows with it, and a ray onto its top lands there, in world units.
         let top = Vec3::new((min.x + max.x) * 0.5, max.y, (min.z + max.z) * 0.5);
         let from = top + Vec3::Y * 5.0;
-        let hit = nearest_aimed(from, Vec3::NEG_Y, REACH, AimBuffer::EXACT, [((), transform, Vec3::new(-1.0, -2.0, -0.2), Vec3::new(1.5, 7.0, 0.3))]);
-        assert!(hit.is_some_and(|(_, s)| (s.distance - 5.0).abs() < 1e-3 && s.angle == 0.0), "{hit:?}");
+        let hit = nearest_aimed(
+            from,
+            Vec3::NEG_Y,
+            REACH,
+            AimBuffer::EXACT,
+            [(
+                (),
+                transform,
+                Vec3::new(-1.0, -2.0, -0.2),
+                Vec3::new(1.5, 7.0, 0.3),
+            )],
+        );
+        assert!(
+            hit.is_some_and(|(_, s)| (s.distance - 5.0).abs() < 1e-3 && s.angle == 0.0),
+            "{hit:?}"
+        );
     }
 
     #[test]
     fn rays_hit_boxes_in_front_only() {
         let (min, max) = (Vec3::splat(-1.0), Vec3::splat(1.0));
-        assert!(close(ray_box(Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z, min, max).unwrap(), 4.0));
+        assert!(close(
+            ray_box(Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z, min, max).unwrap(),
+            4.0
+        ));
         assert_eq!(ray_box(Vec3::new(0.0, 0.0, 5.0), Vec3::Z, min, max), None);
-        assert_eq!(ray_box(Vec3::new(3.0, 0.0, 5.0), Vec3::NEG_Z, min, max), None);
+        assert_eq!(
+            ray_box(Vec3::new(3.0, 0.0, 5.0), Vec3::NEG_Z, min, max),
+            None
+        );
         assert_eq!(ray_box(Vec3::ZERO, Vec3::X, min, max), Some(0.0));
     }
 
     #[test]
     fn the_nearest_item_in_reach_is_picked() {
         let (min, max) = (Vec3::splat(-1.0), Vec3::splat(1.0));
-        let at = |z: f32| Transform::from_xyz(0.0, 0.0, z).with_rotation(Quat::from_rotation_y(0.6));
-        let targets = [(1, at(-15.0), min, max), (2, at(-8.0), min, max), (3, at(-40.0), min, max)];
+        let at =
+            |z: f32| Transform::from_xyz(0.0, 0.0, z).with_rotation(Quat::from_rotation_y(0.6));
+        let targets = [
+            (1, at(-15.0), min, max),
+            (2, at(-8.0), min, max),
+            (3, at(-40.0), min, max),
+        ];
         let buffer = AimBuffer::of(&Tuning::default());
-        assert_eq!(nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, targets).map(|h| h.0), Some(2));
-        assert_eq!(nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, [targets[2]]), None);
+        assert_eq!(
+            nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, targets).map(|h| h.0),
+            Some(2)
+        );
+        assert_eq!(
+            nearest_aimed(Vec3::ZERO, Vec3::NEG_Z, REACH, buffer, [targets[2]]),
+            None
+        );
     }
 
     /// A ring resting on the floor `at`, as it is laid out: its world transform and bounds.
@@ -1675,7 +2293,18 @@ mod tests {
         let ring = fb_items::roll_item("Ring", 2).unwrap();
         let points = item_points(&ring.shape.build());
         let (min, max) = bounds(points.iter().copied()).unwrap();
-        (rest_on_floor(&points, fb_items::profile::stands_on_base(&ring.shape), at, 0.0, floor_scale()).unwrap(), min, max)
+        (
+            rest_on_floor(
+                &points,
+                fb_items::profile::stands_on_base(&ring.shape),
+                at,
+                0.0,
+                floor_scale(),
+            )
+            .unwrap(),
+            min,
+            max,
+        )
     }
 
     /// The direction from `eye` to `target`, turned `degrees` to the right about +Y.
@@ -1690,15 +2319,37 @@ mod tests {
         let centre = rest.transform_point((min + max) * 0.5);
         let buffer = AimBuffer::of(&Tuning::default());
         // Looking straight at it, it is aimed at either way.
-        assert!(nearest_aimed(eye, (centre - eye).normalize(), REACH, AimBuffer::EXACT, [((), rest, min, max)]).is_some());
+        assert!(
+            nearest_aimed(
+                eye,
+                (centre - eye).normalize(),
+                REACH,
+                AimBuffer::EXACT,
+                [((), rest, min, max)]
+            )
+            .is_some()
+        );
         // A degree and a half off is about twenty pixels on a 1080-pixel, 70-degree view: past
         // the ring's edge, so an exact ray misses it, but the buffer still catches it.
         let dir = off_by(eye, centre, 1.5);
-        assert_eq!(nearest_aimed(eye, dir, REACH, AimBuffer::EXACT, [((), rest, min, max)]), None, "the ray itself misses the ring");
+        assert_eq!(
+            nearest_aimed(eye, dir, REACH, AimBuffer::EXACT, [((), rest, min, max)]),
+            None,
+            "the ray itself misses the ring"
+        );
         let caught = nearest_aimed(eye, dir, REACH, buffer, [((), rest, min, max)]);
         assert!(caught.is_some_and(|(_, s)| s.angle > 0.0), "{caught:?}");
         // Well off to the side, it is not.
-        assert_eq!(nearest_aimed(eye, off_by(eye, centre, 12.0), REACH, buffer, [((), rest, min, max)]), None);
+        assert_eq!(
+            nearest_aimed(
+                eye,
+                off_by(eye, centre, 12.0),
+                REACH,
+                buffer,
+                [((), rest, min, max)]
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1706,19 +2357,41 @@ mod tests {
         let eye = Vec3::new(0.0, EYE_HEIGHT, 0.0);
         let left = ring_on_floor(Vec3::new(-1.2, 0.0, -10.0));
         let right = ring_on_floor(Vec3::new(1.2, 0.0, -10.0));
-        let targets = [("left", left.0, left.1, left.2), ("right", right.0, right.1, right.2)];
+        let targets = [
+            ("left", left.0, left.1, left.2),
+            ("right", right.0, right.1, right.2),
+        ];
         let between = Vec3::new(0.0, 0.3, -10.0);
         let buffer = AimBuffer::of(&Tuning::default());
         // Straight between them, both are off the line and neither is near enough.
-        assert_eq!(nearest_aimed(eye, (between - eye).normalize(), REACH, buffer, targets), None);
+        assert_eq!(
+            nearest_aimed(eye, (between - eye).normalize(), REACH, buffer, targets),
+            None
+        );
         // Nudged toward one, that one; nudged toward the other, the other.
         let toward = |x: f32| (Vec3::new(x, 0.3, -10.0) - eye).normalize();
-        assert_eq!(nearest_aimed(eye, toward(0.75), REACH, buffer, targets).map(|h| h.0), Some("right"));
-        assert_eq!(nearest_aimed(eye, toward(-0.75), REACH, buffer, targets).map(|h| h.0), Some("left"));
+        assert_eq!(
+            nearest_aimed(eye, toward(0.75), REACH, buffer, targets).map(|h| h.0),
+            Some("right")
+        );
+        assert_eq!(
+            nearest_aimed(eye, toward(-0.75), REACH, buffer, targets).map(|h| h.0),
+            Some("left")
+        );
         // One the line passes through beats one merely near it.
-        let big = (Transform::from_xyz(0.9, 0.0, -10.0), Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
-        let with_big = [("right", right.0, right.1, right.2), ("big", big.0, big.1, big.2)];
-        assert_eq!(nearest_aimed(eye, toward(0.75), REACH, buffer, with_big).map(|h| h.0), Some("big"));
+        let big = (
+            Transform::from_xyz(0.9, 0.0, -10.0),
+            Vec3::new(-0.5, 0.0, -0.5),
+            Vec3::new(0.5, 1.0, 0.5),
+        );
+        let with_big = [
+            ("right", right.0, right.1, right.2),
+            ("big", big.0, big.1, big.2),
+        ];
+        assert_eq!(
+            nearest_aimed(eye, toward(0.75), REACH, buffer, with_big).map(|h| h.0),
+            Some("big")
+        );
     }
 
     #[test]
@@ -1729,12 +2402,25 @@ mod tests {
             let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, z));
             let centre = rest.transform_point((min + max) * 0.5);
             for degrees in [0.0, 0.5, 1.5] {
-                assert_eq!(nearest_aimed(eye, off_by(eye, centre, degrees), REACH, buffer, [((), rest, min, max)]), None, "{z} {degrees}");
+                assert_eq!(
+                    nearest_aimed(
+                        eye,
+                        off_by(eye, centre, degrees),
+                        REACH,
+                        buffer,
+                        [((), rest, min, max)]
+                    ),
+                    None,
+                    "{z} {degrees}"
+                );
             }
         }
         // Nor anything behind the eye, however near.
         let (rest, min, max) = ring_on_floor(Vec3::new(0.0, 0.0, 3.0));
-        assert_eq!(nearest_aimed(eye, Vec3::NEG_Z, REACH, buffer, [((), rest, min, max)]), None);
+        assert_eq!(
+            nearest_aimed(eye, Vec3::NEG_Z, REACH, buffer, [((), rest, min, max)]),
+            None
+        );
     }
 
     #[test]
@@ -1751,7 +2437,11 @@ mod tests {
     fn the_carried_light_follows_the_hands() {
         use fb_items::Slot;
         let mut inventory = Inventory::default();
-        assert_eq!(carried_light(&inventory), None, "nothing lit in hand: no carried light");
+        assert_eq!(
+            carried_light(&inventory),
+            None,
+            "nothing lit in hand: no carried light"
+        );
         let torch = inventory.add(lit_torch(3));
         inventory.wear(torch, Slot::Offhand).unwrap();
         assert_eq!(carried_light(&inventory), Some((Slot::Offhand, torch)));
@@ -1762,7 +2452,12 @@ mod tests {
         inventory.take_out(torch);
         assert_eq!(carried_light(&inventory), None);
         // A torch that is out gives none.
-        let spare = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Torch", s)).find(|i| item_light(&i.shape).is_none()).unwrap());
+        let spare = inventory.add(
+            (1..400)
+                .filter_map(|s| fb_items::roll_item("Torch", s))
+                .find(|i| item_light(&i.shape).is_none())
+                .unwrap(),
+        );
         inventory.wear(spare, Slot::Offhand).unwrap();
         assert_eq!(carried_light(&inventory), None);
     }
@@ -1797,11 +2492,22 @@ mod tests {
             .init_resource::<Tuning>()
             .init_resource::<crate::fitting::FitCache>()
             .add_systems(Update, show_held);
-        let camera = app.world_mut().spawn((PlayerCamera, Carrying::default())).id();
-        let view_model = app.world_mut().spawn(ViewModelCamera { follows: camera }).id();
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Carrying::default()))
+            .id();
+        let view_model = app
+            .world_mut()
+            .spawn(ViewModelCamera { follows: camera })
+            .id();
         let (mace, torch) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.shape.family() == Family::Mace).unwrap());
+            let mace = inventory.add(
+                (1..400)
+                    .filter_map(|s| fb_items::roll_item("Mace", s))
+                    .find(|i| i.shape.family() == Family::Mace)
+                    .unwrap(),
+            );
             let torch = inventory.add(lit_torch(5));
             inventory.wear(mace, Slot::Mainhand).unwrap();
             inventory.wear(torch, Slot::Offhand).unwrap();
@@ -1809,18 +2515,42 @@ mod tests {
         };
         let held = |app: &mut App| {
             let mut query = app.world_mut().query::<(&HeldItem, &Transform, &ChildOf)>();
-            let mut held: Vec<(Slot, Family, f32)> = query.iter(app.world()).map(|(h, t, c)| { assert_eq!(c.parent(), view_model); (h.hand, h.item.family(), t.translation.x) }).collect();
+            let mut held: Vec<(Slot, Family, f32)> = query
+                .iter(app.world())
+                .map(|(h, t, c)| {
+                    assert_eq!(c.parent(), view_model);
+                    (h.hand, h.item.family(), t.translation.x)
+                })
+                .collect();
             held.sort_by_key(|h| h.0 as u8);
             held
         };
         wait_for_held_fitting(&mut app);
         let both = held(&mut app);
-        assert_eq!(both.iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Family::Mace), (Slot::Offhand, Family::Torch)]);
-        assert!(both[0].2 > 0.0 && both[1].2 < 0.0, "the mace on the right, the torch on the left: {both:?}");
+        assert_eq!(
+            both.iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(),
+            vec![
+                (Slot::Mainhand, Family::Mace),
+                (Slot::Offhand, Family::Torch)
+            ]
+        );
+        assert!(
+            both[0].2 > 0.0 && both[1].2 < 0.0,
+            "the mace on the right, the torch on the left: {both:?}"
+        );
         // The torch still lights the level: a light on the player camera.
         let mut lights = app.world_mut().query::<(&PointLight, &ChildOf)>();
-        assert_eq!(lights.iter(app.world()).filter(|(_, c)| c.parent() == camera).count(), 1);
-        assert_eq!(app.world().get::<Carrying>(camera).unwrap().light(), Some(torch));
+        assert_eq!(
+            lights
+                .iter(app.world())
+                .filter(|(_, c)| c.parent() == camera)
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.world().get::<Carrying>(camera).unwrap().light(),
+            Some(torch)
+        );
 
         // A sword equipped in its place swaps the view model; the torch stays.
         {
@@ -1830,7 +2560,16 @@ mod tests {
             assert_ne!(inventory.worn(Slot::Mainhand), Some(mace));
         }
         wait_for_held_fitting(&mut app);
-        assert_eq!(held(&mut app).iter().map(|h| (h.0, h.1)).collect::<Vec<_>>(), vec![(Slot::Mainhand, Family::Sword), (Slot::Offhand, Family::Torch)]);
+        assert_eq!(
+            held(&mut app)
+                .iter()
+                .map(|h| (h.0, h.1))
+                .collect::<Vec<_>>(),
+            vec![
+                (Slot::Mainhand, Family::Sword),
+                (Slot::Offhand, Family::Torch)
+            ]
+        );
         // Empty hands hold nothing, and nothing lights the level.
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
@@ -1858,28 +2597,49 @@ mod tests {
             .init_resource::<Tuning>()
             .init_resource::<crate::fitting::FitCache>()
             .add_systems(Update, show_held);
-        let camera = app.world_mut().spawn((PlayerCamera, Carrying::default())).id();
-        let view_model = app.world_mut().spawn(ViewModelCamera { follows: camera }).id();
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Carrying::default()))
+            .id();
+        let view_model = app
+            .world_mut()
+            .spawn(ViewModelCamera { follows: camera })
+            .id();
         let (sword, mace) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
-            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.shape.family() == Family::Mace).unwrap());
+            let mace = inventory.add(
+                (1..400)
+                    .filter_map(|s| fb_items::roll_item("Mace", s))
+                    .find(|i| i.shape.family() == Family::Mace)
+                    .unwrap(),
+            );
             inventory.equip(sword, Slot::Mainhand).unwrap();
             (sword, mace)
         };
         let drawn = |app: &mut App| {
             let mut query = app.world_mut().query::<(&HeldItem, &ChildOf)>();
-            query.iter(app.world()).filter(|(_, c)| c.parent() == view_model).map(|(h, _)| h.item.family()).collect::<Vec<_>>()
+            query
+                .iter(app.world())
+                .filter(|(_, c)| c.parent() == view_model)
+                .map(|(h, _)| h.item.family())
+                .collect::<Vec<_>>()
         };
         wait_for_held_fitting(&mut app);
         assert_eq!(drawn(&mut app), vec![Family::Sword]);
-        app.world_mut().resource_mut::<Inventory>().equip(mace, Slot::Mainhand).unwrap();
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .equip(mace, Slot::Mainhand)
+            .unwrap();
         wait_for_held_fitting(&mut app);
         assert_eq!(drawn(&mut app), vec![Family::Mace]);
         let misses = app.world().resource::<crate::fitting::FitCache>().misses;
 
         // The sword again: drawn on the next frame, from the cache, with no job.
-        app.world_mut().resource_mut::<Inventory>().equip(sword, Slot::Mainhand).unwrap();
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .equip(sword, Slot::Mainhand)
+            .unwrap();
         app.update();
         let carrying = app.world().get::<Carrying>(camera).unwrap();
         assert!(carrying.fitting.is_none(), "no fitting job started");
@@ -1891,13 +2651,22 @@ mod tests {
     #[test]
     fn a_cached_held_kit_is_the_one_a_fresh_fit_makes() {
         let spec = Character::default().spec();
-        let worn = vec![(fb_items::Slot::Mainhand, fb_items::roll_item("Sword", 3).unwrap().shape), (fb_items::Slot::Offhand, lit_torch(5).shape)];
+        let worn = vec![
+            (
+                fb_items::Slot::Mainhand,
+                fb_items::roll_item("Sword", 3).unwrap().shape,
+            ),
+            (fb_items::Slot::Offhand, lit_torch(5).shape),
+        ];
         let key = held_key(&spec, &worn);
         assert_eq!(key, held_key(&spec, &worn));
         let mut cache = crate::fitting::FitCache::default();
         cache.store_held(&key, std::sync::Arc::new(HeldFit::fit(&spec, &worn)));
         let cached = cache.held(&key).unwrap();
-        assert_eq!(format!("{:?}", *cached), format!("{:?}", HeldFit::fit(&spec, &worn)));
+        assert_eq!(
+            format!("{:?}", *cached),
+            format!("{:?}", HeldFit::fit(&spec, &worn))
+        );
     }
 
     #[test]
@@ -1908,13 +2677,21 @@ mod tests {
         if let armory::Item::Torch(s) = &mut torch.shape {
             s.burn.char += if s.burn.char > 0.5 { -0.1 } else { 0.1 };
         }
-        assert_ne!(held_key(&spec, &[(fb_items::Slot::Offhand, torch.shape)]), before, "a torch burning down");
+        assert_ne!(
+            held_key(&spec, &[(fb_items::Slot::Offhand, torch.shape)]),
+            before,
+            "a torch burning down"
+        );
         let mut sword = fb_items::roll_item("Sword", 3).unwrap();
         let before = held_key(&spec, &[(fb_items::Slot::Mainhand, sword.shape.clone())]);
         let mut condition = sword.shape.condition();
         condition.wear += if condition.wear > 0.5 { -0.1 } else { 0.1 };
         sword.shape.set_condition(condition);
-        assert_ne!(held_key(&spec, &[(fb_items::Slot::Mainhand, sword.shape)]), before, "a sword worn");
+        assert_ne!(
+            held_key(&spec, &[(fb_items::Slot::Mainhand, sword.shape)]),
+            before,
+            "a sword worn"
+        );
     }
 
     #[test]
@@ -1931,39 +2708,72 @@ mod tests {
             .init_resource::<crate::fitting::FitCache>()
             .add_systems(Update, show_held);
         let body = app.world_mut().spawn(Transform::default()).id();
-        let camera = app.world_mut().spawn((PlayerCamera, Carrying::default(), ChildOf(body))).id();
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Carrying::default(), ChildOf(body)))
+            .id();
         app.world_mut().spawn(ViewModelCamera { follows: camera });
         let (torch, lantern) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let belt = inventory.add(fb_items::roll_item("Belt", 1).unwrap());
             inventory.wear(belt, Slot::Belt).unwrap();
-            let lantern = inventory.add((1..500).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap());
+            let lantern = inventory.add(
+                (1..500)
+                    .filter_map(|s| fb_items::roll_item("Lantern", s))
+                    .find(|i| item_light(&i.shape).is_some())
+                    .unwrap(),
+            );
             inventory.wear(lantern, Slot::Hip).unwrap();
             let torch = inventory.add(lit_torch(5));
             inventory.wear(torch, Slot::Offhand).unwrap();
             (torch, lantern)
         };
-        let world_lights = |app: &mut App| app.world_mut().query::<&GivenLight>().iter(app.world()).count();
+        let world_lights = |app: &mut App| {
+            app.world_mut()
+                .query::<&GivenLight>()
+                .iter(app.world())
+                .count()
+        };
         wait_for_held_fitting(&mut app);
-        assert_eq!(world_lights(&mut app), 2, "a lit torch in hand and a lit lantern at the hip: two lights");
+        assert_eq!(
+            world_lights(&mut app),
+            2,
+            "a lit torch in hand and a lit lantern at the hip: two lights"
+        );
         let character = Character::default();
         let derived = character.derive(app.world().resource::<Inventory>());
         let inventory = app.world().resource::<Inventory>();
         let reach = |id| inventory.item(id).unwrap().profile.stats.light;
-        assert_eq!(derived.light, reach(torch).max(reach(lantern)), "the header shows the larger");
+        assert_eq!(
+            derived.light,
+            reach(torch).max(reach(lantern)),
+            "the header shows the larger"
+        );
 
         // The hip lantern put out gives none; the torch still does.
-        app.world_mut().resource_mut::<Inventory>().toggle_light(lantern).unwrap();
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .toggle_light(lantern)
+            .unwrap();
         wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 1);
         // The torch put out: dark, and the torch drawn doused.
-        app.world_mut().resource_mut::<Inventory>().toggle_light(torch).unwrap();
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .toggle_light(torch)
+            .unwrap();
         wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 0);
         let mut held = app.world_mut().query::<&HeldItem>();
-        assert!(held.iter(app.world()).any(|h| h.item.family() == Family::Torch && h.item.lit() == Some(false)));
+        assert!(
+            held.iter(app.world())
+                .any(|h| h.item.family() == Family::Torch && h.item.lit() == Some(false))
+        );
         // Lit again from its card, the lantern's light comes back.
-        app.world_mut().resource_mut::<Inventory>().toggle_light(lantern).unwrap();
+        app.world_mut()
+            .resource_mut::<Inventory>()
+            .toggle_light(lantern)
+            .unwrap();
         wait_for_held_fitting(&mut app);
         assert_eq!(world_lights(&mut app), 1);
     }
@@ -1984,28 +2794,62 @@ mod tests {
         let view = Tuning::default().view;
         let on_screen = |p| crate::view_model::on_screen(p, view.held_fov_degrees);
         use fb_items::Slot;
-        let lantern = (1..500).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap().shape;
+        let lantern = (1..500)
+            .filter_map(|s| fb_items::roll_item("Lantern", s))
+            .find(|i| item_light(&i.shape).is_some())
+            .unwrap()
+            .shape;
         for folk in [Folk::Human, Folk::Gnome] {
             let spec = BodySpec::roll(folk, 1207);
             for light in [lit_torch(4).shape, lantern.clone()] {
                 for hand in [Slot::Mainhand, Slot::Offhand] {
-                    let (main, off) = if hand == Slot::Mainhand { (Some(&light), None) } else { (None, Some(&light)) };
+                    let (main, off) = if hand == Slot::Mainhand {
+                        (Some(&light), None)
+                    } else {
+                        (None, Some(&light))
+                    };
                     let held = &held_in_view(&spec, main, off, view.held_scale)[0];
                     let anchor = item_light(&light).unwrap();
-                    let flame = held.transform.transform_point(Vec3::from_array(anchor.position));
+                    let flame = held
+                        .transform
+                        .transform_point(Vec3::from_array(anchor.position));
                     let at = stage_light_at(&anchor, held.transform, hand);
                     let label = format!("{folk:?} {:?} {hand:?}", light.family());
                     // The stage light keeps its place off the drawn flame, up and toward the eye
                     // and to the inside of the view, where the world light is.
                     let side = if hand == Slot::Offhand { -1.0 } else { 1.0 };
-                    assert!((at - flame).abs_diff_eq(HELD_LIGHT_OFFSET * Vec3::new(side, 1.0, 1.0) * view.held_scale, 1e-4), "{label}");
-                    assert!(at.x * side < flame.x * side && at.y > flame.y && at.z > flame.z, "{label}");
+                    assert!(
+                        (at - flame).abs_diff_eq(
+                            HELD_LIGHT_OFFSET * Vec3::new(side, 1.0, 1.0) * view.held_scale,
+                            1e-4
+                        ),
+                        "{label}"
+                    );
+                    assert!(
+                        at.x * side < flame.x * side && at.y > flame.y && at.z > flame.z,
+                        "{label}"
+                    );
                     // The flame shows on its hand's side of the view, in it.
                     let screen = on_screen(flame).unwrap();
-                    assert!(screen.x * side > 0.0 && screen.y.abs() < 1.0, "{label}: flame at {screen}");
+                    assert!(
+                        screen.x * side > 0.0 && screen.y.abs() < 1.0,
+                        "{label}: flame at {screen}"
+                    );
                     // The whole held light is within the stage light's reach.
-                    for p in held.item.build().parts.iter().flat_map(|p| p.positions.clone()) {
-                        assert!(held.transform.transform_point(Vec3::from_array(p)).distance(at) < HELD_REACH, "{label}");
+                    for p in held
+                        .item
+                        .build()
+                        .parts
+                        .iter()
+                        .flat_map(|p| p.positions.clone())
+                    {
+                        assert!(
+                            held.transform
+                                .transform_point(Vec3::from_array(p))
+                                .distance(at)
+                                < HELD_REACH,
+                            "{label}"
+                        );
                     }
                 }
             }
@@ -2024,7 +2868,16 @@ mod tests {
         for _ in 0..30 {
             sway.follow(Vec2::new(0.4, -0.1), 1.0 / 60.0);
         }
-        assert_eq!(sway.transform(Gait { phase: 1.1, pace: 0.0 }, 1.0), rest());
+        assert_eq!(
+            sway.transform(
+                Gait {
+                    phase: 1.1,
+                    pace: 0.0
+                },
+                1.0
+            ),
+            rest()
+        );
     }
 
     #[test]
@@ -2033,8 +2886,16 @@ mod tests {
         let step = |phase: f32| sway.transform(Gait { phase, pace: 1.0 }, 1.0).translation;
         let quarter = std::f32::consts::FRAC_PI_2;
         // At the footfall it is low and to one side; a step later, low and to the other.
-        assert!(step(quarter).y < HELD_FLAME.y - 0.2 && step(quarter).x > HELD_FLAME.x + 0.2, "{}", step(quarter));
-        assert!(step(3.0 * quarter).x < HELD_FLAME.x - 0.2, "{}", step(3.0 * quarter));
+        assert!(
+            step(quarter).y < HELD_FLAME.y - 0.2 && step(quarter).x > HELD_FLAME.x + 0.2,
+            "{}",
+            step(quarter)
+        );
+        assert!(
+            step(3.0 * quarter).x < HELD_FLAME.x - 0.2,
+            "{}",
+            step(3.0 * quarter)
+        );
         assert!(step(0.0).abs_diff_eq(HELD_FLAME, 1e-5));
     }
 
@@ -2053,17 +2914,30 @@ mod tests {
         for _ in 0..120 {
             sway.follow(Vec2::new(29.0 * dt, 0.0), dt);
         }
-        assert!(sway.transform(Gait::default(), 1.0).translation.abs_diff_eq(HELD_FLAME, 1e-3));
+        assert!(
+            sway.transform(Gait::default(), 1.0)
+                .translation
+                .abs_diff_eq(HELD_FLAME, 1e-3)
+        );
         // Across the yaw wrap the turn is the short way round.
         let mut wrap = HeldSway::new(rest());
         wrap.follow(Vec2::new(std::f32::consts::PI - 0.01, 0.0), dt);
         wrap.follow(Vec2::new(-std::f32::consts::PI + 0.01, 0.0), dt);
-        assert!(wrap.lag.x > 0.0 && wrap.lag.x < HELD_LAG_MAX, "{}", wrap.lag);
+        assert!(
+            wrap.lag.x > 0.0 && wrap.lag.x < HELD_LAG_MAX,
+            "{}",
+            wrap.lag
+        );
     }
 
     #[test]
     fn yaw_and_pitch_read_from_the_eye() {
-        let eye = GlobalTransform::from(Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -0.3, 0.0)));
+        let eye = GlobalTransform::from(Transform::from_rotation(Quat::from_euler(
+            EulerRot::YXZ,
+            0.7,
+            -0.3,
+            0.0,
+        )));
         assert!(yaw_pitch(&eye).abs_diff_eq(Vec2::new(0.7, -0.3), 1e-5));
     }
 
@@ -2081,7 +2955,10 @@ mod tests {
         let level = fb_level::generate(1207, 1);
         let (x, y, facing) = level.start();
         let start = DebugPose::parse(&level, "1");
-        assert_eq!(start.at, Vec3::new((x as f32 + 0.5) * CELL, 0.0, (y as f32 + 0.5) * CELL));
+        assert_eq!(
+            start.at,
+            Vec3::new((x as f32 + 0.5) * CELL, 0.0, (y as f32 + 0.5) * CELL)
+        );
         assert_eq!(start.yaw, facing.yaw());
         let spot = (x as f32 + 0.25, y as f32 + 0.75);
         let there = DebugPose::parse(&level, &format!("{}, {}, 0, -30", spot.0, spot.1));
@@ -2096,11 +2973,17 @@ mod tests {
         let level = crate::travel::Abyss::new(4).level_at(2);
         assert!(!level.is_open(30, 15));
         let pose = DebugPose::parse(&level, "30.5,15.5,90,0");
-        let (x, z) = ((pose.at.x / CELL).floor() as i32, (pose.at.z / CELL).floor() as i32);
+        let (x, z) = (
+            (pose.at.x / CELL).floor() as i32,
+            (pose.at.z / CELL).floor() as i32,
+        );
         assert!(level.is_open(x, z), "stands at {x},{z}");
         assert_eq!((pose.yaw, pose.pitch), (90f32.to_radians(), 0.0));
         // Open floor is left where it is.
-        assert_eq!(DebugPose::parse(&level, "29.25,15.5").at, Vec3::new(29.25 * CELL, 0.0, 15.5 * CELL));
+        assert_eq!(
+            DebugPose::parse(&level, "29.25,15.5").at,
+            Vec3::new(29.25 * CELL, 0.0, 15.5 * CELL)
+        );
     }
 
     #[test]
@@ -2108,7 +2991,10 @@ mod tests {
         // A corridor running east, one cell wide, rock at x = 3 cells.
         let blocked = |x: i32, y: i32| !(y == 0 && (0..3).contains(&x));
         let feet = Vec2::new(10.0, 10.0);
-        assert!(drop_spot(feet, Vec2::X, 0.0, 2.0, blocked, &[]).abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3));
+        assert!(
+            drop_spot(feet, Vec2::X, 0.0, 2.0, blocked, &[])
+                .abs_diff_eq(Vec2::new(10.0 + DROP_DISTANCE, 10.0), 1e-3)
+        );
         // Up against the end wall it lands clear of it by its radius.
         let near_end = Vec2::new(55.0, 10.0);
         assert!(drop_spot(near_end, Vec2::X, 0.0, 2.0, blocked, &[]).x <= 3.0 * CELL - 2.0 + 1e-3);
@@ -2117,11 +3003,14 @@ mod tests {
         assert!(spot.y >= 9.5 && spot.y <= 10.5, "{spot}");
     }
 
-
     #[test]
     fn dropped_items_stop_short_of_props() {
         let open = |_: i32, _: i32| false;
-        let chest = [Obstacle::Rect { centre: Vec2::new(50.0, 50.0 - DROP_DISTANCE), half: Vec2::new(4.5, 2.4), yaw: 0.0 }];
+        let chest = [Obstacle::Rect {
+            centre: Vec2::new(50.0, 50.0 - DROP_DISTANCE),
+            half: Vec2::new(4.5, 2.4),
+            yaw: 0.0,
+        }];
         let spot = drop_spot(Vec2::new(50.0, 50.0), Vec2::NEG_Y, 0.0, 1.0, open, &chest);
         assert!(!chest[0].overlaps(spot, 1.0), "{spot}");
         assert!(spot.y > 50.0 - DROP_DISTANCE + 2.4, "{spot}");
@@ -2133,7 +3022,10 @@ mod tests {
         let feet = Vec2::new(50.0, 50.0);
         // Facing -Z, the right is +X.
         let right = drop_spot(feet, Vec2::NEG_Y, 3.0, 1.0, open, &[]);
-        assert!(right.abs_diff_eq(Vec2::new(53.0, 50.0 - DROP_DISTANCE), 1e-3), "{right}");
+        assert!(
+            right.abs_diff_eq(Vec2::new(53.0, 50.0 - DROP_DISTANCE), 1e-3),
+            "{right}"
+        );
         let far = drop_spot(feet, Vec2::NEG_Y, -40.0, 1.0, open, &[]);
         assert!((far.x - (50.0 - DROP_SPREAD)).abs() < 1e-3, "{far}");
         let eye = Vec3::new(feet.x, EYE_HEIGHT, feet.y);
@@ -2171,18 +3063,37 @@ mod tests {
         let (mut app, pack) = delving_app();
         let start = DebugPose::parse(&app.world().resource::<CurrentLevel>().0, "1");
         let item = fb_items::roll_item("Mace", 1207).unwrap();
-        let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
+        let id = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item.clone());
         let eye = start.eye();
         let camera = app.world_mut().spawn((PlayerCamera, Equipped, eye)).id();
         app.world_mut()
             .run_system_once(
-                move |mut spawner: ItemSpawner, inventory: Res<Inventory>, mut level: ResMut<CurrentLevel>, blocked: Res<BlockedCells>| {
-                    set_down(&mut spawner, &inventory, &mut level.0, &blocked, &Obstacles::default(), &GlobalTransform::from(eye), id, 0.0, &Tuning::default());
+                move |mut spawner: ItemSpawner,
+                      inventory: Res<Inventory>,
+                      mut level: ResMut<CurrentLevel>,
+                      blocked: Res<BlockedCells>| {
+                    set_down(
+                        &mut spawner,
+                        &inventory,
+                        &mut level.0,
+                        &blocked,
+                        &Obstacles::default(),
+                        &GlobalTransform::from(eye),
+                        id,
+                        0.0,
+                        &Tuning::default(),
+                    );
                 },
             )
             .unwrap();
         let mut floor = app.world_mut().query::<(Entity, &Transform, &FloorItem)>();
-        let (dropped, at, spot, floor_id) = floor.single(app.world()).map(|(e, t, f)| (e, *t, f.spot, f.id)).unwrap();
+        let (dropped, at, spot, floor_id) = floor
+            .single(app.world())
+            .map(|(e, t, f)| (e, *t, f.spot, f.id))
+            .unwrap();
         assert_eq!(floor_id, id);
         assert_eq!(app.world().resource::<CurrentLevel>().0.items, vec![spot]);
         // In front of the player, on open floor, within reach.
@@ -2190,10 +3101,18 @@ mod tests {
         assert!(ahead.dot(eye.forward().as_vec3().xz()) > 0.0, "{ahead}");
         let reach = Vec3::new(spot.x * CELL, 0.0, spot.y * CELL).distance(eye.translation);
         assert!(reach < REACH, "{reach}");
-        assert!(app.world().resource::<CurrentLevel>().0.is_open(spot.x.floor() as i32, spot.y.floor() as i32));
+        assert!(
+            app.world()
+                .resource::<CurrentLevel>()
+                .0
+                .is_open(spot.x.floor() as i32, spot.y.floor() as i32)
+        );
         // Resting like a spawned item: lowest point on the floor.
         let points = item_points(&item.shape.build());
-        let low = points.iter().map(|&p| at.transform_point(p).y).fold(f32::INFINITY, f32::min);
+        let low = points
+            .iter()
+            .map(|&p| at.transform_point(p).y)
+            .fold(f32::INFINITY, f32::min);
         assert!(low.abs() < 1e-3, "{low}");
 
         // Look down at it and pick it up again with E: into the pack.
@@ -2203,10 +3122,14 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(dropped));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyF);
         app.update();
         let inventory = app.world().resource::<Inventory>();
-        assert!(matches!(inventory.location(id), Some(crate::inventory::Location::In { container, .. }) if container == pack));
+        assert!(
+            matches!(inventory.location(id), Some(crate::inventory::Location::In { container, .. }) if container == pack)
+        );
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
         assert!(app.world().get_entity(dropped).is_err());
     }
@@ -2216,25 +3139,66 @@ mod tests {
         let (mut app, _) = delving_app();
         // A chest a metre ahead of an eye looking down at it.
         let at = Transform::from_xyz(0.0, 0.0, -10.0);
-        let spot = fb_level::PropSpot { x: 0.0, y: -0.5, yaw: 0.0, prop: fb_level::Prop::Container { style: armory::families::chests::ChestStyle::Chest, seed: 1, loot: 1 } };
-        let piece = PropPiece { index: 0, spot, min: Vec3::new(-3.0, 0.0, -2.0), max: Vec3::new(3.0, 4.0, 2.0) };
-        let id = app.world_mut().resource_mut::<Inventory>().add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 1, false)));
-        let chest = app.world_mut().spawn((at, GlobalTransform::from(at), piece, Container { id, opened: false })).id();
-        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 2.0, -10.0), Vec3::Y);
-        app.world_mut().spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
+        let spot = fb_level::PropSpot {
+            x: 0.0,
+            y: -0.5,
+            yaw: 0.0,
+            prop: fb_level::Prop::Container {
+                style: armory::families::chests::ChestStyle::Chest,
+                seed: 1,
+                loot: 1,
+            },
+        };
+        let piece = PropPiece {
+            index: 0,
+            spot,
+            min: Vec3::new(-3.0, 0.0, -2.0),
+            max: Vec3::new(3.0, 4.0, 2.0),
+        };
+        let id = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(fb_items::container_item(fb_level::chest_state(
+                armory::families::chests::ChestStyle::Chest,
+                1,
+                false,
+            )));
+        let chest = app
+            .world_mut()
+            .spawn((
+                at,
+                GlobalTransform::from(at),
+                piece,
+                Container { id, opened: false },
+            ))
+            .id();
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0)
+            .looking_at(Vec3::new(0.0, 2.0, -10.0), Vec3::Y);
+        app.world_mut()
+            .spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(chest));
         // F picks nothing up: the chest is never carried off (`crate::props` opens it).
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyF);
         app.update();
         assert!(app.world().get_entity(chest).is_ok());
-        assert_eq!(app.world().resource::<Inventory>().location(id), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(id),
+            Some(crate::inventory::Location::Loose)
+        );
     }
 
     /// [`delving_app`] with F equipping what is aimed at, and the level's floor changes made.
     fn equipping_app() -> (App, ItemId) {
         let (mut app, pack) = delving_app();
-        app.init_resource::<Toast>().init_resource::<FloorChanges>().add_systems(Update, (equip_aimed, apply_floor_changes).chain().after(pick_up));
+        app.init_resource::<Toast>()
+            .init_resource::<FloorChanges>()
+            .add_systems(
+                Update,
+                (equip_aimed, apply_floor_changes).chain().after(pick_up),
+            );
         (app, pack)
     }
 
@@ -2242,14 +3206,30 @@ mod tests {
     /// and aims at it. Returns its entity, id and spot.
     fn lay_ahead(app: &mut App, item: fb_items::Item) -> (Entity, ItemId, ItemSpot) {
         use bevy::ecs::system::RunSystemOnce;
-        let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
-        let spot = ItemSpot { x: 0.0, y: -0.5, yaw: 0.3, family: item.shape.family(), seed: item.seed };
-        app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
+        let id = app
+            .world_mut()
+            .resource_mut::<Inventory>()
+            .add(item.clone());
+        let spot = ItemSpot {
+            x: 0.0,
+            y: -0.5,
+            yaw: 0.3,
+            family: item.shape.family(),
+            seed: item.seed,
+        };
+        app.world_mut()
+            .resource_mut::<CurrentLevel>()
+            .0
+            .items
+            .push(spot);
         let entity = app
             .world_mut()
-            .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+            .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| {
+                spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap()
+            })
             .unwrap();
-        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 0.3, -10.0), Vec3::Y);
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0)
+            .looking_at(Vec3::new(0.0, 0.3, -10.0), Vec3::Y);
         app.world_mut().spawn((PlayerCamera, Equipped, eye));
         app.update();
         app.update();
@@ -2271,7 +3251,12 @@ mod tests {
         let (mut app, pack) = equipping_app();
         let mace = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let mace = inventory.add((1..400).filter_map(|s| fb_items::roll_item("Mace", s)).find(|i| i.profile.packable).unwrap());
+            let mace = inventory.add(
+                (1..400)
+                    .filter_map(|s| fb_items::roll_item("Mace", s))
+                    .find(|i| i.profile.packable)
+                    .unwrap(),
+            );
             inventory.wear(mace, Slot::Mainhand).unwrap();
             // The off hand is full too, so the sword swaps out the main hand's mace.
             let torch = inventory.add(lit_torch(2));
@@ -2284,14 +3269,19 @@ mod tests {
         press_g(&mut app);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(inventory.worn(Slot::Mainhand), Some(sword));
-        assert!(matches!(inventory.location(mace), Some(crate::inventory::Location::In { container, .. }) if container == pack));
+        assert!(
+            matches!(inventory.location(mace), Some(crate::inventory::Location::In { container, .. }) if container == pack)
+        );
         // Lifted from the level, and the view model's key changes, so the view holds the sword.
         assert!(app.world().get_entity(entity).is_err());
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
         let after = HeldKey::of(inventory, &character);
         assert_eq!((before.main, after.main), (Some(mace), Some(sword)));
         let toast = &app.world().resource::<Toast>().text;
-        assert!(toast.starts_with("Holding ") && toast.contains("went into the"), "{toast}");
+        assert!(
+            toast.starts_with("Holding ") && toast.contains("went into the"),
+            "{toast}"
+        );
     }
 
     #[test]
@@ -2307,9 +3297,18 @@ mod tests {
         let (_, dagger, _) = lay_ahead(&mut app, fb_items::roll_item("Dagger", 4).unwrap());
         press_g(&mut app);
         let inventory = app.world().resource::<Inventory>();
-        assert_eq!((inventory.worn(Slot::Mainhand), inventory.worn(Slot::Offhand)), (Some(sword), Some(dagger)));
+        assert_eq!(
+            (
+                inventory.worn(Slot::Mainhand),
+                inventory.worn(Slot::Offhand)
+            ),
+            (Some(sword), Some(dagger))
+        );
         let toast = &app.world().resource::<Toast>().text;
-        assert!(toast.starts_with("Holding ") && !toast.contains("went"), "{toast}");
+        assert!(
+            toast.starts_with("Holding ") && !toast.contains("went"),
+            "{toast}"
+        );
     }
 
     #[test]
@@ -2328,15 +3327,27 @@ mod tests {
         press_g(&mut app);
         let inventory = app.world().resource::<Inventory>();
         assert_eq!(inventory.worn(Slot::Head), Some(new));
-        assert_eq!(inventory.location(old), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            inventory.location(old),
+            Some(crate::inventory::Location::Loose)
+        );
         let old_item = inventory.item(old).unwrap();
         let items = &app.world().resource::<CurrentLevel>().0.items;
         assert_eq!(items.len(), 1, "{items:?}");
-        assert_eq!((items[0].x, items[0].y, items[0].yaw, items[0].seed), (spot.x, spot.y, spot.yaw, old_item.seed));
+        assert_eq!(
+            (items[0].x, items[0].y, items[0].yaw, items[0].seed),
+            (spot.x, spot.y, spot.yaw, old_item.seed)
+        );
         let mut floor = app.world_mut().query::<&FloorItem>();
-        assert_eq!(floor.iter(app.world()).map(|f| f.id).collect::<Vec<_>>(), vec![old]);
+        assert_eq!(
+            floor.iter(app.world()).map(|f| f.id).collect::<Vec<_>>(),
+            vec![old]
+        );
         let toast = &app.world().resource::<Toast>().text;
-        assert!(toast.starts_with("Wearing ") && toast.ends_with("was set down."), "{toast}");
+        assert!(
+            toast.starts_with("Wearing ") && toast.ends_with("was set down."),
+            "{toast}"
+        );
     }
 
     #[test]
@@ -2345,7 +3356,10 @@ mod tests {
         let (entity, bread, _) = lay_ahead(&mut app, fb_items::roll_item("Bread", 1).unwrap());
         press_g(&mut app);
         assert!(app.world().get_entity(entity).is_ok());
-        assert_eq!(app.world().resource::<Inventory>().location(bread), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(bread),
+            Some(crate::inventory::Location::Loose)
+        );
         assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), 1);
         assert_eq!(app.world().resource::<Toast>().text, "");
     }
@@ -2353,27 +3367,50 @@ mod tests {
     #[test]
     fn tertiary_and_special_do_nothing_to_an_item_and_nothing_aimed_does_nothing() {
         let (mut app, _) = equipping_app();
-        let (entity, sword, _) = lay_ahead(&mut app, fb_items::roll_item("Shortsword", 1).or_else(|| fb_items::roll_item("Dagger", 1)).unwrap());
+        let (entity, sword, _) = lay_ahead(
+            &mut app,
+            fb_items::roll_item("Shortsword", 1)
+                .or_else(|| fb_items::roll_item("Dagger", 1))
+                .unwrap(),
+        );
         for key in [KeyCode::KeyR, KeyCode::KeyT] {
-            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
             app.update();
         }
         assert!(app.world().get_entity(entity).is_ok());
-        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(sword),
+            Some(crate::inventory::Location::Loose)
+        );
         // Looking away, F and G have nothing to act on either.
-        let camera = app.world_mut().query_filtered::<Entity, With<PlayerCamera>>().single(app.world()).unwrap();
-        *app.world_mut().get_mut::<Transform>(camera).unwrap() = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, EYE_HEIGHT, 10.0), Vec3::Y);
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<PlayerCamera>>()
+            .single(app.world())
+            .unwrap();
+        *app.world_mut().get_mut::<Transform>(camera).unwrap() =
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0)
+                .looking_at(Vec3::new(0.0, EYE_HEIGHT, 10.0), Vec3::Y);
         app.update();
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, None);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
         for key in [KeyCode::KeyF, KeyCode::KeyG] {
-            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
         }
         app.update();
         app.update();
         assert!(app.world().get_entity(entity).is_ok());
-        assert_eq!(app.world().resource::<Inventory>().location(sword), Some(crate::inventory::Location::Loose));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(sword),
+            Some(crate::inventory::Location::Loose)
+        );
     }
 
     #[test]
@@ -2387,14 +3424,29 @@ mod tests {
         assert_eq!((equipped.slot, equipped.displaced), (Slot::Ring2, None));
         assert_eq!(inventory.worn(Slot::Ring1), Some(first));
         let torch = inventory.add(lit_torch(4));
-        assert_eq!(equip_from_floor(&mut inventory, torch, Vec2::ZERO, 0.0).unwrap().slot, Slot::Offhand);
+        assert_eq!(
+            equip_from_floor(&mut inventory, torch, Vec2::ZERO, 0.0)
+                .unwrap()
+                .slot,
+            Slot::Offhand
+        );
         let shield = inventory.add(fb_items::roll_item("Shield", 12).unwrap());
         let equipped = equip_from_floor(&mut inventory, shield, Vec2::new(2.0, 3.0), 0.5).unwrap();
         assert_eq!(equipped.slot, Slot::Offhand);
         // Nowhere to stow the torch: it goes down where the shield lay.
         assert_eq!(equipped.displaced, Some((torch, None)));
-        assert_eq!(equipped.changes, vec![crate::inventory::FloorChange::Lifted(shield), crate::inventory::FloorChange::SetDownAt(torch, Vec2::new(2.0, 3.0), 0.5)]);
-        assert_eq!(carried_light(&inventory), None, "the carried light follows the hands");
+        assert_eq!(
+            equipped.changes,
+            vec![
+                crate::inventory::FloorChange::Lifted(shield),
+                crate::inventory::FloorChange::SetDownAt(torch, Vec2::new(2.0, 3.0), 0.5)
+            ]
+        );
+        assert_eq!(
+            carried_light(&inventory),
+            None,
+            "the carried light follows the hands"
+        );
     }
 
     #[test]
@@ -2406,34 +3458,74 @@ mod tests {
         let old = inventory.add(fb_items::roll_item("Lantern", 2).unwrap());
         inventory.wear(old, Slot::Hip).unwrap();
         let lantern = inventory.add(fb_items::roll_item("Lantern", 3).unwrap());
-        assert_eq!(floor_verb(&inventory, lantern, crate::interact::Slot::Special), Some(crate::interact::Verb::HangAtHip));
-        let hung = equip_from_floor_in(&mut inventory, lantern, Slot::Hip, Vec2::new(1.0, 2.0), 0.3).unwrap();
-        assert_eq!((hung.slot, inventory.worn(Slot::Hip), inventory.worn(Slot::Offhand)), (Slot::Hip, Some(lantern), None));
+        assert_eq!(
+            floor_verb(&inventory, lantern, crate::interact::Slot::Special),
+            Some(crate::interact::Verb::HangAtHip)
+        );
+        let hung =
+            equip_from_floor_in(&mut inventory, lantern, Slot::Hip, Vec2::new(1.0, 2.0), 0.3)
+                .unwrap();
+        assert_eq!(
+            (
+                hung.slot,
+                inventory.worn(Slot::Hip),
+                inventory.worn(Slot::Offhand)
+            ),
+            (Slot::Hip, Some(lantern), None)
+        );
         // The belt's own pouch takes the lantern that hung there.
         assert_eq!(hung.displaced, Some((old, Some(belt))));
         let title = |id| inventory.item(id).unwrap().title().to_string();
-        assert_eq!(hung.message(&inventory, lantern), format!("{} hangs from the belt. {} went into the {}.", title(lantern), title(old), title(belt)));
+        assert_eq!(
+            hung.message(&inventory, lantern),
+            format!(
+                "{} hangs from the belt. {} went into the {}.",
+                title(lantern),
+                title(old),
+                title(belt)
+            )
+        );
     }
 
     #[test]
     fn legendary_floor_items_shimmer_and_others_do_not() {
         let drops = crate::inventory::underfoot::drops_for_capture("Sword:legendary,Sword:common");
         let [legendary, common] = [&drops[0], &drops[1]];
-        assert_eq!((legendary.rarity, common.rarity), (Rarity::Legendary, Rarity::Common));
+        assert_eq!(
+            (legendary.rarity, common.rarity),
+            (Rarity::Legendary, Rarity::Common)
+        );
         let (mut app, _) = delving_app();
         let mut spawned = Vec::new();
         for (x, item) in [(0.0, legendary.clone()), (1.0, common.clone())] {
             use bevy::ecs::system::RunSystemOnce;
-            let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
-            let spot = ItemSpot { x, y: 0.0, yaw: 0.0, family: item.shape.family(), seed: item.seed };
+            let id = app
+                .world_mut()
+                .resource_mut::<Inventory>()
+                .add(item.clone());
+            let spot = ItemSpot {
+                x,
+                y: 0.0,
+                yaw: 0.0,
+                family: item.shape.family(),
+                seed: item.seed,
+            };
             let entity = app
                 .world_mut()
-                .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+                .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| {
+                    spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default())
+                        .unwrap()
+                })
                 .unwrap();
             spawned.push(entity);
         }
         let shimmers = |app: &mut App, entity: Entity| {
-            let children: Vec<Entity> = app.world().get::<Children>(entity).unwrap().iter().collect();
+            let children: Vec<Entity> = app
+                .world()
+                .get::<Children>(entity)
+                .unwrap()
+                .iter()
+                .collect();
             let materials = app.world().resource::<Assets<ToonMaterial>>();
             children
                 .iter()
@@ -2443,15 +3535,30 @@ mod tests {
         };
         let strength = Tuning::default().view.legendary_shimmer;
         let gold = shimmers(&mut app, spawned[0]);
-        assert!(!gold.is_empty() && gold.iter().all(|s| s.strength == strength && s.color == Shimmer::new(rarity_color(Rarity::Legendary), 1.0).color));
-        assert!(shimmers(&mut app, spawned[1]).iter().all(|s| s.strength == 0.0));
+        assert!(
+            !gold.is_empty()
+                && gold.iter().all(|s| s.strength == strength
+                    && s.color == Shimmer::new(rarity_color(Rarity::Legendary), 1.0).color)
+        );
+        assert!(
+            shimmers(&mut app, spawned[1])
+                .iter()
+                .all(|s| s.strength == 0.0)
+        );
         // Held or drawn anywhere else, it does not shimmer.
         assert_eq!(appearance_of(&legendary.shape).shimmer, Shimmer::default());
         // A change of tuning reaches the floor items already lying there.
         app.add_systems(Update, reshimmer_floor_items);
-        app.world_mut().resource_mut::<Tuning>().view.legendary_shimmer = 0.5;
+        app.world_mut()
+            .resource_mut::<Tuning>()
+            .view
+            .legendary_shimmer = 0.5;
         app.update();
-        assert!(shimmers(&mut app, spawned[0]).iter().all(|s| s.strength == 0.5));
+        assert!(
+            shimmers(&mut app, spawned[0])
+                .iter()
+                .all(|s| s.strength == 0.5)
+        );
     }
 
     #[test]
@@ -2461,25 +3568,57 @@ mod tests {
         let (spot, item) = level
             .items
             .iter()
-            .map(|s| (*s, fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()))
+            .map(|s| {
+                (
+                    *s,
+                    fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth))
+                        .unwrap(),
+                )
+            })
             .find(|(_, i)| i.profile.packable && i.profile.holds.is_none())
             .unwrap();
-        app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
+        app.world_mut()
+            .resource_mut::<CurrentLevel>()
+            .0
+            .items
+            .push(spot);
         let name = item.title().to_string();
         let id = app.world_mut().resource_mut::<Inventory>().add(item);
         // An item a metre ahead of an eye looking down at it.
         let at = Transform::from_xyz(0.0, 0.0, -10.0);
-        let floor = app.world_mut().spawn((at, GlobalTransform::from(at), FloorItem { id, spot, min: Vec3::splat(-1.0), max: Vec3::splat(1.0) })).id();
-        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 0.0, -10.0), Vec3::Y);
-        app.world_mut().spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
+        let floor = app
+            .world_mut()
+            .spawn((
+                at,
+                GlobalTransform::from(at),
+                FloorItem {
+                    id,
+                    spot,
+                    min: Vec3::splat(-1.0),
+                    max: Vec3::splat(1.0),
+                },
+            ))
+            .id();
+        let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0)
+            .looking_at(Vec3::new(0.0, 0.0, -10.0), Vec3::Y);
+        app.world_mut()
+            .spawn((PlayerCamera, Equipped, eye, GlobalTransform::from(eye)));
 
         app.update();
         assert_eq!(app.world().resource::<Aimed>().0, Some(floor));
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyF);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyF);
         app.update();
         assert!(app.world().get_entity(floor).is_err());
         let inventory = app.world().resource::<Inventory>();
-        let packed: Vec<String> = inventory.grid(pack).unwrap().entries().iter().map(|e| inventory.item(e.id).unwrap().title().to_string()).collect();
+        let packed: Vec<String> = inventory
+            .grid(pack)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|e| inventory.item(e.id).unwrap().title().to_string())
+            .collect();
         assert_eq!(packed, vec![name]);
         assert!(app.world().resource::<CurrentLevel>().0.items.is_empty());
     }
@@ -2488,31 +3627,62 @@ mod tests {
     fn floor_items_on_1207_are_rolled_with_rarity() {
         // Four levels down, as the first rolls nearly everything common.
         let level = fb_level::generate(fb_level::depth_seed(1207, 4), 4);
-        let items: Vec<fb_items::Item> = level.items.iter().map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()).collect();
+        let items: Vec<fb_items::Item> = level
+            .items
+            .iter()
+            .map(|s| {
+                fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(level.depth)).unwrap()
+            })
+            .collect();
         assert_eq!(items.len(), level.items.len());
         for (item, spot) in items.iter().zip(&level.items) {
             assert_eq!(item.shape.family(), spot.family);
             if item.profile.kind == fb_items::Kind::Gear {
-                assert_eq!(item.shape.condition().state, armory::cond::ConditionState::Custom, "{}: not dressed", item.name);
+                assert_eq!(
+                    item.shape.condition().state,
+                    armory::cond::ConditionState::Custom,
+                    "{}: not dressed",
+                    item.name
+                );
             }
         }
-        assert!(items.iter().any(|i| i.rarity != Rarity::Common), "a level of nothing but common items");
+        assert!(
+            items.iter().any(|i| i.rarity != Rarity::Common),
+            "a level of nothing but common items"
+        );
         let first = fb_level::generate(1207, 1);
-        let firsts = first.items.iter().filter_map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(1)));
-        assert!(firsts.into_iter().all(|i| i.rarity < Rarity::Legendary), "a legendary on the first level");
+        let firsts = first
+            .items
+            .iter()
+            .filter_map(|s| fb_items::roll_loot(s.family, s.seed, fb_items::Odds::loot(1)));
+        assert!(
+            firsts.into_iter().all(|i| i.rarity < Rarity::Legendary),
+            "a legendary on the first level"
+        );
     }
 
     #[test]
     fn every_torch_and_lantern_lying_in_a_level_can_be_held_in_the_off_hand() {
         let mut lights = 0;
         for seed in 1..=32 {
-            for spot in fb_level::generate(seed, 1).items.iter().filter(|s| matches!(s.family, Family::Torch | Family::Lantern)) {
-                let item = fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::default()).unwrap();
+            for spot in fb_level::generate(seed, 1)
+                .items
+                .iter()
+                .filter(|s| matches!(s.family, Family::Torch | Family::Lantern))
+            {
+                let item =
+                    fb_items::roll_loot(spot.family, spot.seed, fb_items::Odds::default()).unwrap();
                 let (base, name) = (item.base.clone(), item.title().to_string());
                 let mut inventory = Inventory::default();
                 let id = inventory.add(item);
-                assert_eq!(inventory.target_slot(id), Some(fb_items::Slot::Offhand), "seed {seed}: {base} ({name})");
-                inventory.equip(id, fb_items::Slot::Offhand).unwrap_or_else(|r| panic!("seed {seed}: {base} ({name}): {}", r.reason()));
+                assert_eq!(
+                    inventory.target_slot(id),
+                    Some(fb_items::Slot::Offhand),
+                    "seed {seed}: {base} ({name})"
+                );
+                inventory
+                    .equip(id, fb_items::Slot::Offhand)
+                    .unwrap_or_else(|r| panic!("seed {seed}: {base} ({name}): {}", r.reason()));
                 assert_eq!(inventory.worn(fb_items::Slot::Offhand), Some(id));
                 lights += 1;
             }
@@ -2522,7 +3692,10 @@ mod tests {
 
     #[test]
     fn floor_items_wear_their_own_condition() {
-        let item = (1..500).filter_map(|seed| fb_items::roll_item("Sword", seed)).find(|i| i.rarity == Rarity::Common).unwrap();
+        let item = (1..500)
+            .filter_map(|seed| fb_items::roll_item("Sword", seed))
+            .find(|i| i.rarity == Rarity::Common)
+            .unwrap();
         assert_eq!(appearance_of(&item.shape).condition, item.shape.condition());
         assert!(item.shape.condition().wear >= 0.15);
     }
@@ -2530,7 +3703,11 @@ mod tests {
     #[test]
     fn grip_point_stays_at_hand_regardless_of_held_scale() {
         let spec = Character::default().spec();
-        let sword = (1..400).filter_map(|s| fb_items::roll_item("Sword", s)).find(|i| i.shape.family() == Family::Sword).unwrap().shape;
+        let sword = (1..400)
+            .filter_map(|s| fb_items::roll_item("Sword", s))
+            .find(|i| i.shape.family() == Family::Sword)
+            .unwrap()
+            .shape;
         let torch = lit_torch(1207).shape;
 
         for (name, item) in &[("Sword", sword.clone()), ("Torch", torch.clone())] {
@@ -2553,7 +3730,8 @@ mod tests {
                     continue;
                 }
                 // On second iteration, compare with scale 1.0
-                let placed_1 = crate::view_model::held_in_view(&spec, Some(item), None, 1.0)[0].transform;
+                let placed_1 =
+                    crate::view_model::held_in_view(&spec, Some(item), None, 1.0)[0].transform;
                 let grip_world_1 = placed_1.transform_point(grip);
                 assert!(
                     grip_world.abs_diff_eq(grip_world_1, 1e-4),
@@ -2580,14 +3758,23 @@ mod tests {
         inventory.burn_lights(60.0);
         assert_eq!(key(&inventory), start, "a minute is under a bucket");
         inventory.burn_lights(armory::kindle::TORCH_SECONDS * 0.06);
-        assert_ne!(key(&inventory), start, "past 0.05 char the held torch is fitted again");
+        assert_ne!(
+            key(&inventory),
+            start,
+            "past 0.05 char the held torch is fitted again"
+        );
     }
 
     #[test]
     fn the_toast_sits_above_the_orbs_and_quick_bar() {
         let layout = crate::combat::orbs::cluster_layout();
         let cluster_top = crate::combat::orbs::MARGIN + layout.size.y;
-        assert!(toast_lift() > cluster_top, "{} over {}", toast_lift(), cluster_top);
+        assert!(
+            toast_lift() > cluster_top,
+            "{} over {}",
+            toast_lift(),
+            cluster_top
+        );
         assert!(toast_lift() < 40.0, "still near the foot of the view");
     }
 }

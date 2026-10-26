@@ -14,7 +14,10 @@ use armory::{
     cond::{Condition, ConditionState},
 };
 use bevy::prelude::*;
-use fb_body::{Body, BodySpec, Gait, Joint, PartSkin, Rig, Side, SkinRegion, Skinner, fit_hands, fit_hip, fit_worn};
+use fb_body::{
+    Body, BodySpec, Gait, Joint, PartSkin, Rig, Side, SkinRegion, Skinner, fit_hands, fit_hip,
+    fit_worn,
+};
 use fb_items::Slot;
 
 use crate::carry::{appearance_of, item_light};
@@ -74,32 +77,76 @@ impl Figure {
     /// items are held, rings and charms are not drawn), its skin worn with `dirt` (0 clean to
     /// 1 filthy, the plate's `C.dirt`).
     pub fn dress(spec: &BodySpec, worn: &[(Slot, fb_items::Item)], dirt: f32) -> Figure {
-        let held = |slot| worn.iter().find(|(s, _)| *s == slot).map(|(_, item)| &item.shape);
+        let held = |slot| {
+            worn.iter()
+                .find(|(s, _)| *s == slot)
+                .map(|(_, item)| &item.shape)
+        };
         let hands = fit_hands(spec, held(Slot::Mainhand), held(Slot::Offhand));
         let body = hands.body;
-        let shapes: Vec<(Slot, armory::Item)> = worn.iter().map(|(slot, item)| (*slot, item.shape.clone())).collect();
+        let shapes: Vec<(Slot, armory::Item)> = worn
+            .iter()
+            .map(|(slot, item)| (*slot, item.shape.clone()))
+            .collect();
         let fit = fit_worn(&body, &shapes);
 
         let mut skin = body.skin_mesh_lifted(fit.wing_lift);
         skin.parts.retain(|p| !fit.covered.hides(p.name));
         let mut head = body.head_mesh_fitted(fit.head);
         head.parts.extend(body.hair_mesh(fit.hair).parts);
-        let condition = Condition { state: ConditionState::Custom, wear: dirt.clamp(0.0, 1.0), ..Condition::default() };
-        let flesh = ItemAppearance { condition, seed: spec.seed, ..default() };
+        let condition = Condition {
+            state: ConditionState::Custom,
+            wear: dirt.clamp(0.0, 1.0),
+            ..Condition::default()
+        };
+        let flesh = ItemAppearance {
+            condition,
+            seed: spec.seed,
+            ..default()
+        };
         let hooded = matches!(held(Slot::Head), Some(armory::Item::Hood(_)));
         // Every vertex of the skin and the gear follows the rig's joints, by where it rests; what
         // is held rides a joint rigidly. The head and the hood turn with the body under a hood.
         let skinner = Skinner::with_wing_lift(&body, fit.wing_lift);
-        let head_region = if hooded { SkinRegion::Chest } else { SkinRegion::Head };
-        let weights = |mesh: &ItemMesh, region: &dyn Fn(&str) -> SkinRegion| Some(skinner.mesh(mesh, region));
+        let head_region = if hooded {
+            SkinRegion::Chest
+        } else {
+            SkinRegion::Head
+        };
+        let weights =
+            |mesh: &ItemMesh, region: &dyn Fn(&str) -> SkinRegion| Some(skinner.mesh(mesh, region));
         let mut pieces = vec![
-            Piece { name: "Body".into(), appearance: flesh, on_head: false, lit: false, skin: weights(&skin, &SkinRegion::of_skin), attach: None, mesh: skin },
-            Piece { name: "Head".into(), appearance: flesh, on_head: !hooded, lit: false, skin: weights(&head, &|_| head_region), attach: None, mesh: head },
+            Piece {
+                name: "Body".into(),
+                appearance: flesh,
+                on_head: false,
+                lit: false,
+                skin: weights(&skin, &SkinRegion::of_skin),
+                attach: None,
+                mesh: skin,
+            },
+            Piece {
+                name: "Head".into(),
+                appearance: flesh,
+                on_head: !hooded,
+                lit: false,
+                skin: weights(&head, &|_| head_region),
+                attach: None,
+                mesh: head,
+            },
         ];
         for layer in &fit.layers {
-            let Some((_, item)) = worn.iter().find(|(slot, _)| *slot == layer.slot) else { continue };
+            let Some((_, item)) = worn.iter().find(|(slot, _)| *slot == layer.slot) else {
+                continue;
+            };
             let on_head = layer.slot == Slot::Head && !hooded;
-            let region = |name: &str| if layer.slot == Slot::Head && hooded { SkinRegion::Chest } else { SkinRegion::of_worn(layer.slot, name) };
+            let region = |name: &str| {
+                if layer.slot == Slot::Head && hooded {
+                    SkinRegion::Chest
+                } else {
+                    SkinRegion::of_worn(layer.slot, name)
+                }
+            };
             pieces.push(Piece {
                 name: item.title().to_string(),
                 mesh: layer.mesh.clone(),
@@ -112,9 +159,15 @@ impl Figure {
         }
         let mut light = None;
         for (slot, fit) in [(Slot::Mainhand, &hands.main), (Slot::Offhand, &hands.off)] {
-            let (Some(fit), Some((_, item))) = (fit, worn.iter().find(|(s, _)| *s == slot)) else { continue };
+            let (Some(fit), Some((_, item))) = (fit, worn.iter().find(|(s, _)| *s == slot)) else {
+                continue;
+            };
             let anchor = item_light(&fit.item);
-            let side = if slot == Slot::Mainhand { fb_body::MAIN_HAND } else { fb_body::OFF_HAND };
+            let side = if slot == Slot::Mainhand {
+                fb_body::MAIN_HAND
+            } else {
+                fb_body::OFF_HAND
+            };
             pieces.push(Piece {
                 name: item.title().to_string(),
                 mesh: fit.mesh.clone(),
@@ -127,7 +180,12 @@ impl Figure {
             if light.is_none()
                 && let Some(anchor) = anchor
             {
-                light = Some(HeldLight { at: Vec3::from_array(fit.to_body(anchor.position)), anchor, side, joint: Joint::wrist(side) });
+                light = Some(HeldLight {
+                    at: Vec3::from_array(fit.to_body(anchor.position)),
+                    anchor,
+                    side,
+                    joint: Joint::wrist(side),
+                });
             }
         }
         // A lantern hung at the hip, from the belt; the carried light if no hand holds one.
@@ -148,13 +206,26 @@ impl Figure {
             if light.is_none()
                 && let Some(anchor) = anchor
             {
-                light = Some(HeldLight { at: Vec3::from_array(hip.to_body(anchor.position)), anchor, side: hip.side, joint: Joint::Pelvis });
+                light = Some(HeldLight {
+                    at: Vec3::from_array(hip.to_body(anchor.position)),
+                    anchor,
+                    side: hip.side,
+                    joint: Joint::Pelvis,
+                });
             }
         }
         let neck = Vec3::from_array(body.neck_base().origin);
         let rig = Rig::of_lifted(&body, fit.wing_lift);
         let gait = Gait::new(&body, &rig);
-        Figure { body, pieces, light, neck, rig, gait, hooded }
+        Figure {
+            body,
+            pieces,
+            light,
+            neck,
+            rig,
+            gait,
+            hooded,
+        }
     }
 
     /// The figure's bounds in body space, every piece included.
@@ -163,7 +234,9 @@ impl Figure {
             .iter()
             .flat_map(|p| p.mesh.parts.iter().flat_map(|part| &part.positions))
             .map(|&p| Vec3::from_array(p))
-            .fold(None, |acc, p| Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p)))))
+            .fold(None, |acc, p| {
+                Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p))))
+            })
     }
 
     /// The top of what is worn on the head, in body space: the highest vertex of any unlit piece
@@ -180,7 +253,16 @@ impl Figure {
             .flat_map(|p| {
                 // What rides the head (a helm or hat) counts whole, horns and brim included.
                 let on_head = p.on_head;
-                p.mesh.parts.iter().flat_map(|part| &part.positions).filter(move |v| on_head || ((v[0] - centre.x).abs() <= reach && (v[2] - centre.z).abs() <= reach)).map(|v| v[1])
+                p.mesh
+                    .parts
+                    .iter()
+                    .flat_map(|part| &part.positions)
+                    .filter(move |v| {
+                        on_head
+                            || ((v[0] - centre.x).abs() <= reach
+                                && (v[2] - centre.z).abs() <= reach)
+                    })
+                    .map(|v| v[1])
             })
             .filter(|&y| y >= centre.y)
             .fold(centre.y + self.body.head.half_height, f32::max)
@@ -189,16 +271,27 @@ impl Figure {
     /// The head's centre and its radius (its largest half extent), in body space.
     pub fn head(&self) -> (Vec3, f32) {
         let head = &self.body.head;
-        (Vec3::from_array(head.centre), head.half_width.max(head.half_height).max(head.half_depth))
+        (
+            Vec3::from_array(head.centre),
+            head.half_width.max(head.half_height).max(head.half_depth),
+        )
     }
 }
 
 /// Spawns `figure` at the origin as one root entity with every piece under it, each piece
 /// keeping an identity transform so its wear stays where its mesh puts it. Returns the root.
 pub fn spawn_figure(commands: &mut Commands, spawner: &mut ItemSpawner, figure: &Figure) -> Entity {
-    let root = commands.spawn((Name::new("Figure"), Transform::default(), Visibility::default())).id();
+    let root = commands
+        .spawn((
+            Name::new("Figure"),
+            Transform::default(),
+            Visibility::default(),
+        ))
+        .id();
     for piece in &figure.pieces {
-        spawner.spawn(&piece.mesh, &piece.appearance).insert((Name::new(piece.name.clone()), ChildOf(root)));
+        spawner
+            .spawn(&piece.mesh, &piece.appearance)
+            .insert((Name::new(piece.name.clone()), ChildOf(root)));
     }
     root
 }
@@ -209,7 +302,10 @@ mod tests {
     use fb_body::Folk;
 
     fn fighter(folk: Folk, seed: u32) -> Vec<(Slot, fb_items::Item)> {
-        fb_items::outfit::outfit("fighter").unwrap().roll(seed, folk.key()).worn
+        fb_items::outfit::outfit("fighter")
+            .unwrap()
+            .roll(seed, folk.key())
+            .worn
     }
 
     #[test]
@@ -217,16 +313,36 @@ mod tests {
         for folk in Folk::ALL {
             let worn = fighter(folk, 7);
             let figure = Figure::dress(&BodySpec::roll(folk, 7), &worn, 0.2);
-            let weapon = worn.iter().find(|(s, _)| *s == Slot::Mainhand).map(|(_, i)| i.title().to_string()).unwrap();
+            let weapon = worn
+                .iter()
+                .find(|(s, _)| *s == Slot::Mainhand)
+                .map(|(_, i)| i.title().to_string())
+                .unwrap();
             let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
-            assert!(names.contains(&weapon.as_str()), "{folk:?}: no {weapon} in {names:?}");
+            assert!(
+                names.contains(&weapon.as_str()),
+                "{folk:?}: no {weapon} in {names:?}"
+            );
             // Skin, at least a shirt and trousers, and the weapon.
             assert!(figure.pieces.len() >= 4, "{folk:?}: {names:?}");
-            assert!(figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()), "{folk:?}");
+            assert!(
+                figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()),
+                "{folk:?}"
+            );
             // The weapon is in the main hand's fist.
             let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
-            let held = &figure.pieces.iter().find(|p| p.name == weapon).unwrap().mesh;
-            let nearest = held.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+            let held = &figure
+                .pieces
+                .iter()
+                .find(|p| p.name == weapon)
+                .unwrap()
+                .mesh;
+            let nearest = held
+                .parts
+                .iter()
+                .flat_map(|p| &p.positions)
+                .map(|&p| Vec3::from_array(p).distance(fist))
+                .fold(f32::MAX, f32::min);
             assert!(nearest < 0.5, "{folk:?}: weapon {nearest} from the fist");
         }
     }
@@ -234,19 +350,53 @@ mod tests {
     #[test]
     fn a_minotaur_is_dressed_and_holds_a_weapon_in_its_fist() {
         for outfit in ["fighter", "ranger", "mage", "cleric"] {
-            let worn = fb_items::outfit::outfit(outfit).unwrap().roll(7, Folk::Minotaur.key()).worn;
+            let worn = fb_items::outfit::outfit(outfit)
+                .unwrap()
+                .roll(7, Folk::Minotaur.key())
+                .worn;
             let figure = Figure::dress(&BodySpec::roll(Folk::Minotaur, 7), &worn, 0.2);
             let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();
-            assert!(figure.pieces.len() >= 4 && figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()), "{outfit}: {names:?}");
+            assert!(
+                figure.pieces.len() >= 4 && figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()),
+                "{outfit}: {names:?}"
+            );
             // Hooves are bare, the horns are drawn, the tail is skinned to its bones.
-            let parts = |piece: &str| figure.pieces.iter().find(|p| p.name == piece).unwrap().mesh.parts.iter().map(|p| p.name).collect::<Vec<_>>();
-            assert!(parts("Body").contains(&"hooves") && parts("Head").contains(&"horns"), "{outfit}");
+            let parts = |piece: &str| {
+                figure
+                    .pieces
+                    .iter()
+                    .find(|p| p.name == piece)
+                    .unwrap()
+                    .mesh
+                    .parts
+                    .iter()
+                    .map(|p| p.name)
+                    .collect::<Vec<_>>()
+            };
+            assert!(
+                parts("Body").contains(&"hooves") && parts("Head").contains(&"horns"),
+                "{outfit}"
+            );
             let body = figure.pieces.iter().find(|p| p.name == "Body").unwrap();
-            assert!(body.skin.as_ref().is_some_and(|s| s.len() == body.mesh.parts.len()));
+            assert!(
+                body.skin
+                    .as_ref()
+                    .is_some_and(|s| s.len() == body.mesh.parts.len())
+            );
             if let Some((_, weapon)) = worn.iter().find(|(s, _)| *s == Slot::Mainhand) {
                 let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
-                let held = &figure.pieces.iter().find(|p| p.name == weapon.title()).unwrap().mesh;
-                let nearest = held.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+                let held = &figure
+                    .pieces
+                    .iter()
+                    .find(|p| p.name == weapon.title())
+                    .unwrap()
+                    .mesh;
+                let nearest = held
+                    .parts
+                    .iter()
+                    .flat_map(|p| &p.positions)
+                    .map(|&p| Vec3::from_array(p).distance(fist))
+                    .fold(f32::MAX, f32::min);
                 assert!(nearest < 0.7, "{outfit}: weapon {nearest} from the fist");
             }
         }
@@ -256,20 +406,51 @@ mod tests {
     fn each_demon_is_dressed_with_wings_over_the_gear_and_holds_a_weapon() {
         for folk in [Folk::WingedDemon, Folk::HornedDemon, Folk::Succubus] {
             for outfit in ["fighter", "mage"] {
-                let worn = fb_items::outfit::outfit(outfit).unwrap().roll(7, folk.key()).worn;
+                let worn = fb_items::outfit::outfit(outfit)
+                    .unwrap()
+                    .roll(7, folk.key())
+                    .worn;
                 let figure = Figure::dress(&BodySpec::roll(folk, 7), &worn, 0.2);
                 let body = figure.pieces.iter().find(|p| p.name == "Body").unwrap();
                 let names: Vec<&str> = body.mesh.parts.iter().map(|p| p.name).collect();
-                assert!(figure.pieces.len() >= 4 && figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()), "{folk:?} {outfit}");
-                assert!(names.contains(&"tail_spade"), "{folk:?} {outfit}: {names:?}");
+                assert!(
+                    figure.pieces.len() >= 4
+                        && figure.pieces.iter().all(|p| !p.mesh.parts.is_empty()),
+                    "{folk:?} {outfit}"
+                );
+                assert!(
+                    names.contains(&"tail_spade"),
+                    "{folk:?} {outfit}: {names:?}"
+                );
                 // The wings are skinned (every vertex to joints) and the body has them only where the race does.
-                assert_eq!(names.contains(&"wing_membrane"), folk != Folk::HornedDemon, "{folk:?} {outfit}");
-                assert!(body.skin.as_ref().is_some_and(|s| s.len() == body.mesh.parts.len()));
+                assert_eq!(
+                    names.contains(&"wing_membrane"),
+                    folk != Folk::HornedDemon,
+                    "{folk:?} {outfit}"
+                );
+                assert!(
+                    body.skin
+                        .as_ref()
+                        .is_some_and(|s| s.len() == body.mesh.parts.len())
+                );
                 if let Some((_, weapon)) = worn.iter().find(|(s, _)| *s == Slot::Mainhand) {
                     let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
-                    let held = &figure.pieces.iter().find(|p| p.name == weapon.title()).unwrap().mesh;
-                    let nearest = held.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
-                    assert!(nearest < 0.7, "{folk:?} {outfit}: weapon {nearest} from the fist");
+                    let held = &figure
+                        .pieces
+                        .iter()
+                        .find(|p| p.name == weapon.title())
+                        .unwrap()
+                        .mesh;
+                    let nearest = held
+                        .parts
+                        .iter()
+                        .flat_map(|p| &p.positions)
+                        .map(|&p| Vec3::from_array(p).distance(fist))
+                        .fold(f32::MAX, f32::min);
+                    assert!(
+                        nearest < 0.7,
+                        "{folk:?} {outfit}: weapon {nearest} from the fist"
+                    );
                 }
             }
         }
@@ -278,7 +459,11 @@ mod tests {
     #[test]
     fn the_same_folk_seed_and_outfit_look_the_same() {
         let dress = || {
-            let figure = Figure::dress(&BodySpec::roll(Folk::Dwarf, 7), &fighter(Folk::Dwarf, 7), 0.3);
+            let figure = Figure::dress(
+                &BodySpec::roll(Folk::Dwarf, 7),
+                &fighter(Folk::Dwarf, 7),
+                0.3,
+            );
             figure.pieces
         };
         assert_eq!(dress(), dress());
@@ -287,36 +472,72 @@ mod tests {
     #[test]
     fn an_off_hand_weapon_is_held_in_the_left_fist() {
         let spec = BodySpec::roll(Folk::Human, 5);
-        for base in ["Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow"] {
-            let (main, off) = (fb_items::roll_item("Sword", 3).unwrap(), fb_items::roll_item(base, 8).unwrap());
+        for base in [
+            "Sword", "Dagger", "Mace", "Club", "Hand axe", "Spear", "Staff", "Bow", "Crossbow",
+        ] {
+            let (main, off) = (
+                fb_items::roll_item("Sword", 3).unwrap(),
+                fb_items::roll_item(base, 8).unwrap(),
+            );
             let name = off.title().to_string();
             let figure = Figure::dress(&spec, &[(Slot::Mainhand, main), (Slot::Offhand, off)], 0.0);
             let held = &figure.pieces.last().unwrap();
             assert_eq!(held.name, name, "{base}: the off hand's is drawn last");
-            let points: Vec<Vec3> = held.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let points: Vec<Vec3> = held
+                .mesh
+                .parts
+                .iter()
+                .flat_map(|p| &p.positions)
+                .map(|&p| Vec3::from_array(p))
+                .collect();
             let fist = Vec3::from_array(figure.body.grip(fb_body::OFF_HAND).origin);
-            let nearest = points.iter().map(|p| p.distance(fist)).fold(f32::MAX, f32::min);
+            let nearest = points
+                .iter()
+                .map(|p| p.distance(fist))
+                .fold(f32::MAX, f32::min);
             assert!(nearest < 0.5, "{base}: {nearest} from the left fist");
             // On the wearer's left (+X), as the main hand's sword is on the right.
             let centre = points.iter().sum::<Vec3>() / points.len() as f32;
-            assert!(fist.x > 0.0 && centre.x > 0.0, "{base}: fist {fist}, centre {centre}");
+            assert!(
+                fist.x > 0.0 && centre.x > 0.0,
+                "{base}: fist {fist}, centre {centre}"
+            );
         }
     }
 
     #[test]
     fn a_hip_lantern_hangs_from_the_belt_and_lights_when_no_hand_does() {
-        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap();
+        let lantern = (1..200)
+            .filter_map(|s| fb_items::roll_item("Lantern", s))
+            .find(|i| item_light(&i.shape).is_some())
+            .unwrap();
         let name = lantern.title().to_string();
-        let (sword, dagger, belt) = (fb_items::roll_item("Sword", 3).unwrap(), fb_items::roll_item("Dagger", 4).unwrap(), fb_items::roll_item("Belt", 2).unwrap());
+        let (sword, dagger, belt) = (
+            fb_items::roll_item("Sword", 3).unwrap(),
+            fb_items::roll_item("Dagger", 4).unwrap(),
+            fb_items::roll_item("Belt", 2).unwrap(),
+        );
         let spec = BodySpec::roll(Folk::Human, 5);
-        let worn = [(Slot::Belt, belt), (Slot::Mainhand, sword), (Slot::Offhand, dagger), (Slot::Hip, lantern.clone())];
+        let worn = [
+            (Slot::Belt, belt),
+            (Slot::Mainhand, sword),
+            (Slot::Offhand, dagger),
+            (Slot::Hip, lantern.clone()),
+        ];
         let figure = Figure::dress(&spec, &worn, 0.0);
-        let hung = figure.pieces.iter().find(|p| p.name == name).expect("the lantern is drawn");
+        let hung = figure
+            .pieces
+            .iter()
+            .find(|p| p.name == name)
+            .expect("the lantern is drawn");
         assert!(hung.lit);
         let (lo, hi) = hung.mesh.bounds().unwrap();
         // At the hip, on the off hand's side (+X): from the belt line down, above the knee.
         let body = &figure.body;
-        assert!(lo[0] > 0.0 && hi[1] <= body.waist_y + 0.5 && lo[1] > body.hip_y * 0.5, "{lo:?}..{hi:?}");
+        assert!(
+            lo[0] > 0.0 && hi[1] <= body.waist_y + 0.5 && lo[1] > body.hip_y * 0.5,
+            "{lo:?}..{hi:?}"
+        );
         let light = figure.light.expect("the hip lantern lights the doll");
         assert_eq!(light.side, fb_body::OFF_HAND);
         assert!(light.at.y < body.waist_y, "{}", light.at);
@@ -327,14 +548,25 @@ mod tests {
 
     #[test]
     fn a_held_lantern_lights_from_its_hand() {
-        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap();
+        let lantern = (1..200)
+            .filter_map(|s| fb_items::roll_item("Lantern", s))
+            .find(|i| item_light(&i.shape).is_some())
+            .unwrap();
         let mace = fb_items::roll_item("Mace", 3).unwrap();
         let spec = BodySpec::roll(Folk::Human, 5);
-        let figure = Figure::dress(&spec, &[(Slot::Mainhand, mace), (Slot::Offhand, lantern)], 0.0);
+        let figure = Figure::dress(
+            &spec,
+            &[(Slot::Mainhand, mace), (Slot::Offhand, lantern)],
+            0.0,
+        );
         let light = figure.light.expect("a lit lantern");
         assert_eq!(light.side, fb_body::OFF_HAND);
         // On the off hand's side (+X, the wearer's left), below the shoulder.
-        assert!(light.at.x > 0.0 && light.at.y < figure.body.shoulder_y, "{}", light.at);
+        assert!(
+            light.at.x > 0.0 && light.at.y < figure.body.shoulder_y,
+            "{}",
+            light.at
+        );
         assert!(Figure::dress(&spec, &[], 0.0).light.is_none());
     }
 
@@ -365,12 +597,28 @@ mod tests {
         .expect("async fitting should complete");
 
         // Compare key properties
-        assert_eq!(direct.pieces.len(), async_result.pieces.len(), "piece count differs");
-        for (i, (d, a)) in direct.pieces.iter().zip(async_result.pieces.iter()).enumerate() {
+        assert_eq!(
+            direct.pieces.len(),
+            async_result.pieces.len(),
+            "piece count differs"
+        );
+        for (i, (d, a)) in direct
+            .pieces
+            .iter()
+            .zip(async_result.pieces.iter())
+            .enumerate()
+        {
             assert_eq!(d.name, a.name, "piece {i} name differs");
-            assert_eq!(d.mesh.parts.len(), a.mesh.parts.len(), "piece {i} part count differs");
+            assert_eq!(
+                d.mesh.parts.len(),
+                a.mesh.parts.len(),
+                "piece {i} part count differs"
+            );
             for (j, (dp, ap)) in d.mesh.parts.iter().zip(a.mesh.parts.iter()).enumerate() {
-                assert_eq!(dp.positions, ap.positions, "piece {i} part {j} positions differ");
+                assert_eq!(
+                    dp.positions, ap.positions,
+                    "piece {i} part {j} positions differ"
+                );
                 assert_eq!(dp.indices, ap.indices, "piece {i} part {j} indices differ");
                 assert_eq!(dp.normals, ap.normals, "piece {i} part {j} normals differ");
             }

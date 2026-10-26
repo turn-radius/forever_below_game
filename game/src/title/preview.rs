@@ -25,7 +25,9 @@ use fb_items::Slot;
 use super::creator::{Draft, ShapeMoved};
 use crate::figure::{Figure, spawn_figure};
 use crate::fitting::{Fitting, figure_key};
-use crate::inventory::doll::{DOLL_LAYER, DollView, HELD_LIGHT_PEAK, HELD_LIGHT_REACH, SlotView, TURN_PER_PIXEL, doll_view};
+use crate::inventory::doll::{
+    DOLL_LAYER, DollView, HELD_LIGHT_PEAK, HELD_LIGHT_REACH, SlotView, TURN_PER_PIXEL, doll_view,
+};
 use crate::inventory::{DollAssets, Inventory, starting_kit};
 use crate::launch::AppState;
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
@@ -69,7 +71,10 @@ pub struct PreviewStage {
 /// a slot.
 pub fn preview_kit(draft: &Draft) -> Vec<(Slot, fb_items::Item)> {
     let mut kit: Vec<(Slot, fb_items::Item)> = Vec::new();
-    for (slot, item) in starting_kit(|salt| draft.body_seed.wrapping_mul(0x2545_f491).wrapping_add(salt), draft.folk) {
+    for (slot, item) in starting_kit(
+        |salt| draft.body_seed.wrapping_mul(0x2545_f491).wrapping_add(salt),
+        draft.folk,
+    ) {
         if !kit.iter().any(|(s, _)| *s == slot) {
             kit.push((slot, item));
         }
@@ -96,8 +101,16 @@ impl Plugin for PreviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PreviewStage>()
             .init_resource::<ShapeMoved>()
-            .add_systems(OnExit(AppState::Title), |mut stage: ResMut<PreviewStage>| *stage = PreviewStage::default())
-            .add_systems(Update, (fit_preview, turn_preview).chain().run_if(in_state(AppState::Title)));
+            .add_systems(
+                OnExit(AppState::Title),
+                |mut stage: ResMut<PreviewStage>| *stage = PreviewStage::default(),
+            )
+            .add_systems(
+                Update,
+                (fit_preview, turn_preview)
+                    .chain()
+                    .run_if(in_state(AppState::Title)),
+            );
     }
 }
 
@@ -106,7 +119,14 @@ impl Plugin for PreviewPlugin {
 /// every frame: the fit in flight is finished and shown, then the latest body is fitted, so
 /// the doll follows the drag instead of waiting for it to stop. The camera comes with the creator, so the doll's
 /// image is cleared of whatever the inventory last drew there before the first figure shows.
-fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, mut moved: ResMut<ShapeMoved>, assets: Res<DollAssets>, mut stage: ResMut<PreviewStage>, mut spawner: ItemSpawner) {
+fn fit_preview(
+    mut commands: Commands,
+    draft: Option<Res<Draft>>,
+    mut moved: ResMut<ShapeMoved>,
+    assets: Res<DollAssets>,
+    mut stage: ResMut<PreviewStage>,
+    mut spawner: ItemSpawner,
+) {
     let Some(draft) = draft else {
         if stage.figure.is_some() || stage.camera.is_some() || stage.fitting.is_some() {
             for entity in [stage.figure, stage.camera].into_iter().flatten() {
@@ -125,7 +145,11 @@ fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, mut moved: Res
         if stage.kit.as_ref().is_none_or(|(k, _)| *k != rolled_for) {
             stage.kit = Some((rolled_for, preview_kit(&draft)));
         }
-        let kit = stage.kit.as_ref().map(|(_, kit)| kit.clone()).unwrap_or_default();
+        let kit = stage
+            .kit
+            .as_ref()
+            .map(|(_, kit)| kit.clone())
+            .unwrap_or_default();
         let key = figure_key(&spec, &kit, draft.dirt);
         stage.wanted = Some((key, spec, kit, draft.dirt));
     }
@@ -142,7 +166,9 @@ fn fit_preview(mut commands: Commands, draft: Option<Res<Draft>>, mut moved: Res
         && let Some((key, spec, kit, dirt)) = stage.wanted.take()
         && stage.dressed.as_ref() != Some(&key)
     {
-        stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &kit, dirt))));
+        stage.fitting = Some(Fitting::start(key, move || {
+            Arc::new(Figure::dress(&spec, &kit, dirt))
+        }));
     }
 }
 
@@ -155,7 +181,12 @@ fn spawn_camera(commands: &mut Commands, assets: &DollAssets) -> Entity {
     let side = 20.0;
     let distance = 12.0 * side;
     let range = 8.0 * distance;
-    let key = point_light(Color::WHITE, KEY_LEVEL / reach_falloff(distance, range), range, &exposure);
+    let key = point_light(
+        Color::WHITE,
+        KEY_LEVEL / reach_falloff(distance, range),
+        range,
+        &exposure,
+    );
     let (projection, at) = framing(side, side * 0.5);
     commands
         .spawn((
@@ -163,16 +194,29 @@ fn spawn_camera(commands: &mut Commands, assets: &DollAssets) -> Entity {
             crate::render::ScreenInkExempt,
             DespawnOnExit(AppState::Title),
             Camera3d::default(),
-            Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
+            Camera {
+                order: -3,
+                clear_color: ClearColorConfig::Custom(Color::NONE),
+                ..default()
+            },
             RenderTarget::Image(assets.doll.clone().into()),
             projection,
             exposure,
             Tonemapping::Linear,
-            AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+            AmbientLight {
+                color: StudioLight::ARMORY.ambient_color,
+                brightness: StudioLight::ARMORY.ambient / exposure.exposure(),
+                ..default()
+            },
             layer.clone(),
             at,
         ))
-        .with_child((Name::new("Creator doll key light"), key, Transform::from_translation(StudioLight::ARMORY.key_from() * distance), layer))
+        .with_child((
+            Name::new("Creator doll key light"),
+            key,
+            Transform::from_translation(StudioLight::ARMORY.key_from() * distance),
+            layer,
+        ))
         .id()
 }
 
@@ -181,21 +225,34 @@ fn framing(side: f32, centre_y: f32) -> (Projection, Transform) {
     let looking_at = STAGE + Vec3::Y * centre_y;
     let depth = 4.0 * side;
     let projection = Projection::Orthographic(OrthographicProjection {
-        scaling_mode: ScalingMode::Fixed { width: side, height: side },
+        scaling_mode: ScalingMode::Fixed {
+            width: side,
+            height: side,
+        },
         near: 0.1,
         far: 2.0 * depth,
         ..OrthographicProjection::default_3d()
     });
-    (projection, Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y))
+    (
+        projection,
+        Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y),
+    )
 }
 
 /// Puts `figure` on the stage in place of the one there, with the torch it holds lit, and
 /// frames the camera on it as the inventory frames its doll.
-fn show_figure(commands: &mut Commands, spawner: &mut ItemSpawner, stage: &mut PreviewStage, figure: &Figure) {
+fn show_figure(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    stage: &mut PreviewStage,
+    figure: &Figure,
+) {
     if let Some(old) = stage.figure.take() {
         commands.entity(old).despawn();
     }
-    let Some(bounds) = figure.bounds() else { return };
+    let Some(bounds) = figure.bounds() else {
+        return;
+    };
     let layer = RenderLayers::layer(DOLL_LAYER);
     let root = spawn_figure(commands, spawner, figure);
     commands.entity(root).insert((
@@ -206,9 +263,23 @@ fn show_figure(commands: &mut Commands, spawner: &mut ItemSpawner, stage: &mut P
         Propagate(NotShadowCaster),
     ));
     if let Some(light) = figure.light {
-        let colour = Color::srgb(light.anchor.color.0, light.anchor.color.1, light.anchor.color.2);
-        let lamp = Torch::flickering(point_light(colour, HELD_LIGHT_PEAK, figure.body.height * HELD_LIGHT_REACH, &Exposure::INDOOR), light.anchor.flicker);
-        commands.entity(root).with_child((lamp, Transform::from_translation(light.at), layer));
+        let colour = Color::srgb(
+            light.anchor.color.0,
+            light.anchor.color.1,
+            light.anchor.color.2,
+        );
+        let lamp = Torch::flickering(
+            point_light(
+                colour,
+                HELD_LIGHT_PEAK,
+                figure.body.height * HELD_LIGHT_REACH,
+                &Exposure::INDOOR,
+            ),
+            light.anchor.flicker,
+        );
+        commands
+            .entity(root)
+            .with_child((lamp, Transform::from_translation(light.at), layer));
     }
     stage.figure = Some(root);
     if let Some(camera) = stage.camera {
@@ -236,12 +307,17 @@ fn turn_preview(
     if buttons.just_pressed(MouseButton::Left) {
         let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
         let on = |rect: Rect| cursor.is_some_and(|c| rect.contains(c));
-        *turning = views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
+        *turning = views.iter().any(|(n, t)| on(node_rect(n, t)))
+            && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
     }
     if !buttons.pressed(MouseButton::Left) {
         *turning = false;
     }
-    let step = if *turning { motion.delta.x * TURN_PER_PIXEL } else { time.delta_secs() * TURN_SPEED };
+    let step = if *turning {
+        motion.delta.x * TURN_PER_PIXEL
+    } else {
+        time.delta_secs() * TURN_SPEED
+    };
     stage.turn = (stage.turn + step).rem_euclid(std::f32::consts::TAU);
     if let Ok(mut transform) = transforms.get_mut(figure) {
         transform.rotation = Quat::from_rotation_y(stage.turn);
@@ -257,13 +333,24 @@ mod tests {
         let draft = Draft::roll(12);
         let kit = preview_kit(&draft);
         for slot in [Slot::Belt, Slot::Offhand] {
-            assert_eq!(kit.iter().filter(|(s, _)| *s == slot).count(), 1, "{slot:?}");
+            assert_eq!(
+                kit.iter().filter(|(s, _)| *s == slot).count(),
+                1,
+                "{slot:?}"
+            );
         }
         assert!(kit.iter().any(|(_, item)| item.base == "Torch"));
         assert_eq!(kit, preview_kit(&draft), "the same draft dresses the same");
         let inventory = preview_inventory(&draft);
         for (slot, item) in &kit {
-            assert_eq!(inventory.worn(*slot).and_then(|id| inventory.item(id)).map(|i| &i.name), Some(&item.name), "{slot:?} is in its slot");
+            assert_eq!(
+                inventory
+                    .worn(*slot)
+                    .and_then(|id| inventory.item(id))
+                    .map(|i| &i.name),
+                Some(&item.name),
+                "{slot:?} is in its slot"
+            );
         }
     }
 

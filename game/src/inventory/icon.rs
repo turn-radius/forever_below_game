@@ -23,6 +23,11 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use armory::families::{
+    Generator,
+    banner::{Banner, BannerState},
+};
+use armory::heraldry::Field;
 use bevy::{
     app::Propagate,
     asset::RenderAssetUsages,
@@ -36,12 +41,10 @@ use bevy::{
         view::Tonemapping,
     },
 };
-use armory::families::{Generator, banner::{Banner, BannerState}};
-use armory::heraldry::Field;
 use fb_items::Item;
 
-use crate::launch::AppState;
 use crate::carry::appearance_of;
+use crate::launch::AppState;
 use crate::light::{StudioLight, point_light, reach_falloff};
 use crate::render::ItemSpawner;
 use crate::ui::{MUTED, UiFonts};
@@ -103,7 +106,13 @@ pub struct IconKey {
 
 impl IconKey {
     pub fn of(item: &Item, turned: bool) -> Self {
-        IconKey { base: item.base.clone(), seed: item.seed, turned, lit: item.shape.lit(), worked: item.history.len() }
+        IconKey {
+            base: item.base.clone(),
+            seed: item.seed,
+            turned,
+            lit: item.shape.lit(),
+            worked: item.history.len(),
+        }
     }
 }
 
@@ -168,7 +177,12 @@ impl IconCache {
     /// Forgets every icon that is drawn and not drawing, so each is made again when next asked
     /// for (the soak's `FB_SOAK_CHURN`, to make and take down many icon cameras).
     pub fn forget_drawn(&mut self) {
-        let busy: HashSet<AssetId<Image>> = self.drawing.iter().map(|d| d.image).chain(self.queued.iter().map(|q| q.1.id())).collect();
+        let busy: HashSet<AssetId<Image>> = self
+            .drawing
+            .iter()
+            .map(|d| d.image)
+            .chain(self.queued.iter().map(|q| q.1.id()))
+            .collect();
         self.images.retain(|_, image| busy.contains(&image.id()));
         self.arms.retain(|_, image| busy.contains(&image.id()));
         self.drawn.retain(|id| busy.contains(id));
@@ -177,7 +191,12 @@ impl IconCache {
     /// Forgets the icons queued or being drawn, whose stages are despawned with the delve, so
     /// each is made afresh when next asked for. Icons already drawn are kept.
     pub fn abandon_drawing(&mut self) {
-        let busy: HashSet<AssetId<Image>> = self.drawing.drain(..).map(|d| d.image).chain(self.queued.drain(..).map(|q| q.1.id())).collect();
+        let busy: HashSet<AssetId<Image>> = self
+            .drawing
+            .drain(..)
+            .map(|d| d.image)
+            .chain(self.queued.drain(..).map(|q| q.1.id()))
+            .collect();
         self.images.retain(|_, image| !busy.contains(&image.id()));
         self.arms.retain(|_, image| !busy.contains(&image.id()));
     }
@@ -200,7 +219,8 @@ impl IconCache {
 /// Where stage `stage` is: a square of stages [`STAGE_SPACING`] apart, kept compact so the
 /// furthest is still near enough the origin for fine detail in 32-bit floats.
 pub fn stage_at(stage: usize) -> Vec3 {
-    ICON_STAGE + Vec3::new((stage % STAGE_ROW) as f32, 0.0, (stage / STAGE_ROW) as f32) * STAGE_SPACING
+    ICON_STAGE
+        + Vec3::new((stage % STAGE_ROW) as f32, 0.0, (stage / STAGE_ROW) as f32) * STAGE_SPACING
 }
 
 /// The size in pixels of the icon for `item` lying `turned`.
@@ -236,20 +256,27 @@ impl Icons<'_> {
             return image.clone();
         }
         let size = icon_size(item, turned);
-        let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
+        let mut target =
+            Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
         target.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         // Read back by `stage_icon` to see when the item first shows.
         target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let image = self.images.add(target);
         self.cache.images.insert(key.clone(), image.clone());
-        self.cache.queued.push_back((Subject::Item(key, Box::new(item.clone())), image.clone()));
+        self.cache
+            .queued
+            .push_back((Subject::Item(key, Box::new(item.clone())), image.clone()));
         image
     }
 
     /// The crest for `field`, drawn once from the armory and kept: the faction's arms flat on a
     /// shield, from the same field its banners are painted from. Blank until drawn.
     pub fn crest(&mut self, field: &Field) -> Handle<Image> {
-        self.arms(Arms::Crest(armory::crest::field_key(field)), CREST_PX, || Subject::Crest(Box::new(*field)))
+        self.arms(
+            Arms::Crest(armory::crest::field_key(field)),
+            CREST_PX,
+            || Subject::Crest(Box::new(*field)),
+        )
     }
 
     /// The image of `banner` hanging face on, drawn once from the armory and kept. Blank until
@@ -264,7 +291,8 @@ impl Icons<'_> {
         if let Some(image) = self.cache.arms.get(&key) {
             return image.clone();
         }
-        let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
+        let mut target =
+            Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
         target.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let image = self.images.add(target);
@@ -275,21 +303,42 @@ impl Icons<'_> {
 
     /// Spawns `node` showing the crest for `field`; until it is drawn, a plain shield stands in
     /// its place.
-    pub fn spawn_crest<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, field: &Field, node: Node) -> EntityCommands<'a> {
+    pub fn spawn_crest<'a>(
+        &mut self,
+        parent: &'a mut ChildSpawnerCommands,
+        field: &Field,
+        node: Node,
+    ) -> EntityCommands<'a> {
         let image = self.crest(field);
-        let shield = BorderRadius { top_left: px(3).into(), top_right: px(3).into(), bottom_left: percent(50).into(), bottom_right: percent(50).into() };
+        let shield = BorderRadius {
+            top_left: px(3).into(),
+            top_right: px(3).into(),
+            bottom_left: percent(50).into(),
+            bottom_right: percent(50).into(),
+        };
         self.spawn_arms(parent, image, node, shield)
     }
 
     /// Spawns `node` showing `banner`; until it is drawn, a plain cloth stands in its place.
-    pub fn spawn_banner<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, banner: &BannerState, node: Node) -> EntityCommands<'a> {
+    pub fn spawn_banner<'a>(
+        &mut self,
+        parent: &'a mut ChildSpawnerCommands,
+        banner: &BannerState,
+        node: Node,
+    ) -> EntityCommands<'a> {
         let image = self.banner(banner);
         self.spawn_arms(parent, image, node, BorderRadius::all(px(3)))
     }
 
     /// Spawns `node` showing `image`, with a faint shape rounded by `corners` in its place until
     /// it is drawn.
-    fn spawn_arms<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, image: Handle<Image>, node: Node, corners: BorderRadius) -> EntityCommands<'a> {
+    fn spawn_arms<'a>(
+        &mut self,
+        parent: &'a mut ChildSpawnerCommands,
+        image: Handle<Image>,
+        node: Node,
+        corners: BorderRadius,
+    ) -> EntityCommands<'a> {
         let drawn = self.cache.is_drawn(&image);
         let mut arms = parent.spawn((node, ImageNode::new(image.clone())));
         if !drawn {
@@ -298,20 +347,36 @@ impl Icons<'_> {
                 placeholder = arms
                     .spawn((
                         IconPlaceholder,
-                        Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), border_radius: corners, ..default() },
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: percent(100),
+                            height: percent(100),
+                            border_radius: corners,
+                            ..default()
+                        },
                         BackgroundColor(MUTED.with_alpha(0.25)),
                         Pickable::IGNORE,
                     ))
                     .id();
             });
-            arms.insert(AwaitingIcon { image: image.id(), placeholder });
+            arms.insert(AwaitingIcon {
+                image: image.id(),
+                placeholder,
+            });
         }
         arms
     }
 
     /// Spawns `node` showing the icon for `item` lying `turned`. Until the icon is drawn, the
     /// item's initial stands faintly in its place, `glyph_px` high.
-    pub fn spawn<'a>(&mut self, parent: &'a mut ChildSpawnerCommands, item: &Item, turned: bool, node: Node, glyph_px: f32) -> EntityCommands<'a> {
+    pub fn spawn<'a>(
+        &mut self,
+        parent: &'a mut ChildSpawnerCommands,
+        item: &Item,
+        turned: bool,
+        node: Node,
+        glyph_px: f32,
+    ) -> EntityCommands<'a> {
         let image = self.of(item, turned);
         let drawn = self.cache.is_drawn(&image);
         let mut icon = parent.spawn((node, ImageNode::new(image.clone())));
@@ -331,10 +396,17 @@ impl Icons<'_> {
                         },
                         Pickable::IGNORE,
                     ))
-                    .with_child((Text::new(initial(&item.name)), UiFonts::style(&self.fonts.display, glyph_px, MUTED.with_alpha(0.45)), Pickable::IGNORE))
+                    .with_child((
+                        Text::new(initial(&item.name)),
+                        UiFonts::style(&self.fonts.display, glyph_px, MUTED.with_alpha(0.45)),
+                        Pickable::IGNORE,
+                    ))
                     .id();
             });
-            icon.insert(AwaitingIcon { image: image.id(), placeholder });
+            icon.insert(AwaitingIcon {
+                image: image.id(),
+                placeholder,
+            });
         }
         icon
     }
@@ -342,11 +414,17 @@ impl Icons<'_> {
 
 /// The first letter or digit of `name`, upper case, for an icon's placeholder.
 pub fn initial(name: &str) -> String {
-    name.chars().find(|c| c.is_alphanumeric()).map_or_else(String::new, |c| c.to_uppercase().collect())
+    name.chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(String::new, |c| c.to_uppercase().collect())
 }
 
 /// Takes away the placeholder of every icon that has been drawn.
-pub fn reveal_icons(mut commands: Commands, cache: Res<IconCache>, awaiting: Query<(Entity, &AwaitingIcon)>) {
+pub fn reveal_icons(
+    mut commands: Commands,
+    cache: Res<IconCache>,
+    awaiting: Query<(Entity, &AwaitingIcon)>,
+) {
     for (entity, icon) in &awaiting {
         if cache.is_drawn(icon.image) {
             commands.entity(icon.placeholder).try_despawn();
@@ -374,8 +452,16 @@ pub fn stands_upright(item: &Item) -> bool {
 /// with no vertices.
 pub fn icon_pose(points: &[Vec3], upright: bool, turned: bool) -> Option<(Quat, Vec3, Vec3)> {
     let (min, max) = bounds(points.iter().copied())?;
-    let align = if upright { Quat::IDENTITY } else { longest_up(max - min) };
-    let turn = if turned { Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
+    let align = if upright {
+        Quat::IDENTITY
+    } else {
+        longest_up(max - min)
+    };
+    let turn = if turned {
+        Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
+    } else {
+        Quat::IDENTITY
+    };
     let view = Quat::from_rotation_x(VIEW_PITCH) * Quat::from_rotation_y(-VIEW_YAW);
     let rotation = (view * turn * align).normalize();
     let (min, max) = bounds(points.iter().map(|&p| rotation * p))?;
@@ -407,11 +493,18 @@ pub fn icon_view(min: Vec3, max: Vec3, aspect: f32) -> Vec2 {
 }
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
-    points.fold(None, |acc, p| Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p)))))
+    points.fold(None, |acc, p| {
+        Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p))))
+    })
 }
 
 /// Starts drawing queued icons on free stages and takes down cameras that are done.
-pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spawner: ItemSpawner, time: Res<Time<Real>>) {
+pub fn draw_icons(
+    mut commands: Commands,
+    mut cache: ResMut<IconCache>,
+    mut spawner: ItemSpawner,
+    time: Res<Time<Real>>,
+) {
     let now = time.elapsed_secs();
     let IconCache { drawing, drawn, .. } = &mut *cache;
     drawing.retain_mut(|drawing| {
@@ -426,38 +519,114 @@ pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spaw
         !done
     });
     while cache.drawing.len() < STAGES {
-        let Some((subject, image)) = cache.queued.pop_front() else { break };
-        let stage = (0..STAGES).find(|s| cache.drawing.iter().all(|d| d.stage != *s)).expect("a free stage");
+        let Some((subject, image)) = cache.queued.pop_front() else {
+            break;
+        };
+        let stage = (0..STAGES)
+            .find(|s| cache.drawing.iter().all(|d| d.stage != *s))
+            .expect("a free stage");
         let id = image.id();
         // An item with no shape is never drawn and keeps its placeholder.
         let entities = match subject {
-            Subject::Item(key, item) => stage_icon(&mut commands, &mut spawner, &item, key.turned, image, stage),
-            Subject::Crest(field) => stage_arms(&mut commands, &mut spawner, &armory::crest::crest_mesh(&field), "Icon: crest", CREST_PX, image, stage),
-            Subject::Banner(banner) => stage_arms(&mut commands, &mut spawner, &Banner::build(&banner), "Icon: banner", BANNER_PX, image, stage),
+            Subject::Item(key, item) => {
+                stage_icon(&mut commands, &mut spawner, &item, key.turned, image, stage)
+            }
+            Subject::Crest(field) => stage_arms(
+                &mut commands,
+                &mut spawner,
+                &armory::crest::crest_mesh(&field),
+                "Icon: crest",
+                CREST_PX,
+                image,
+                stage,
+            ),
+            Subject::Banner(banner) => stage_arms(
+                &mut commands,
+                &mut spawner,
+                &Banner::build(&banner),
+                "Icon: banner",
+                BANNER_PX,
+                image,
+                stage,
+            ),
         };
         if let Some(entities) = entities {
-            cache.drawing.push(Drawing { stage, image: id, entities, started: now, frames: 0 });
+            cache.drawing.push(Drawing {
+                stage,
+                image: id,
+                entities,
+                started: now,
+                frames: 0,
+            });
         }
     }
 }
 
 /// Spawns `item` posed on `stage` with a camera drawing it into `image`, its light, and a
 /// readback watching for it to show. Returns the camera, the item, the light and the readback.
-fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, turned: bool, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
+fn stage_icon(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    item: &Item,
+    turned: bool,
+    image: Handle<Image>,
+    stage: usize,
+) -> Option<[Entity; 4]> {
     let mesh = item.shape.build();
-    let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+    let points: Vec<Vec3> = mesh
+        .parts
+        .iter()
+        .flat_map(|p| &p.positions)
+        .map(|&p| Vec3::from_array(p))
+        .collect();
     let (rotation, min, max) = icon_pose(&points, stands_upright(item), turned)?;
     let size = icon_size(item, turned);
-    Some(stage_mesh(commands, spawner, &mesh, &appearance_of(&item.shape), &format!("Icon: {}", item.name), (rotation, min, max), size, image, stage))
+    Some(stage_mesh(
+        commands,
+        spawner,
+        &mesh,
+        &appearance_of(&item.shape),
+        &format!("Icon: {}", item.name),
+        (rotation, min, max),
+        size,
+        image,
+        stage,
+    ))
 }
 
 /// Spawns a faction's arms, `mesh` (its crest or its banner), on `stage`, face on, into an
 /// image of `size`, with the camera, light and readback of an item's icon.
-fn stage_arms(commands: &mut Commands, spawner: &mut ItemSpawner, mesh: &armory::geom::ItemMesh, name: &str, size: UVec2, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
-    let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+fn stage_arms(
+    commands: &mut Commands,
+    spawner: &mut ItemSpawner,
+    mesh: &armory::geom::ItemMesh,
+    name: &str,
+    size: UVec2,
+    image: Handle<Image>,
+    stage: usize,
+) -> Option<[Entity; 4]> {
+    let points: Vec<Vec3> = mesh
+        .parts
+        .iter()
+        .flat_map(|p| &p.positions)
+        .map(|&p| Vec3::from_array(p))
+        .collect();
     let (min, max) = bounds(points.iter().copied())?;
-    let appearance = crate::render::ItemAppearance { palette: crate::render::ItemPalette::ARMORY, ..default() };
-    Some(stage_mesh(commands, spawner, mesh, &appearance, name, (Quat::IDENTITY, min, max), size, image, stage))
+    let appearance = crate::render::ItemAppearance {
+        palette: crate::render::ItemPalette::ARMORY,
+        ..default()
+    };
+    Some(stage_mesh(
+        commands,
+        spawner,
+        mesh,
+        &appearance,
+        name,
+        (Quat::IDENTITY, min, max),
+        size,
+        image,
+        stage,
+    ))
 }
 
 /// Spawns `mesh` posed by `pose` (rotation and posed bounds) on `stage`, with a camera drawing
@@ -500,10 +669,17 @@ fn stage_mesh(
             crate::render::ScreenInkExempt,
             DespawnOnExit(AppState::Delving),
             Camera3d::default(),
-            Camera { order: -10 - stage as isize, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
+            Camera {
+                order: -10 - stage as isize,
+                clear_color: ClearColorConfig::Custom(Color::NONE),
+                ..default()
+            },
             RenderTarget::Image(image.clone().into()),
             Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
+                scaling_mode: ScalingMode::Fixed {
+                    width: view.x,
+                    height: view.y,
+                },
                 near: 0.1,
                 far: depth + 20.0,
                 ..OrthographicProjection::default_3d()
@@ -537,13 +713,21 @@ fn stage_mesh(
     // Each frame until the item shows, its image is read back to see whether anything is drawn.
     let (width, height) = (size.x as usize, size.y as usize);
     let readback = commands
-        .spawn((Name::new("Icon readback"), DespawnOnExit(AppState::Delving), Readback::texture(image.clone())))
-        .observe(move |event: On<ReadbackComplete>, mut cache: ResMut<IconCache>, mut commands: Commands| {
-            if any_pixel_shows(&event.data, width, height) {
-                cache.drawn.insert(image_id);
-                commands.entity(event.entity).try_remove::<Readback>();
-            }
-        })
+        .spawn((
+            Name::new("Icon readback"),
+            DespawnOnExit(AppState::Delving),
+            Readback::texture(image.clone()),
+        ))
+        .observe(
+            move |event: On<ReadbackComplete>,
+                  mut cache: ResMut<IconCache>,
+                  mut commands: Commands| {
+                if any_pixel_shows(&event.data, width, height) {
+                    cache.drawn.insert(image_id);
+                    commands.entity(event.entity).try_remove::<Readback>();
+                }
+            },
+        )
         .id();
     [camera, root, light, readback]
 }
@@ -555,7 +739,10 @@ pub fn any_pixel_shows(data: &[u8], width: usize, height: usize) -> bool {
         return false;
     }
     let stride = data.len() / height;
-    (0..height).any(|y| data.get(y * stride..y * stride + width * 4).is_some_and(|row| row.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0)))
+    (0..height).any(|y| {
+        data.get(y * stride..y * stride + width * 4)
+            .is_some_and(|row| row.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0))
+    })
 }
 
 #[cfg(test)]
@@ -563,7 +750,15 @@ mod tests {
     use super::*;
 
     fn box_points(size: Vec3) -> Vec<Vec3> {
-        (0..8).map(|i| Vec3::new(if i & 1 == 0 { 0.0 } else { size.x }, if i & 2 == 0 { 0.0 } else { size.y }, if i & 4 == 0 { 0.0 } else { size.z })).collect()
+        (0..8)
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 == 0 { 0.0 } else { size.x },
+                    if i & 2 == 0 { 0.0 } else { size.y },
+                    if i & 4 == 0 { 0.0 } else { size.z },
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -582,24 +777,54 @@ mod tests {
     fn a_pitched_tent_is_posed_standing_not_end_on() {
         let packed = fb_items::roll_item("Tent", 4).unwrap();
         let pitched = fb_items::camp::set_up(&packed).unwrap();
-        assert!(!stands_upright(&packed), "rolled up it lies along its longest side");
+        assert!(
+            !stands_upright(&packed),
+            "rolled up it lies along its longest side"
+        );
         assert!(stands_upright(&pitched));
-        let points: Vec<Vec3> = pitched.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+        let points: Vec<Vec3> = pitched
+            .shape
+            .build()
+            .parts
+            .iter()
+            .flat_map(|p| &p.positions)
+            .map(|&p| Vec3::from_array(p))
+            .collect();
         let (rotation, min, max) = icon_pose(&points, stands_upright(&pitched), false).unwrap();
         assert!((rotation * Vec3::Y).y > 0.9, "ground down");
         let posed = max - min;
-        assert!(posed.x > posed.y, "wider than tall, not stood on end: {posed}");
+        assert!(
+            posed.x > posed.y,
+            "wider than tall, not stood on end: {posed}"
+        );
     }
 
     #[test]
     fn containers_stand_upright_facing_the_viewer() {
         use armory::families::chests::ChestStyle;
-        for style in [ChestStyle::Chest, ChestStyle::Strongbox, ChestStyle::Coffer, ChestStyle::Barrel, ChestStyle::Crate, ChestStyle::Amphora] {
+        for style in [
+            ChestStyle::Chest,
+            ChestStyle::Strongbox,
+            ChestStyle::Coffer,
+            ChestStyle::Barrel,
+            ChestStyle::Crate,
+            ChestStyle::Amphora,
+        ] {
             let item = fb_items::container_item(fb_level::chest_state(style, 11, false));
             assert!(stands_upright(&item), "{style:?}");
-            let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+            let points: Vec<Vec3> = item
+                .shape
+                .build()
+                .parts
+                .iter()
+                .flat_map(|p| &p.positions)
+                .map(|&p| Vec3::from_array(p))
+                .collect();
             let (rotation, ..) = icon_pose(&points, true, false).unwrap();
-            assert!((rotation * Vec3::Y).y > 0.9 && (rotation * Vec3::Z).z > 0.9, "{style:?}");
+            assert!(
+                (rotation * Vec3::Y).y > 0.9 && (rotation * Vec3::Z).z > 0.9,
+                "{style:?}"
+            );
             // Turned while dragged, it still turns a quarter in the image.
             let (turned, ..) = icon_pose(&points, true, true).unwrap();
             assert!((turned * Vec3::Y).x.abs() > 0.9, "{style:?}");
@@ -624,7 +849,10 @@ mod tests {
             for b in &stages[i + 1..] {
                 assert!(a.distance(*b) >= STAGE_SPACING - 1e-3, "{a} {b}");
             }
-            assert!(a.distance(super::super::doll::DOLL_STAGE) > 3.0 * STAGE_SPACING, "{a}");
+            assert!(
+                a.distance(super::super::doll::DOLL_STAGE) > 3.0 * STAGE_SPACING,
+                "{a}"
+            );
             // Near enough the origin that a 32-bit float still resolves a hundredth of a unit.
             assert!(a.length() < 120_000.0, "{a}");
         }
@@ -650,7 +878,13 @@ mod tests {
     fn icons_are_the_shape_of_their_footprint() {
         let pack = fb_items::roll_item("Pack", 7).unwrap();
         let fp = pack.profile.footprint;
-        assert_eq!(icon_size(&pack, false), UVec2::new(fp.cols as u32, fp.rows as u32) * ICON_CELL_PX);
-        assert_eq!(icon_size(&pack, true), UVec2::new(fp.rows as u32, fp.cols as u32) * ICON_CELL_PX);
+        assert_eq!(
+            icon_size(&pack, false),
+            UVec2::new(fp.cols as u32, fp.rows as u32) * ICON_CELL_PX
+        );
+        assert_eq!(
+            icon_size(&pack, true),
+            UVec2::new(fp.rows as u32, fp.cols as u32) * ICON_CELL_PX
+        );
     }
 }

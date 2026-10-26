@@ -25,7 +25,12 @@ pub struct CalloutPlugin;
 
 impl Plugin for CalloutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Callout>().add_systems(Update, (spawn_callouts, float_callouts).chain().in_set(DelveSystems));
+        app.add_message::<Callout>().add_systems(
+            Update,
+            (spawn_callouts, float_callouts)
+                .chain()
+                .in_set(DelveSystems),
+        );
     }
 }
 
@@ -45,7 +50,11 @@ pub enum Outcome {
     Blocked,
     /// It landed for `damage`, as taken (a skeleton's double from a bludgeon included); a
     /// `critical` is a natural 20, and a `fatal` one brought the target to 0.
-    Hit { damage: u32, critical: bool, fatal: bool },
+    Hit {
+        damage: u32,
+        critical: bool,
+        fatal: bool,
+    },
     /// It missed but grazed for `damage` ([`fb_character::combat::graze`]); a `fatal` one brought
     /// the target to 0.
     Graze { damage: u32, fatal: bool },
@@ -54,7 +63,15 @@ pub enum Outcome {
 impl Outcome {
     /// What `blow` did, having taken `damage` and brought its target to 0 if `fatal`.
     pub fn of(blow: &super::feedback::Struck, damage: u32, fatal: bool) -> Outcome {
-        if blow.graze { Outcome::Graze { damage, fatal } } else { Outcome::Hit { damage, critical: blow.critical, fatal } }
+        if blow.graze {
+            Outcome::Graze { damage, fatal }
+        } else {
+            Outcome::Hit {
+                damage,
+                critical: blow.critical,
+                fatal,
+            }
+        }
     }
 }
 
@@ -89,17 +106,64 @@ const STEEL: Color = Color::srgb(0.68, 0.77, 0.9);
 
 /// How `outcome` is written.
 pub fn look(outcome: Outcome) -> Look {
-    let run = |text: &str, face, size, colour| Run { text: text.to_string(), face, size, colour };
+    let run = |text: &str, face, size, colour| Run {
+        text: text.to_string(),
+        face,
+        size,
+        colour,
+    };
     match outcome {
-        Outcome::Miss => Look { runs: vec![run("Miss", Face::Italic, 24.0, MUTED)], life: 0.9, pop: 1.0 },
-        Outcome::Blocked => Look { runs: vec![run("Blocked", Face::Word, 26.0, STEEL)], life: 1.0, pop: 1.2 },
-        Outcome::Graze { damage, fatal } => Look { runs: vec![run("Graze ", Face::Italic, 22.0, MUTED), run(&damage.to_string(), Face::Number, 26.0, if fatal { BAD } else { INK })], life: 1.0, pop: 1.1 },
-        Outcome::Hit { damage, critical, fatal } => {
-            let number = |colour| run(&damage.to_string(), Face::Number, if critical { 42.0 } else { 32.0 }, if fatal { BAD } else { colour });
+        Outcome::Miss => Look {
+            runs: vec![run("Miss", Face::Italic, 24.0, MUTED)],
+            life: 0.9,
+            pop: 1.0,
+        },
+        Outcome::Blocked => Look {
+            runs: vec![run("Blocked", Face::Word, 26.0, STEEL)],
+            life: 1.0,
+            pop: 1.2,
+        },
+        Outcome::Graze { damage, fatal } => Look {
+            runs: vec![
+                run("Graze ", Face::Italic, 22.0, MUTED),
+                run(
+                    &damage.to_string(),
+                    Face::Number,
+                    26.0,
+                    if fatal { BAD } else { INK },
+                ),
+            ],
+            life: 1.0,
+            pop: 1.1,
+        },
+        Outcome::Hit {
+            damage,
+            critical,
+            fatal,
+        } => {
+            let number = |colour| {
+                run(
+                    &damage.to_string(),
+                    Face::Number,
+                    if critical { 42.0 } else { 32.0 },
+                    if fatal { BAD } else { colour },
+                )
+            };
             if critical {
-                Look { runs: vec![run("Critical ", Face::Word, 26.0, FRAME_GOLD), number(FRAME_GOLD)], life: 1.4, pop: 1.7 }
+                Look {
+                    runs: vec![
+                        run("Critical ", Face::Word, 26.0, FRAME_GOLD),
+                        number(FRAME_GOLD),
+                    ],
+                    life: 1.4,
+                    pop: 1.7,
+                }
             } else {
-                Look { runs: vec![run("Hit ", Face::Word, 22.0, INK), number(BRIGHT)], life: 1.1, pop: 1.3 }
+                Look {
+                    runs: vec![run("Hit ", Face::Word, 22.0, INK), number(BRIGHT)],
+                    life: 1.1,
+                    pop: 1.3,
+                }
             }
         }
     }
@@ -129,7 +193,10 @@ const STEPS: [f32; 3] = [0.0, 22.0, -22.0];
 pub fn kept_in_view(at: Vec2, size: Vec2) -> Vec2 {
     let top = TEXT_HEIGHT + RISE + EDGE;
     let side = 0.5 * WIDTH;
-    Vec2::new(at.x.clamp(side, (size.x - side).max(side)), at.y.clamp(top, (size.y - EDGE).max(top)))
+    Vec2::new(
+        at.x.clamp(side, (size.x - side).max(side)),
+        at.y.clamp(top, (size.y - EDGE).max(top)),
+    )
 }
 
 /// How far in from the edges of the view a callout stays, logical pixels.
@@ -163,7 +230,15 @@ pub struct Floating {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct Heads<'w, 's> {
     creatures: Query<'w, 's, (&'static Critter, &'static Transform, Option<&'static Bones>)>,
-    folk: Query<'w, 's, (&'static Denizen, &'static Transform, Option<&'static Children>)>,
+    folk: Query<
+        'w,
+        's,
+        (
+            &'static Denizen,
+            &'static Transform,
+            Option<&'static Children>,
+        ),
+    >,
     anims: Query<'w, 's, &'static FolkAnim>,
     joints: Query<'w, 's, &'static GlobalTransform, With<FolkJoint>>,
     shapes: Query<'w, 's, (&'static GlobalTransform, &'static HitShape)>,
@@ -173,22 +248,50 @@ impl Heads<'_, '_> {
     /// The point just over `target`'s head, world space.
     pub fn above(&self, target: Entity) -> Option<Vec3> {
         if let Ok((denizen, root, children)) = self.folk.get(target) {
-            let anim = children.into_iter().flat_map(|c| c.iter()).find_map(|c| self.anims.get(c).ok());
-            let head = anim.and_then(|a| self.joints.get(a.joint(fb_body::Joint::Head)).ok()).map(GlobalTransform::translation);
+            let anim = children
+                .into_iter()
+                .flat_map(|c| c.iter())
+                .find_map(|c| self.anims.get(c).ok());
+            let head = anim
+                .and_then(|a| self.joints.get(a.joint(fb_body::Joint::Head)).ok())
+                .map(GlobalTransform::translation);
             // Their bounds take in what they hold, a spear standing well over their head.
-            return Some(head.map_or_else(|| root.transform_point(Vec3::Y * denizen.max.y), |h| h + Vec3::Y * HEAD_HEIGHT) + Vec3::Y * HEAD_ROOM);
+            return Some(
+                head.map_or_else(
+                    || root.transform_point(Vec3::Y * denizen.max.y),
+                    |h| h + Vec3::Y * HEAD_HEIGHT,
+                ) + Vec3::Y * HEAD_ROOM,
+            );
         }
         let (critter, root, bones) = self.creatures.get(target).ok()?;
-        let top = bones.iter().flat_map(|b| b.0.iter()).filter_map(|&bone| self.shapes.get(bone).ok()).flat_map(|(at, shape)| shape.spheres(at)).map(|(c, r)| c.y + r).reduce(f32::max);
+        let top = bones
+            .iter()
+            .flat_map(|b| b.0.iter())
+            .filter_map(|&bone| self.shapes.get(bone).ok())
+            .flat_map(|(at, shape)| shape.spheres(at))
+            .map(|(c, r)| c.y + r)
+            .reduce(f32::max);
         let top = top.unwrap_or(root.translation.y + 2.0 * body_radius(critter));
-        Some(Vec3::new(root.translation.x, top + HEAD_ROOM, root.translation.z))
+        Some(Vec3::new(
+            root.translation.x,
+            top + HEAD_ROOM,
+            root.translation.z,
+        ))
     }
 }
 
 /// Writes each new callout over its target.
-fn spawn_callouts(mut commands: Commands, mut callouts: MessageReader<Callout>, fonts: Option<Res<UiFonts>>, heads: Heads, mut turn: Local<usize>) {
+fn spawn_callouts(
+    mut commands: Commands,
+    mut callouts: MessageReader<Callout>,
+    fonts: Option<Res<UiFonts>>,
+    heads: Heads,
+    mut turn: Local<usize>,
+) {
     for callout in callouts.read() {
-        let Some(anchor) = heads.above(callout.target) else { continue };
+        let Some(anchor) = heads.above(callout.target) else {
+            continue;
+        };
         let look = look(callout.outcome);
         let aside = STEPS[*turn % STEPS.len()];
         *turn += 1;
@@ -198,20 +301,37 @@ fn spawn_callouts(mut commands: Commands, mut callouts: MessageReader<Callout>, 
                 Face::Italic => f.body_italic.clone(),
                 Face::Number => f.mono_bold.clone(),
             });
-            handle.map_or_else(|| TextFont::from_font_size(size), |h| TextFont::from_font_size(size).with_font(h))
+            handle.map_or_else(
+                || TextFont::from_font_size(size),
+                |h| TextFont::from_font_size(size).with_font(h),
+            )
         };
         let colours = look.runs.iter().map(|r| r.colour).collect();
         let (first, rest) = look.runs.split_first().expect("a callout has words");
         commands
             .spawn((
                 Name::new("callout"),
-                Floating { anchor, age: 0.0, life: look.life, pop: look.pop, aside, colours },
+                Floating {
+                    anchor,
+                    age: 0.0,
+                    life: look.life,
+                    pop: look.pop,
+                    aside,
+                    colours,
+                },
                 Text::new(first.text.clone()),
                 font(first.face, first.size),
                 TextColor(first.colour),
-                TextShadow { offset: Vec2::new(2.0, 2.0), color: BG.with_alpha(0.85) },
+                TextShadow {
+                    offset: Vec2::new(2.0, 2.0),
+                    color: BG.with_alpha(0.85),
+                },
                 TextLayout::justify(Justify::Center),
-                Node { position_type: PositionType::Absolute, width: px(WIDTH), ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: px(WIDTH),
+                    ..default()
+                },
                 UiTransform::from_scale(Vec2::splat(look.pop)),
                 // Off screen until placed, under every other part of the HUD and the screens.
                 Visibility::Hidden,
@@ -221,7 +341,11 @@ fn spawn_callouts(mut commands: Commands, mut callouts: MessageReader<Callout>, 
             ))
             .with_children(|text| {
                 for run in rest {
-                    text.spawn((TextSpan::new(run.text.clone()), font(run.face, run.size), TextColor(run.colour)));
+                    text.spawn((
+                        TextSpan::new(run.text.clone()),
+                        font(run.face, run.size),
+                        TextColor(run.colour),
+                    ));
                 }
             });
     }
@@ -237,18 +361,42 @@ fn float_callouts(
     time: Res<Time>,
     ui_scale: Option<Res<UiScale>>,
     cameras: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
-    mut callouts: Query<(Entity, &mut Floating, &mut Node, &mut UiTransform, &mut Visibility, &mut TextColor, &mut TextShadow, Option<&Children>)>,
+    mut callouts: Query<(
+        Entity,
+        &mut Floating,
+        &mut Node,
+        &mut UiTransform,
+        &mut Visibility,
+        &mut TextColor,
+        &mut TextShadow,
+        Option<&Children>,
+    )>,
     mut spans: Query<&mut TextColor, (With<TextSpan>, Without<Floating>)>,
 ) {
     let camera = cameras.single().ok();
     let per_view = 1.0 / ui_scale.map_or(1.0, |s| s.0.max(f32::EPSILON));
-    for (entity, mut floating, mut node, mut transform, mut visibility, mut colour, mut shadow, children) in &mut callouts {
+    for (
+        entity,
+        mut floating,
+        mut node,
+        mut transform,
+        mut visibility,
+        mut colour,
+        mut shadow,
+        children,
+    ) in &mut callouts
+    {
         floating.age += time.delta_secs();
         if floating.age >= floating.life {
             commands.entity(entity).despawn();
             continue;
         }
-        let Some((at, view)) = camera.and_then(|(camera, eye)| Some((camera.world_to_viewport(eye, floating.anchor).ok()?, camera.logical_viewport_size()?))) else {
+        let Some((at, view)) = camera.and_then(|(camera, eye)| {
+            Some((
+                camera.world_to_viewport(eye, floating.anchor).ok()?,
+                camera.logical_viewport_size()?,
+            ))
+        }) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
@@ -259,7 +407,11 @@ fn float_callouts(
         transform.scale = Vec2::splat(scale);
         colour.0 = floating.colours[0].with_alpha(alpha);
         shadow.color = BG.with_alpha(0.85 * alpha);
-        for (span, base) in children.into_iter().flat_map(|c| c.iter()).zip(floating.colours.iter().skip(1)) {
+        for (span, base) in children
+            .into_iter()
+            .flat_map(|c| c.iter())
+            .zip(floating.colours.iter().skip(1))
+        {
             if let Ok(mut span) = spans.get_mut(span) {
                 span.0 = base.with_alpha(alpha);
             }
@@ -280,18 +432,50 @@ mod tests {
     fn each_outcome_reads_as_the_log_says_it() {
         assert_eq!(text(Outcome::Miss), "Miss");
         assert_eq!(text(Outcome::Blocked), "Blocked");
-        assert_eq!(text(Outcome::Graze { damage: 1, fatal: false }), "Graze 1");
-        assert_eq!(text(Outcome::Hit { damage: 5, critical: false, fatal: false }), "Hit 5");
-        assert_eq!(text(Outcome::Hit { damage: 14, critical: true, fatal: false }), "Critical 14");
+        assert_eq!(
+            text(Outcome::Graze {
+                damage: 1,
+                fatal: false
+            }),
+            "Graze 1"
+        );
+        assert_eq!(
+            text(Outcome::Hit {
+                damage: 5,
+                critical: false,
+                fatal: false
+            }),
+            "Hit 5"
+        );
+        assert_eq!(
+            text(Outcome::Hit {
+                damage: 14,
+                critical: true,
+                fatal: false
+            }),
+            "Critical 14"
+        );
     }
 
     #[test]
     fn a_critical_is_bigger_and_stays_longer_and_a_killing_blow_is_red() {
-        let hit = look(Outcome::Hit { damage: 5, critical: false, fatal: false });
-        let critical = look(Outcome::Hit { damage: 5, critical: true, fatal: false });
+        let hit = look(Outcome::Hit {
+            damage: 5,
+            critical: false,
+            fatal: false,
+        });
+        let critical = look(Outcome::Hit {
+            damage: 5,
+            critical: true,
+            fatal: false,
+        });
         assert!(critical.runs[1].size > hit.runs[1].size);
         assert!(critical.life > hit.life && critical.pop > hit.pop);
-        let fatal = look(Outcome::Hit { damage: 5, critical: false, fatal: true });
+        let fatal = look(Outcome::Hit {
+            damage: 5,
+            critical: false,
+            fatal: true,
+        });
         assert_eq!(fatal.runs[1].colour, BAD);
         assert_eq!(fatal.runs[1].face, Face::Number);
     }
@@ -300,7 +484,10 @@ mod tests {
     fn a_head_above_the_view_is_called_out_at_its_top() {
         let view = Vec2::new(1920.0, 1080.0);
         // On screen, it stays where it is.
-        assert_eq!(kept_in_view(Vec2::new(900.0, 400.0), view), Vec2::new(900.0, 400.0));
+        assert_eq!(
+            kept_in_view(Vec2::new(900.0, 400.0), view),
+            Vec2::new(900.0, 400.0)
+        );
         // Above the view, held down so the whole rise shows.
         let held = kept_in_view(Vec2::new(1430.0, -77.0), view);
         assert_eq!(held.x, 1430.0);

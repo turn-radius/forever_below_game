@@ -117,8 +117,7 @@ pub fn register_gameplay_types(app: &mut App) {
         player::{Gait, GearPace, Locomotion, Slowed},
         simulate::Simulated,
     };
-    app
-        .register_type::<Player>()
+    app.register_type::<Player>()
         .register_type::<PlayerCamera>()
         .register_type::<Locomotion>()
         .register_type::<Gait>()
@@ -159,7 +158,9 @@ mod window {
     };
     use bevy_inspector_egui::{
         DefaultInspectorConfigPlugin,
-        bevy_egui::{EguiContext, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext},
+        bevy_egui::{
+            EguiContext, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext,
+        },
         bevy_inspector, egui,
     };
 
@@ -177,10 +178,16 @@ mod window {
             app.insert_resource(InspectorOpen(self.open))
                 // The context goes on a camera of its own, made when the window first opens, as
                 // the game's cameras come and go with its views.
-                .insert_resource(EguiGlobalSettings { auto_create_primary_context: false, ..default() })
+                .insert_resource(EguiGlobalSettings {
+                    auto_create_primary_context: false,
+                    ..default()
+                })
                 .add_plugins((EguiPlugin::default(), DefaultInspectorConfigPlugin))
                 .add_systems(Update, toggle)
-                .add_systems(EguiPrimaryContextPass, inspector_window.run_if(|open: Res<InspectorOpen>| open.0));
+                .add_systems(
+                    EguiPrimaryContextPass,
+                    inspector_window.run_if(|open: Res<InspectorOpen>| open.0),
+                );
         }
     }
 
@@ -211,7 +218,11 @@ mod window {
                     Name::new("Inspector camera"),
                     PrimaryEguiContext,
                     Camera2d,
-                    Camera { order: 1000, clear_color: ClearColorConfig::None, ..default() },
+                    Camera {
+                        order: 1000,
+                        clear_color: ClearColorConfig::None,
+                        ..default()
+                    },
                     // Draws nothing of its own: only egui renders to it.
                     RenderLayers::none(),
                 ));
@@ -223,39 +234,51 @@ mod window {
     }
 
     fn inspector_window(world: &mut World) {
-        let Ok(context) = world.query_filtered::<&mut EguiContext, With<PrimaryEguiContext>>().single(world) else {
+        let Ok(context) = world
+            .query_filtered::<&mut EguiContext, With<PrimaryEguiContext>>()
+            .single(world)
+        else {
             return;
         };
         let mut context = context.clone();
-        egui::Window::new("World Inspector").default_size((360.0, 520.0)).show(context.get_mut(), |ui| {
-            egui::ScrollArea::both().show(ui, |ui| {
-                bevy_inspector::ui_for_world(world, ui);
-                ui.allocate_space(ui.available_size());
+        egui::Window::new("World Inspector")
+            .default_size((360.0, 520.0))
+            .show(context.get_mut(), |ui| {
+                egui::ScrollArea::both().show(ui, |ui| {
+                    bevy_inspector::ui_for_world(world, ui);
+                    ui.allocate_space(ui.available_size());
+                });
             });
-        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        character::DelverNeeds,
-        play::Player,
-        player::Locomotion,
-    };
+    use crate::{character::DelverNeeds, play::Player, player::Locomotion};
     use bevy::ecs::reflect::ReflectComponent;
 
     /// What the inspector does to a component: find it by its registered type and set a field.
     fn set_field(app: &mut App, entity: Entity, component: &str, field: &str, value: f32) {
         let registry = app.world().resource::<AppTypeRegistry>().clone();
         let registry = registry.read();
-        let registration = registry.get_with_type_path(component).unwrap_or_else(|| panic!("{component} is registered"));
-        let reflect = registration.data::<ReflectComponent>().expect("a component").clone();
+        let registration = registry
+            .get_with_type_path(component)
+            .unwrap_or_else(|| panic!("{component} is registered"));
+        let reflect = registration
+            .data::<ReflectComponent>()
+            .expect("a component")
+            .clone();
         let mut entity = app.world_mut().entity_mut(entity);
         let mut data = reflect.reflect_mut(&mut entity).expect("on the entity");
-        let bevy::reflect::ReflectMut::Struct(fields) = data.reflect_mut() else { panic!("{component} is a struct") };
-        *fields.field_mut(field).unwrap_or_else(|| panic!("{field} is a field")).try_downcast_mut::<f32>().expect("an f32") = value;
+        let bevy::reflect::ReflectMut::Struct(fields) = data.reflect_mut() else {
+            panic!("{component} is a struct")
+        };
+        *fields
+            .field_mut(field)
+            .unwrap_or_else(|| panic!("{field} is a field"))
+            .try_downcast_mut::<f32>()
+            .expect("an f32") = value;
     }
 
     #[test]
@@ -263,12 +286,26 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         register_gameplay_types(&mut app);
-        let player = app.world_mut().spawn((Player, Locomotion::default(), DelverNeeds::default())).id();
-        set_field(&mut app, player, "forever_below::player::Locomotion", "yaw", 1.5);
+        let player = app
+            .world_mut()
+            .spawn((Player, Locomotion::default(), DelverNeeds::default()))
+            .id();
+        set_field(
+            &mut app,
+            player,
+            "forever_below::player::Locomotion",
+            "yaw",
+            1.5,
+        );
         assert_eq!(app.world().get::<Locomotion>(player).unwrap().yaw, 1.5);
         // A wrapped `fb_character::Needs` shows its meters through the mirror in [`remote`].
         let registry = app.world().resource::<AppTypeRegistry>().read();
-        let needs = registry.get_with_type_path("forever_below::character::DelverNeeds").expect("registered");
-        assert!(matches!(needs.type_info(), bevy::reflect::TypeInfo::TupleStruct(_)));
+        let needs = registry
+            .get_with_type_path("forever_below::character::DelverNeeds")
+            .expect("registered");
+        assert!(matches!(
+            needs.type_info(),
+            bevy::reflect::TypeInfo::TupleStruct(_)
+        ));
     }
 }

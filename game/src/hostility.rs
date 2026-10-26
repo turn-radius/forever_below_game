@@ -34,7 +34,11 @@ pub struct HostilityPlugin;
 
 impl Plugin for HostilityPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(crate::kills::KillsPlugin).add_message::<Provoked>().init_resource::<BlockedCells>().init_resource::<WorldRecord>().add_systems(Update, turn_on_the_delver.in_set(DelveSystems));
+        app.add_plugins(crate::kills::KillsPlugin)
+            .add_message::<Provoked>()
+            .init_resource::<BlockedCells>()
+            .init_resource::<WorldRecord>()
+            .add_systems(Update, turn_on_the_delver.in_set(DelveSystems));
     }
 }
 
@@ -82,11 +86,21 @@ fn room_of(level: &Level, p: Vec2) -> Option<usize> {
 /// provoked among them): the provoked themselves, and each of their faction in the same room
 /// (within [`SIGHT`] when the provoked stands in no room) with a clear line to them across
 /// `blocked`. A pure function of where everyone stands.
-pub fn who_turns(provoked: Entity, folk: &[Kin], level: &Level, blocked: impl Fn(i32, i32) -> bool) -> Vec<Entity> {
-    let Some(them) = folk.iter().find(|k| k.entity == provoked) else { return Vec::new() };
+pub fn who_turns(
+    provoked: Entity,
+    folk: &[Kin],
+    level: &Level,
+    blocked: impl Fn(i32, i32) -> bool,
+) -> Vec<Entity> {
+    let Some(them) = folk.iter().find(|k| k.entity == provoked) else {
+        return Vec::new();
+    };
     let room = room_of(level, them.at);
     let mut turned = vec![provoked];
-    for kin in folk.iter().filter(|k| k.entity != provoked && k.faction == them.faction) {
+    for kin in folk
+        .iter()
+        .filter(|k| k.entity != provoked && k.faction == them.faction)
+    {
         let near = match room {
             Some(room) => room_of(level, kin.at) == Some(room),
             None => kin.at.distance(them.at) <= SIGHT,
@@ -101,7 +115,10 @@ pub fn who_turns(provoked: Entity, folk: &[Kin], level: &Level, blocked: impl Fn
 /// The line shown when `faction` turns on the delver: "The Ash Choir turn on you".
 pub fn turn_line(name: &str) -> String {
     let mut letters = name.chars();
-    let capital: String = letters.next().map(|c| c.to_uppercase().chain(letters).collect()).unwrap_or_default();
+    let capital: String = letters
+        .next()
+        .map(|c| c.to_uppercase().chain(letters).collect())
+        .unwrap_or_default();
     format!("{capital} turn on you")
 }
 
@@ -120,21 +137,41 @@ pub fn turn_on_the_delver(
     if causes.is_empty() {
         return;
     }
-    let everyone: Vec<Kin> = folk.iter().map(|(entity, d, t, _)| Kin { entity, faction: d.person.spot.faction, at: t.translation.xz() }).collect();
+    let everyone: Vec<Kin> = folk
+        .iter()
+        .map(|(entity, d, t, _)| Kin {
+            entity,
+            faction: d.person.spot.faction,
+            at: t.translation.xz(),
+        })
+        .collect();
     for cause in causes {
         let mut newly = false;
         let mut faction = None;
         // Kin see each other across their own faction's shut doors, and no one else's.
-        let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), everyone.iter().find(|k| k.entity == cause).map(|k| k.faction));
+        let blocked = crate::doors::opaque_for(
+            &level.0,
+            &blocked_cells,
+            doors.as_deref(),
+            everyone
+                .iter()
+                .find(|k| k.entity == cause)
+                .map(|k| k.faction),
+        );
         for entity in who_turns(cause, &everyone, &level.0, &blocked) {
-            let Ok((_, denizen, _, mut hostility)) = folk.get_mut(entity) else { continue };
+            let Ok((_, denizen, _, mut hostility)) = folk.get_mut(entity) else {
+                continue;
+            };
             if !hostility.is_hostile() {
                 *hostility = Hostility::Hostile;
                 newly = true;
                 faction = Some(denizen.person.faction.name.clone());
                 // The faction's standing agrees with its folk, on every level.
                 record.standings.on_blow(denizen.person.faction.id);
-                info!("{} of {} turns hostile", denizen.person.name, denizen.person.faction.name);
+                info!(
+                    "{} of {} turns hostile",
+                    denizen.person.name, denizen.person.faction.name
+                );
             }
         }
         if let (true, Some(faction)) = (newly, faction) {
@@ -150,7 +187,10 @@ mod tests {
     #[test]
     fn the_line_names_the_faction_with_a_capital() {
         assert_eq!(turn_line("the Ash Choir"), "The Ash Choir turn on you");
-        assert_eq!(turn_line("the Lantern-keepers"), "The Lantern-keepers turn on you");
+        assert_eq!(
+            turn_line("the Lantern-keepers"),
+            "The Lantern-keepers turn on you"
+        );
     }
 
     #[test]
@@ -162,15 +202,24 @@ mod tests {
             .folk
             .iter()
             .enumerate()
-            .map(|(i, s)| Kin { entity: Entity::from_raw_u32(i as u32 + 1).unwrap(), faction: s.faction, at: Vec2::new(s.x, s.y) * CELL })
+            .map(|(i, s)| Kin {
+                entity: Entity::from_raw_u32(i as u32 + 1).unwrap(),
+                faction: s.faction,
+                at: Vec2::new(s.x, s.y) * CELL,
+            })
             .collect();
         let first = folk[0];
         let turned = who_turns(first.entity, &folk, &level, open);
         assert_eq!(turned[0], first.entity, "the provoked turn first");
         let room = room_of(&level, first.at);
         for kin in &folk[1..] {
-            let same = kin.faction == first.faction && room_of(&level, kin.at) == room && room.is_some();
-            assert_eq!(turned.contains(&kin.entity), same && line_of_sight(grid(kin.at), grid(first.at), open), "{kin:?}");
+            let same =
+                kin.faction == first.faction && room_of(&level, kin.at) == room && room.is_some();
+            assert_eq!(
+                turned.contains(&kin.entity),
+                same && line_of_sight(grid(kin.at), grid(first.at), open),
+                "{kin:?}"
+            );
             if kin.faction != first.faction {
                 assert!(!turned.contains(&kin.entity), "another faction turned");
             }
@@ -180,7 +229,12 @@ mod tests {
         // Of another faction, standing right beside, they stay friendly.
         let mut stranger = first;
         stranger.entity = Entity::from_raw_u32(999).unwrap();
-        stranger.faction = level.factions.iter().map(|f| f.id).find(|f| *f != first.faction).unwrap();
+        stranger.faction = level
+            .factions
+            .iter()
+            .map(|f| f.id)
+            .find(|f| *f != first.faction)
+            .unwrap();
         stranger.at += Vec2::X;
         let with_stranger: Vec<Kin> = folk.iter().copied().chain([stranger]).collect();
         assert!(!who_turns(first.entity, &with_stranger, &level, open).contains(&stranger.entity));

@@ -126,7 +126,10 @@ impl Plugin for BreathPlugin {
             .init_resource::<ScreenOpen>()
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
-            .add_systems(Startup, load_breath_sounds.run_if(resource_exists::<AssetServer>))
+            .add_systems(
+                Startup,
+                load_breath_sounds.run_if(resource_exists::<AssetServer>),
+            )
             .add_systems(Update, breathe.in_set(DelveSystems));
     }
 }
@@ -165,16 +168,23 @@ fn breathe(
         }
         return;
     }
-    let target = delver.single().ok().and_then(|(stamina, exhaustion)| breathing(stamina.0.value as f32, stamina.0.winded, exhaustion.0.level));
+    let target = delver.single().ok().and_then(|(stamina, exhaustion)| {
+        breathing(stamina.0.value as f32, stamina.0.winded, exhaustion.0.level)
+    });
     let step = time.delta_secs() / BREATH_FADE;
-    let volume = effect_volume(&game, &tuning) * global.map_or(1.0, |global| global.volume.to_linear());
+    let volume =
+        effect_volume(&game, &tuning) * global.map_or(1.0, |global| global.volume.to_linear());
 
     if let Some((breath, gain)) = target
         && !loops.iter().any(|(_, l, _)| l.breath == breath)
     {
         commands.spawn((
             Name::new("delver breath"),
-            BreathLoop { breath, fade: 0.0, gain },
+            BreathLoop {
+                breath,
+                fade: 0.0,
+                gain,
+            },
             AudioPlayer::new(sounds.of(breath).clone()),
             PlaybackSettings::LOOP.with_volume(Volume::SILENT),
             DespawnOnExit(AppState::Delving),
@@ -194,7 +204,9 @@ fn breathe(
             if sink.is_paused() {
                 sink.play();
             }
-            sink.set_volume(Volume::Linear(volume * breath_loop.gain * fade_curve(breath_loop.fade)));
+            sink.set_volume(Volume::Linear(
+                volume * breath_loop.gain * fade_curve(breath_loop.fade),
+            ));
         }
     }
 }
@@ -224,12 +236,16 @@ mod tests {
         assert_eq!(breathing(0.1, false, 0).map(|b| b.0), Some(Breath::Ragged));
         // Winded is ragged even if the fraction has climbed back past the lowest band.
         assert_eq!(breathing(0.3, true, 0).map(|b| b.0), Some(Breath::Ragged));
-        assert!(gain(0.6, false, 0) < gain(0.3, false, 0) && gain(0.3, false, 0) < gain(0.1, false, 0));
+        assert!(
+            gain(0.6, false, 0) < gain(0.3, false, 0) && gain(0.3, false, 0) < gain(0.1, false, 0)
+        );
     }
 
     #[test]
     fn exhaustion_breathes_louder_and_more_ragged_per_level() {
-        let breaths: Vec<_> = (1..=6).map(|level| breathing(1.0, false, level).unwrap()).collect();
+        let breaths: Vec<_> = (1..=6)
+            .map(|level| breathing(1.0, false, level).unwrap())
+            .collect();
         assert!(breaths.windows(2).all(|w| w[0].0 <= w[1].0), "{breaths:?}");
         assert_eq!(breaths[0].0, Breath::Steady);
         assert_eq!(breaths[5].0, Breath::Ragged);
@@ -248,13 +264,16 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .insert_state(AppState::Delving)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                100,
+            )))
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
             .init_resource::<ScreenOpen>()
             .init_resource::<BreathSounds>()
             .add_systems(Update, breathe);
-        app.world_mut().spawn((Player, DelverStamina::default(), Exhaustion::default()));
+        app.world_mut()
+            .spawn((Player, DelverStamina::default(), Exhaustion::default()));
         app
     }
 
@@ -265,15 +284,27 @@ mod tests {
     }
 
     fn set_level(app: &mut App, level: u32) {
-        app.world_mut().query::<&mut Exhaustion>().single_mut(app.world_mut()).unwrap().0 = fb_character::Exhaustion::new(level);
+        app.world_mut()
+            .query::<&mut Exhaustion>()
+            .single_mut(app.world_mut())
+            .unwrap()
+            .0 = fb_character::Exhaustion::new(level);
     }
 
     fn set_stamina(app: &mut App, value: f64, winded: bool) {
-        app.world_mut().query::<&mut DelverStamina>().single_mut(app.world_mut()).unwrap().0 = fb_character::Stamina { value, winded };
+        app.world_mut()
+            .query::<&mut DelverStamina>()
+            .single_mut(app.world_mut())
+            .unwrap()
+            .0 = fb_character::Stamina { value, winded };
     }
 
     fn loops(app: &mut App) -> Vec<(Breath, f32, f32)> {
-        app.world_mut().query::<&BreathLoop>().iter(app.world()).map(|l| (l.breath, l.fade, l.gain)).collect()
+        app.world_mut()
+            .query::<&BreathLoop>()
+            .iter(app.world())
+            .map(|l| (l.breath, l.fade, l.gain))
+            .collect()
     }
 
     #[test]
@@ -346,9 +377,14 @@ mod tests {
     #[test]
     fn the_loops_are_ogg_assets() {
         for name in ["steady", "harder", "ragged"] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/audio").join(format!("breath_{name}.ogg"));
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/audio")
+                .join(format!("breath_{name}.ogg"));
             let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert!(crate::audio::ogg_vorbis_duration(&bytes).unwrap() > 5.0, "{name}");
+            assert!(
+                crate::audio::ogg_vorbis_duration(&bytes).unwrap() > 5.0,
+                "{name}"
+            );
         }
     }
 }

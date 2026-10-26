@@ -35,11 +35,11 @@ use std::sync::Arc;
 use super::icon::Icons;
 use super::items::Inventory;
 use super::seal::{Canvas, Glyph, Seal, SealInks, TURN_SECONDS};
-use crate::launch::AppState;
 use crate::carry::item_light;
 use crate::character::Character;
 use crate::figure::{Figure, spawn_figure};
 use crate::fitting::{FitCache, Fitting, figure_key};
+use crate::launch::AppState;
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
 use crate::play::{Screen, ScreenOpen};
 use crate::render::ItemSpawner;
@@ -137,20 +137,34 @@ const PORTRAIT_FROM: Vec3 = Vec3::new(0.32, 0.04, 1.0);
 /// The warm glow of a carried light, a canvas [`GLOW_SIZE`] units square.
 pub fn light_glow(scale: f32) -> Canvas {
     let mut canvas = Canvas::new((GLOW_SIZE * scale).round() as u32, scale);
-    canvas.radial([0.0, 0.0], GLOW_SIZE * 0.5, srgb(GLOW), |t| GLOW_PEAK * (1.0 - t).powi(2));
+    canvas.radial([0.0, 0.0], GLOW_SIZE * 0.5, srgb(GLOW), |t| {
+        GLOW_PEAK * (1.0 - t).powi(2)
+    });
     canvas
 }
 
 /// The hand holding a lit thing, the main hand's before the off hand's, if either does.
 pub fn lit_hand(inventory: &Inventory) -> Option<Slot> {
-    let lit = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| item_light(&item.shape).is_some());
-    [Slot::Mainhand, Slot::Offhand].into_iter().find(|&slot| lit(slot))
+    let lit = |slot| {
+        inventory
+            .worn(slot)
+            .and_then(|id| inventory.item(id))
+            .is_some_and(|item| item_light(&item.shape).is_some())
+    };
+    [Slot::Mainhand, Slot::Offhand]
+        .into_iter()
+        .find(|&slot| lit(slot))
 }
 
 /// The slot holding the carried light: a hand holding a lit thing ([`lit_hand`]), or else a lit
 /// lantern hung at the hip.
 pub fn lit_slot(inventory: &Inventory) -> Option<Slot> {
-    let lit = |slot| inventory.worn(slot).and_then(|id| inventory.item(id)).is_some_and(|item| item_light(&item.shape).is_some());
+    let lit = |slot| {
+        inventory
+            .worn(slot)
+            .and_then(|id| inventory.item(id))
+            .is_some_and(|item| item_light(&item.shape).is_some())
+    };
     lit_hand(inventory).or_else(|| lit(Slot::Hip).then_some(Slot::Hip))
 }
 
@@ -158,7 +172,10 @@ pub fn lit_slot(inventory: &Inventory) -> Option<Slot> {
 /// lit thing or a lit lantern hangs at the hip.
 pub fn light_side(inventory: &Inventory) -> Option<SlotSide> {
     let slot = lit_slot(inventory)?;
-    slot_places().iter().find(|p| p.slot == slot).map(|p| p.side)
+    slot_places()
+        .iter()
+        .find(|p| p.slot == slot)
+        .map(|p| p.side)
 }
 
 fn srgb(colour: Color) -> [f32; 3] {
@@ -168,7 +185,11 @@ fn srgb(colour: Color) -> [f32; 3] {
 
 fn image_of(canvas: &Canvas) -> Image {
     Image::new(
-        Extent3d { width: canvas.size, height: canvas.size, depth_or_array_layers: 1 },
+        Extent3d {
+            width: canvas.size,
+            height: canvas.size,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         canvas.to_rgba8(),
         TextureFormat::Rgba8UnormSrgb,
@@ -179,10 +200,16 @@ fn image_of(canvas: &Canvas) -> Image {
 impl FromWorld for DollAssets {
     fn from_world(world: &mut World) -> Self {
         // Gold lines and gold dots alike, faint over the dark page.
-        let inks = SealInks { line: srgb(GOLD), gold: srgb(GOLD), page: srgb(BG), glow: SEAL_GLOW };
+        let inks = SealInks {
+            line: srgb(GOLD),
+            gold: srgb(GOLD),
+            page: srgb(BG),
+            glow: SEAL_GLOW,
+        };
         let layers = Seal { r: seal_radius() }.layers(PIXELS_PER_POINT, inks);
         let side = (DOLL_SIZE * PIXELS_PER_POINT).round() as u32;
-        let mut doll_image = Image::new_target_texture(side, side, TextureFormat::Rgba8UnormSrgb, None);
+        let mut doll_image =
+            Image::new_target_texture(side, side, TextureFormat::Rgba8UnormSrgb, None);
         doll_image.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
         let glow = image_of(&light_glow(1.0));
         let mut images = world.resource_mut::<Assets<Image>>();
@@ -260,7 +287,10 @@ pub fn portrait_view(centre: Vec3, r: f32, top: f32) -> (Vec2, Vec3) {
         return (Vec2::new(height * aspect, height), look);
     }
     let height = wanted - bottom;
-    (Vec2::new(height * aspect, height), Vec3::new(look.x, bottom + height * 0.5, look.z))
+    (
+        Vec2::new(height * aspect, height),
+        Vec3::new(look.x, bottom + height * 0.5, look.z),
+    )
 }
 
 /// The Armory's key light for a stage whose subject is `side` units across: far off along the
@@ -269,14 +299,28 @@ pub fn portrait_view(centre: Vec3, r: f32, top: f32) -> (Vec2, Vec3) {
 pub fn studio_key(side: f32) -> (PointLight, Transform) {
     let distance = 12.0 * side;
     let range = 8.0 * distance;
-    let light = point_light(Color::WHITE, KEY_LEVEL / reach_falloff(distance, range), range, &Exposure::INDOOR);
-    (light, Transform::from_translation(StudioLight::ARMORY.key_from() * distance))
+    let light = point_light(
+        Color::WHITE,
+        KEY_LEVEL / reach_falloff(distance, range),
+        range,
+        &Exposure::INDOOR,
+    );
+    (
+        light,
+        Transform::from_translation(StudioLight::ARMORY.key_from() * distance),
+    )
 }
 
 /// A camera on the head of `figure`, a child of its `root`, drawing into `image` (the size of
 /// the portrait) on `layer`: the delver's portrait in the header and the trader's on the barter
 /// screen alike. It starts off; whoever shows the portrait turns it on.
-pub fn spawn_portrait_camera(commands: &mut Commands, image: Handle<Image>, figure: &Figure, layer: RenderLayers, root: Entity) -> Entity {
+pub fn spawn_portrait_camera(
+    commands: &mut Commands,
+    image: Handle<Image>,
+    figure: &Figure,
+    layer: RenderLayers,
+    root: Entity,
+) -> Entity {
     let exposure = Exposure::INDOOR;
     let (head, _) = figure.head();
     let (view, looking_at) = portrait_view(head, figure.body.head.half_height, figure.head_top());
@@ -286,17 +330,29 @@ pub fn spawn_portrait_camera(commands: &mut Commands, image: Handle<Image>, figu
             Name::new("Portrait camera"),
             crate::render::ScreenInkExempt,
             Camera3d::default(),
-            Camera { order: -4, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
+            Camera {
+                order: -4,
+                clear_color: ClearColorConfig::Custom(Color::NONE),
+                is_active: false,
+                ..default()
+            },
             RenderTarget::Image(image.into()),
             Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::Fixed { width: view.x, height: view.y },
+                scaling_mode: ScalingMode::Fixed {
+                    width: view.x,
+                    height: view.y,
+                },
                 near: 0.1,
                 far: 60.0,
                 ..OrthographicProjection::default_3d()
             }),
             exposure,
             Tonemapping::Linear,
-            AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+            AmbientLight {
+                color: StudioLight::ARMORY.ambient_color,
+                brightness: StudioLight::ARMORY.ambient / exposure.exposure(),
+                ..default()
+            },
             layer,
             Transform::from_translation(looking_at + from * 30.0).looking_at(looking_at, Vec3::Y),
             ChildOf(root),
@@ -306,7 +362,12 @@ pub fn spawn_portrait_camera(commands: &mut Commands, image: Handle<Image>, figu
 
 /// A new render target the size of the portrait.
 pub fn portrait_target() -> Image {
-    let mut portrait = Image::new_target_texture(PORTRAIT_PIXELS.x, PORTRAIT_PIXELS.y, TextureFormat::Rgba8UnormSrgb, None);
+    let mut portrait = Image::new_target_texture(
+        PORTRAIT_PIXELS.x,
+        PORTRAIT_PIXELS.y,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    );
     portrait.asset_usage = RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD;
     portrait
 }
@@ -337,7 +398,11 @@ pub fn start_doll_fitting(
     }
     let spec = character.spec();
     let dirt = character.dirt;
-    let worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    let worn: Vec<(Slot, fb_items::Item)> = inventory
+        .equipped()
+        .into_iter()
+        .map(|(slot, item)| (slot, item.clone()))
+        .collect();
     let key = figure_key(&spec, &worn, dirt);
     if stage.dressed.as_ref() == Some(&key) {
         // Already dressed for this equipment; drop any in-flight fit
@@ -352,7 +417,9 @@ pub fn start_doll_fitting(
         stage.fitting = Some(Fitting::ready(key, figure));
         return;
     }
-    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &worn, dirt))));
+    stage.fitting = Some(Fitting::start(key, move || {
+        Arc::new(Figure::dress(&spec, &worn, dirt))
+    }));
 }
 
 /// Poll the fitting task and spawn the figure when it's ready.
@@ -363,7 +430,9 @@ pub fn poll_doll_fitting(
     mut cache: ResMut<FitCache>,
     mut spawner: ItemSpawner,
 ) {
-    let Some(mut fitting) = stage.fitting.take() else { return };
+    let Some(mut fitting) = stage.fitting.take() else {
+        return;
+    };
     if let Some(figure) = fitting.poll() {
         cache.store_figure(fitting.key(), figure.clone());
         stage.dressed = Some(fitting.key().clone());
@@ -384,7 +453,9 @@ fn spawn_doll_figure(
     if let Some(old) = stage.figure.take() {
         commands.entity(old).despawn();
     }
-    let Some(bounds) = figure.bounds() else { return };
+    let Some(bounds) = figure.bounds() else {
+        return;
+    };
     let layer = RenderLayers::layer(DOLL_LAYER);
     let exposure = Exposure::INDOOR;
     let root = spawn_figure(commands, spawner, figure);
@@ -396,26 +467,52 @@ fn spawn_doll_figure(
         Propagate(NotShadowCaster),
     ));
     if let Some(light) = figure.light {
-        let colour = Color::srgb(light.anchor.color.0, light.anchor.color.1, light.anchor.color.2);
-        let lamp = Torch::flickering(point_light(colour, HELD_LIGHT_PEAK, figure.body.height * HELD_LIGHT_REACH, &exposure), light.anchor.flicker);
-        commands.entity(root).with_child((lamp, Transform::from_translation(light.at), layer.clone()));
+        let colour = Color::srgb(
+            light.anchor.color.0,
+            light.anchor.color.1,
+            light.anchor.color.2,
+        );
+        let lamp = Torch::flickering(
+            point_light(
+                colour,
+                HELD_LIGHT_PEAK,
+                figure.body.height * HELD_LIGHT_REACH,
+                &exposure,
+            ),
+            light.anchor.flicker,
+        );
+        commands.entity(root).with_child((
+            lamp,
+            Transform::from_translation(light.at),
+            layer.clone(),
+        ));
     }
     stage.figure = Some(root);
 
     // The portrait turns with the doll, so it always sees the face.
-    let portrait = spawn_portrait_camera(commands, assets.portrait.clone(), figure, layer.clone(), root);
+    let portrait = spawn_portrait_camera(
+        commands,
+        assets.portrait.clone(),
+        figure,
+        layer.clone(),
+        root,
+    );
     stage.portrait = Some(portrait);
 
     let (side, centre_y) = doll_view(bounds);
     let looking_at = DOLL_STAGE + Vec3::Y * centre_y;
     let depth = 4.0 * side;
     let projection = Projection::Orthographic(OrthographicProjection {
-        scaling_mode: ScalingMode::Fixed { width: side, height: side },
+        scaling_mode: ScalingMode::Fixed {
+            width: side,
+            height: side,
+        },
         near: 0.1,
         far: 2.0 * depth,
         ..OrthographicProjection::default_3d()
     });
-    let at = Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y);
+    let at =
+        Transform::from_translation(looking_at + Vec3::Z * depth).looking_at(looking_at, Vec3::Y);
     match stage.camera {
         Some(camera) => {
             commands.entity(camera).insert((projection, at));
@@ -430,12 +527,21 @@ fn spawn_doll_figure(
                     crate::render::ScreenInkExempt,
                     DespawnOnExit(AppState::Delving),
                     Camera3d::default(),
-                    Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::NONE), is_active: false, ..default() },
+                    Camera {
+                        order: -3,
+                        clear_color: ClearColorConfig::Custom(Color::NONE),
+                        is_active: false,
+                        ..default()
+                    },
                     RenderTarget::Image(assets.doll.clone().into()),
                     projection,
                     exposure,
                     Tonemapping::Linear,
-                    AmbientLight { color: StudioLight::ARMORY.ambient_color, brightness: StudioLight::ARMORY.ambient / exposure.exposure(), ..default() },
+                    AmbientLight {
+                        color: StudioLight::ARMORY.ambient_color,
+                        brightness: StudioLight::ARMORY.ambient / exposure.exposure(),
+                        ..default()
+                    },
                     layer.clone(),
                     at,
                 ))
@@ -482,7 +588,9 @@ pub fn turn_doll(
     if buttons.just_pressed(MouseButton::Left) {
         let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
         let on = |rect: Rect| cursor.is_some_and(|c| rect.contains(c));
-        *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
+        *turning = dragging.0.is_none()
+            && views.iter().any(|(n, t)| on(node_rect(n, t)))
+            && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
     }
     if !*turning || motion.delta.x == 0.0 {
         return;
@@ -502,134 +610,205 @@ pub fn turn_seal(time: Res<Time<Real>>, mut bands: Query<(&SealBand, &mut UiTran
 }
 
 /// Builds the doll's leaf: the seal, the doll, and the slots with their labels.
-pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, inventory: &Inventory, fonts: &UiFonts, icons: &mut Icons) {
+pub fn doll_leaf(
+    parent: &mut ChildSpawnerCommands,
+    assets: &DollAssets,
+    inventory: &Inventory,
+    fonts: &UiFonts,
+    icons: &mut Icons,
+) {
     let seal = Seal { r: seal_radius() };
     let side = seal.r * 2.12;
     let centre = FRAME * 0.5;
     let [outer, middle, inner] = seal.bands([15.0 * 0.7 + 4.0, 12.0 * 0.7 + 4.0, 12.0 * 0.7 + 4.0]);
     let rune_ink = GOLD.with_alpha(RUNE_ALPHA);
     let glyph_inks = [(15.0, rune_ink), (12.0, rune_ink), (12.0, rune_ink)];
-    parent.spawn(Node { width: px(FRAME.x), height: px(FRAME.y), flex_shrink: 0.0, ..default() }).with_children(|frame| {
-        if let Some(side) = light_side(inventory) {
-            let glow_x = match side {
-                SlotSide::Left => centre.x - GLOW_OFFSET.x,
-                SlotSide::Right => centre.x + GLOW_OFFSET.x,
-            };
+    parent
+        .spawn(Node {
+            width: px(FRAME.x),
+            height: px(FRAME.y),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|frame| {
+            if let Some(side) = light_side(inventory) {
+                let glow_x = match side {
+                    SlotSide::Left => centre.x - GLOW_OFFSET.x,
+                    SlotSide::Right => centre.x + GLOW_OFFSET.x,
+                };
+                frame.spawn((
+                    LightGlow,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(glow_x - GLOW_SIZE * 0.5),
+                        top: px(centre.y + GLOW_OFFSET.y - GLOW_SIZE * 0.5),
+                        width: px(GLOW_SIZE),
+                        height: px(GLOW_SIZE),
+                        ..default()
+                    },
+                    ImageNode::new(assets.glow.clone()),
+                ));
+            }
+            for (band, glyphs) in [outer, middle, inner].into_iter().enumerate() {
+                frame
+                    .spawn((
+                        SealBand(band),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(centre.x - side * 0.5),
+                            top: px(centre.y - side * 0.5),
+                            width: px(side),
+                            height: px(side),
+                            ..default()
+                        },
+                        UiTransform::IDENTITY,
+                        ImageNode::new(assets.bands[band].clone())
+                            .with_color(Color::WHITE.with_alpha(SEAL_TINT)),
+                    ))
+                    .with_children(|layer| {
+                        let (size, colour) = glyph_inks[band];
+                        for glyph in glyphs {
+                            rune(layer, fonts, &glyph, side, size, colour);
+                        }
+                        if band == 1 {
+                            for (point, text) in
+                                seal.star_points().into_iter().zip(seal.medallion_runes())
+                            {
+                                rune(
+                                    layer,
+                                    fonts,
+                                    &Glyph {
+                                        text,
+                                        at: point,
+                                        turn: 0.0,
+                                    },
+                                    side,
+                                    13.0,
+                                    GOLD.with_alpha(0.6),
+                                );
+                            }
+                        }
+                    });
+            }
             frame.spawn((
-                LightGlow,
+                DollView {
+                    image: assets.doll.clone(),
+                },
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(glow_x - GLOW_SIZE * 0.5),
-                    top: px(centre.y + GLOW_OFFSET.y - GLOW_SIZE * 0.5),
-                    width: px(GLOW_SIZE),
-                    height: px(GLOW_SIZE),
+                    left: px(centre.x - DOLL_SIZE * 0.5),
+                    top: px(centre.y - DOLL_SIZE * 0.5),
+                    width: px(DOLL_SIZE),
+                    height: px(DOLL_SIZE),
                     ..default()
                 },
-                ImageNode::new(assets.glow.clone()),
+                ImageNode::new(assets.doll.clone()),
             ));
-        }
-        for (band, glyphs) in [outer, middle, inner].into_iter().enumerate() {
-            frame
-                .spawn((
-                    SealBand(band),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(centre.x - side * 0.5),
-                        top: px(centre.y - side * 0.5),
-                        width: px(side),
-                        height: px(side),
-                        ..default()
-                    },
-                    UiTransform::IDENTITY,
-                    ImageNode::new(assets.bands[band].clone()).with_color(Color::WHITE.with_alpha(SEAL_TINT)),
-                ))
-                .with_children(|layer| {
-                    let (size, colour) = glyph_inks[band];
-                    for glyph in glyphs {
-                        rune(layer, fonts, &glyph, side, size, colour);
-                    }
-                    if band == 1 {
-                        for (point, text) in seal.star_points().into_iter().zip(seal.medallion_runes()) {
-                            rune(layer, fonts, &Glyph { text, at: point, turn: 0.0 }, side, 13.0, GOLD.with_alpha(0.6));
-                        }
-                    }
-                });
-        }
-        frame.spawn((
-            DollView { image: assets.doll.clone() },
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(centre.x - DOLL_SIZE * 0.5),
-                top: px(centre.y - DOLL_SIZE * 0.5),
-                width: px(DOLL_SIZE),
-                height: px(DOLL_SIZE),
-                ..default()
-            },
-            ImageNode::new(assets.doll.clone()),
-        ));
-        for place in slot_places() {
-            let size = match place.size {
-                SlotSize::Big => BIG_SLOT,
-                SlotSize::Small => SMALL_SLOT,
-            };
-            let x = px(FRAME.x * place.x_percent / 100.0);
-            let worn = inventory.worn(place.slot).and_then(|id| inventory.item(id));
-            let (left, right) = match place.side {
-                SlotSide::Left => (x, Val::Auto),
-                SlotSide::Right => (Val::Auto, x),
-            };
-            frame
-                .spawn((
-                    SlotView(place.slot),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left,
-                        right,
-                        top: px(FRAME.y * place.y_percent / 100.0),
-                        width: px(size),
-                        height: px(size),
-                        padding: UiRect::all(px(4)),
-                        border: UiRect::all(px(1.5)),
-                        border_radius: BorderRadius::all(px(8)),
-                        ..default()
-                    },
-                    BackgroundColor(BG.with_alpha(0.8)),
-                    // Filled, a bright cream outline; empty, a dim tan one.
-                    BorderColor::all(if worn.is_some() { BRIGHT } else { LINE }),
-                ))
-                .with_children(|slot| {
-                    if let Some(item) = worn {
-                        let shape = super::icon::icon_size(item, false).as_vec2();
-                        let fit = (size - 11.0) / shape.max_element();
-                        slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
+            for place in slot_places() {
+                let size = match place.size {
+                    SlotSize::Big => BIG_SLOT,
+                    SlotSize::Small => SMALL_SLOT,
+                };
+                let x = px(FRAME.x * place.x_percent / 100.0);
+                let worn = inventory.worn(place.slot).and_then(|id| inventory.item(id));
+                let (left, right) = match place.side {
+                    SlotSide::Left => (x, Val::Auto),
+                    SlotSide::Right => (Val::Auto, x),
+                };
+                frame
+                    .spawn((
+                        SlotView(place.slot),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left,
+                            right,
+                            top: px(FRAME.y * place.y_percent / 100.0),
+                            width: px(size),
+                            height: px(size),
+                            padding: UiRect::all(px(4)),
+                            border: UiRect::all(px(1.5)),
+                            border_radius: BorderRadius::all(px(8)),
+                            ..default()
+                        },
+                        BackgroundColor(BG.with_alpha(0.8)),
+                        // Filled, a bright cream outline; empty, a dim tan one.
+                        BorderColor::all(if worn.is_some() { BRIGHT } else { LINE }),
+                    ))
+                    .with_children(|slot| {
+                        if let Some(item) = worn {
+                            let shape = super::icon::icon_size(item, false).as_vec2();
+                            let fit = (size - 11.0) / shape.max_element();
+                            slot.spawn(Node {
+                                width: percent(100),
+                                height: percent(100),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            })
                             .with_children(|centre| {
-                                icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
+                                icons.spawn(
+                                    centre,
+                                    item,
+                                    false,
+                                    Node {
+                                        width: px(shape.x * fit),
+                                        height: px(shape.y * fit),
+                                        ..default()
+                                    },
+                                    (size * 0.45).min(40.0),
+                                );
                             });
-                        if item.profile.kind == Kind::Gear {
-                            slot.spawn((
-                                Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
-                                BackgroundColor(rarity_color(item.rarity)),
-                            ));
+                            if item.profile.kind == Kind::Gear {
+                                slot.spawn((
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        right: px(5),
+                                        top: px(5),
+                                        width: px(7),
+                                        height: px(7),
+                                        border_radius: BorderRadius::MAX,
+                                        ..default()
+                                    },
+                                    BackgroundColor(rarity_color(item.rarity)),
+                                ));
+                            }
                         }
-                    }
-                    let font = if place.size == SlotSize::Big { 14.0 } else { 12.0 };
-                    let (label_left, label_right) = match place.side {
-                        SlotSide::Left => (px(0), Val::Auto),
-                        SlotSide::Right => (Val::Auto, px(0)),
-                    };
-                    slot.spawn((
-                        Node { position_type: PositionType::Absolute, top: percent(100), left: label_left, right: label_right, margin: UiRect::top(px(2)), ..default() },
-                        Text::new(place.label.clone()),
-                        UiFonts::style(&fonts.display, font, INK),
-                        TextLayout::no_wrap(),
-                    ));
-                });
-        }
-    });
+                        let font = if place.size == SlotSize::Big {
+                            14.0
+                        } else {
+                            12.0
+                        };
+                        let (label_left, label_right) = match place.side {
+                            SlotSide::Left => (px(0), Val::Auto),
+                            SlotSide::Right => (Val::Auto, px(0)),
+                        };
+                        slot.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                top: percent(100),
+                                left: label_left,
+                                right: label_right,
+                                margin: UiRect::top(px(2)),
+                                ..default()
+                            },
+                            Text::new(place.label.clone()),
+                            UiFonts::style(&fonts.display, font, INK),
+                            TextLayout::no_wrap(),
+                        ));
+                    });
+            }
+        });
 }
 
 /// One rune of a band, centred on its place in a layer `side` across, turned to its circle.
-fn rune(layer: &mut ChildSpawnerCommands, fonts: &UiFonts, glyph: &Glyph, side: f32, size: f32, colour: Color) {
+fn rune(
+    layer: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    glyph: &Glyph,
+    side: f32,
+    size: f32,
+    colour: Color,
+) {
     layer
         .spawn((
             Node {
@@ -644,7 +823,11 @@ fn rune(layer: &mut ChildSpawnerCommands, fonts: &UiFonts, glyph: &Glyph, side: 
             },
             UiTransform::from_rotation(Rot2::radians(glyph.turn)),
         ))
-        .with_child((Text::new(glyph.text.to_string()), UiFonts::style(&fonts.rune, size, colour), TextLayout::no_wrap()));
+        .with_child((
+            Text::new(glyph.text.to_string()),
+            UiFonts::style(&fonts.rune, size, colour),
+            TextLayout::no_wrap(),
+        ));
 }
 
 #[cfg(test)]
@@ -678,21 +861,43 @@ mod tests {
             fb_items::Slot::Charm,
             fb_items::Slot::Hip,
         ] {
-            let place = places.iter().find(|p| p.slot == slot).unwrap_or_else(|| panic!("{slot:?}"));
-            let size = if place.size == SlotSize::Big { BIG_SLOT } else { SMALL_SLOT };
-            assert!(FRAME.x * place.x_percent / 100.0 + size <= FRAME.x && FRAME.y * place.y_percent / 100.0 + size <= FRAME.y, "{slot:?} off the frame");
+            let place = places
+                .iter()
+                .find(|p| p.slot == slot)
+                .unwrap_or_else(|| panic!("{slot:?}"));
+            let size = if place.size == SlotSize::Big {
+                BIG_SLOT
+            } else {
+                SMALL_SLOT
+            };
+            assert!(
+                FRAME.x * place.x_percent / 100.0 + size <= FRAME.x
+                    && FRAME.y * place.y_percent / 100.0 + size <= FRAME.y,
+                "{slot:?} off the frame"
+            );
         }
     }
 
     #[test]
     fn the_glow_is_on_the_side_of_the_hand_holding_a_light() {
         let mut inventory = Inventory::default();
-        let main = slot_places().iter().find(|p| p.slot == fb_items::Slot::Mainhand).unwrap().side;
-        let off = slot_places().iter().find(|p| p.slot == fb_items::Slot::Offhand).unwrap().side;
+        let main = slot_places()
+            .iter()
+            .find(|p| p.slot == fb_items::Slot::Mainhand)
+            .unwrap()
+            .side;
+        let off = slot_places()
+            .iter()
+            .find(|p| p.slot == fb_items::Slot::Offhand)
+            .unwrap()
+            .side;
         assert_ne!(main, off);
         // Nothing lit in hand, no glow.
         assert_eq!(light_side(&inventory), None);
-        let lantern = (1..200).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| item_light(&i.shape).is_some()).unwrap();
+        let lantern = (1..200)
+            .filter_map(|s| fb_items::roll_item("Lantern", s))
+            .find(|i| item_light(&i.shape).is_some())
+            .unwrap();
         let lantern = inventory.add(lantern);
         inventory.wear(lantern, fb_items::Slot::Offhand).unwrap();
         assert_eq!(light_side(&inventory), Some(off));
@@ -702,15 +907,26 @@ mod tests {
         inventory.wear(belt, fb_items::Slot::Belt).unwrap();
         inventory.take_out(lantern);
         inventory.wear(lantern, fb_items::Slot::Hip).unwrap();
-        let hip = slot_places().iter().find(|p| p.slot == fb_items::Slot::Hip).unwrap().side;
-        assert_eq!((lit_slot(&inventory), light_side(&inventory)), (Some(fb_items::Slot::Hip), Some(hip)));
+        let hip = slot_places()
+            .iter()
+            .find(|p| p.slot == fb_items::Slot::Hip)
+            .unwrap()
+            .side;
+        assert_eq!(
+            (lit_slot(&inventory), light_side(&inventory)),
+            (Some(fb_items::Slot::Hip), Some(hip))
+        );
     }
 
     #[test]
     fn the_glow_is_warm_in_the_middle_and_gone_at_the_edge() {
         let canvas = light_glow(0.25);
         let c = canvas.size / 2;
-        assert!((canvas.alpha(c, c) - GLOW_PEAK).abs() < 0.03, "{}", canvas.alpha(c, c));
+        assert!(
+            (canvas.alpha(c, c) - GLOW_PEAK).abs() < 0.03,
+            "{}",
+            canvas.alpha(c, c)
+        );
         assert!(canvas.alpha(c, c / 2) < canvas.alpha(c, c));
         assert_eq!(canvas.alpha(0, 0), 0.0);
     }
@@ -746,13 +962,24 @@ mod tests {
             .init_resource::<Assets<crate::render::ToonMaterial>>()
             .init_resource::<Assets<crate::render::OutlineMaterial>>()
             .init_resource::<crate::render::OutlineMaterials>()
-            .add_systems(Update, (start_doll_fitting, poll_doll_fitting, show_doll, turn_doll).chain());
+            .add_systems(
+                Update,
+                (start_doll_fitting, poll_doll_fitting, show_doll, turn_doll).chain(),
+            );
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(320.0, 320.0)));
         app.world_mut().spawn((window, PrimaryWindow));
         let image = app.world().resource::<DollAssets>().doll.clone();
-        let node = ComputedNode { size: Vec2::splat(440.0), inverse_scale_factor: 1.0, ..ComputedNode::DEFAULT };
-        app.world_mut().spawn((DollView { image }, node, UiGlobalTransform::from_translation(Vec2::splat(320.0))));
+        let node = ComputedNode {
+            size: Vec2::splat(440.0),
+            inverse_scale_factor: 1.0,
+            ..ComputedNode::DEFAULT
+        };
+        app.world_mut().spawn((
+            DollView { image },
+            node,
+            UiGlobalTransform::from_translation(Vec2::splat(320.0)),
+        ));
         app
     }
 
@@ -773,14 +1000,26 @@ mod tests {
     }
 
     fn worn_names(app: &App) -> Vec<String> {
-        app.world().resource::<DollStage>().built.as_ref().unwrap().pieces.iter().map(|p| p.name.clone()).collect()
+        app.world()
+            .resource::<DollStage>()
+            .built
+            .as_ref()
+            .unwrap()
+            .pieces
+            .iter()
+            .map(|p| p.name.clone())
+            .collect()
     }
 
     #[test]
     fn the_doll_wears_what_is_equipped() {
         let mut app = stage_app();
         wait_for_doll_fitting(&mut app);
-        assert_eq!(worn_names(&app), vec!["Body".to_string(), "Head".to_string()], "bare to begin with");
+        assert_eq!(
+            worn_names(&app),
+            vec!["Body".to_string(), "Head".to_string()],
+            "bare to begin with"
+        );
         let helm = fb_items::roll_item("Helm", 5).unwrap();
         let name = helm.title().to_string();
         {
@@ -789,11 +1028,17 @@ mod tests {
             inventory.wear(id, Slot::Head).unwrap();
         }
         wait_for_doll_fitting(&mut app);
-        assert_eq!(worn_names(&app), vec!["Body".to_string(), "Head".to_string(), name]);
+        assert_eq!(
+            worn_names(&app),
+            vec!["Body".to_string(), "Head".to_string(), name]
+        );
         let stage = app.world().resource::<DollStage>();
         let camera = app.world().get::<Camera>(stage.camera().unwrap()).unwrap();
         assert!(camera.is_active, "drawn while the inventory is open");
-        assert!(matches!(app.world().get::<RenderTarget>(stage.camera().unwrap()), Some(RenderTarget::Image(_))));
+        assert!(matches!(
+            app.world().get::<RenderTarget>(stage.camera().unwrap()),
+            Some(RenderTarget::Image(_))
+        ));
     }
 
     #[test]
@@ -802,14 +1047,25 @@ mod tests {
         wait_for_doll_fitting(&mut app);
         let stage = app.world().resource::<DollStage>();
         let (portrait, figure) = (stage.portrait().unwrap(), stage.figure.unwrap());
-        let (head, r, stage_top) = { let f = stage.built.as_ref().unwrap(); (f.head().0, f.body.head.half_height, f.head_top()) };
+        let (head, r, stage_top) = {
+            let f = stage.built.as_ref().unwrap();
+            (f.head().0, f.body.head.half_height, f.head_top())
+        };
         // Drawn into the portrait image, turning with the doll, and looking at its head.
         let target = app.world().get::<RenderTarget>(portrait).unwrap();
-        assert!(matches!(target, RenderTarget::Image(i) if i.handle == app.world().resource::<DollAssets>().portrait));
-        assert_eq!(app.world().get::<ChildOf>(portrait).map(|c| c.parent()), Some(figure));
+        assert!(
+            matches!(target, RenderTarget::Image(i) if i.handle == app.world().resource::<DollAssets>().portrait)
+        );
+        assert_eq!(
+            app.world().get::<ChildOf>(portrait).map(|c| c.parent()),
+            Some(figure)
+        );
         let at = app.world().get::<Transform>(portrait).unwrap();
         let to_head = (head - at.translation).normalize();
-        assert!(to_head.dot(at.forward().as_vec3()) > 0.99, "looks at the head");
+        assert!(
+            to_head.dot(at.forward().as_vec3()) > 0.99,
+            "looks at the head"
+        );
         let (view, _) = portrait_view(head, r, stage_top);
         assert!(view.y >= 3.2 * r && view.y < 5.0 * r, "{view}");
     }
@@ -823,16 +1079,28 @@ mod tests {
             let (head, r) = bare.head();
             let (view, at) = portrait_view(head, bare.body.head.half_height, bare.head_top());
             let plate = portrait_view(head, bare.body.head.half_height, f32::MIN);
-            assert_eq!((view, at), plate, "{folk:?}: a bare head is framed as the plate frames it");
+            assert_eq!(
+                (view, at),
+                plate,
+                "{folk:?}: a bare head is framed as the plate frames it"
+            );
             for kit in ["Hood", "Pointed hat"] {
-                let Some(item) = fb_items::roll_item(kit, 3) else { continue };
+                let Some(item) = fb_items::roll_item(kit, 3) else {
+                    continue;
+                };
                 if !item.slots().contains(&Slot::Head) {
                     continue;
                 }
                 let figure = Figure::dress(&spec, &[(Slot::Head, item)], 0.0);
-                let (view, at) = portrait_view(head, figure.body.head.half_height, figure.head_top());
+                let (view, at) =
+                    portrait_view(head, figure.body.head.half_height, figure.head_top());
                 assert!(figure.head_top() >= bare.head_top(), "{folk:?} {kit}");
-                assert!(at.y + view.y * 0.5 >= figure.head_top(), "{folk:?} {kit}: the gear's top {} is inside the frame's {} (r {r})", figure.head_top(), at.y + view.y * 0.5);
+                assert!(
+                    at.y + view.y * 0.5 >= figure.head_top(),
+                    "{folk:?} {kit}: the gear's top {} is inside the frame's {} (r {r})",
+                    figure.head_top(),
+                    at.y + view.y * 0.5
+                );
             }
         }
     }
@@ -842,9 +1110,17 @@ mod tests {
         let mut app = stage_app();
         let (a, b) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            (inventory.add(fb_items::roll_item("Helm", 5).unwrap()), inventory.add(fb_items::roll_item("Helm", 6).unwrap()))
+            (
+                inventory.add(fb_items::roll_item("Helm", 5).unwrap()),
+                inventory.add(fb_items::roll_item("Helm", 6).unwrap()),
+            )
         };
-        let wear = |app: &mut App, id| app.world_mut().resource_mut::<Inventory>().equip(id, Slot::Head).unwrap();
+        let wear = |app: &mut App, id| {
+            app.world_mut()
+                .resource_mut::<Inventory>()
+                .equip(id, Slot::Head)
+                .unwrap()
+        };
         wear(&mut app, a);
         wait_for_doll_fitting(&mut app);
         let first = worn_names(&app);
@@ -856,7 +1132,10 @@ mod tests {
         for (id, names) in [(a, &first), (b, &second), (a, &first)] {
             wear(&mut app, id);
             app.update();
-            assert!(app.world().resource::<DollStage>().fitting.is_none(), "no fit started");
+            assert!(
+                app.world().resource::<DollStage>().fitting.is_none(),
+                "no fit started"
+            );
             assert_eq!(&worn_names(&app), names);
         }
         let cache = app.world().resource::<FitCache>();
@@ -868,16 +1147,22 @@ mod tests {
         let mut app = stage_app();
         wait_for_doll_fitting(&mut app);
         let figure = app.world().resource::<DollStage>().figure.unwrap();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(60.0, 0.0);
+        app.world_mut()
+            .resource_mut::<AccumulatedMouseMotion>()
+            .delta = Vec2::new(60.0, 0.0);
         app.update();
         let turn = app.world().resource::<DollStage>().turn;
         assert!((turn - 60.0 * TURN_PER_PIXEL).abs() < 1e-4, "{turn}");
         let rotation = app.world().get::<Transform>(figure).unwrap().rotation;
         assert!(rotation.abs_diff_eq(Quat::from_rotation_y(turn), 1e-5));
         // Let go, and dragging no longer turns it.
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
         app.update();
         app.update();
         assert_eq!(app.world().resource::<DollStage>().turn, turn);
@@ -895,9 +1180,19 @@ mod tests {
         }
         wait_for_doll_fitting(&mut app);
         let figure = app.world().resource::<DollStage>().built.clone().unwrap();
-        let held = figure.pieces.iter().find(|p| p.name == name).expect("the sword is drawn");
+        let held = figure
+            .pieces
+            .iter()
+            .find(|p| p.name == name)
+            .expect("the sword is drawn");
         let fist = Vec3::from_array(figure.body.grip(fb_body::MAIN_HAND).origin);
-        let nearest = held.mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p).distance(fist)).fold(f32::MAX, f32::min);
+        let nearest = held
+            .mesh
+            .parts
+            .iter()
+            .flat_map(|p| &p.positions)
+            .map(|&p| Vec3::from_array(p).distance(fist))
+            .fold(f32::MAX, f32::min);
         assert!(nearest < 0.5, "{nearest}");
     }
 
@@ -920,7 +1215,10 @@ mod tests {
         {
             let stage = app.world().resource::<DollStage>();
             // Fitting should not be running while closed
-            assert!(stage.fitting.is_none(), "no fitting should run while inventory closed");
+            assert!(
+                stage.fitting.is_none(),
+                "no fitting should run while inventory closed"
+            );
         }
         // Open inventory
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
@@ -929,6 +1227,9 @@ mod tests {
         let stage = app.world().resource::<DollStage>();
         let figure = stage.built.as_ref().unwrap();
         let has_sword = figure.pieces.iter().any(|p| p.name == name);
-        assert!(has_sword, "new sword should be shown after opening inventory");
+        assert!(
+            has_sword,
+            "new sword should be shown after opening inventory"
+        );
     }
 }

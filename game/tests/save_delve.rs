@@ -49,7 +49,7 @@ use forever_below::{
     quickslots::Quickslots,
     record::{LevelRecord, WorldRecord},
     render::{ArmoryRenderPlugin, ItemSpawner},
-    save::{self, ResumeDelve, SaveFile, SavedGame, Saveable},
+    save::{self, ResumeDelve, SaveFile, Saveable, SavedGame},
     settings::SettingsPlugin,
     title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
     travel::{Abyss, Journey, UseStair},
@@ -66,15 +66,37 @@ fn headless_game(file: &PathBuf) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
-            .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
-            .set(RenderPlugin { render_creation: WgpuSettings { backends: None, ..default() }.into(), ..default() })
-            .set(AssetPlugin { file_path: forever_below::tuning::asset_file_path(), ..default() })
+            .set(WindowPlugin {
+                primary_window: None,
+                exit_condition: ExitCondition::DontExit,
+                ..default()
+            })
+            .set(RenderPlugin {
+                render_creation: WgpuSettings {
+                    backends: None,
+                    ..default()
+                }
+                .into(),
+                ..default()
+            })
+            .set(AssetPlugin {
+                file_path: forever_below::tuning::asset_file_path(),
+                ..default()
+            })
             .disable::<WinitPlugin>(),
     )
-    .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+    .insert_resource(TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_secs_f32(1.0 / 60.0),
+    ))
     .insert_state(AppState::Title)
     .insert_resource(SaveFile(Some(file.clone())))
-    .add_plugins((SettingsPlugin, TuningPlugin, ArmoryRenderPlugin, PlayPlugin, TitlePlugin))
+    .add_plugins((
+        SettingsPlugin,
+        TuningPlugin,
+        ArmoryRenderPlugin,
+        PlayPlugin,
+        TitlePlugin,
+    ))
     .insert_resource(NewDelveSeed(Some(1207)));
     app
 }
@@ -89,9 +111,13 @@ fn run(app: &mut App, frames: usize) {
 fn delving(file: &PathBuf) -> App {
     let mut app = headless_game(file);
     run(&mut app, 30);
-    app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
+    app.world_mut()
+        .write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
-    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Delving);
+    assert_eq!(
+        *app.world().resource::<State<AppState>>().get(),
+        AppState::Delving
+    );
     run(&mut app, 60);
     app.insert_resource(Saveable(true));
     app
@@ -103,15 +129,28 @@ fn level(app: &App) -> &Level {
 
 fn player(app: &mut App) -> Entity {
     let world = app.world_mut();
-    world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver")
+    world
+        .query_filtered::<Entity, With<Player>>()
+        .single(world)
+        .expect("one delver")
 }
 
 fn go(app: &mut App, by: StairKind) {
     let from = app.world().resource::<Abyss>().depth;
     app.world_mut().write_message(UseStair(by));
     run(app, 200);
-    assert!(app.world().get_resource::<Journey>().is_none(), "the journey is over");
-    assert_eq!(app.world().resource::<Abyss>().depth, if by == StairKind::Down { from + 1 } else { from - 1 });
+    assert!(
+        app.world().get_resource::<Journey>().is_none(),
+        "the journey is over"
+    );
+    assert_eq!(
+        app.world().resource::<Abyss>().depth,
+        if by == StairKind::Down {
+            from + 1
+        } else {
+            from - 1
+        }
+    );
 }
 
 fn start_cell(app: &App) -> Vec2 {
@@ -120,7 +159,10 @@ fn start_cell(app: &App) -> Vec2 {
 }
 
 fn set_down_at(app: &mut App, id: ItemId, spot: Vec2, yaw: f32) {
-    app.world_mut().resource_mut::<FloorChanges>().0.push(FloorChange::SetDownAt(id, spot, yaw));
+    app.world_mut()
+        .resource_mut::<FloorChanges>()
+        .0
+        .push(FloorChange::SetDownAt(id, spot, yaw));
     run(app, 5);
 }
 
@@ -128,27 +170,72 @@ fn set_down_at(app: &mut App, id: ItemId, spot: Vec2, yaw: f32) {
 /// returns where the delver stood to do it and the way they faced.
 fn set_camp_where(app: &mut App, base: &str, seed: u32) -> (Vec2, Vec2) {
     let lvl = level(app).clone();
-    let blocked = app.world().resource::<forever_below::play::BlockedCells>().clone();
-    let obstacles = app.world().resource::<forever_below::play::Obstacles>().0.clone();
+    let blocked = app
+        .world()
+        .resource::<forever_below::play::BlockedCells>()
+        .clone();
+    let obstacles = app
+        .world()
+        .resource::<forever_below::play::Obstacles>()
+        .0
+        .clone();
     let set = fb_items::camp::set_up(&fb_items::roll_item(base, seed).unwrap()).unwrap();
     let (half, offset) = forever_below::camp::footprint(&set).unwrap();
     let gap = forever_below::camp::gap_for(set.camp().unwrap());
     let (feet, forward) = (0..lvl.height as i32)
         .flat_map(|y| (0..lvl.width as i32).map(move |x| (x, y)))
         .filter(|&(x, y)| lvl.cell(x, y) == fb_level::Cell::Floor)
-        .flat_map(|(x, y)| [fb_level::Facing::North, fb_level::Facing::East, fb_level::Facing::South, fb_level::Facing::West].map(move |f| (x, y, f)))
-        .map(|(x, y, f)| (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * fb_level::CELL, Vec2::new(f.step().0 as f32, f.step().1 as f32)))
+        .flat_map(|(x, y)| {
+            [
+                fb_level::Facing::North,
+                fb_level::Facing::East,
+                fb_level::Facing::South,
+                fb_level::Facing::West,
+            ]
+            .map(move |f| (x, y, f))
+        })
+        .map(|(x, y, f)| {
+            (
+                Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * fb_level::CELL,
+                Vec2::new(f.step().0 as f32, f.step().1 as f32),
+            )
+        })
         .find(|&(feet, forward)| {
             let site = forever_below::camp::site_ahead(feet, forward, half, gap);
-            let canvas = fb_items::camp::canvas_half(&set.shape).map(|(x, z)| forever_below::camp::Site { centre: site.centre - site.to_floor(offset), half: Vec2::new(x, z), yaw: site.yaw });
-            forever_below::camp::check_site(&site, &lvl, &blocked, &obstacles, &[]).is_ok() && canvas.is_none_or(|c| forever_below::camp::check_passage(&c, &lvl, &blocked, &obstacles, 3.5).is_ok())
+            let canvas =
+                fb_items::camp::canvas_half(&set.shape).map(|(x, z)| forever_below::camp::Site {
+                    centre: site.centre - site.to_floor(offset),
+                    half: Vec2::new(x, z),
+                    yaw: site.yaw,
+                });
+            forever_below::camp::check_site(&site, &lvl, &blocked, &obstacles, &[]).is_ok()
+                && canvas.is_none_or(|c| {
+                    forever_below::camp::check_passage(&c, &lvl, &blocked, &obstacles, 3.5).is_ok()
+                })
         })
         .expect("somewhere in the level a camp fits");
-    let id = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item(base, seed).unwrap());
+    let id = app
+        .world_mut()
+        .resource_mut::<Inventory>()
+        .add(fb_items::roll_item(base, seed).unwrap());
     let mut changes = FloorChanges::default();
-    let said = forever_below::camp::lay_out(&mut app.world_mut().resource_mut::<Inventory>(), &mut changes, id, feet, forward, &lvl, &blocked, &obstacles, &[], 3.5);
+    let said = forever_below::camp::lay_out(
+        &mut app.world_mut().resource_mut::<Inventory>(),
+        &mut changes,
+        id,
+        feet,
+        forward,
+        &lvl,
+        &blocked,
+        &obstacles,
+        &[],
+        3.5,
+    );
     assert!(said.is_ok(), "{base}: {said:?}");
-    app.world_mut().resource_mut::<FloorChanges>().0.extend(changes.0);
+    app.world_mut()
+        .resource_mut::<FloorChanges>()
+        .0
+        .extend(changes.0);
     run(app, 5);
     (feet, forward)
 }
@@ -174,24 +261,29 @@ fn look_down_at_camp(app: &mut App, feet: Vec2, forward: Vec2, sleepiness: f64) 
     for mut at in creatures.iter_mut(world) {
         at.translation = Vec3::new(10.0, 0.0, 10.0);
     }
-    let mut eyes = world.query_filtered::<&mut Transform, With<forever_below::play::PlayerCamera>>();
+    let mut eyes =
+        world.query_filtered::<&mut Transform, With<forever_below::play::PlayerCamera>>();
     for mut eye in eyes.iter_mut(world) {
         eye.rotation = Quat::from_rotation_x(-60f32.to_radians());
     }
     run(app, 5);
     let aimed = app.world().resource::<Aimed>().0;
-    assert!(aimed.is_some_and(|e| app.world().get::<SetCamp>(e).is_some()), "the camp is under the crosshair: {aimed:?}");
+    assert!(
+        aimed.is_some_and(|e| app.world().get::<SetCamp>(e).is_some()),
+        "the camp is under the crosshair: {aimed:?}"
+    );
 }
 
 fn key(app: &mut App, key_code: KeyCode, text: &str, state: bevy::input::ButtonState) {
-    app.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
-        key_code,
-        logical_key: bevy::input::keyboard::Key::Character(text.into()),
-        state,
-        text: None,
-        repeat: false,
-        window: Entity::PLACEHOLDER,
-    });
+    app.world_mut()
+        .write_message(bevy::input::keyboard::KeyboardInput {
+            key_code,
+            logical_key: bevy::input::keyboard::Key::Character(text.into()),
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
 }
 
 /// Everything the delve's state is, read from the live world a field at a time.
@@ -227,12 +319,32 @@ struct Snapshot {
 }
 
 /// Walks what `id` holds, naming each by the slot and cells it lies in.
-fn carried_in(inventory: &Inventory, id: ItemId, path: String, out: &mut Vec<(String, fb_items::Item)>, names: &mut BTreeMap<ItemId, String>) {
-    out.push((path.clone(), inventory.item(id).expect("carried items are kept").clone()));
+fn carried_in(
+    inventory: &Inventory,
+    id: ItemId,
+    path: String,
+    out: &mut Vec<(String, fb_items::Item)>,
+    names: &mut BTreeMap<ItemId, String>,
+) {
+    out.push((
+        path.clone(),
+        inventory.item(id).expect("carried items are kept").clone(),
+    ));
     names.insert(id, path.clone());
     if let Some(grid) = inventory.grid(id) {
         for entry in grid.entries() {
-            carried_in(inventory, entry.id, format!("{path}/{},{}{}", entry.at.x, entry.at.y, if entry.at.turned { "t" } else { "" }), out, names);
+            carried_in(
+                inventory,
+                entry.id,
+                format!(
+                    "{path}/{},{}{}",
+                    entry.at.x,
+                    entry.at.y,
+                    if entry.at.turned { "t" } else { "" }
+                ),
+                out,
+                names,
+            );
         }
     }
 }
@@ -253,7 +365,12 @@ fn snapshot(app: &mut App) -> Snapshot {
         character: world.resource::<Character>().clone(),
         coins: inventory.coins(),
         carried,
-        quickslots: world.resource::<Quickslots>().0.iter().map(|bound| bound.and_then(|id| names.get(&id).cloned())).collect(),
+        quickslots: world
+            .resource::<Quickslots>()
+            .0
+            .iter()
+            .map(|bound| bound.and_then(|id| names.get(&id).cloned()))
+            .collect(),
         at: body.get::<Transform>().unwrap().translation.to_array(),
         yaw: body.get::<Locomotion>().unwrap().yaw,
         pitch: body.get::<Locomotion>().unwrap().pitch,
@@ -268,12 +385,22 @@ fn snapshot(app: &mut App) -> Snapshot {
         clock: world.resource::<GameClock>().time,
         revives: world.resource::<Revives>().0,
         enchanting: world.resource::<Enchanting>().0.clone(),
-        explored: world.resource::<ExploredLevels>().0.iter().map(|(seed, seen)| (*seed, seen.to_bits())).collect(),
+        explored: world
+            .resource::<ExploredLevels>()
+            .0
+            .iter()
+            .map(|(seed, seen)| (*seed, seen.to_bits()))
+            .collect(),
         standings: record.standings.clone(),
         orders: record.orders.clone(),
         keys_given: record.keys_given.clone(),
         met_on: record.met_on.clone(),
-        other_levels: record.levels.iter().filter(|(depth, _)| **depth != abyss.depth).map(|(d, l)| (*d, l.clone())).collect(),
+        other_levels: record
+            .levels
+            .iter()
+            .filter(|(depth, _)| **depth != abyss.depth)
+            .map(|(d, l)| (*d, l.clone()))
+            .collect(),
     }
 }
 
@@ -288,21 +415,58 @@ struct Standing {
 
 fn standing(app: &mut App) -> Standing {
     let world = app.world_mut();
-    let mut floor: Vec<_> = world.query::<&FloorItem>().iter(world).map(|f| (f.id, f.spot)).collect();
+    let mut floor: Vec<_> = world
+        .query::<&FloorItem>()
+        .iter(world)
+        .map(|f| (f.id, f.spot))
+        .collect();
     floor.sort_by_key(|(id, _)| *id);
     let inventory = world.resource::<Inventory>().clone();
-    let mut floor: Vec<(ItemSpot, fb_items::Item)> = floor.into_iter().map(|(id, spot)| (spot, inventory.item(id).unwrap().clone())).collect();
+    let mut floor: Vec<(ItemSpot, fb_items::Item)> = floor
+        .into_iter()
+        .map(|(id, spot)| (spot, inventory.item(id).unwrap().clone()))
+        .collect();
     floor.sort_by_key(|(spot, item)| (item.seed, spot.x.to_bits(), spot.y.to_bits()));
-    let camps = world.query::<&SetCamp>().iter(world).map(|c| c.camp).collect();
+    let camps = world
+        .query::<&SetCamp>()
+        .iter(world)
+        .map(|c| c.camp)
+        .collect();
     let mut containers: Vec<_> = world
         .query::<(&PropPiece, &Container)>()
         .iter(world)
-        .map(|(p, c)| (p.index, c.opened, inventory.grid(c.id).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect()))
+        .map(|(p, c)| {
+            (
+                p.index,
+                c.opened,
+                inventory
+                    .grid(c.id)
+                    .unwrap()
+                    .entries()
+                    .iter()
+                    .map(|e| {
+                        (
+                            inventory.item(e.id).unwrap().base.clone(),
+                            inventory.item(e.id).unwrap().seed,
+                        )
+                    })
+                    .collect(),
+            )
+        })
         .collect();
     containers.sort_by_key(|c| c.0);
-    let mut creatures: Vec<_> = world.query::<(&Critter, &Health, Has<Corpse>)>().iter(world).map(|(c, h, dead)| (c.spot.seed, h.hp, dead)).collect();
+    let mut creatures: Vec<_> = world
+        .query::<(&Critter, &Health, Has<Corpse>)>()
+        .iter(world)
+        .map(|(c, h, dead)| (c.spot.seed, h.hp, dead))
+        .collect();
     creatures.sort();
-    Standing { floor, camps, containers, creatures }
+    Standing {
+        floor,
+        camps,
+        containers,
+        creatures,
+    }
 }
 
 /// A delve on three levels with something changed on each, ended by lying down in a pitched
@@ -313,34 +477,79 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
 
     // Level 1: a sword dropped, the nearest rat dead, a rat hurt, a chest opened and robbed.
     let at = start_cell(&app);
-    let sword = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Sword", 40_001).unwrap());
+    let sword = app
+        .world_mut()
+        .resource_mut::<Inventory>()
+        .add(fb_items::roll_item("Sword", 40_001).unwrap());
     set_down_at(&mut app, sword, at, 0.8);
     let mut critters: Vec<(Entity, u32)> = {
         let world = app.world_mut();
-        world.query::<(Entity, &Critter)>().iter(world).map(|(e, c)| (e, c.spot.seed)).collect()
+        world
+            .query::<(Entity, &Critter)>()
+            .iter(world)
+            .map(|(e, c)| (e, c.spot.seed))
+            .collect()
     };
     critters.sort_by_key(|c| c.1);
     let (dead, hurt) = (critters[0].0, critters[1].0);
     app.world_mut().get_mut::<Health>(hurt).unwrap().hp -= 1;
-    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false });
+    app.world_mut().write_message(Struck {
+        target: dead,
+        damage: 10_000,
+        from: Vec2::ZERO,
+        bludgeoning: false,
+        critical: false,
+        by_ally: false,
+        graze: false,
+    });
     run(&mut app, 60);
     let (entity, container) = {
         let world = app.world_mut();
         let inventory = world.resource::<Inventory>().clone();
-        let mut all: Vec<_> = world.query::<(Entity, &PropPiece, &Container)>().iter(world).map(|(e, p, c)| (p.index, e, *c)).collect();
+        let mut all: Vec<_> = world
+            .query::<(Entity, &PropPiece, &Container)>()
+            .iter(world)
+            .map(|(e, p, c)| (p.index, e, *c))
+            .collect();
         all.sort_by_key(|a| a.0);
-        let (_, entity, container) = all.into_iter().find(|(_, _, c)| inventory.contents_count(c.id) >= 2).expect("a chest with something in it");
+        let (_, entity, container) = all
+            .into_iter()
+            .find(|(_, _, c)| inventory.contents_count(c.id) >= 2)
+            .expect("a chest with something in it");
         (entity, container)
     };
     app.world_mut()
         .run_system_once(
-            move |mut commands: Commands, mut spawner: ItemSpawner, level: Res<CurrentLevel>, mut open: ResMut<ScreenOpen>, mut showing: ResMut<OpenContainer>, tuning: Res<Tuning>, pieces: Query<&PropPiece>| {
-                open_container(&mut commands, &mut spawner, &level.0, entity, pieces.get(entity).unwrap(), container, &mut open, &mut showing, None, &tuning);
+            move |mut commands: Commands,
+                  mut spawner: ItemSpawner,
+                  level: Res<CurrentLevel>,
+                  mut open: ResMut<ScreenOpen>,
+                  mut showing: ResMut<OpenContainer>,
+                  tuning: Res<Tuning>,
+                  pieces: Query<&PropPiece>| {
+                open_container(
+                    &mut commands,
+                    &mut spawner,
+                    &level.0,
+                    entity,
+                    pieces.get(entity).unwrap(),
+                    container,
+                    &mut open,
+                    &mut showing,
+                    None,
+                    &tuning,
+                );
             },
         )
         .unwrap();
     run(&mut app, 5);
-    let taken = app.world().resource::<Inventory>().grid(container.id).unwrap().entries()[0].id;
+    let taken = app
+        .world()
+        .resource::<Inventory>()
+        .grid(container.id)
+        .unwrap()
+        .entries()[0]
+        .id;
     app.world_mut().resource_mut::<Inventory>().stow(taken).ok();
     go(&mut app, StairKind::Down);
 
@@ -350,7 +559,11 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         let sack = inventory.add(fb_items::roll_item("Sack", 40_002).unwrap());
         let dagger = inventory.add(fb_items::roll_item("Dagger", 40_003).unwrap());
-        let free = inventory.grid(sack).unwrap().first_free(inventory.footprint(dagger).unwrap()).unwrap();
+        let free = inventory
+            .grid(sack)
+            .unwrap()
+            .first_free(inventory.footprint(dagger).unwrap())
+            .unwrap();
         inventory.put(dagger, sack, free).unwrap();
         sack
     };
@@ -363,7 +576,11 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         let bread = inventory.add(fb_items::roll_item("Bread", 40_020).unwrap());
         inventory.stow(bread).unwrap();
-        inventory.add_coins(Coins { gp: 3, sp: 4, cp: 5 });
+        inventory.add_coins(Coins {
+            gp: 3,
+            sp: 4,
+            cp: 5,
+        });
         bread
     };
     app.world_mut().resource_mut::<Quickslots>().bind(3, bread);
@@ -375,7 +592,16 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
         record.keys_given.push(faction);
         record.note_met_on(faction, 2);
         record.note_met_on(faction, 3);
-        let mut screen = CommissionScreen::begin(Trade { profession: Profession::Weaponsmith, tier: Tier::Master, style: Some(Style::Blades) }, "Oda", "the Brothers of the Last Door").unwrap();
+        let mut screen = CommissionScreen::begin(
+            Trade {
+                profession: Profession::Weaponsmith,
+                tier: Tier::Master,
+                style: Some(Style::Blades),
+            },
+            "Oda",
+            "the Brothers of the Last Door",
+        )
+        .unwrap();
         screen.maker_spot = 4242;
         screen.depth = 2;
         record.orders.push(screen.order(100.0, "Wren").unwrap());
@@ -384,7 +610,10 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
         character.books_read.push(77);
         world.resource_mut::<Enchanting>().0.essence = 7;
         world.resource_mut::<Revives>().0 = 1;
-        let rules = world.resource::<forever_below::rules::GameRules>().0.clone();
+        let rules = world
+            .resource::<forever_below::rules::GameRules>()
+            .0
+            .clone();
         let delver = player(&mut app);
         let mut body = app.world_mut().entity_mut(delver);
         body.insert(DelverEffects::poisoned_for(&rules, 3.0));
@@ -398,13 +627,39 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
 
     // Lie down: F, and one frame.
     look_down_at_camp(&mut app, feet, forward, 0.6);
-    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    key(
+        &mut app,
+        KeyCode::KeyF,
+        "f",
+        bevy::input::ButtonState::Pressed,
+    );
     app.update();
-    assert!(app.world().resource::<Asleep>().0.is_some(), "asleep: {}", app.world().resource::<forever_below::inventory::Toast>().text);
-    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "Your delve is saved.");
+    assert!(
+        app.world().resource::<Asleep>().0.is_some(),
+        "asleep: {}",
+        app.world()
+            .resource::<forever_below::inventory::Toast>()
+            .text
+    );
+    assert_eq!(
+        app.world()
+            .resource::<forever_below::inventory::Toast>()
+            .text,
+        "Your delve is saved."
+    );
+    assert_eq!(
+        app.world().resource::<Asleep>().0.and_then(|s| s.saved),
+        Some(forever_below::save::SaveOutcome::Saved),
+        "the veil has it to show"
+    );
     let at_save = snapshot(&mut app);
     let lying = standing(&mut app);
-    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Released);
+    key(
+        &mut app,
+        KeyCode::KeyF,
+        "f",
+        bevy::input::ButtonState::Released,
+    );
     (app, at_save, lying, file)
 }
 
@@ -413,14 +668,19 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
 fn resumed(file: &PathBuf) -> (App, Snapshot) {
     let mut app = headless_game(file);
     run(&mut app, 30);
-    assert!(app.world().resource::<SavedGame>().delve.is_some(), "the title found the save");
+    assert!(
+        app.world().resource::<SavedGame>().delve.is_some(),
+        "the title found the save"
+    );
     app.world_mut().write_message(MenuCommand::ResumeDelve);
     let mut frames = 0;
     // The state is put back on the first frame of the delve; the next frame it is only played.
     loop {
         app.update();
         frames += 1;
-        if *app.world().resource::<State<AppState>>().get() == AppState::Delving && app.world().get_resource::<ResumeDelve>().is_none() {
+        if *app.world().resource::<State<AppState>>().get() == AppState::Delving
+            && app.world().get_resource::<ResumeDelve>().is_none()
+        {
             break;
         }
         assert!(frames < 20, "the delve begins");
@@ -433,9 +693,19 @@ fn resumed(file: &PathBuf) -> (App, Snapshot) {
 fn a_saved_delve_comes_back_whole_on_three_levels() {
     let (_, at_save, lying, file) = played("whole");
     assert_eq!(at_save.abyss.1, 3, "the delver lay down on the third level");
-    assert!(!at_save.other_levels.is_empty() && at_save.other_levels.contains_key(&1) && at_save.other_levels.contains_key(&2), "two levels left behind");
+    assert!(
+        !at_save.other_levels.is_empty()
+            && at_save.other_levels.contains_key(&1)
+            && at_save.other_levels.contains_key(&2),
+        "two levels left behind"
+    );
     // Everything the state holds is something, so the comparison below means something.
-    assert!(at_save.effects.is_some() && at_save.quickslots[3].is_some() && !at_save.orders.is_empty() && at_save.revives == 1);
+    assert!(
+        at_save.effects.is_some()
+            && at_save.quickslots[3].is_some()
+            && !at_save.orders.is_empty()
+            && at_save.revives == 1
+    );
     assert!(at_save.character.books_read == vec![77] && at_save.health.hp < at_save.health.max);
 
     let (mut app, resumed_at) = resumed(&file);
@@ -446,32 +716,69 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
         app.update();
         frames += 1;
     }
-    let sleep = app.world().resource::<Asleep>().0.expect("lying in their camp");
+    let sleep = app
+        .world()
+        .resource::<Asleep>()
+        .0
+        .expect("lying in their camp");
     assert_eq!(sleep.camp, fb_items::camp::Camp::Tent);
     assert!(app.world().get::<SetCamp>(sleep.bed).is_some());
-    assert!(app.world().get_resource::<forever_below::camp::PendingBed>().is_none());
+    assert!(
+        app.world()
+            .get_resource::<forever_below::camp::PendingBed>()
+            .is_none()
+    );
     let now = standing(&mut app);
-    assert_eq!(now.floor.len(), lying.floor.len(), "the floor holds as many things");
+    assert_eq!(
+        now.floor.len(),
+        lying.floor.len(),
+        "the floor holds as many things"
+    );
     for (a, b) in now.floor.iter().zip(&lying.floor) {
-        assert_eq!((a.0, &a.1.base, a.1.seed), (b.0, &b.1.base, b.1.seed), "the same thing lies in the same place");
+        assert_eq!(
+            (a.0, &a.1.base, a.1.seed),
+            (b.0, &b.1.base, b.1.seed),
+            "the same thing lies in the same place"
+        );
         if b.1.shape.lit() == Some(true) {
             // A light left burning burns on in the frames since (the world ran on).
             assert_eq!(a.1.shape.lit(), Some(true), "{} is still alight", b.1.base);
-            assert!(a.1.fuel_left() <= b.1.fuel_left(), "{} burns on, never back", b.1.base);
+            assert!(
+                a.1.fuel_left() <= b.1.fuel_left(),
+                "{} burns on, never back",
+                b.1.base
+            );
             continue;
         }
         let (a_text, b_text) = (format!("{a:?}"), format!("{b:?}"));
-        let at = a_text.bytes().zip(b_text.bytes()).position(|(x, y)| x != y).unwrap_or(0);
+        let at = a_text
+            .bytes()
+            .zip(b_text.bytes())
+            .position(|(x, y)| x != y)
+            .unwrap_or(0);
         let around = |t: &str| t[at.saturating_sub(60)..(at + 80).min(t.len())].to_string();
-        assert!(a == b, "{} {} differs near ...{}... then ...{}...", b.1.base, b.1.seed, around(&a_text), around(&b_text));
+        assert!(
+            a == b,
+            "{} {} differs near ...{}... then ...{}...",
+            b.1.base,
+            b.1.seed,
+            around(&a_text),
+            around(&b_text)
+        );
     }
     assert_eq!(now.camps, lying.camps, "the tent is still pitched");
     assert_eq!(now.containers, lying.containers, "the chests");
-    assert_eq!(now.creatures, lying.creatures, "the creatures, hurt or dead");
+    assert_eq!(
+        now.creatures, lying.creatures,
+        "the creatures, hurt or dead"
+    );
     // By now the rats of this level may have come for the sleeper. Let them be, and walk up.
     let delver = player(&mut app);
     let world = app.world_mut();
-    let creatures: Vec<Entity> = world.query_filtered::<Entity, With<Critter>>().iter(world).collect();
+    let creatures: Vec<Entity> = world
+        .query_filtered::<Entity, With<Critter>>()
+        .iter(world)
+        .collect();
     for creature in creatures {
         world.despawn(creature);
     }
@@ -483,12 +790,30 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     // The levels left behind come back as they were: down the stairs and up again.
     go(&mut app, StairKind::Up);
     assert_eq!(app.world().resource::<Abyss>().depth, 2);
-    assert!(standing(&mut app).floor.iter().any(|(_, i)| i.base == "Sack" && i.seed == 40_002), "the sack lies where it was set down");
+    assert!(
+        standing(&mut app)
+            .floor
+            .iter()
+            .any(|(_, i)| i.base == "Sack" && i.seed == 40_002),
+        "the sack lies where it was set down"
+    );
     go(&mut app, StairKind::Up);
     let level_one = standing(&mut app);
-    assert!(level_one.floor.iter().any(|(_, i)| i.base == "Sword" && i.seed == 40_001), "the sword lies where it was dropped");
-    assert!(level_one.creatures.iter().any(|c| c.2), "the rat killed is still dead");
-    assert!(level_one.containers.iter().any(|c| c.1), "the chest stands open");
+    assert!(
+        level_one
+            .floor
+            .iter()
+            .any(|(_, i)| i.base == "Sword" && i.seed == 40_001),
+        "the sword lies where it was dropped"
+    );
+    assert!(
+        level_one.creatures.iter().any(|c| c.2),
+        "the rat killed is still dead"
+    );
+    assert!(
+        level_one.containers.iter().any(|c| c.1),
+        "the chest stands open"
+    );
 }
 
 #[test]
@@ -498,11 +823,21 @@ fn a_delve_that_may_not_save_writes_nothing_when_the_delver_lies_down() {
     app.insert_resource(Saveable(false));
     let (feet, forward) = set_camp_where(&mut app, "Bedroll", 40_011);
     look_down_at_camp(&mut app, feet, forward, 0.6);
-    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    key(
+        &mut app,
+        KeyCode::KeyF,
+        "f",
+        bevy::input::ButtonState::Pressed,
+    );
     app.update();
     assert!(app.world().resource::<Asleep>().0.is_some());
     assert!(!file.exists(), "no save was written");
-    assert!(app.world().resource::<forever_below::inventory::Toast>().text.starts_with("You lie down"));
+    assert!(
+        app.world()
+            .resource::<forever_below::inventory::Toast>()
+            .text
+            .starts_with("You lie down")
+    );
 }
 
 /// Every resource and every component of the delver the game has, and what the save does with
@@ -512,22 +847,37 @@ fn every_resource_and_component_is_accounted_for() {
     // (type name, how the save has it)
     const KEPT: &[(&str, &str)] = &[
         ("travel::Abyss", "run_seed and depth"),
-        ("record::WorldRecord", "record: every level, standings, orders, keys, meetings"),
+        (
+            "record::WorldRecord",
+            "record: every level, standings, orders, keys, meetings",
+        ),
         ("character::Character", "delver (worn is worked out again)"),
-        ("inventory::items::Inventory", "pack: what is worn and carried, with the coin purse; the floor is in the record"),
+        (
+            "inventory::items::Inventory",
+            "pack: what is worn and carried, with the coin purse; the floor is in the record",
+        ),
         ("quickslots::Quickslots", "pack.quickslots"),
         ("game_clock::GameClock", "clock"),
         ("combat::revival::Revives", "revives"),
         ("enchanting::Enchanting", "enchanting"),
         ("map::explore::ExploredLevels", "explored"),
-        ("camp::Asleep", "camp: the delver lies down in it again on resuming"),
+        (
+            "camp::Asleep",
+            "camp: the delver lies down in it again on resuming",
+        ),
     ];
     const NOT_KEPT: &[(&str, &str)] = &[
         // Set again by the delve that starts, from what the save holds.
         ("save::SaveFile", "where the file is"),
-        ("save::Saveable", "whether this delve may save: set by the title"),
+        (
+            "save::Saveable",
+            "whether this delve may save: set by the title",
+        ),
         ("character::ChosenDelver", "taken up by the delve's start"),
-        ("play::CurrentLevel", "rebuilt from the seed, depth and record"),
+        (
+            "play::CurrentLevel",
+            "rebuilt from the seed, depth and record",
+        ),
         ("play::LevelRooms", "mapped from the level"),
         ("play::BlockedCells", "worked out as the level is laid out"),
         ("play::Obstacles", "gathered each frame"),
@@ -536,7 +886,10 @@ fn every_resource_and_component_is_accounted_for() {
         ("level::PreparedStone", "the level's stone made ahead"),
         ("folk::FolkFigures", "folk figures made ahead"),
         ("travel::Below", "the level below being made"),
-        ("travel::Journey", "a journey between levels: none while asleep"),
+        (
+            "travel::Journey",
+            "a journey between levels: none while asleep",
+        ),
         // The moment.
         ("play::ScreenOpen", "no screen is open to lie down"),
         ("play::SheetTab", "which tab the inventory opens on"),
@@ -544,8 +897,14 @@ fn every_resource_and_component_is_accounted_for() {
         ("inventory::Hovered", "the mouse"),
         ("inventory::OpenContainer", "closed to lie down"),
         ("inventory::Toast", "a line of text"),
-        ("inventory::underfoot::Underfoot", "what lies near: the floor is in the record"),
-        ("inventory::underfoot::FloorChanges", "changes to the floor, applied each frame"),
+        (
+            "inventory::underfoot::Underfoot",
+            "what lies near: the floor is in the record",
+        ),
+        (
+            "inventory::underfoot::FloorChanges",
+            "changes to the floor, applied each frame",
+        ),
         ("inventory::ColumnScroll", "screen layout"),
         ("inventory::ShelfScrolled", "screen layout"),
         ("inventory::card::ShownCard", "screen"),
@@ -554,7 +913,10 @@ fn every_resource_and_component_is_accounted_for() {
         ("inventory::doll::DollAssets", "icons and figures drawn"),
         ("inventory::doll::DollStage", "the paper doll's figure"),
         ("fitting::FitCache", "fits made again as needed"),
-        ("barter::Barter", "no barter while lying down; the shelves are in the record"),
+        (
+            "barter::Barter",
+            "no barter while lying down; the shelves are in the record",
+        ),
         ("barter::BarterRequest", "a request"),
         ("carry::Aimed", "what is under the crosshair"),
         ("interact::CrosshairPrompt", "a line of text"),
@@ -563,8 +925,14 @@ fn every_resource_and_component_is_accounted_for() {
         ("folk::AimedFolk", "what is under the crosshair"),
         ("talk::Talk", "no talk while lying down"),
         ("talk::TalkRequest", "a request"),
-        ("commission::CommissionScreen", "no screen is open to lie down; the orders are in the record"),
-        ("commission::CommissionStage", "the commission screen's figure"),
+        (
+            "commission::CommissionScreen",
+            "no screen is open to lie down; the orders are in the record",
+        ),
+        (
+            "commission::CommissionStage",
+            "the commission screen's figure",
+        ),
         ("commission::Turn", "the commission screen's turn"),
         ("enchanter::Bench", "no screen is open to lie down"),
         ("reading::OpenPage", "no screen is open to lie down"),
@@ -585,11 +953,20 @@ fn every_resource_and_component_is_accounted_for() {
         ("inspect::InspectorOpen", "a debug tool"),
         // Dice and what hunts.
         ("combat::RunDice", "drawn afresh each run, from the clock"),
-        ("combat::shoot::Marksman", "a bow drawn: nothing is drawn while lying down"),
+        (
+            "combat::shoot::Marksman",
+            "a bow drawn: nothing is drawn while lying down",
+        ),
         ("combat::vitals::Pain", "the red flash"),
-        ("combat::vitals::Dying", "a last gasp: not alive to lie down in it"),
+        (
+            "combat::vitals::Dying",
+            "a last gasp: not alive to lie down in it",
+        ),
         ("combat::vitals::Fallen", "death: the save is deleted"),
-        ("combat::revival::Unconscious", "a choice at the edge of death: none while lying down"),
+        (
+            "combat::revival::Unconscious",
+            "a choice at the edge of death: none while lying down",
+        ),
         ("combat::blood::GaspBlood", "the red edge"),
         ("combat::voice::Grunts", "sounds"),
         ("combat::feedback::CreatureSounds", "sounds"),
@@ -633,62 +1010,151 @@ fn every_resource_and_component_is_accounted_for() {
         ("title::creator::ShapeMoved", "the creator"),
     ];
     const PLAYER_KEPT: &[&str] = &[
-        "Transform", "player::Locomotion", "combat::Health", "character::DelverNeeds", "character::DelverStamina", "character::DelverMana", "exhaustion::Exhaustion", "exhaustion::ExhaustionTimes",
-        "character::DelverRecovery", "character::DelverEffects",
+        "Transform",
+        "player::Locomotion",
+        "combat::Health",
+        "character::DelverNeeds",
+        "character::DelverStamina",
+        "character::DelverMana",
+        "exhaustion::Exhaustion",
+        "exhaustion::ExhaustionTimes",
+        "character::DelverRecovery",
+        "character::DelverEffects",
     ];
     const PLAYER_NOT_KEPT: &[(&str, &str)] = &[
         ("play::Player", "the delver itself"),
         ("character::Load", "worked out from the pack"),
         ("character::GearStamina", "worked out from the pack"),
         ("player::GearPace", "worked out from the pack"),
-        ("character::DelverVisibility", "worked out from the light and the pace"),
+        (
+            "character::DelverVisibility",
+            "worked out from the light and the pace",
+        ),
         ("player::Gait", "the step cycle"),
         ("combat::vitals::Shunned", "worked out from what is worn"),
         ("combat::ArmourClass", "worked out from what is worn"),
-        ("combat::vitals::Constricted", "a snake's hold: broken by lying down"),
+        (
+            "combat::vitals::Constricted",
+            "a snake's hold: broken by lying down",
+        ),
         ("combat::swing::Swing", "a swing"),
         ("combat::guard::Guard", "a guard"),
         ("player::Slowed", "a moment"),
         ("footsteps::StepState", "sounds"),
-        ("kindle::Held", "the light in hand, worked out from the pack"),
+        (
+            "kindle::Held",
+            "the light in hand, worked out from the pack",
+        ),
     ];
 
     // The whole flow has been played (levels visited, a tent pitched, poisoned, asleep), so what
     // only exists then is in the world too. The save it made is one versioned file, alone.
     let (mut app, _, _, file) = played("accounted");
-    let names: Vec<String> = std::fs::read_dir(file.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    assert_eq!(names, vec![save::FILE_NAME.to_string()], "no temporary file is left behind");
+    let names: Vec<String> = std::fs::read_dir(file.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec![save::FILE_NAME.to_string()],
+        "no temporary file is left behind"
+    );
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(text.starts_with(&format!("{{\"version\":{}", save::VERSION)), "the version comes first: {}", &text[..40]);
+    assert!(
+        text.starts_with(&format!("{{\"version\":{}", save::VERSION)),
+        "the version comes first: {}",
+        &text[..40]
+    );
     let delver = player(&mut app);
     let world = app.world_mut();
     let short = |name: &str| -> String {
-        name.strip_prefix("forever_below::").map_or_else(|| name.to_string(), str::to_string)
+        name.strip_prefix("forever_below::")
+            .map_or_else(|| name.to_string(), str::to_string)
     };
-    let resources: BTreeSet<String> = world.iter_resources().map(|(_, info, _)| info.name().to_string()).filter(|n| n.starts_with("forever_below::")).map(|n| short(&n)).collect();
-    let known: BTreeSet<&str> = KEPT.iter().map(|(n, _)| *n).chain(NOT_KEPT.iter().map(|(n, _)| *n)).collect();
-    let unknown: Vec<&String> = resources.iter().filter(|n| !known.contains(n.as_str())).collect();
-    assert!(unknown.is_empty(), "resources the save has not decided about (add each to KEPT or NOT_KEPT): {unknown:#?}");
+    let resources: BTreeSet<String> = world
+        .iter_resources()
+        .map(|(_, info, _)| info.name().to_string())
+        .filter(|n| n.starts_with("forever_below::"))
+        .map(|n| short(&n))
+        .collect();
+    let known: BTreeSet<&str> = KEPT
+        .iter()
+        .map(|(n, _)| *n)
+        .chain(NOT_KEPT.iter().map(|(n, _)| *n))
+        .collect();
+    let unknown: Vec<&String> = resources
+        .iter()
+        .filter(|n| !known.contains(n.as_str()))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "resources the save has not decided about (add each to KEPT or NOT_KEPT): {unknown:#?}"
+    );
 
     let components: BTreeSet<String> = world
         .inspect_entity(delver)
         .unwrap()
         .map(|(_, info)| info.name().to_string())
-        .map(|n| if n.ends_with("::Transform") { "Transform".to_string() } else { short(&n) })
+        .map(|n| {
+            if n.ends_with("::Transform") {
+                "Transform".to_string()
+            } else {
+                short(&n)
+            }
+        })
         .filter(|n| !n.starts_with("bevy_") && !n.starts_with("alloc::"))
         .collect();
-    let known: BTreeSet<&str> = PLAYER_KEPT.iter().copied().chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n)).collect();
-    let unknown: Vec<&String> = components.iter().filter(|n| !known.contains(n.as_str())).collect();
-    assert!(unknown.is_empty(), "components of the delver the save has not decided about (add each to PLAYER_KEPT or PLAYER_NOT_KEPT): {unknown:#?}");
+    let known: BTreeSet<&str> = PLAYER_KEPT
+        .iter()
+        .copied()
+        .chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n))
+        .collect();
+    let unknown: Vec<&String> = components
+        .iter()
+        .filter(|n| !known.contains(n.as_str()))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "components of the delver the save has not decided about (add each to PLAYER_KEPT or PLAYER_NOT_KEPT): {unknown:#?}"
+    );
 
     // And the other way: a name in a list that is no longer a type of the game is a stale entry.
     // (What exists only when it happens, a fall or a journey, or only in the real game's asset
     // server, is registered by then too, except these.)
-    const ONLY_WHEN_IT_HAPPENS: &[&str] = &["combat::vitals::Fallen", "combat::vitals::Dying", "combat::revival::Unconscious", "travel::Journey", "travel::Below", "combat::shoot::Marksman", "combat::vitals::Constricted", "combat::swing::Swing", "combat::guard::Guard", "player::Slowed", "kindle::Held", "rules::RulesFile"];
-    let registered: BTreeSet<String> = world.components().iter_registered().map(|(_, info)| short(&info.name().to_string())).collect();
-    let listed = KEPT.iter().map(|(n, _)| *n).chain(NOT_KEPT.iter().map(|(n, _)| *n)).chain(PLAYER_KEPT.iter().copied()).chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n));
-    let stale: Vec<&str> = listed.filter(|n| *n != "Transform" && !ONLY_WHEN_IT_HAPPENS.contains(n) && !registered.contains(*n)).collect();
-    assert!(stale.is_empty(), "names in the lists that are not types of the game: {stale:#?}");
+    const ONLY_WHEN_IT_HAPPENS: &[&str] = &[
+        "combat::vitals::Fallen",
+        "combat::vitals::Dying",
+        "combat::revival::Unconscious",
+        "travel::Journey",
+        "travel::Below",
+        "combat::shoot::Marksman",
+        "combat::vitals::Constricted",
+        "combat::swing::Swing",
+        "combat::guard::Guard",
+        "player::Slowed",
+        "kindle::Held",
+        "rules::RulesFile",
+    ];
+    let registered: BTreeSet<String> = world
+        .components()
+        .iter_registered()
+        .map(|(_, info)| short(&info.name().to_string()))
+        .collect();
+    let listed = KEPT
+        .iter()
+        .map(|(n, _)| *n)
+        .chain(NOT_KEPT.iter().map(|(n, _)| *n))
+        .chain(PLAYER_KEPT.iter().copied())
+        .chain(PLAYER_NOT_KEPT.iter().map(|(n, _)| *n));
+    let stale: Vec<&str> = listed
+        .filter(|n| {
+            *n != "Transform" && !ONLY_WHEN_IT_HAPPENS.contains(n) && !registered.contains(*n)
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "names in the lists that are not types of the game: {stale:#?}"
+    );
 }
 
 #[test]
@@ -701,12 +1167,29 @@ fn dying_deletes_the_save_and_the_title_offers_no_resume() {
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     // The save goes at the lethal blow, in the last gasp, before the fall.
     run(&mut app, 10);
-    assert!(app.world().get_resource::<forever_below::combat::vitals::Dying>().is_some() && app.world().get_resource::<forever_below::combat::vitals::Fallen>().is_none());
-    assert!(!file.exists(), "deleted in the last gasp, so quitting then cannot keep it");
+    assert!(
+        app.world()
+            .get_resource::<forever_below::combat::vitals::Dying>()
+            .is_some()
+            && app
+                .world()
+                .get_resource::<forever_below::combat::vitals::Fallen>()
+                .is_none()
+    );
+    assert!(
+        !file.exists(),
+        "deleted in the last gasp, so quitting then cannot keep it"
+    );
     run(&mut app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 60);
-    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+    assert_eq!(
+        *app.world().resource::<State<AppState>>().get(),
+        AppState::Title
+    );
     assert!(!file.exists(), "death deleted the save");
-    assert!(app.world().resource::<SavedGame>().delve.is_none(), "so the title has none to resume");
+    assert!(
+        app.world().resource::<SavedGame>().delve.is_none(),
+        "so the title has none to resume"
+    );
 }
 
 #[test]
@@ -720,5 +1203,9 @@ fn an_unreadable_save_is_set_aside_and_the_title_says_so() {
     assert!(found.delve.is_none());
     assert_eq!(found.unreadable, Some(save::SET_ASIDE_LINE));
     assert!(!file.exists() && file.with_file_name(save::ASIDE_NAME).exists());
-    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title, "no panic, the title stands");
+    assert_eq!(
+        *app.world().resource::<State<AppState>>().get(),
+        AppState::Title,
+        "no panic, the title stands"
+    );
 }

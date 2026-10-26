@@ -107,7 +107,9 @@ mod tests {
     fn app_in(state: AppState) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::ZERO))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::ZERO,
+            ))
             .insert_state(state)
             .init_resource::<Tuning>()
             .init_resource::<ScreenOpen>()
@@ -120,7 +122,9 @@ mod tests {
     /// Runs `seconds` of fixed time, one second per step.
     fn run_fixed(app: &mut App, seconds: u32) {
         for _ in 0..seconds {
-            app.world_mut().resource_mut::<Time<Fixed>>().advance_by(Duration::from_secs(1));
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .advance_by(Duration::from_secs(1));
             app.world_mut().run_schedule(FixedUpdate);
         }
     }
@@ -146,7 +150,10 @@ mod tests {
     fn changing_the_tuning_keeps_the_time_and_changes_the_rate() {
         let mut app = delve();
         run_fixed(&mut app, 300);
-        app.world_mut().resource_mut::<Tuning>().clock.game_seconds_per_second = 6.0;
+        app.world_mut()
+            .resource_mut::<Tuning>()
+            .clock
+            .game_seconds_per_second = 6.0;
         assert!((hours(&app) - 1.0).abs() < 1e-3, "no jump");
         run_fixed(&mut app, 300);
         assert!((hours(&app) - 1.5).abs() < 1e-3, "{}", hours(&app));
@@ -177,9 +184,13 @@ mod tests {
         let mut app = delve();
         run_fixed(&mut app, 300);
         assert!(hours(&app) > 0.9);
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Title);
         app.update();
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Delving);
         app.update();
         assert_eq!(hours(&app), 0.0);
     }
@@ -190,13 +201,24 @@ mod tests {
         run_fixed(&mut app, 60);
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
 
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Title);
         app.update();
-        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Delving);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Delving);
         app.update();
 
-        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "stale screen should be cleared");
+        assert_eq!(
+            app.world().resource::<ScreenOpen>().0,
+            None,
+            "stale screen should be cleared"
+        );
         run_fixed(&mut app, 60);
-        assert!(hours(&app) > 0.01, "clock should advance despite previous screen state");
+        assert!(
+            hours(&app) > 0.01,
+            "clock should advance despite previous screen state"
+        );
     }
 }

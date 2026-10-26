@@ -31,7 +31,11 @@ impl Attacker {
 
     /// Every attacker: each creature, then a folk with each melee base.
     pub fn all() -> Vec<Attacker> {
-        Species::ALL.iter().map(|&s| Attacker::Creature(s)).chain(melee_bases().into_iter().map(Attacker::Folk)).collect()
+        Species::ALL
+            .iter()
+            .map(|&s| Attacker::Creature(s))
+            .chain(melee_bases().into_iter().map(Attacker::Folk))
+            .collect()
     }
 }
 
@@ -41,14 +45,26 @@ pub fn melee_bases() -> Vec<String> {
     static BASES: LazyLock<Vec<String>> = LazyLock::new(|| {
         let mut names: BTreeSet<&str> = ARMORY_BASES.iter().map(|(n, _)| *n).collect();
         names.extend(bases().keys().map(String::as_str));
-        names.into_iter().filter(|n| roll_item(n, 1).is_some_and(|i| i.profile.tags.contains(&Tag::Weapon) && is_melee(i.shape.family()))).map(String::from).collect()
+        names
+            .into_iter()
+            .filter(|n| {
+                roll_item(n, 1).is_some_and(|i| {
+                    i.profile.tags.contains(&Tag::Weapon) && is_melee(i.shape.family())
+                })
+            })
+            .map(String::from)
+            .collect()
     });
     BASES.clone()
 }
 
 /// The lab character's armour class, as the sheet shows it.
 pub fn armour_class(state: &LabState) -> i32 {
-    state.character.armour_class_with(&state.ruleset.rules, &state.inventory()).value().round() as i32
+    state
+        .character
+        .armour_class_with(&state.ruleset.rules, &state.inventory())
+        .value()
+        .round() as i32
 }
 
 /// The lab character's hit points at full.

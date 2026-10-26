@@ -12,7 +12,9 @@
 
 use bevy::prelude::*;
 use fb_character::rules::Rules;
-use fb_character::{Exhaustion as ExhaustionLevel, Mana, Meter, MeterKind, Needs, Stamina, modifier};
+use fb_character::{
+    Exhaustion as ExhaustionLevel, Mana, Meter, MeterKind, Needs, Stamina, modifier,
+};
 
 use super::card::place_beside;
 use super::items::Inventory;
@@ -128,7 +130,11 @@ const BAR_PX: f32 = 180.0;
 const BAR_HEIGHT_PX: f32 = 10.0;
 
 /// The meters in the order they are shown, with their labels.
-pub const NEEDS: [(MeterKind, &str); 3] = [(MeterKind::Hunger, "Hunger"), (MeterKind::Thirst, "Thirst"), (MeterKind::Sleepiness, "Sleepiness")];
+pub const NEEDS: [(MeterKind, &str); 3] = [
+    (MeterKind::Hunger, "Hunger"),
+    (MeterKind::Thirst, "Thirst"),
+    (MeterKind::Sleepiness, "Sleepiness"),
+];
 
 /// A gear row's whole line, by its place in [`GEAR_ROWS`]: what hovering a number is measured
 /// against.
@@ -150,7 +156,26 @@ const TIP_WIDTH: f32 = 380.0;
 pub const ATTRIBUTES: [&str; 5] = ["STR", "DEX", "CON", "INT", "WIS"];
 
 /// The rows of what the delver's gear makes of them.
-pub const GEAR_ROWS: [&str; 18] = ["Load", "Warmth", "Light", "Darkvision", "Armour class", "Hunger rate", "Sleepiness rate", "Heal on a kill", "Speed", "Block chance", "Luck", "Abilities", "To hit", "Ranged to hit", "Attack rate", "Stamina refill", "Stamina cost", "Creature wards"];
+pub const GEAR_ROWS: [&str; 18] = [
+    "Load",
+    "Warmth",
+    "Light",
+    "Darkvision",
+    "Armour class",
+    "Hunger rate",
+    "Sleepiness rate",
+    "Heal on a kill",
+    "Speed",
+    "Block chance",
+    "Luck",
+    "Abilities",
+    "To hit",
+    "Ranged to hit",
+    "Attack rate",
+    "Stamina refill",
+    "Stamina cost",
+    "Creature wards",
+];
 
 /// "STR 14 (+2)": the score and its SRD modifier.
 pub fn attribute_text(name: &str, score: i32) -> String {
@@ -161,7 +186,13 @@ pub fn attribute_text(name: &str, score: i32) -> String {
 pub fn attribute_lines(character: &Character) -> [String; 5] {
     // As they stand, with what they wear (the Abilities row says how much that is).
     let a = character.scores();
-    let scores = [a.strength, a.dexterity, a.constitution, a.intelligence, a.wisdom];
+    let scores = [
+        a.strength,
+        a.dexterity,
+        a.constitution,
+        a.intelligence,
+        a.wisdom,
+    ];
     std::array::from_fn(|i| attribute_text(ATTRIBUTES[i], scores[i]))
 }
 
@@ -169,24 +200,72 @@ pub fn attribute_lines(character: &Character) -> [String; 5] {
 /// \u{b7} Burdened", "4 / 6", "20 ft", "60 ft", "13", "\u{d7}0.85", "usual", "+1 HP", "\u{d7}1.2",
 /// "20%", "+2", "+2 STR, -1 CON", then the to hit rows "+1" and "+2" (or "none"), the attack rate "\u{d7}1.1", and the stamina refill and cost multiples.
 pub fn gear_values(character: &Character, derived: &Derived) -> [String; 18] {
-    let feet = |f: f32| if f > 0.0 { format!("{f:.0} ft") } else { "none".to_string() };
-    let points = |p: f32| if p.round() == 0.0 { "none".to_string() } else { format!("{:+}", p.round()) };
-    let rate = |r: f32| if (r - 1.0).abs() < 1e-6 { "usual".to_string() } else { format!("\u{d7}{}", fb_character::explain::number(r as f64)) };
+    let feet = |f: f32| {
+        if f > 0.0 {
+            format!("{f:.0} ft")
+        } else {
+            "none".to_string()
+        }
+    };
+    let points = |p: f32| {
+        if p.round() == 0.0 {
+            "none".to_string()
+        } else {
+            format!("{:+}", p.round())
+        }
+    };
+    let rate = |r: f32| {
+        if (r - 1.0).abs() < 1e-6 {
+            "usual".to_string()
+        } else {
+            format!("\u{d7}{}", fb_character::explain::number(r as f64))
+        }
+    };
     [
-        format!("{:.0} / {:.0} lb \u{b7} {}", derived.load, derived.capacity, derived.load_band.word()),
+        format!(
+            "{:.0} / {:.0} lb \u{b7} {}",
+            derived.load,
+            derived.capacity,
+            derived.load_band.word()
+        ),
         format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()),
         feet(derived.light),
         feet(derived.darkvision),
         derived.armour_class.to_string(),
         rate(derived.hunger_rate),
         rate(derived.sleepiness_rate),
-        if derived.heal_on_kill > 0.0 { format!("+{} HP", fb_character::explain::number(derived.heal_on_kill as f64)) } else { "none".to_string() },
+        if derived.heal_on_kill > 0.0 {
+            format!(
+                "+{} HP",
+                fb_character::explain::number(derived.heal_on_kill as f64)
+            )
+        } else {
+            "none".to_string()
+        },
         rate(derived.speed),
-        if derived.block_chance > 0.0 { format!("{}%", (derived.block_chance * 100.0).round()) } else { "none".to_string() },
-        if derived.luck > 0.0 { format!("+{}", fb_character::explain::number(derived.luck as f64)) } else { "none".to_string() },
+        if derived.block_chance > 0.0 {
+            format!("{}%", (derived.block_chance * 100.0).round())
+        } else {
+            "none".to_string()
+        },
+        if derived.luck > 0.0 {
+            format!("+{}", fb_character::explain::number(derived.luck as f64))
+        } else {
+            "none".to_string()
+        },
         {
-            let given: Vec<String> = derived.abilities.named().into_iter().filter(|(_, by)| *by != 0).map(|(name, by)| format!("{by:+} {name}")).collect();
-            if given.is_empty() { "none".to_string() } else { given.join(", ") }
+            let given: Vec<String> = derived
+                .abilities
+                .named()
+                .into_iter()
+                .filter(|(_, by)| *by != 0)
+                .map(|(name, by)| format!("{by:+} {name}"))
+                .collect();
+            if given.is_empty() {
+                "none".to_string()
+            } else {
+                given.join(", ")
+            }
         },
         points(derived.to_hit),
         points(derived.ranged_to_hit),
@@ -211,7 +290,11 @@ pub fn ward_summary(derived: &Derived) -> String {
             parts.push(format!("{} {}% unaware", foe.label(), pct(derived.shun[i])));
         }
     }
-    if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(", ")
+    }
 }
 
 fn meter(needs: &Needs, kind: MeterKind) -> &Meter {
@@ -256,99 +339,265 @@ pub fn exhaustion_effect(exhaustion: ExhaustionLevel, rules: &Rules) -> String {
 
 /// "Exhaustion 2: half speed".
 pub fn exhaustion_text(exhaustion: ExhaustionLevel, rules: &Rules) -> String {
-    format!("Exhaustion {}: {}", exhaustion.level, exhaustion_effect(exhaustion, rules))
+    format!(
+        "Exhaustion {}: {}",
+        exhaustion.level,
+        exhaustion_effect(exhaustion, rules)
+    )
 }
 
 /// A heading over a section, in the display face with a rule beneath.
 fn heading(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, title: &str) {
     parent
-        .spawn((Node { border: UiRect::bottom(px(1)), padding: UiRect::bottom(px(2)), margin: UiRect::top(px(6)), ..default() }, BorderColor::all(FAINT)))
+        .spawn((
+            Node {
+                border: UiRect::bottom(px(1)),
+                padding: UiRect::bottom(px(2)),
+                margin: UiRect::top(px(6)),
+                ..default()
+            },
+            BorderColor::all(FAINT),
+        ))
         .with_child((Text::new(title), UiFonts::style(&fonts.display, 20.0, INK)));
 }
 
 /// A row: its label in the body face, then what `fill_row` puts after it.
-fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
-    row_labelled(parent, fonts, label, gear, Node { width: px(LABEL_PX), flex_shrink: 0.0, ..default() }, fill_row);
+fn row(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    gear: Option<usize>,
+    fill_row: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    row_labelled(
+        parent,
+        fonts,
+        label,
+        gear,
+        Node {
+            width: px(LABEL_PX),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        fill_row,
+    );
 }
 
 /// [`row`] with the label's box given: the tongues section lets it size to its words.
-fn row_labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, gear: Option<usize>, label_box: Node, fill_row: impl FnOnce(&mut ChildSpawnerCommands)) {
-    let mut row = parent.spawn(Node { align_items: AlignItems::Center, column_gap: px(12), min_height: px(22), ..default() });
+fn row_labelled(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    gear: Option<usize>,
+    label_box: Node,
+    fill_row: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    let mut row = parent.spawn(Node {
+        align_items: AlignItems::Center,
+        column_gap: px(12),
+        min_height: px(22),
+        ..default()
+    });
     if let Some(i) = gear {
         row.insert(GearRow(i));
     }
     row.with_children(|row| {
-        row.spawn(label_box).with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
+        row.spawn(label_box)
+            .with_child((Text::new(label), UiFonts::style(&fonts.body, 15.0, MUTED)));
         fill_row(row);
     });
 }
 
 /// Builds the character tab's body: the status section.
 #[allow(clippy::too_many_arguments)]
-pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
-    parent.spawn((CharacterSheet, Name::new("CharacterSheet"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 0.0, ..default() })).with_children(|sheet| {
-        heading(sheet, fonts, "attributes");
-        sheet.spawn(Node { column_gap: px(18), flex_wrap: FlexWrap::Wrap, row_gap: px(4), ..default() }).with_children(|line| {
-            for (i, text) in attribute_lines(character).into_iter().enumerate() {
-                line.spawn((AttributeLine(i), Text::new(text), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
+pub fn sheet(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    rules: &Rules,
+    character: &Character,
+    inventory: &Inventory,
+    needs: &Needs,
+    exhaustion: ExhaustionLevel,
+    vitals: Vitals,
+) {
+    parent
+        .spawn((
+            CharacterSheet,
+            Name::new("CharacterSheet"),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                flex_shrink: 0.0,
+                ..default()
+            },
+        ))
+        .with_children(|sheet| {
+            heading(sheet, fonts, "attributes");
+            sheet
+                .spawn(Node {
+                    column_gap: px(18),
+                    flex_wrap: FlexWrap::Wrap,
+                    row_gap: px(4),
+                    ..default()
+                })
+                .with_children(|line| {
+                    for (i, text) in attribute_lines(character).into_iter().enumerate() {
+                        line.spawn((
+                            AttributeLine(i),
+                            Text::new(text),
+                            UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT),
+                        ));
+                    }
+                });
+            heading(sheet, fonts, "conditions");
+            sheet.spawn((
+                ConditionList,
+                Name::new("Conditions"),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(6),
+                    ..default()
+                },
+            ));
+            heading(sheet, fonts, "enchanting");
+            sheet.spawn((
+                EnchantingLine,
+                Text::new(NO_ENCHANTING),
+                UiFonts::style(&fonts.body, 15.0, MUTED),
+            ));
+            sheet.spawn((
+                TongueList,
+                Name::new("Tongues"),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(4),
+                    ..default()
+                },
+            ));
+            heading(sheet, fonts, "what your gear makes of you");
+            let values = gear_values(character, &character.derive_with(rules, inventory));
+            for (i, label) in GEAR_ROWS.into_iter().enumerate() {
+                row(sheet, fonts, label, Some(i), |row| {
+                    let colour = if i == 0 {
+                        crate::ui::load_colour(character.derive_with(rules, inventory).load_band)
+                            .unwrap_or(BRIGHT)
+                    } else {
+                        BRIGHT
+                    };
+                    row.spawn((
+                        GearLine(i),
+                        Text::new(values[i].clone()),
+                        UiFonts::style(&fonts.mono_bold, 14.0, colour),
+                    ));
+                });
+            }
+            heading(sheet, fonts, "status");
+            for (kind, label) in NEEDS {
+                let meter = meter(needs, kind);
+                row(sheet, fonts, label, None, |row| {
+                    row.spawn((
+                        Node {
+                            width: px(BAR_PX),
+                            height: px(BAR_HEIGHT_PX),
+                            flex_shrink: 0.0,
+                            border: UiRect::all(px(1)),
+                            border_radius: BorderRadius::all(px(3)),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                        BackgroundColor(CELL),
+                        BorderColor::all(LINE),
+                    ))
+                    .with_child((
+                        NeedFill(kind),
+                        Node {
+                            width: percent(fill(meter) * 100.0),
+                            height: percent(100),
+                            ..default()
+                        },
+                        BackgroundColor(need_colour(meter)),
+                    ));
+                    row.spawn((
+                        NeedWord(kind),
+                        Text::new(meter.word_with(rules)),
+                        UiFonts::style(&fonts.mono_bold, 14.0, need_colour(meter)),
+                    ));
+                });
+            }
+            row(sheet, fonts, "Exhaustion", None, |row| {
+                row.spawn((
+                    ExhaustionLine,
+                    Text::new(exhaustion_text(exhaustion, rules)),
+                    UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT),
+                ));
+            });
+            for (vital, label) in [(Vital::Stamina, "Stamina"), (Vital::Mana, "Mana")] {
+                row(sheet, fonts, label, None, |row| {
+                    row.spawn((
+                        Node {
+                            width: px(BAR_PX),
+                            height: px(BAR_HEIGHT_PX),
+                            flex_shrink: 0.0,
+                            border: UiRect::all(px(1)),
+                            border_radius: BorderRadius::all(px(3)),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                        BackgroundColor(CELL),
+                        BorderColor::all(LINE),
+                    ))
+                    .with_child((
+                        VitalFill(vital),
+                        Node {
+                            width: percent(vital_fill(&vitals, vital) * 100.0),
+                            height: percent(100),
+                            ..default()
+                        },
+                        BackgroundColor(vital_colour(&vitals, vital)),
+                    ));
+                    row.spawn((
+                        VitalWord(vital),
+                        Text::new(vital_word(&vitals, vital)),
+                        UiFonts::style(&fonts.mono_bold, 14.0, vital_colour(&vitals, vital)),
+                    ));
+                });
             }
         });
-        heading(sheet, fonts, "conditions");
-        sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
-        heading(sheet, fonts, "enchanting");
-        sheet.spawn((EnchantingLine, Text::new(NO_ENCHANTING), UiFonts::style(&fonts.body, 15.0, MUTED)));
-        sheet.spawn((TongueList, Name::new("Tongues"), Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }));
-        heading(sheet, fonts, "what your gear makes of you");
-        let values = gear_values(character, &character.derive_with(rules, inventory));
-        for (i, label) in GEAR_ROWS.into_iter().enumerate() {
-            row(sheet, fonts, label, Some(i), |row| {
-                let colour = if i == 0 { crate::ui::load_colour(character.derive_with(rules, inventory).load_band).unwrap_or(BRIGHT) } else { BRIGHT };
-                row.spawn((GearLine(i), Text::new(values[i].clone()), UiFonts::style(&fonts.mono_bold, 14.0, colour)));
-            });
-        }
-        heading(sheet, fonts, "status");
-        for (kind, label) in NEEDS {
-            let meter = meter(needs, kind);
-            row(sheet, fonts, label, None, |row| {
-                row.spawn((
-                    Node { width: px(BAR_PX), height: px(BAR_HEIGHT_PX), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), overflow: Overflow::clip(), ..default() },
-                    BackgroundColor(CELL),
-                    BorderColor::all(LINE),
-                ))
-                .with_child((NeedFill(kind), Node { width: percent(fill(meter) * 100.0), height: percent(100), ..default() }, BackgroundColor(need_colour(meter))));
-                row.spawn((NeedWord(kind), Text::new(meter.word_with(rules)), UiFonts::style(&fonts.mono_bold, 14.0, need_colour(meter))));
-            });
-        }
-        row(sheet, fonts, "Exhaustion", None, |row| {
-            row.spawn((ExhaustionLine, Text::new(exhaustion_text(exhaustion, rules)), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
-        });
-        for (vital, label) in [(Vital::Stamina, "Stamina"), (Vital::Mana, "Mana")] {
-            row(sheet, fonts, label, None, |row| {
-                row.spawn((
-                    Node { width: px(BAR_PX), height: px(BAR_HEIGHT_PX), flex_shrink: 0.0, border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), overflow: Overflow::clip(), ..default() },
-                    BackgroundColor(CELL),
-                    BorderColor::all(LINE),
-                ))
-                .with_child((VitalFill(vital), Node { width: percent(vital_fill(&vitals, vital) * 100.0), height: percent(100), ..default() }, BackgroundColor(vital_colour(&vitals, vital))));
-                row.spawn((VitalWord(vital), Text::new(vital_word(&vitals, vital)), UiFonts::style(&fonts.mono_bold, 14.0, vital_colour(&vitals, vital))));
-            });
-        }
-    });
 }
 
 /// Where each gear number comes from, one line per term set, for the row `row` of
 /// [`GEAR_ROWS`]: the folk, each item and each affix that gave to it, from the same
 /// [`Character::loadout`] and [`Character::armour_class`] the game plays by.
-pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
+pub fn breakdown(
+    rules: &Rules,
+    character: &Character,
+    inventory: &Inventory,
+    row: usize,
+) -> Vec<String> {
     let loadout = character.loadout(inventory);
     match row {
         0 => character.load_breakdown(rules, inventory),
-        1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
+        1 => vec![
+            loadout.warmth().line(),
+            format!("Warmth needed {}", character.warmth_need()),
+        ],
         2 => vec![loadout.light().line()],
         3 => vec![loadout.darkvision().line()],
         4 => vec![character.armour_class_with(rules, inventory).line()],
-        5 => vec![loadout.rate_with(rules, MeterKind::Hunger, fb_character::Activity::Walking).line()],
-        6 => vec![loadout.rate_with(rules, MeterKind::Sleepiness, fb_character::Activity::Walking).line()],
+        5 => vec![
+            loadout
+                .rate_with(rules, MeterKind::Hunger, fb_character::Activity::Walking)
+                .line(),
+        ],
+        6 => vec![
+            loadout
+                .rate_with(
+                    rules,
+                    MeterKind::Sleepiness,
+                    fb_character::Activity::Walking,
+                )
+                .line(),
+        ],
         7 => vec![loadout.heal_on_kill().line()],
         8 => vec![loadout.speed().line()],
         9 => vec![loadout.block_chance().line()],
@@ -369,17 +618,33 @@ pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, ro
                     lines.push(loadout.shun_line(foe));
                 }
             }
-            if lines.is_empty() { vec!["Nothing worn wards against a kind of creature".to_string()] } else { lines }
+            if lines.is_empty() {
+                vec!["Nothing worn wards against a kind of creature".to_string()]
+            } else {
+                lines
+            }
         }
         _ => {
-            let lines: Vec<String> = ["STR", "DEX", "CON", "INT", "WIS"].into_iter().map(|a| loadout.ability(a)).filter(|e| e.value() != 0.0).map(|e| e.line()).collect();
-            if lines.is_empty() { vec!["Nothing worn adds to an ability score".to_string()] } else { lines }
+            let lines: Vec<String> = ["STR", "DEX", "CON", "INT", "WIS"]
+                .into_iter()
+                .map(|a| loadout.ability(a))
+                .filter(|e| e.value() != 0.0)
+                .map(|e| e.line())
+                .collect();
+            if lines.is_empty() {
+                vec!["Nothing worn adds to an ability score".to_string()]
+            } else {
+                lines
+            }
         }
     }
 }
 
 /// The gear row under `point`, of the rows `rects`.
-pub fn row_under(rects: impl IntoIterator<Item = (usize, Rect)>, point: Vec2) -> Option<(usize, Rect)> {
+pub fn row_under(
+    rects: impl IntoIterator<Item = (usize, Rect)>,
+    point: Vec2,
+) -> Option<(usize, Rect)> {
     rects.into_iter().find(|(_, rect)| rect.contains(point))
 }
 
@@ -392,7 +657,9 @@ pub fn hover_numbers(
     mut hovered: ResMut<HoveredNumber>,
 ) {
     let over = if open.is(Screen::Inventory) {
-        window.and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref())).and_then(|point| row_under(rows.iter().map(|(r, n, t)| (r.0, node_rect(n, t))), point))
+        window
+            .and_then(|w| crate::ui::ui_cursor(&w, ui_scale.as_deref()))
+            .and_then(|point| row_under(rows.iter().map(|(r, n, t)| (r.0, node_rect(n, t))), point))
     } else {
         None
     };
@@ -400,11 +667,17 @@ pub fn hover_numbers(
 }
 
 /// Spawns the tooltip, hidden, once there is a camera to draw it.
-pub fn spawn_tip(mut commands: Commands, tips: Query<(), With<BreakdownTip>>, cameras: Query<Entity, With<ViewModelCamera>>) {
+pub fn spawn_tip(
+    mut commands: Commands,
+    tips: Query<(), With<BreakdownTip>>,
+    cameras: Query<Entity, With<ViewModelCamera>>,
+) {
     if !tips.is_empty() {
         return;
     }
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     commands.spawn((
         Name::new("Breakdown tip"),
         DespawnOnExit(crate::launch::AppState::Delving),
@@ -440,7 +713,16 @@ pub fn show_breakdown(
     inventory: Res<Inventory>,
     rules: Option<Res<GameRules>>,
     fonts: Res<UiFonts>,
-    mut tips: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, Option<&ComputedUiRenderTargetInfo>), With<BreakdownTip>>,
+    mut tips: Query<
+        (
+            Entity,
+            &mut Node,
+            &mut Visibility,
+            &ComputedNode,
+            Option<&ComputedUiRenderTargetInfo>,
+        ),
+        With<BreakdownTip>,
+    >,
     mut shown: Local<Option<usize>>,
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
@@ -452,13 +734,24 @@ pub fn show_breakdown(
             *shown = None;
             continue;
         };
-        if *shown != Some(row) || hovered.is_changed() || character.is_changed() || inventory.is_changed() || rules_changed {
-            commands.entity(tip).despawn_children().with_children(|tip| {
-                tip.spawn((Text::new(GEAR_ROWS[row]), UiFonts::style(&fonts.display, 18.0, INK)));
-                for line in breakdown(GameRules::of(&rules), &character, &inventory, row) {
-                    tip.spawn((Text::new(line), UiFonts::style(&fonts.mono, 12.0, MUTED)));
-                }
-            });
+        if *shown != Some(row)
+            || hovered.is_changed()
+            || character.is_changed()
+            || inventory.is_changed()
+            || rules_changed
+        {
+            commands
+                .entity(tip)
+                .despawn_children()
+                .with_children(|tip| {
+                    tip.spawn((
+                        Text::new(GEAR_ROWS[row]),
+                        UiFonts::style(&fonts.display, 18.0, INK),
+                    ));
+                    for line in breakdown(GameRules::of(&rules), &character, &inventory, row) {
+                        tip.spawn((Text::new(line), UiFonts::style(&fonts.mono, 12.0, MUTED)));
+                    }
+                });
             *shown = Some(row);
             visibility.set_if_neq(Visibility::Hidden);
             continue;
@@ -498,7 +791,9 @@ pub fn update_gear(
             text.0 = values[*i].clone();
         }
         if *i == 0 {
-            colour.set_if_neq(TextColor(crate::ui::load_colour(derived.load_band).unwrap_or(BRIGHT)));
+            colour.set_if_neq(TextColor(
+                crate::ui::load_colour(derived.load_band).unwrap_or(BRIGHT),
+            ));
         }
     }
 }
@@ -512,7 +807,9 @@ pub fn update_status(
     mut words: Query<(&NeedWord, &mut Text, &mut TextColor), Without<ExhaustionLine>>,
     mut exhaustions: Query<&mut Text, (With<ExhaustionLine>, Without<NeedWord>)>,
 ) {
-    let Ok((needs, exhaustion)) = players.single() else { return };
+    let Ok((needs, exhaustion)) = players.single() else {
+        return;
+    };
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
     if !needs.is_changed() && !exhaustion.is_changed() && !rules_changed {
         return;
@@ -571,27 +868,54 @@ pub fn update_conditions(
         if !changed && !added.is_added() {
             continue;
         }
-        commands.entity(list).despawn_children().with_children(|list| {
-            if conditions.is_empty() {
-                list.spawn((Text::new(NO_CONDITIONS), UiFonts::style(&fonts.body, 15.0, MUTED)));
-            }
-            for condition in conditions {
-                let colour = severity_colour(condition.severity);
-                let icon = icons.as_deref_mut().and_then(|icons| icons.get(condition.kind, images.as_deref_mut()));
-                list.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), min_height: px(CONDITION_BADGE_PX), ..default() }).with_children(|line| {
-                    badge(line, condition, px(CONDITION_BADGE_PX), px(2), icon);
-                    line.spawn(Node { width: px(LABEL_PX - CONDITION_BADGE_PX - 10.0), flex_shrink: 0.0, ..default() })
-                        .with_child((Text::new(condition.name.clone()), UiFonts::style(&fonts.mono_bold, 14.0, colour)));
-                    line.spawn((Text::new(condition.effect.clone()), UiFonts::style(&fonts.body, 14.0, INK)));
-                });
-            }
-        });
+        commands
+            .entity(list)
+            .despawn_children()
+            .with_children(|list| {
+                if conditions.is_empty() {
+                    list.spawn((
+                        Text::new(NO_CONDITIONS),
+                        UiFonts::style(&fonts.body, 15.0, MUTED),
+                    ));
+                }
+                for condition in conditions {
+                    let colour = severity_colour(condition.severity);
+                    let icon = icons
+                        .as_deref_mut()
+                        .and_then(|icons| icons.get(condition.kind, images.as_deref_mut()));
+                    list.spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: px(10),
+                        min_height: px(CONDITION_BADGE_PX),
+                        ..default()
+                    })
+                    .with_children(|line| {
+                        badge(line, condition, px(CONDITION_BADGE_PX), px(2), icon);
+                        line.spawn(Node {
+                            width: px(LABEL_PX - CONDITION_BADGE_PX - 10.0),
+                            flex_shrink: 0.0,
+                            ..default()
+                        })
+                        .with_child((
+                            Text::new(condition.name.clone()),
+                            UiFonts::style(&fonts.mono_bold, 14.0, colour),
+                        ));
+                        line.spawn((
+                            Text::new(condition.effect.clone()),
+                            UiFonts::style(&fonts.body, 14.0, INK),
+                        ));
+                    });
+                }
+            });
     }
 }
 
 /// What the sheet says of a tongue the delver knows some of: "29%", then what they can do in it
 /// ("barter, quests") once the words for it are learned.
-pub fn tongue_summary(lexicon: &fb_denizens::tongue::Lexicon, kind: fb_denizens::DenizenKind) -> (String, String) {
+pub fn tongue_summary(
+    lexicon: &fb_denizens::tongue::Lexicon,
+    kind: fb_denizens::DenizenKind,
+) -> (String, String) {
     let share = format!("{}%", (lexicon.known_share(kind) * 100.0).round());
     let mut can = Vec::new();
     if lexicon.can_barter(kind) {
@@ -606,40 +930,84 @@ pub fn tongue_summary(lexicon: &fb_denizens::tongue::Lexicon, kind: fb_denizens:
 /// Fills the sheet's tongues section from the lexicon in the delve record: one row for each
 /// tongue with any word learned, and nothing at all (no heading) before that. Rebuilt only when
 /// the section is new or the record changed.
-pub fn update_tongues(mut commands: Commands, record: Option<Res<crate::record::WorldRecord>>, mut lists: Query<(Entity, Ref<TongueList>, &mut Node)>, fonts: Res<UiFonts>) {
+pub fn update_tongues(
+    mut commands: Commands,
+    record: Option<Res<crate::record::WorldRecord>>,
+    mut lists: Query<(Entity, Ref<TongueList>, &mut Node)>,
+    fonts: Res<UiFonts>,
+) {
     let changed = record.as_ref().is_some_and(|r| r.is_changed());
     for (list, added, mut node) in &mut lists {
         if !changed && !added.is_added() {
             continue;
         }
         let lexicon = record.as_deref().map(|r| r.lexicon());
-        let known: Vec<fb_denizens::DenizenKind> = lexicon.map(|l| fb_denizens::DenizenKind::ALL.into_iter().filter(|&k| l.known_share(k) > 0.0).collect()).unwrap_or_default();
+        let known: Vec<fb_denizens::DenizenKind> = lexicon
+            .map(|l| {
+                fb_denizens::DenizenKind::ALL
+                    .into_iter()
+                    .filter(|&k| l.known_share(k) > 0.0)
+                    .collect()
+            })
+            .unwrap_or_default();
         // Empty, the section takes no room, not even the gap the sheet leaves between sections.
-        node.display = if known.is_empty() { Display::None } else { Display::Flex };
-        commands.entity(list).despawn_children().with_children(|list| {
-            let Some(lexicon) = lexicon.filter(|_| !known.is_empty()) else { return };
-            heading(list, &fonts, "tongues");
-            for kind in known {
-                let (share, can) = tongue_summary(lexicon, kind);
-                let label_box = Node { min_width: px(LABEL_PX), flex_shrink: 0.0, ..default() };
-                row_labelled(list, &fonts, fb_denizens::tongue::tongue_name(kind), None, label_box, |row| {
-                    row.spawn((Text::new(share), UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT)));
-                    if !can.is_empty() {
-                        row.spawn((Text::new(can), UiFonts::style(&fonts.body, 14.0, MUTED)));
-                    }
-                });
-            }
-        });
+        node.display = if known.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        commands
+            .entity(list)
+            .despawn_children()
+            .with_children(|list| {
+                let Some(lexicon) = lexicon.filter(|_| !known.is_empty()) else {
+                    return;
+                };
+                heading(list, &fonts, "tongues");
+                for kind in known {
+                    let (share, can) = tongue_summary(lexicon, kind);
+                    let label_box = Node {
+                        min_width: px(LABEL_PX),
+                        flex_shrink: 0.0,
+                        ..default()
+                    };
+                    row_labelled(
+                        list,
+                        &fonts,
+                        fb_denizens::tongue::tongue_name(kind),
+                        None,
+                        label_box,
+                        |row| {
+                            row.spawn((
+                                Text::new(share),
+                                UiFonts::style(&fonts.mono_bold, 14.0, BRIGHT),
+                            ));
+                            if !can.is_empty() {
+                                row.spawn((
+                                    Text::new(can),
+                                    UiFonts::style(&fonts.body, 14.0, MUTED),
+                                ));
+                            }
+                        },
+                    );
+                }
+            });
     }
 }
 
 /// Keeps the sheet's enchanting line true to the delver's essence and materials.
-pub fn update_enchanting(stock: Option<Res<crate::enchanting::Enchanting>>, mut lines: Query<(Ref<EnchantingLine>, &mut Text)>) {
+pub fn update_enchanting(
+    stock: Option<Res<crate::enchanting::Enchanting>>,
+    mut lines: Query<(Ref<EnchantingLine>, &mut Text)>,
+) {
     for (added, mut text) in &mut lines {
         if !added.is_added() && !stock.as_ref().is_some_and(|s| s.is_changed()) {
             continue;
         }
-        let line = stock.as_ref().filter(|s| !s.0.is_empty()).map_or_else(|| NO_ENCHANTING.to_string(), |s| s.0.line());
+        let line = stock
+            .as_ref()
+            .filter(|s| !s.0.is_empty())
+            .map_or_else(|| NO_ENCHANTING.to_string(), |s| s.0.line());
         if text.0 != line {
             text.0 = line;
         }
@@ -654,11 +1022,18 @@ pub fn update_vitals(
     mut fills: Query<(&VitalFill, &mut Node, &mut BackgroundColor)>,
     mut words: Query<(&VitalWord, &mut Text, &mut TextColor)>,
 ) {
-    let Ok((stamina, mana)) = players.single() else { return };
-    if !stamina.as_ref().is_some_and(|s| s.is_changed()) && !mana.as_ref().is_some_and(|m| m.is_changed()) {
+    let Ok((stamina, mana)) = players.single() else {
+        return;
+    };
+    if !stamina.as_ref().is_some_and(|s| s.is_changed())
+        && !mana.as_ref().is_some_and(|m| m.is_changed())
+    {
         return;
     }
-    let vitals = Vitals { stamina: stamina.map_or_else(Default::default, |s| s.0), mana: mana.map_or_else(Default::default, |m| m.0) };
+    let vitals = Vitals {
+        stamina: stamina.map_or_else(Default::default, |s| s.0),
+        mana: mana.map_or_else(Default::default, |m| m.0),
+    };
     for (VitalFill(vital), mut node, mut colour) in &mut fills {
         let width = percent(vital_fill(&vitals, *vital) * 100.0);
         if node.width != width {
@@ -682,7 +1057,9 @@ mod tests {
     #[test]
     fn the_cursor_over_a_load_target_hovers_row_0_in_ui_space() {
         let mut app = App::new();
-        app.init_resource::<ScreenOpen>().init_resource::<HoveredNumber>().add_systems(Update, hover_numbers);
+        app.init_resource::<ScreenOpen>()
+            .init_resource::<HoveredNumber>()
+            .add_systems(Update, hover_numbers);
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(150.0, 140.0)));
@@ -690,35 +1067,71 @@ mod tests {
         // The header's load part: 120 by 16 around (150, 140).
         app.world_mut().spawn((
             GearRow(0),
-            ComputedNode { size: Vec2::new(120.0, 16.0), inverse_scale_factor: 1.0, ..default() },
-            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(150.0, 140.0))),
+            ComputedNode {
+                size: Vec2::new(120.0, 16.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                150.0, 140.0,
+            ))),
         ));
         app.update();
-        assert_eq!(app.world().resource::<HoveredNumber>().0.map(|(row, _)| row), Some(0));
-        app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(400.0, 140.0)));
+        assert_eq!(
+            app.world()
+                .resource::<HoveredNumber>()
+                .0
+                .map(|(row, _)| row),
+            Some(0)
+        );
+        app.world_mut()
+            .query::<&mut Window>()
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(400.0, 140.0)));
         app.update();
-        assert_eq!(app.world().resource::<HoveredNumber>().0, None, "off the target nothing is hovered");
+        assert_eq!(
+            app.world().resource::<HoveredNumber>().0,
+            None,
+            "off the target nothing is hovered"
+        );
     }
 
     fn meter_at(kind: MeterKind, value: f64) -> Meter {
-        Meter { value, ..Meter::new(kind) }
+        Meter {
+            value,
+            ..Meter::new(kind)
+        }
     }
 
     #[test]
     fn the_sheets_armour_class_follows_the_loaded_rules() {
         let mut app = App::new();
-        app.init_resource::<Character>().init_resource::<Inventory>().init_resource::<GameRules>().add_systems(Update, update_gear);
+        app.init_resource::<Character>()
+            .init_resource::<Inventory>()
+            .init_resource::<GameRules>()
+            .add_systems(Update, update_gear);
         let ac = app.world_mut().spawn((GearLine(4), Text::new(""))).id();
         let tip = |app: &App| app.world().get::<Text>(ac).unwrap().0.clone();
         app.update();
         let before: i32 = tip(&app).parse().unwrap();
-        app.world_mut().resource_mut::<GameRules>().combat.armour_base = 14;
+        app.world_mut()
+            .resource_mut::<GameRules>()
+            .combat
+            .armour_base = 14;
         app.update();
         assert_eq!(tip(&app), (before + 4).to_string());
         // The tooltip's breakdown reads the same rules.
         let rules = app.world().resource::<GameRules>().0.clone();
-        let (character, inventory) = (app.world().resource::<Character>(), app.world().resource::<Inventory>());
-        assert!(breakdown(&rules, character, inventory, 4)[0].contains("base (14)"), "{:?}", breakdown(&rules, character, inventory, 4));
+        let (character, inventory) = (
+            app.world().resource::<Character>(),
+            app.world().resource::<Inventory>(),
+        );
+        assert!(
+            breakdown(&rules, character, inventory, 4)[0].contains("base (14)"),
+            "{:?}",
+            breakdown(&rules, character, inventory, 4)
+        );
     }
 
     #[test]
@@ -726,26 +1139,52 @@ mod tests {
         use fb_denizens::DenizenKind;
         use fb_denizens::tongue::{Lexicon, Teaching, Topic};
         let mut lexicon = Lexicon::new();
-        assert_eq!(lexicon.known_share(DenizenKind::Minotaur), 0.0, "nothing known, nothing listed");
-        lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[Topic::Greeting]));
+        assert_eq!(
+            lexicon.known_share(DenizenKind::Minotaur),
+            0.0,
+            "nothing known, nothing listed"
+        );
+        lexicon.learn_teaching(&Teaching::of_topics(
+            DenizenKind::Minotaur,
+            &[Topic::Greeting],
+        ));
         let (share, can) = tongue_summary(&lexicon, DenizenKind::Minotaur);
         assert!(share.ends_with('%') && !share.starts_with('0'), "{share}");
         assert_eq!(can, "");
-        lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]));
-        assert_eq!(tongue_summary(&lexicon, DenizenKind::Minotaur).1, "barter, quests");
+        lexicon.learn_teaching(&Teaching::of_topics(
+            DenizenKind::Minotaur,
+            &[Topic::Trade, Topic::Quest],
+        ));
+        assert_eq!(
+            tongue_summary(&lexicon, DenizenKind::Minotaur).1,
+            "barter, quests"
+        );
     }
 
     #[test]
     fn the_tongues_section_fills_once_a_word_is_learned() {
         let mut app = App::new();
-        app.init_resource::<UiFonts>().init_resource::<crate::record::WorldRecord>().add_systems(Update, update_tongues);
+        app.init_resource::<UiFonts>()
+            .init_resource::<crate::record::WorldRecord>()
+            .add_systems(Update, update_tongues);
         let list = app.world_mut().spawn((TongueList, Node::default())).id();
         app.update();
-        assert!(app.world().get::<Children>(list).is_none(), "no heading before a word is known");
+        assert!(
+            app.world().get::<Children>(list).is_none(),
+            "no heading before a word is known"
+        );
         let teaching = crate::reading::teaching_for_capture("demon:scroll:4", 0).unwrap();
-        app.world_mut().resource_mut::<crate::record::WorldRecord>().lexicon.learn_teaching(teaching.teaching().unwrap());
+        app.world_mut()
+            .resource_mut::<crate::record::WorldRecord>()
+            .lexicon
+            .learn_teaching(teaching.teaching().unwrap());
         app.update();
-        assert!(app.world().get::<Children>(list).is_some_and(|c| c.len() == 2), "a heading and a row for the one tongue");
+        assert!(
+            app.world()
+                .get::<Children>(list)
+                .is_some_and(|c| c.len() == 2),
+            "a heading and a row for the one tongue"
+        );
     }
 
     #[test]
@@ -754,9 +1193,18 @@ mod tests {
         rules.exhaustion.slowed_from = 1;
         rules.exhaustion.slowed_speed = 0.75;
         rules.exhaustion.halted_from = 4;
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(1), &rules), "Exhaustion 1: speed ×0.75");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(3), &rules), "Exhaustion 3: speed ×0.75");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(4), &rules), "Exhaustion 4: cannot move");
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(1), &rules),
+            "Exhaustion 1: speed ×0.75"
+        );
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(3), &rules),
+            "Exhaustion 3: speed ×0.75"
+        );
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(4), &rules),
+            "Exhaustion 4: cannot move"
+        );
     }
 
     #[test]
@@ -773,7 +1221,11 @@ mod tests {
     /// it reads.
     fn sheet_with(shown: Vec<fb_character::conditions::Condition>) -> (App, Vec<String>) {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).init_resource::<UiFonts>().init_resource::<ConditionIcons>().init_resource::<Assets<Image>>().insert_resource(ShownConditions(shown));
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<UiFonts>()
+            .init_resource::<ConditionIcons>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(ShownConditions(shown));
         app.add_systems(Update, update_conditions);
         app.world_mut().spawn(ConditionList);
         app.update();
@@ -787,11 +1239,17 @@ mod tests {
             if let Some(text) = world.get::<Text>(at) {
                 out.push(text.0.clone());
             }
-            for &child in world.get::<Children>(at).map(|c| &c[..]).unwrap_or_default() {
+            for &child in world
+                .get::<Children>(at)
+                .map(|c| &c[..])
+                .unwrap_or_default()
+            {
                 walk(world, child, out);
             }
         }
-        let mut lists = app.world_mut().query_filtered::<Entity, With<ConditionList>>();
+        let mut lists = app
+            .world_mut()
+            .query_filtered::<Entity, With<ConditionList>>();
         let list = lists.single(app.world()).unwrap();
         let mut out = Vec::new();
         walk(app.world(), list, &mut out);
@@ -799,20 +1257,47 @@ mod tests {
     }
 
     #[test]
-    fn the_conditions_section_lists_each_condition_with_its_badge_and_says_so_when_there_are_none() {
+    fn the_conditions_section_lists_each_condition_with_its_badge_and_says_so_when_there_are_none()
+    {
         use fb_character::conditions::{Circumstances, conditions};
         let (_, empty) = sheet_with(vec![]);
         assert_eq!(empty, vec![NO_CONDITIONS.to_string()]);
-        let now = Circumstances { held_pace: Some(0.25), ..Circumstances::default() };
+        let now = Circumstances {
+            held_pace: Some(0.25),
+            ..Circumstances::default()
+        };
         let rules = fb_character::rules::defaults();
         let poisoned = crate::character::DelverEffects::poisoned_for(rules, 1.0);
         let (mut app, lines) = sheet_with(conditions(&now, &poisoned.0, &rules.effects));
-        assert_eq!(lines, ["Held", "Moving at 25% pace until you strike what holds you", "Poisoned", "Attacking at disadvantage; wears off in 60 minutes"]);
+        assert_eq!(
+            lines,
+            [
+                "Held",
+                "Moving at 25% pace until you strike what holds you",
+                "Poisoned",
+                "Attacking at disadvantage; wears off in 60 minutes"
+            ]
+        );
         let mut badges = app.world_mut().query::<(&Name, &BorderColor)>();
-        let rims: Vec<(String, BorderColor)> = badges.iter(app.world()).map(|(n, c)| (n.to_string(), *c)).collect();
-        assert!(rims.contains(&("Poisoned badge".to_string(), BorderColor::all(severity_colour(fb_character::conditions::Severity::Moderate)))), "{rims:?}");
+        let rims: Vec<(String, BorderColor)> = badges
+            .iter(app.world())
+            .map(|(n, c)| (n.to_string(), *c))
+            .collect();
+        assert!(
+            rims.contains(&(
+                "Poisoned badge".to_string(),
+                BorderColor::all(severity_colour(
+                    fb_character::conditions::Severity::Moderate
+                ))
+            )),
+            "{rims:?}"
+        );
         let mut icons = app.world_mut().query::<&ImageNode>();
-        assert_eq!(icons.iter(app.world()).count(), 2, "each badge has its icon");
+        assert_eq!(
+            icons.iter(app.world()).count(),
+            2,
+            "each badge has its icon"
+        );
         // The list follows the conditions as they change.
         app.world_mut().resource_mut::<ShownConditions>().0.clear();
         app.update();
@@ -822,20 +1307,40 @@ mod tests {
     #[test]
     fn the_enchanting_line_follows_the_stock() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).init_resource::<crate::enchanting::Enchanting>().add_systems(Update, update_enchanting);
-        let line = app.world_mut().spawn((EnchantingLine, Text::new(NO_ENCHANTING))).id();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::enchanting::Enchanting>()
+            .add_systems(Update, update_enchanting);
+        let line = app
+            .world_mut()
+            .spawn((EnchantingLine, Text::new(NO_ENCHANTING)))
+            .id();
         app.update();
         assert_eq!(app.world().get::<Text>(line).unwrap().0, NO_ENCHANTING);
-        app.world_mut().resource_mut::<crate::enchanting::Enchanting>().0.essence = 12;
+        app.world_mut()
+            .resource_mut::<crate::enchanting::Enchanting>()
+            .0
+            .essence = 12;
         app.update();
         assert_eq!(app.world().get::<Text>(line).unwrap().0, "Essence 12");
     }
 
     #[test]
     fn exhaustion_says_what_it_does() {
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(0), &Rules::default()), "Exhaustion 0: no ill effect");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(2), &Rules::default()), "Exhaustion 2: half speed");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(5), &Rules::default()), "Exhaustion 5: cannot move");
-        assert_eq!(exhaustion_text(ExhaustionLevel::new(6), &Rules::default()), "Exhaustion 6: death");
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(0), &Rules::default()),
+            "Exhaustion 0: no ill effect"
+        );
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(2), &Rules::default()),
+            "Exhaustion 2: half speed"
+        );
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(5), &Rules::default()),
+            "Exhaustion 5: cannot move"
+        );
+        assert_eq!(
+            exhaustion_text(ExhaustionLevel::new(6), &Rules::default()),
+            "Exhaustion 6: death"
+        );
     }
 }

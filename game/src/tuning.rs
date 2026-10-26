@@ -135,7 +135,13 @@ pub struct MovingTuning {
 
 impl Default for MovingTuning {
     fn default() -> Self {
-        MovingTuning { walk_speed: 14.0, hurry_speed: 45.0, acceleration: 10.0, body_radius: 3.5, web_pace: fb_level::webs::WEB_PACE }
+        MovingTuning {
+            walk_speed: 14.0,
+            hurry_speed: 45.0,
+            acceleration: 10.0,
+            body_radius: 3.5,
+            web_pace: fb_level::webs::WEB_PACE,
+        }
     }
 }
 
@@ -164,7 +170,14 @@ pub struct CreatureTuning {
 
 impl Default for CreatureTuning {
     fn default() -> Self {
-        CreatureTuning { sense_scale: 1.0, rat_cooldown: 1.5, snake_cooldown: 2.5, rat_chase_speed: 2.0, snake_chase_speed: 1.0, size: CreatureSizes::default() }
+        CreatureTuning {
+            sense_scale: 1.0,
+            rat_cooldown: 1.5,
+            snake_cooldown: 2.5,
+            rat_chase_speed: 2.0,
+            snake_chase_speed: 1.0,
+            size: CreatureSizes::default(),
+        }
     }
 }
 
@@ -198,7 +211,16 @@ pub struct FolkTuning {
 
 impl Default for FolkTuning {
     fn default() -> Self {
-        FolkTuning { walk_speed: 14.0, pause_min: 3.0, pause_max: 8.0, wander_radius: 90.0, notice_distance: 28.0, release_distance: 40.0, release_delay: 1.0, lose_interest_after: 25.0 }
+        FolkTuning {
+            walk_speed: 14.0,
+            pause_min: 3.0,
+            pause_max: 8.0,
+            wander_radius: 90.0,
+            notice_distance: 28.0,
+            release_distance: 40.0,
+            release_delay: 1.0,
+            lose_interest_after: 25.0,
+        }
     }
 }
 
@@ -228,7 +250,19 @@ pub struct CreatureSizes {
 
 impl Default for CreatureSizes {
     fn default() -> Self {
-        CreatureSizes { rat: 1.0, giant_rat: 1.0, viper: 1.0, constrictor: 1.0, skeleton: 1.0, giant_spider: 1.0, troll: 1.0, jackalope: 1.0, giant_centipede: 1.0, bat: 1.0, giant_bat: 1.0 }
+        CreatureSizes {
+            rat: 1.0,
+            giant_rat: 1.0,
+            viper: 1.0,
+            constrictor: 1.0,
+            skeleton: 1.0,
+            giant_spider: 1.0,
+            troll: 1.0,
+            jackalope: 1.0,
+            giant_centipede: 1.0,
+            bat: 1.0,
+            giant_bat: 1.0,
+        }
     }
 }
 
@@ -274,7 +308,14 @@ pub struct CombatTuning {
 
 impl Default for CombatTuning {
     fn default() -> Self {
-        CombatTuning { reach_scale: 1.0, hit_cone_degrees: 50.0, flash_hold: 0.12, flash_fade: 0.2, knockback_scale: 1.0, hit_kick: 1.0 }
+        CombatTuning {
+            reach_scale: 1.0,
+            hit_cone_degrees: 50.0,
+            flash_hold: 0.12,
+            flash_fade: 0.2,
+            knockback_scale: 1.0,
+            hit_kick: 1.0,
+        }
     }
 }
 
@@ -405,7 +446,11 @@ pub struct InterfaceTuning {
 
 impl Default for InterfaceTuning {
     fn default() -> Self {
-        InterfaceTuning { cell_size: 72.0, min_cell_size: 36.0, hover_delay: 0.0 }
+        InterfaceTuning {
+            cell_size: 72.0,
+            min_cell_size: 36.0,
+            hover_delay: 0.0,
+        }
     }
 }
 
@@ -455,7 +500,9 @@ pub struct ClockTuning {
 
 impl Default for ClockTuning {
     fn default() -> Self {
-        ClockTuning { game_seconds_per_second: 12.0 }
+        ClockTuning {
+            game_seconds_per_second: 12.0,
+        }
     }
 }
 
@@ -474,7 +521,11 @@ pub struct RecoveryTuning {
 impl RecoveryTuning {
     /// Game minutes per hit point for a delver with `points` of recovery from their gear.
     pub fn minutes_for(&self, points: f64) -> f64 {
-        fb_character::recovery::minutes_per_hit_point(self.minutes_per_hit_point as f64, self.faster_per_point as f64, points)
+        fb_character::recovery::minutes_per_hit_point(
+            self.minutes_per_hit_point as f64,
+            self.faster_per_point as f64,
+            points,
+        )
     }
 }
 
@@ -496,8 +547,13 @@ impl Tuning {
         let file = match text.parse::<toml::Table>() {
             Ok(table) => table,
             Err(error) => {
-                let line = error.span().map_or(1, |span| text[..span.start.min(text.len())].matches('\n').count() + 1);
-                warnings.push(format!("not valid TOML at line {line} ({}), so every value is its default", error.message().trim()));
+                let line = error.span().map_or(1, |span| {
+                    text[..span.start.min(text.len())].matches('\n').count() + 1
+                });
+                warnings.push(format!(
+                    "not valid TOML at line {line} ({}), so every value is its default",
+                    error.message().trim()
+                ));
                 return (Tuning::default(), warnings);
             }
         };
@@ -506,7 +562,9 @@ impl Tuning {
         match toml::Value::Table(merged).try_into() {
             Ok(tuning) => (tuning, warnings),
             Err(error) => {
-                warnings.push(format!("could not be read, so every value is its default: {error}"));
+                warnings.push(format!(
+                    "could not be read, so every value is its default: {error}"
+                ));
                 (Tuning::default(), warnings)
             }
         }
@@ -522,7 +580,11 @@ impl Tuning {
     pub fn keys() -> Vec<String> {
         fn walk(table: &toml::Table, prefix: &str, out: &mut Vec<String>) {
             for (key, value) in table {
-                let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
                 match value {
                     toml::Value::Table(inner) => walk(inner, &path, out),
                     _ => out.push(path),
@@ -537,27 +599,51 @@ impl Tuning {
 
 /// `file` laid over `defaults`, key by key: a value of the default's kind replaces it, and every
 /// other case keeps the default with a warning naming the key.
-fn merge(defaults: toml::Table, mut file: toml::Table, prefix: &str, warnings: &mut Vec<String>) -> toml::Table {
+fn merge(
+    defaults: toml::Table,
+    mut file: toml::Table,
+    prefix: &str,
+    warnings: &mut Vec<String>,
+) -> toml::Table {
     let mut merged = toml::Table::new();
     for (key, default) in defaults {
-        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         let value = match (default, file.remove(&key)) {
             (default, None) => {
                 warnings.push(format!("`{path}` is missing, so it is {}", shown(&default)));
                 default
             }
-            (toml::Value::Table(inner), Some(toml::Value::Table(given))) => toml::Value::Table(merge(inner, given, &path, warnings)),
+            (toml::Value::Table(inner), Some(toml::Value::Table(given))) => {
+                toml::Value::Table(merge(inner, given, &path, warnings))
+            }
             (toml::Value::Float(_), Some(toml::Value::Integer(n))) => toml::Value::Float(n as f64),
-            (default, Some(given)) if std::mem::discriminant(&default) == std::mem::discriminant(&given) => given,
+            (default, Some(given))
+                if std::mem::discriminant(&default) == std::mem::discriminant(&given) =>
+            {
+                given
+            }
             (default, Some(given)) => {
-                warnings.push(format!("`{path}` should be {}, not {}, so it is {}", kind(&default), shown(&given), shown(&default)));
+                warnings.push(format!(
+                    "`{path}` should be {}, not {}, so it is {}",
+                    kind(&default),
+                    shown(&given),
+                    shown(&default)
+                ));
                 default
             }
         };
         merged.insert(key, value);
     }
     for key in file.keys() {
-        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         warnings.push(format!("`{path}` is not a tuning key, so it does nothing"));
     }
     merged
@@ -592,7 +678,12 @@ impl AssetLoader for TuningLoader {
     type Settings = ();
     type Error = std::io::Error;
 
-    async fn load(&self, reader: &mut dyn Reader, _settings: &(), load_context: &mut LoadContext<'_>) -> Result<Tuning, Self::Error> {
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &(),
+        load_context: &mut LoadContext<'_>,
+    ) -> Result<Tuning, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let (tuning, warnings) = Tuning::from_toml(&String::from_utf8_lossy(&bytes));
@@ -616,7 +707,10 @@ impl AssetLoader for TuningLoader {
 /// both loading and watching see the same folder.
 pub fn asset_file_path() -> String {
     match std::env::var_os("BEVY_ASSET_ROOT").map(std::path::PathBuf::from) {
-        Some(root) if root.is_relative() => std::path::absolute(root.join("assets")).map_or_else(|_| "assets".to_string(), |p| p.to_string_lossy().into_owned()),
+        Some(root) if root.is_relative() => std::path::absolute(root.join("assets")).map_or_else(
+            |_| "assets".to_string(),
+            |p| p.to_string_lossy().into_owned(),
+        ),
         _ => "assets".to_string(),
     }
 }
@@ -640,7 +734,10 @@ impl Plugin for TuningPlugin {
         if app.world().contains_resource::<AssetServer>() {
             app.init_asset::<Tuning>()
                 .init_asset_loader::<TuningLoader>()
-                .add_systems(Startup, load_tuning.run_if(not(resource_exists::<TuningFile>)))
+                .add_systems(
+                    Startup,
+                    load_tuning.run_if(not(resource_exists::<TuningFile>)),
+                )
                 .add_systems(PreUpdate, apply_tuning_file.in_set(TuningSet));
         }
     }
@@ -651,10 +748,17 @@ fn load_tuning(mut commands: Commands, assets: Res<AssetServer>) {
 }
 
 /// Copies the file into [`Tuning`] when it loads and each time it is saved.
-fn apply_tuning_file(mut events: MessageReader<AssetEvent<Tuning>>, file: Option<Res<TuningFile>>, files: Res<Assets<Tuning>>, mut tuning: ResMut<Tuning>) {
+fn apply_tuning_file(
+    mut events: MessageReader<AssetEvent<Tuning>>,
+    file: Option<Res<TuningFile>>,
+    files: Res<Assets<Tuning>>,
+    mut tuning: ResMut<Tuning>,
+) {
     let Some(file) = file else { return };
     for event in events.read() {
-        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = *event else { continue };
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = *event else {
+            continue;
+        };
         if id != file.0.id() {
             continue;
         }
@@ -672,7 +776,12 @@ mod tests {
     use super::*;
 
     fn shipped() -> String {
-        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(TUNING_PATH)).unwrap()
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(TUNING_PATH),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -691,17 +800,31 @@ mod tests {
             if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
                 continue;
             }
-            assert!(i > 0 && lines[i - 1].trim().starts_with('#'), "no comment above `{line}`");
+            assert!(
+                i > 0 && lines[i - 1].trim().starts_with('#'),
+                "no comment above `{line}`"
+            );
         }
     }
 
     #[test]
     fn the_readme_lists_every_key() {
-        let readme = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("README.md")).unwrap();
-        let section = readme.split("### Tuning").nth(1).expect("a Tuning section in the README");
+        let readme = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("README.md"),
+        )
+        .unwrap();
+        let section = readme
+            .split("### Tuning")
+            .nth(1)
+            .expect("a Tuning section in the README");
         for key in Tuning::keys() {
             let leaf = key.rsplit('.').next().unwrap();
-            assert!(section.contains(&format!("`{leaf}`")), "the README's Tuning section does not list `{key}`");
+            assert!(
+                section.contains(&format!("`{leaf}`")),
+                "the README's Tuning section does not list `{key}`"
+            );
         }
     }
 
@@ -709,17 +832,43 @@ mod tests {
     fn a_bad_key_keeps_its_default_and_says_so() {
         let text = "[view]\nheld_scale = \"big\"\nfloor_item_scale = 2\n[moving]\nwalk_speed = 20.0\nwalkspeed = 3.0\n";
         let (tuning, warnings) = Tuning::from_toml(text);
-        assert_eq!(tuning.view.held_scale, ViewTuning::default().held_scale, "the wrong kind keeps the default");
-        assert_eq!(tuning.view.floor_item_scale, 2.0, "a whole number reads as a decimal");
+        assert_eq!(
+            tuning.view.held_scale,
+            ViewTuning::default().held_scale,
+            "the wrong kind keeps the default"
+        );
+        assert_eq!(
+            tuning.view.floor_item_scale, 2.0,
+            "a whole number reads as a decimal"
+        );
         assert_eq!(tuning.moving.walk_speed, 20.0);
-        assert_eq!(tuning.light, LightTuning::default(), "a missing table is all defaults");
-        let about = |key: &str| warnings.iter().filter(|w| w.contains(&format!("`{key}`"))).count();
+        assert_eq!(
+            tuning.light,
+            LightTuning::default(),
+            "a missing table is all defaults"
+        );
+        let about = |key: &str| {
+            warnings
+                .iter()
+                .filter(|w| w.contains(&format!("`{key}`")))
+                .count()
+        };
         assert_eq!(about("view.held_scale"), 1, "{warnings:#?}");
-        assert!(warnings.iter().any(|w| w.contains("`view.held_scale` should be a number, not \"big\", so it is 1.4")), "{warnings:#?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w
+                    .contains("`view.held_scale` should be a number, not \"big\", so it is 1.4")),
+            "{warnings:#?}"
+        );
         assert_eq!(about("moving.walkspeed"), 1, "an unknown key is named");
         assert_eq!(about("moving.hurry_speed"), 1, "a missing key is named");
         assert_eq!(about("light"), 1, "a missing table is named once");
-        assert_eq!(about("view.floor_item_scale") + about("moving.walk_speed"), 0, "good keys say nothing");
+        assert_eq!(
+            about("view.floor_item_scale") + about("moving.walk_speed"),
+            0,
+            "good keys say nothing"
+        );
     }
 
     #[test]
@@ -732,28 +881,50 @@ mod tests {
 
     #[test]
     fn a_table_given_as_a_value_keeps_its_defaults() {
-        let (tuning, warnings) = Tuning::from_toml(&shipped().replace("[interface]", "creatures = 3\n[interface]"));
+        let (tuning, warnings) =
+            Tuning::from_toml(&shipped().replace("[interface]", "creatures = 3\n[interface]"));
         // The shipped file already has a [creatures] table, so a second `creatures` is not TOML.
         assert_eq!(tuning, Tuning::default());
         assert!(!warnings.is_empty());
         let (tuning, warnings) = Tuning::from_toml("[creatures]\nsize = 2\n");
         assert_eq!(tuning.creatures.size, CreatureSizes::default());
-        assert!(warnings.iter().any(|w| w.contains("`creatures.size` should be a table")), "{warnings:#?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("`creatures.size` should be a table")),
+            "{warnings:#?}"
+        );
     }
 
     #[test]
     fn every_species_has_a_size() {
-        let sizes = CreatureSizes { rat: 1.0, giant_rat: 2.0, viper: 3.0, constrictor: 4.0, skeleton: 5.0, giant_spider: 6.0, troll: 7.0, jackalope: 8.0, giant_centipede: 9.0, bat: 10.0, giant_bat: 11.0 };
+        let sizes = CreatureSizes {
+            rat: 1.0,
+            giant_rat: 2.0,
+            viper: 3.0,
+            constrictor: 4.0,
+            skeleton: 5.0,
+            giant_spider: 6.0,
+            troll: 7.0,
+            jackalope: 8.0,
+            giant_centipede: 9.0,
+            bat: 10.0,
+            giant_bat: 11.0,
+        };
         // Every species, so one added without a size fails here.
         let all = Species::ALL;
-        assert_eq!(all.map(|s| sizes.of(s)).to_vec(), (1..=all.len()).map(|n| n as f32).collect::<Vec<_>>());
+        assert_eq!(
+            all.map(|s| sizes.of(s)).to_vec(),
+            (1..=all.len()).map(|n| n as f32).collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn saving_the_file_changes_the_resource() {
         use bevy::asset::AssetPlugin;
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default())).add_plugins(TuningPlugin);
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .add_plugins(TuningPlugin);
         let mut files = app.world_mut().resource_mut::<Assets<Tuning>>();
         let mut faster = Tuning::default();
         faster.moving.walk_speed = 30.0;
@@ -762,7 +933,10 @@ mod tests {
         app.update();
         assert_eq!(*app.world().resource::<Tuning>(), Tuning::default());
         // As a reload does: the asset's value is replaced, and an event says so.
-        let _ = app.world_mut().resource_mut::<Assets<Tuning>>().insert(&handle, faster.clone());
+        let _ = app
+            .world_mut()
+            .resource_mut::<Assets<Tuning>>()
+            .insert(&handle, faster.clone());
         app.update();
         app.update();
         assert_eq!(app.world().resource::<Tuning>().moving.walk_speed, 30.0);

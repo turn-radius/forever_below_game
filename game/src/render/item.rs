@@ -14,7 +14,9 @@ use bevy::{
 };
 
 use super::outline::{ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
-use super::toon::{Decay, Etch, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial};
+use super::toon::{
+    Decay, Etch, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial,
+};
 
 /// Base colour for every material kind: the armory palette for paletted metals, wood and
 /// so on, plus the kinds it leaves to other sources (untinted gems, cloth, paint, food).
@@ -106,10 +108,17 @@ impl ItemAppearance {
     /// `Part::pattern` is drawn over it.
     pub fn material_for(&self, part: &Part) -> ToonMaterial {
         // A flame takes its colour from its vertices (`part_to_mesh`), so its material is white.
-        let colour = if is_flame(part) { Rgb(1.0, 1.0, 1.0) } else { part.tint.or(part.material.map(|kind| self.palette.get(kind))).unwrap_or(Rgb(0.5, 0.5, 0.5)) };
+        let colour = if is_flame(part) {
+            Rgb(1.0, 1.0, 1.0)
+        } else {
+            part.tint
+                .or(part.material.map(|kind| self.palette.get(kind)))
+                .unwrap_or(Rgb(0.5, 0.5, 0.5))
+        };
         let decay = Decay {
             kind: part.material.map_or(0, MaterialKind::decay_type),
-            amount: part.material.map_or(0.0, |kind| self.condition.decay(kind)) * light_fastness(part),
+            amount: part.material.map_or(0.0, |kind| self.condition.decay(kind))
+                * light_fastness(part),
             scale: self.condition.scale * self.decay_scale_factor,
             seed: (self.seed % 997) as f32 * 0.137,
         };
@@ -121,7 +130,12 @@ impl ItemAppearance {
         let see_through = is_see_through(part);
         ToonMaterial {
             base: StandardMaterial {
-                base_color: Color::srgba(colour.0, colour.1, colour.2, if see_through { GLASS_OPACITY } else { 1.0 }),
+                base_color: Color::srgba(
+                    colour.0,
+                    colour.1,
+                    colour.2,
+                    if see_through { GLASS_OPACITY } else { 1.0 },
+                ),
                 alpha_mode: if see_through {
                     AlphaMode::Blend
                 } else if is_flame(part) {
@@ -146,11 +160,18 @@ impl ItemAppearance {
                 min_width: if part.outline {
                     MinWidth::default()
                 } else {
-                    MinWidth { px: self.min_width_px, half_thickness: half_thickness(part) }
+                    MinWidth {
+                        px: self.min_width_px,
+                        half_thickness: half_thickness(part),
+                    }
                 },
-                pattern: part.pattern.map_or(Pattern::default(), |pattern| Pattern::of(&pattern, &part.positions)),
+                pattern: part.pattern.map_or(Pattern::default(), |pattern| {
+                    Pattern::of(&pattern, &part.positions)
+                }),
                 etch: match (self.etching, part.material) {
-                    (Some(etching), Some(material)) => Etch::on(&etching, material, self.decay_scale_factor),
+                    (Some(etching), Some(material)) => {
+                        Etch::on(&etching, material, self.decay_scale_factor)
+                    }
                     _ => Etch::default(),
                 },
                 shimmer: self.shimmer,
@@ -198,12 +219,19 @@ pub fn light_fastness(part: &Part) -> f32 {
 /// (falling back to the normals) and a `u32` triangle list.
 pub fn part_to_mesh(part: &Part) -> Mesh {
     let vertex_count = part.positions.len();
-    let outline_normals = if part.outline_normals.len() == vertex_count { &part.outline_normals } else { &part.normals };
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone())
-        .with_inserted_attribute(ATTRIBUTE_OUTLINE_NORMAL, outline_normals.clone())
-        .with_inserted_indices(Indices::U32(part.indices.clone()));
+    let outline_normals = if part.outline_normals.len() == vertex_count {
+        &part.outline_normals
+    } else {
+        &part.normals
+    };
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone())
+    .with_inserted_attribute(ATTRIBUTE_OUTLINE_NORMAL, outline_normals.clone())
+    .with_inserted_indices(Indices::U32(part.indices.clone()));
     if part.uvs.len() == vertex_count {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
     }
@@ -213,15 +241,28 @@ pub fn part_to_mesh(part: &Part) -> Mesh {
     }
     if is_flame(part) {
         // Colour and opacity by height along the flame (`flame::flame_colour`, `flame_alpha`).
-        let layer = if part.name == "flame_core" { super::flame::FlameLayer::Core } else { super::flame::FlameLayer::Veil };
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, super::flame::flame_vertex_colours(&part.positions, layer));
+        let layer = if part.name == "flame_core" {
+            super::flame::FlameLayer::Core
+        } else {
+            super::flame::FlameLayer::Veil
+        };
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_COLOR,
+            super::flame::flame_vertex_colours(&part.positions, layer),
+        );
     }
     if part.occlusion.len() == vertex_count && !is_flame(part) {
         // Openness lives in vertex alpha, harmless only because stone is `AlphaMode::Opaque`.
         // How open each vertex is, in the colour's alpha (`toon.wesl` reads it back): white
         // leaves the albedo alone and an opaque material ignores the alpha, so it shades
         // nothing but the light. Items and creatures carry none and are drawn unshaded.
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, part.occlusion.iter().map(|&open| [1.0, 1.0, 1.0, open]).collect::<Vec<[f32; 4]>>());
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_COLOR,
+            part.occlusion
+                .iter()
+                .map(|&open| [1.0, 1.0, 1.0, open])
+                .collect::<Vec<[f32; 4]>>(),
+        );
     }
     mesh
 }
@@ -244,10 +285,25 @@ fn octahedral(n: [f32; 3]) -> [f32; 2] {
 /// moves (`toon.wesl`).
 pub fn part_to_skinned_mesh(part: &Part, skin: &fb_body::PartSkin) -> Mesh {
     let mut mesh = part_to_mesh(part);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(skin.joints.clone()));
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_INDEX,
+        VertexAttributeValues::Uint16x4(skin.joints.clone()),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, skin.weights.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, part.positions.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect::<Vec<[f32; 4]>>());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, part.normals.iter().map(|&n| octahedral(n)).collect::<Vec<[f32; 2]>>());
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_TANGENT,
+        part.positions
+            .iter()
+            .map(|p| [p[0], p[1], p[2], 1.0])
+            .collect::<Vec<[f32; 4]>>(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_1,
+        part.normals
+            .iter()
+            .map(|&n| octahedral(n))
+            .collect::<Vec<[f32; 2]>>(),
+    );
     // Bounds that follow the joints, so a swung limb is not culled with its rest pose.
     let _ = mesh.generate_skinned_mesh_bounds();
     mesh
@@ -263,7 +319,11 @@ pub fn is_flame(part: &Part) -> bool {
 /// knowledge of the part's shape: exactly the radius of a tube, and the full thickness of a
 /// thin plate, which errs on the thick side. Zero for a part with no area.
 pub fn half_thickness(part: &Part) -> f32 {
-    let points: Vec<Vec3> = part.positions.iter().map(|&p| Vec3::from_array(p)).collect();
+    let points: Vec<Vec3> = part
+        .positions
+        .iter()
+        .map(|&p| Vec3::from_array(p))
+        .collect();
     // Measured about the part's own centre, which keeps the sum accurate far from the origin.
     let centre = points.iter().sum::<Vec3>() / points.len().max(1) as f32;
     let (mut volume, mut area) = (0.0, 0.0);
@@ -272,12 +332,21 @@ pub fn half_thickness(part: &Part) -> f32 {
         volume += a.dot(b.cross(c)) / 6.0;
         area += (b - a).cross(c - a).length() * 0.5;
     }
-    if area > 0.0 { (2.0 * volume / area).max(0.0) } else { 0.0 }
+    if area > 0.0 {
+        (2.0 * volume / area).max(0.0)
+    } else {
+        0.0
+    }
 }
 
 /// Item-space bounds of every part, or `None` for an item with no vertices.
 pub fn item_bounds(item: &ItemMesh) -> Option<Aabb3d> {
-    let mut points = item.parts.iter().flat_map(|part| &part.positions).map(|&p| Vec3::from_array(p)).peekable();
+    let mut points = item
+        .parts
+        .iter()
+        .flat_map(|part| &part.positions)
+        .map(|&p| Vec3::from_array(p))
+        .peekable();
     points.peek()?;
     Some(Aabb3d::from_point_cloud(Isometry3d::IDENTITY, points))
 }
@@ -299,11 +368,19 @@ pub struct InkOutline;
 pub struct OutlineMaterials(HashMap<[u32; 7], Handle<OutlineMaterial>>);
 
 impl OutlineMaterials {
-    fn get_or_add(&mut self, assets: &mut Assets<OutlineMaterial>, material: OutlineMaterial) -> Handle<OutlineMaterial> {
+    fn get_or_add(
+        &mut self,
+        assets: &mut Assets<OutlineMaterial>,
+        material: OutlineMaterial,
+    ) -> Handle<OutlineMaterial> {
         let [r, g, b, a] = material.color.to_f32_array();
-        let [r, g, b, a, width, max] = [r, g, b, a, material.width_px, material.max_width].map(f32::to_bits);
+        let [r, g, b, a, width, max] =
+            [r, g, b, a, material.width_px, material.max_width].map(f32::to_bits);
         let key = [r, g, b, a, width, max, material.see_through as u32];
-        self.0.entry(key).or_insert_with(|| assets.add(material)).clone()
+        self.0
+            .entry(key)
+            .or_insert_with(|| assets.add(material))
+            .clone()
     }
 }
 
@@ -332,7 +409,13 @@ impl<'w, 's> ItemSpawner<'w, 's> {
     /// [`ItemSpawner::spawn`] for an item whose parts are skinned (`skins` parallel to its
     /// parts, from `fb_body`), each part and its ink hull bound to `skinned`'s joints. The
     /// parts' transforms no longer place them: the joints do.
-    pub fn spawn_skinned(&mut self, item: &ItemMesh, appearance: &ItemAppearance, skins: &[fb_body::PartSkin], skinned: &SkinnedMesh) -> EntityCommands<'_> {
+    pub fn spawn_skinned(
+        &mut self,
+        item: &ItemMesh,
+        appearance: &ItemAppearance,
+        skins: &[fb_body::PartSkin],
+        skinned: &SkinnedMesh,
+    ) -> EntityCommands<'_> {
         self.spawn_with(item, appearance, Some((skins, skinned)))
     }
 
@@ -342,11 +425,26 @@ impl<'w, 's> ItemSpawner<'w, 's> {
         &mut self.commands
     }
 
-    fn spawn_with(&mut self, item: &ItemMesh, appearance: &ItemAppearance, skin: Option<(&[fb_body::PartSkin], &SkinnedMesh)>) -> EntityCommands<'_> {
-        let outline = self.shared_outlines.get_or_add(&mut self.outline_materials, appearance.outline);
-        let glass_outline =
-            self.shared_outlines.get_or_add(&mut self.outline_materials, OutlineMaterial { see_through: true, ..appearance.outline });
-        let root = self.commands.spawn((ArmoryItem, Transform::default(), Visibility::default())).id();
+    fn spawn_with(
+        &mut self,
+        item: &ItemMesh,
+        appearance: &ItemAppearance,
+        skin: Option<(&[fb_body::PartSkin], &SkinnedMesh)>,
+    ) -> EntityCommands<'_> {
+        let outline = self
+            .shared_outlines
+            .get_or_add(&mut self.outline_materials, appearance.outline);
+        let glass_outline = self.shared_outlines.get_or_add(
+            &mut self.outline_materials,
+            OutlineMaterial {
+                see_through: true,
+                ..appearance.outline
+            },
+        );
+        let root = self
+            .commands
+            .spawn((ArmoryItem, Transform::default(), Visibility::default()))
+            .id();
         let mut flame = None;
         for (index, part) in item.parts.iter().enumerate() {
             let mesh = self.meshes.add(match skin {
@@ -355,8 +453,13 @@ impl<'w, 's> ItemSpawner<'w, 's> {
             });
             let material = self.toon_materials.add(appearance.material_for(part));
             let see_through = is_see_through(part);
-            let mut part_entity =
-                self.commands.spawn((ArmoryPart, Name::new(part.name), Mesh3d(mesh.clone()), MeshMaterial3d(material), ChildOf(root)));
+            let mut part_entity = self.commands.spawn((
+                ArmoryPart,
+                Name::new(part.name),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material),
+                ChildOf(root),
+            ));
             if let Some((_, skinned)) = skin {
                 part_entity.insert((skinned.clone(), DynamicSkinnedMeshBounds));
             }
@@ -375,8 +478,17 @@ impl<'w, 's> ItemSpawner<'w, 's> {
             }
             let part_entity = part_entity.id();
             if part.outline {
-                let ink = if see_through { glass_outline.clone() } else { outline.clone() };
-                let mut hull = self.commands.spawn((InkOutline, Mesh3d(mesh), MeshMaterial3d(ink), ChildOf(part_entity)));
+                let ink = if see_through {
+                    glass_outline.clone()
+                } else {
+                    outline.clone()
+                };
+                let mut hull = self.commands.spawn((
+                    InkOutline,
+                    Mesh3d(mesh),
+                    MeshMaterial3d(ink),
+                    ChildOf(part_entity),
+                ));
                 if let Some((_, skinned)) = skin {
                     hull.insert((skinned.clone(), DynamicSkinnedMeshBounds));
                 }
@@ -388,8 +500,8 @@ impl<'w, 's> ItemSpawner<'w, 's> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::toon::EtchStyle;
+    use super::*;
     use armory::fabric::{PatternKind, SurfacePattern};
 
     #[test]
@@ -401,7 +513,11 @@ mod tests {
 
     #[test]
     fn tint_overrides_the_palette() {
-        let part = Part { material: Some(MaterialKind::Gem), tint: Some(Rgb(1.0, 0.0, 0.0)), ..default() };
+        let part = Part {
+            material: Some(MaterialKind::Gem),
+            tint: Some(Rgb(1.0, 0.0, 0.0)),
+            ..default()
+        };
         let material = ItemAppearance::default().material_for(&part);
         assert_eq!(material.base.base_color, Color::srgb(1.0, 0.0, 0.0));
         assert_eq!(material.extension.decay.kind, 5);
@@ -423,25 +539,57 @@ mod tests {
         assert!(matches!(material.base.alpha_mode, AlphaMode::Premultiplied));
         assert_eq!(material.base.base_color, Color::srgb(1.0, 1.0, 1.0));
         let mesh = part_to_mesh(&veil);
-        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("no vertex colours") };
-        assert!((colors[0][3] - 0.4).abs() < 1e-5 && colors[2][3] > colors[0][3], "{colors:?}");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("no vertex colours")
+        };
+        assert!(
+            (colors[0][3] - 0.4).abs() < 1e-5 && colors[2][3] > colors[0][3],
+            "{colors:?}"
+        );
         // Yellow at the base, redder at the tip.
         assert!(colors[0][1] > colors[2][1]);
         // The core is paler and more opaque than the veil at the same height.
         let core = part_to_mesh(&flame("flame_core"));
-        let Some(bevy::mesh::VertexAttributeValues::Float32x4(core)) = core.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!() };
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(core)) =
+            core.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!()
+        };
         assert!(core[0][2] > colors[0][2] && core[0][3] > colors[0][3]);
         // Other glowing parts stay opaque and uncoloured.
         let ember = flame("embers");
-        assert!(matches!(ItemAppearance::default().material_for(&ember).base.alpha_mode, AlphaMode::Opaque));
-        assert!(part_to_mesh(&ember).attribute(Mesh::ATTRIBUTE_COLOR).is_none());
+        assert!(matches!(
+            ItemAppearance::default()
+                .material_for(&ember)
+                .base
+                .alpha_mode,
+            AlphaMode::Opaque
+        ));
+        assert!(
+            part_to_mesh(&ember)
+                .attribute(Mesh::ATTRIBUTE_COLOR)
+                .is_none()
+        );
     }
 
     #[test]
     fn flames_do_not_wear() {
-        let grave = ItemAppearance { condition: Condition::of(armory::cond::ConditionState::GraveFind), ..default() };
-        let flame = Part { material: Some(MaterialKind::Gem), glow: 1.0, ..default() };
-        let gem = Part { material: Some(MaterialKind::Gem), glow: 0.5, ..default() };
+        let grave = ItemAppearance {
+            condition: Condition::of(armory::cond::ConditionState::GraveFind),
+            ..default()
+        };
+        let flame = Part {
+            material: Some(MaterialKind::Gem),
+            glow: 1.0,
+            ..default()
+        };
+        let gem = Part {
+            material: Some(MaterialKind::Gem),
+            glow: 0.5,
+            ..default()
+        };
         assert_eq!(grave.material_for(&flame).extension.decay.amount, 0.0);
         let full = grave.condition.decay(MaterialKind::Gem);
         assert!((grave.material_for(&gem).extension.decay.amount - full * 0.5).abs() < 1e-6);
@@ -449,9 +597,17 @@ mod tests {
 
     #[test]
     fn bounds_cover_every_part() {
-        let part = |positions: Vec<[f32; 3]>| Part { positions, ..default() };
+        let part = |positions: Vec<[f32; 3]>| Part {
+            positions,
+            ..default()
+        };
         assert!(item_bounds(&ItemMesh::default()).is_none());
-        let item = ItemMesh { parts: vec![part(vec![[0.0, 0.0, 0.0], [1.0, 2.0, 0.5]]), part(vec![[-1.0, 8.0, 0.0]])] };
+        let item = ItemMesh {
+            parts: vec![
+                part(vec![[0.0, 0.0, 0.0], [1.0, 2.0, 0.5]]),
+                part(vec![[-1.0, 8.0, 0.0]]),
+            ],
+        };
         let bounds = item_bounds(&item).unwrap();
         assert_eq!(Vec3::from(bounds.min), Vec3::new(-1.0, 0.0, 0.0));
         assert_eq!(Vec3::from(bounds.max), Vec3::new(1.0, 8.0, 0.5));
@@ -470,7 +626,11 @@ mod tests {
             let (a, b) = (2 + 2 * i, 2 + 2 * ((i + 1) % sides));
             indices.extend([a, a + 1, b, b, a + 1, b + 1, 0, a, b, 1, b + 1, a + 1]);
         }
-        Part { positions, indices, ..default() }
+        Part {
+            positions,
+            indices,
+            ..default()
+        }
     }
 
     #[test]
@@ -484,26 +644,56 @@ mod tests {
     #[test]
     fn only_parts_without_ink_get_a_minimum_width() {
         let appearance = ItemAppearance::default();
-        let string = Part { outline: false, ..cylinder(0.01, 12.0, 24) };
-        let limb = Part { outline: true, ..cylinder(0.1, 12.0, 24) };
+        let string = Part {
+            outline: false,
+            ..cylinder(0.01, 12.0, 24)
+        };
+        let limb = Part {
+            outline: true,
+            ..cylinder(0.1, 12.0, 24)
+        };
         let fine = appearance.material_for(&string).extension.min_width;
         assert_eq!(fine.px, appearance.min_width_px);
         assert!((fine.half_thickness - 0.01).abs() < 0.0005);
-        assert_eq!(appearance.material_for(&limb).extension.min_width, MinWidth::default());
+        assert_eq!(
+            appearance.material_for(&limb).extension.min_width,
+            MinWidth::default()
+        );
     }
 
     fn patterned(kind: PatternKind, scale: f32) -> Part {
-        let pattern = SurfacePattern { kind, color: Rgb::hex(0xe0d4b0), scale };
-        Part { material: Some(MaterialKind::Cloth), pattern: Some(pattern), ..cylinder(1.0, 4.0, 48) }
+        let pattern = SurfacePattern {
+            kind,
+            color: Rgb::hex(0xe0d4b0),
+            scale,
+        };
+        Part {
+            material: Some(MaterialKind::Cloth),
+            pattern: Some(pattern),
+            ..cylinder(1.0, 4.0, 48)
+        }
     }
 
     #[test]
     fn every_pattern_kind_draws_its_own_pattern() {
         let appearance = ItemAppearance::default();
-        let ids: Vec<u32> = PatternKind::ALL.iter().map(|&kind| appearance.material_for(&patterned(kind, 2.0)).extension.pattern.id).collect();
+        let ids: Vec<u32> = PatternKind::ALL
+            .iter()
+            .map(|&kind| {
+                appearance
+                    .material_for(&patterned(kind, 2.0))
+                    .extension
+                    .pattern
+                    .id
+            })
+            .collect();
         for (kind, id) in PatternKind::ALL.iter().zip(&ids) {
             assert_eq!(*id, kind.shader_id());
-            assert_eq!(ids.iter().filter(|other| *other == id).count(), 1, "{kind:?}");
+            assert_eq!(
+                ids.iter().filter(|other| *other == id).count(),
+                1,
+                "{kind:?}"
+            );
         }
     }
 
@@ -511,13 +701,27 @@ mod tests {
     fn pattern_scale_follows_the_surface_pattern() {
         let appearance = ItemAppearance::default();
         for scale in [1.0, 2.5, 9.0] {
-            let pattern = appearance.material_for(&patterned(PatternKind::Mail, scale)).extension.pattern;
+            let pattern = appearance
+                .material_for(&patterned(PatternKind::Mail, scale))
+                .extension
+                .pattern;
             assert_eq!(pattern.scale, scale);
-            assert_eq!(pattern.color, Vec3::new(0xe0 as f32 / 255.0, 0xd4 as f32 / 255.0, 0xb0 as f32 / 255.0));
+            assert_eq!(
+                pattern.color,
+                Vec3::new(
+                    0xe0 as f32 / 255.0,
+                    0xd4 as f32 / 255.0,
+                    0xb0 as f32 / 255.0
+                )
+            );
             // The cylinder's girth is about 2 pi, so `scale` cells to a unit give about 2 pi scale
             // round it, rounded to an even count.
             let expected = 2.0 * (std::f32::consts::PI * scale).round();
-            assert!((pattern.around - expected).abs() <= 2.0, "{} {expected}", pattern.around);
+            assert!(
+                (pattern.around - expected).abs() <= 2.0,
+                "{} {expected}",
+                pattern.around
+            );
             assert_eq!(pattern.around % 2.0, 0.0);
         }
     }
@@ -525,19 +729,33 @@ mod tests {
     #[test]
     fn glass_is_see_through_and_keeps_its_ink() {
         let appearance = ItemAppearance::default();
-        let glass = Part { material: Some(MaterialKind::Glass), outline: true, ..cylinder(1.0, 3.0, 24) };
-        let drink = Part { material: Some(MaterialKind::Gem), outline: false, ..cylinder(0.9, 2.0, 24) };
+        let glass = Part {
+            material: Some(MaterialKind::Glass),
+            outline: true,
+            ..cylinder(1.0, 3.0, 24)
+        };
+        let drink = Part {
+            material: Some(MaterialKind::Gem),
+            outline: false,
+            ..cylinder(0.9, 2.0, 24)
+        };
         let material = appearance.material_for(&glass);
         assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
         assert_eq!(material.base.base_color.alpha(), GLASS_OPACITY);
-        assert_eq!(material.base.base_color.with_alpha(1.0), { let Rgb(r, g, b) = appearance.palette.glass; Color::srgb(r, g, b) });
+        assert_eq!(material.base.base_color.with_alpha(1.0), {
+            let Rgb(r, g, b) = appearance.palette.glass;
+            Color::srgb(r, g, b)
+        });
         assert!(is_see_through(&glass) && glass.outline);
         // The drink inside, and every opaque part, draw as before.
         let inside = appearance.material_for(&drink);
         assert_eq!(inside.base.alpha_mode, AlphaMode::Opaque);
         assert_eq!(inside.base.base_color.alpha(), 1.0);
         // A see-through hull goes in the transparent pass, sorted after the glass.
-        let ink = OutlineMaterial { see_through: true, ..default() };
+        let ink = OutlineMaterial {
+            see_through: true,
+            ..default()
+        };
         assert_eq!(ink.alpha_mode(), AlphaMode::Blend);
         assert!(ink.depth_bias() > 0.0);
         assert_eq!(OutlineMaterial::default().alpha_mode(), AlphaMode::Opaque);
@@ -547,50 +765,138 @@ mod tests {
     #[test]
     fn etching_goes_only_on_its_target() {
         use armory::etch::{EtchFinish, EtchPattern, EtchTarget, Etching};
-        let etching = Etching { on: true, pattern: EtchPattern::Runes, target: EtchTarget::Metals, ..Etching::default() };
-        let appearance = ItemAppearance { etching: Some(etching), ..default() };
-        let part = |material| Part { material: Some(material), ..cylinder(0.2, 8.0, 12) };
-        let blade = appearance.material_for(&part(MaterialKind::Iron)).extension.etch;
-        let grip = appearance.material_for(&part(MaterialKind::Leather)).extension.etch;
+        let etching = Etching {
+            on: true,
+            pattern: EtchPattern::Runes,
+            target: EtchTarget::Metals,
+            ..Etching::default()
+        };
+        let appearance = ItemAppearance {
+            etching: Some(etching),
+            ..default()
+        };
+        let part = |material| Part {
+            material: Some(material),
+            ..cylinder(0.2, 8.0, 12)
+        };
+        let blade = appearance
+            .material_for(&part(MaterialKind::Iron))
+            .extension
+            .etch;
+        let grip = appearance
+            .material_for(&part(MaterialKind::Leather))
+            .extension
+            .etch;
         assert_eq!(blade.id, EtchPattern::Runes.shader_id());
         assert_eq!(blade.style, EtchStyle::Engraved);
         assert_eq!(grip, Etch::default(), "leather is not a metal");
         // Blackened lines darken; inlaid ones take the inlay colour (gold by default).
         assert!(!blade.inlaid && blade.style.darken() < 0.5);
-        let inlaid = ItemAppearance { etching: Some(Etching { finish: EtchFinish::Inlaid, ..etching }), ..default() };
-        let gold = inlaid.material_for(&part(MaterialKind::Iron)).extension.etch;
+        let inlaid = ItemAppearance {
+            etching: Some(Etching {
+                finish: EtchFinish::Inlaid,
+                ..etching
+            }),
+            ..default()
+        };
+        let gold = inlaid
+            .material_for(&part(MaterialKind::Iron))
+            .extension
+            .etch;
         assert!(gold.inlaid);
-        assert_eq!(gold.color, Vec3::new(0xd4 as f32 / 255.0, 0xa8 as f32 / 255.0, 0x38 as f32 / 255.0));
+        assert_eq!(
+            gold.color,
+            Vec3::new(
+                0xd4 as f32 / 255.0,
+                0xa8 as f32 / 255.0,
+                0x38 as f32 / 255.0
+            )
+        );
         // Jewellery's pattern is scaled up with its wear (`decay_scale_factor`).
-        let ring = ItemAppearance { decay_scale_factor: 8.0, ..appearance };
-        assert_eq!(ring.material_for(&part(MaterialKind::Gold)).extension.etch.scale, etching.scale * 8.0);
+        let ring = ItemAppearance {
+            decay_scale_factor: 8.0,
+            ..appearance
+        };
+        assert_eq!(
+            ring.material_for(&part(MaterialKind::Gold))
+                .extension
+                .etch
+                .scale,
+            etching.scale * 8.0
+        );
         // Cloth takes it as embroidery; an item with no etching draws none.
-        let embroidered = Etching { target: EtchTarget::Cloth, ..etching };
-        let cloth = ItemAppearance { etching: Some(embroidered), ..default() }.material_for(&part(MaterialKind::Cloth));
+        let embroidered = Etching {
+            target: EtchTarget::Cloth,
+            ..etching
+        };
+        let cloth = ItemAppearance {
+            etching: Some(embroidered),
+            ..default()
+        }
+        .material_for(&part(MaterialKind::Cloth));
         assert_eq!(cloth.extension.etch.style, EtchStyle::Embroidered);
-        assert_eq!(ItemAppearance::default().material_for(&part(MaterialKind::Iron)).extension.etch, Etch::default());
+        assert_eq!(
+            ItemAppearance::default()
+                .material_for(&part(MaterialKind::Iron))
+                .extension
+                .etch,
+            Etch::default()
+        );
     }
 
     #[test]
     fn metal_catches_a_highlight_and_wear_dulls_it() {
-        let part = |material| Part { material: Some(material), ..cylinder(0.2, 8.0, 12) };
+        let part = |material| Part {
+            material: Some(material),
+            ..cylinder(0.2, 8.0, 12)
+        };
         let pristine = ItemAppearance::default();
-        for metal in [MaterialKind::Iron, MaterialKind::Brass, MaterialKind::Gold, MaterialKind::Silver] {
-            assert!(pristine.material_for(&part(metal)).extension.gloss > 0.0, "{metal:?}");
+        for metal in [
+            MaterialKind::Iron,
+            MaterialKind::Brass,
+            MaterialKind::Gold,
+            MaterialKind::Silver,
+        ] {
+            assert!(
+                pristine.material_for(&part(metal)).extension.gloss > 0.0,
+                "{metal:?}"
+            );
         }
-        for matte in [MaterialKind::Wood, MaterialKind::Leather, MaterialKind::Cloth, MaterialKind::Stone, MaterialKind::Skin] {
-            assert_eq!(pristine.material_for(&part(matte)).extension.gloss, 0.0, "{matte:?}");
+        for matte in [
+            MaterialKind::Wood,
+            MaterialKind::Leather,
+            MaterialKind::Cloth,
+            MaterialKind::Stone,
+            MaterialKind::Skin,
+        ] {
+            assert_eq!(
+                pristine.material_for(&part(matte)).extension.gloss,
+                0.0,
+                "{matte:?}"
+            );
         }
-        let rusted = ItemAppearance { condition: Condition::of(armory::cond::ConditionState::GraveFind), ..default() };
-        let new = pristine.material_for(&part(MaterialKind::Iron)).extension.gloss;
-        let old = rusted.material_for(&part(MaterialKind::Iron)).extension.gloss;
+        let rusted = ItemAppearance {
+            condition: Condition::of(armory::cond::ConditionState::GraveFind),
+            ..default()
+        };
+        let new = pristine
+            .material_for(&part(MaterialKind::Iron))
+            .extension
+            .gloss;
+        let old = rusted
+            .material_for(&part(MaterialKind::Iron))
+            .extension
+            .gloss;
         assert!(old > 0.0 && old < new * 0.5, "{old} {new}");
     }
 
     #[test]
     fn a_part_without_a_pattern_draws_none() {
         let appearance = ItemAppearance::default();
-        let plain = Part { material: Some(MaterialKind::Cloth), ..cylinder(1.0, 4.0, 48) };
+        let plain = Part {
+            material: Some(MaterialKind::Cloth),
+            ..cylinder(1.0, 4.0, 48)
+        };
         let material = appearance.material_for(&plain);
         assert_eq!(material.extension.pattern, Pattern::default());
         assert_eq!(material.extension.pattern.id, 0);

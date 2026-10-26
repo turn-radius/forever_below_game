@@ -13,7 +13,10 @@
 //! starts a delve at once.
 
 use bevy::{
-    input::{ButtonState, keyboard::{Key, KeyboardInput}},
+    input::{
+        ButtonState,
+        keyboard::{Key, KeyboardInput},
+    },
     prelude::*,
     window::PrimaryWindow,
 };
@@ -21,22 +24,30 @@ use fb_body::{BodyShape, BodySpec, Folk, ShapeSlider};
 use procgen_rng::Mulberry32;
 
 use crate::character::{Character, ChosenDelver, Class, Sex, modifier};
+use crate::inventory::doll::doll_leaf;
+use crate::inventory::{DollAssets, Icons};
 use crate::keymap::{Action, ActionInput};
 use crate::launch::{AppState, clock_seed};
 use crate::menu::{ButtonInk, MenuButton, MenuCommand, fraction_along};
 use crate::play::CurrentLevel;
 use crate::title::NewDelveSeed;
-use crate::inventory::doll::doll_leaf;
-use crate::inventory::{DollAssets, Icons};
 use crate::title::last_delver::LastDelver;
 use crate::title::preview::preview_inventory;
-use crate::ui::{BG, BRIGHT, CELL, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts, node_rect, ui_cursor};
+use crate::ui::{
+    BG, BRIGHT, CELL, FRAME_GOLD, GOLD, INK, LINE, MUTED, UiFonts, node_rect, ui_cursor,
+};
 
 /// The longest name the creator takes, in characters.
 pub const NAME_MAX: usize = 24;
 
 /// The ability scores' names, in the order of the nudges.
-const ABILITIES: [&str; 5] = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom"];
+const ABILITIES: [&str; 5] = [
+    "Strength",
+    "Dexterity",
+    "Constitution",
+    "Intelligence",
+    "Wisdom",
+];
 
 /// What a creator button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +91,19 @@ impl Draft {
         let class = *rng.pick(&Class::ALL);
         let shape = BodySpec::typical(folk).shape();
         let sex = *rng.pick(&Sex::ALL);
-        let mut draft = Draft { folk, class, name: String::new(), typed: false, body_seed: 0, nudges: [0; 5], shape, shaped: false, sex, dirt: 0.0, rng };
+        let mut draft = Draft {
+            folk,
+            class,
+            name: String::new(),
+            typed: false,
+            body_seed: 0,
+            nudges: [0; 5],
+            shape,
+            shaped: false,
+            sex,
+            dirt: 0.0,
+            rng,
+        };
         draft.roll_name();
         draft.roll_scores();
         draft.roll_look();
@@ -112,7 +135,9 @@ impl Draft {
     /// The body sliders the chosen sex shows: a woman has no beard to cut.
     pub fn sliders(&self) -> impl Iterator<Item = &'static ShapeSlider> {
         let sex = self.sex;
-        BodyShape::SLIDERS.iter().filter(move |s| !(sex == Sex::Female && s.key == "beard"))
+        BodyShape::SLIDERS
+            .iter()
+            .filter(move |s| !(sex == Sex::Female && s.key == "beard"))
     }
 
     /// Makes them `sex`: the hips and bust take the sex's range, other sliders stay.
@@ -126,7 +151,12 @@ impl Draft {
 
     pub fn roll_name(&mut self) {
         self.name = fb_items::naming::folk_name(&mut self.rng, self.folk.key(), Some(self.sex));
-        self.name.truncate(self.name.char_indices().nth(NAME_MAX).map_or(self.name.len(), |(i, _)| i));
+        self.name.truncate(
+            self.name
+                .char_indices()
+                .nth(NAME_MAX)
+                .map_or(self.name.len(), |(i, _)| i),
+        );
         self.typed = false;
     }
 
@@ -210,7 +240,12 @@ pub fn open_creator(commands: &mut Commands) {
 }
 
 /// Begins a delve as `delver`, into `seed`'s level or one from the clock.
-pub fn begin_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed: &NewDelveSeed, delver: Character) {
+pub fn begin_delve(
+    commands: &mut Commands,
+    next: &mut NextState<AppState>,
+    seed: &NewDelveSeed,
+    delver: Character,
+) {
     let seed = seed.0.unwrap_or_else(clock_seed);
     info!("title: {} goes down into level {seed}", delver.name);
     commands.insert_resource(CurrentLevel(fb_level::generate(seed, 1)));
@@ -222,7 +257,12 @@ pub fn begin_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed
 /// Begins a delve the player chose (the creator's Begin, or Continue as): [`begin_delve`], and
 /// when no `--seed` names the level, one that may save and that replaces any saved delve
 /// ([`crate::save::begin_players_delve`]).
-fn begin_players_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed: &NewDelveSeed, delver: Character) {
+fn begin_players_delve(
+    commands: &mut Commands,
+    next: &mut NextState<AppState>,
+    seed: &NewDelveSeed,
+    delver: Character,
+) {
     begin_delve(commands, next, seed, delver);
     if seed.0.is_none() {
         commands.queue(crate::save::begin_players_delve);
@@ -247,7 +287,12 @@ pub fn run_creator(
         for command in chosen.read() {
             match command {
                 // `FB_NEW_DELVE` begins without the creator, as a delver rolled from the clock.
-                MenuCommand::Creator(CreatorCommand::Begin) => begin_delve(&mut commands, &mut next, &seed, Draft::roll(clock_seed()).character()),
+                MenuCommand::Creator(CreatorCommand::Begin) => begin_delve(
+                    &mut commands,
+                    &mut next,
+                    &seed,
+                    Draft::roll(clock_seed()).character(),
+                ),
                 MenuCommand::Continue => {
                     if let Some(delver) = last.as_ref().and_then(|l| l.0.clone()) {
                         begin_players_delve(&mut commands, &mut next, &seed, delver);
@@ -267,7 +312,9 @@ pub fn run_creator(
         typed.clear();
     }
     for command in chosen.read() {
-        let MenuCommand::Creator(command) = *command else { continue };
+        let MenuCommand::Creator(command) = *command else {
+            continue;
+        };
         match command {
             CreatorCommand::Begin => begin = true,
             CreatorCommand::Back => back = true,
@@ -299,11 +346,18 @@ pub fn run_creator(
 /// `FB_ROLL_LOOK=<seconds>`: how often the creator rolls a look by itself, for captures of
 /// the doll changing.
 pub fn roll_look_wait() -> Option<f32> {
-    std::env::var("FB_ROLL_LOOK").ok().and_then(|s| s.trim().parse::<f32>().ok())
+    std::env::var("FB_ROLL_LOOK")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
 }
 
 /// Chooses Roll a look every [`roll_look_wait`] seconds while the creator is open.
-pub fn roll_look_every(time: Res<Time>, draft: Option<Res<Draft>>, mut waited: Local<f32>, mut chosen: MessageWriter<MenuCommand>) {
+pub fn roll_look_every(
+    time: Res<Time>,
+    draft: Option<Res<Draft>>,
+    mut waited: Local<f32>,
+    mut chosen: MessageWriter<MenuCommand>,
+) {
     if draft.is_none() {
         return;
     }
@@ -354,9 +408,14 @@ pub fn drag_shape(
         *held = None;
         return;
     }
-    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else { return };
+    let Some(point) = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref())) else {
+        return;
+    };
     if input.just_pressed(Action::Choose) {
-        *held = bars.iter().map(|(bar, node, transform)| (bar.0, node_rect(node, transform))).find(|(_, rect)| rect.contains(point));
+        *held = bars
+            .iter()
+            .map(|(bar, node, transform)| (bar.0, node_rect(node, transform)))
+            .find(|(_, rect)| rect.contains(point));
     }
     if let Some((key, rect)) = *held
         && let Some(slider) = BodyShape::SLIDERS.iter().find(|s| s.key == key)
@@ -382,7 +441,9 @@ pub fn show_shape(
     let Some(draft) = draft else { return };
     let fraction = |key: &str| {
         let slider = BodyShape::SLIDERS.iter().find(|s| s.key == key);
-        slider.map_or(0.0, |s| ((draft.shape.get(key).unwrap_or(s.low) - s.low) / (s.high - s.low)).clamp(0.0, 1.0))
+        slider.map_or(0.0, |s| {
+            ((draft.shape.get(key).unwrap_or(s.low) - s.low) / (s.high - s.low)).clamp(0.0, 1.0)
+        })
     };
     for (fill, mut node) in &mut fills {
         let width = percent(fraction(fill.0) * 100.0);
@@ -409,7 +470,11 @@ pub fn show_shape(
 /// What a body slider reads: the height in centimetres, the rest as a share.
 fn shape_value(draft: &Draft, slider: &ShapeSlider) -> String {
     let value = draft.shape.get(slider.key).unwrap_or(0.0);
-    if slider.key == "height" { format!("{:.0} cm", draft.folk.race().h * value * 10.0) } else { format!("{:.0}%", value * 100.0) }
+    if slider.key == "height" {
+        format!("{:.0} cm", draft.folk.race().h * value * 10.0)
+    } else {
+        format!("{:.0}%", value * 100.0)
+    }
 }
 
 /// The words at each end of a body slider.
@@ -428,62 +493,175 @@ fn shape_ends(slider: &ShapeSlider) -> (&'static str, &'static str) {
 
 /// The body sliders, a line each: label, the low end's word, the bar, the high end's, the value.
 fn shape_sliders(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft) {
-    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|table| {
-        for slider in draft.sliders() {
-            let value = draft.shape.get(slider.key).unwrap_or(0.0);
-            let fraction = ((value - slider.low) / (slider.high - slider.low)).clamp(0.0, 1.0);
-            let (low, high) = shape_ends(slider);
-            table.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8), ..default() }).with_children(|line| {
-                let cell = |width: f32, justify: JustifyContent| Node { width: px(width), justify_content: justify, ..default() };
-                line.spawn((cell(150.0, JustifyContent::Start), children![(Text::new(slider.label), UiFonts::style(&fonts.body, 18.0, INK))]));
-                line.spawn((cell(72.0, JustifyContent::End), children![(Text::new(low), UiFonts::style(&fonts.body_italic, 15.0, MUTED))]));
-                line.spawn((ShapeBar(slider.key), Node { width: px(SHAPE_PX), height: px(20), align_items: AlignItems::Center, ..default() })).with_children(|bar| {
-                    bar.spawn((Node { width: percent(100), height: px(6), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(3)), ..default() }, BackgroundColor(CELL), BorderColor::all(LINE)))
-                        .with_child((ShapeFill(slider.key), Node { width: percent(fraction * 100.0), height: percent(100), border_radius: BorderRadius::all(px(3)), ..default() }, BackgroundColor(MUTED)));
-                    bar.spawn((
-                        ShapeKnob(slider.key),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: percent(fraction * 100.0),
-                            width: px(14),
-                            height: px(14),
-                            margin: UiRect::left(px(-7)),
-                            border: UiRect::all(px(1)),
-                            border_radius: BorderRadius::MAX,
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(2),
+            ..default()
+        })
+        .with_children(|table| {
+            for slider in draft.sliders() {
+                let value = draft.shape.get(slider.key).unwrap_or(0.0);
+                let fraction = ((value - slider.low) / (slider.high - slider.low)).clamp(0.0, 1.0);
+                let (low, high) = shape_ends(slider);
+                table
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: px(8),
+                        ..default()
+                    })
+                    .with_children(|line| {
+                        let cell = |width: f32, justify: JustifyContent| Node {
+                            width: px(width),
+                            justify_content: justify,
                             ..default()
-                        },
-                        BackgroundColor(INK),
-                        BorderColor::all(BG),
-                    ));
-                });
-                line.spawn((cell(72.0, JustifyContent::Start), children![(Text::new(high), UiFonts::style(&fonts.body_italic, 15.0, MUTED))]));
-                line.spawn((cell(64.0, JustifyContent::End), children![(ShapeValue(slider.key), Text::new(shape_value(draft, slider)), UiFonts::style(&fonts.mono, 16.0, BRIGHT))]));
-            });
-        }
-    });
+                        };
+                        line.spawn((
+                            cell(150.0, JustifyContent::Start),
+                            children![(
+                                Text::new(slider.label),
+                                UiFonts::style(&fonts.body, 18.0, INK)
+                            )],
+                        ));
+                        line.spawn((
+                            cell(72.0, JustifyContent::End),
+                            children![(
+                                Text::new(low),
+                                UiFonts::style(&fonts.body_italic, 15.0, MUTED)
+                            )],
+                        ));
+                        line.spawn((
+                            ShapeBar(slider.key),
+                            Node {
+                                width: px(SHAPE_PX),
+                                height: px(20),
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|bar| {
+                            bar.spawn((
+                                Node {
+                                    width: percent(100),
+                                    height: px(6),
+                                    border: UiRect::all(px(1)),
+                                    border_radius: BorderRadius::all(px(3)),
+                                    ..default()
+                                },
+                                BackgroundColor(CELL),
+                                BorderColor::all(LINE),
+                            ))
+                            .with_child((
+                                ShapeFill(slider.key),
+                                Node {
+                                    width: percent(fraction * 100.0),
+                                    height: percent(100),
+                                    border_radius: BorderRadius::all(px(3)),
+                                    ..default()
+                                },
+                                BackgroundColor(MUTED),
+                            ));
+                            bar.spawn((
+                                ShapeKnob(slider.key),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: percent(fraction * 100.0),
+                                    width: px(14),
+                                    height: px(14),
+                                    margin: UiRect::left(px(-7)),
+                                    border: UiRect::all(px(1)),
+                                    border_radius: BorderRadius::MAX,
+                                    ..default()
+                                },
+                                BackgroundColor(INK),
+                                BorderColor::all(BG),
+                            ));
+                        });
+                        line.spawn((
+                            cell(72.0, JustifyContent::Start),
+                            children![(
+                                Text::new(high),
+                                UiFonts::style(&fonts.body_italic, 15.0, MUTED)
+                            )],
+                        ));
+                        line.spawn((
+                            cell(64.0, JustifyContent::End),
+                            children![(
+                                ShapeValue(slider.key),
+                                Text::new(shape_value(draft, slider)),
+                                UiFonts::style(&fonts.mono, 16.0, BRIGHT)
+                            )],
+                        ));
+                    });
+            }
+        });
 }
 
 /// A choice among several: gold and ruled in gold when it is the one chosen.
-fn chip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, command: CreatorCommand, chosen: bool) {
+fn chip(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    command: CreatorCommand,
+    chosen: bool,
+) {
     let idle = if chosen { FRAME_GOLD } else { MUTED };
     parent
         .spawn((
             MenuButton(MenuCommand::Creator(command)),
             ButtonInk { idle, hover: INK },
-            Node { padding: UiRect::axes(px(12), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+            Node {
+                padding: UiRect::axes(px(12), px(4)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(4)),
+                ..default()
+            },
             BackgroundColor(BG),
             BorderColor::all(if chosen { FRAME_GOLD } else { LINE }),
         ))
-        .with_child((Text::new(label), UiFonts::style(&fonts.body_medium, 20.0, idle)));
+        .with_child((
+            Text::new(label),
+            UiFonts::style(&fonts.body_medium, 20.0, idle),
+        ));
 }
 
 /// A row of the form: its label on the left, its controls after.
-fn row(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str, controls: impl FnOnce(&mut ChildSpawnerCommands)) {
-    parent.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|line| {
-        line.spawn((Node { width: px(96), flex_shrink: 0.0, ..default() }, children![(Text::new(label), UiFonts::style(&fonts.display, 22.0, MUTED))]));
-        line.spawn(Node { flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, column_gap: px(8), row_gap: px(8), ..default() })
+fn row(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    label: &str,
+    controls: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: px(10),
+            ..default()
+        })
+        .with_children(|line| {
+            line.spawn((
+                Node {
+                    width: px(96),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+                children![(
+                    Text::new(label),
+                    UiFonts::style(&fonts.display, 22.0, MUTED)
+                )],
+            ));
+            line.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                row_gap: px(8),
+                ..default()
+            })
             .with_children(controls);
-    });
+        });
 }
 
 /// How the class casts and how tough it is, in a few words.
@@ -498,68 +676,189 @@ fn class_note(class: Class) -> String {
 
 /// Builds the creator's page under `parent`: the form beside the delver's paper doll
 /// ([`super::preview`]).
-pub fn creator_page(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft, dolls: &DollAssets, icons: &mut Icons) {
-    parent.spawn((Text::new("Who goes below?"), UiFonts::style(&fonts.display, 40.0, INK)));
-    let mut body = parent.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(24), width: percent(100), ..default() });
+pub fn creator_page(
+    parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
+    draft: &Draft,
+    dolls: &DollAssets,
+    icons: &mut Icons,
+) {
+    parent.spawn((
+        Text::new("Who goes below?"),
+        UiFonts::style(&fonts.display, 40.0, INK),
+    ));
+    let mut body = parent.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        column_gap: px(24),
+        width: percent(100),
+        ..default()
+    });
     body.with_children(|body| {
-        body.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(16), flex_grow: 1.0, ..default() }).with_children(|form| creator_form(form, fonts, draft));
+        body.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(16),
+            flex_grow: 1.0,
+            ..default()
+        })
+        .with_children(|form| creator_form(form, fonts, draft));
         doll_leaf(body, dolls, &preview_inventory(draft), fonts, icons);
     });
-    parent.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(16), margin: UiRect::top(px(8)), ..default() }).with_children(|buttons| {
-        chip(buttons, fonts, "Back", CreatorCommand::Back, false);
-        chip(buttons, fonts, "Begin the delve", CreatorCommand::Begin, draft.can_begin());
-    });
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(16),
+            margin: UiRect::top(px(8)),
+            ..default()
+        })
+        .with_children(|buttons| {
+            chip(buttons, fonts, "Back", CreatorCommand::Back, false);
+            chip(
+                buttons,
+                fonts,
+                "Begin the delve",
+                CreatorCommand::Begin,
+                draft.can_begin(),
+            );
+        });
 }
 
 /// The creator's choices, a row each.
 fn creator_form(form: &mut ChildSpawnerCommands, fonts: &UiFonts, draft: &Draft) {
     row(form, fonts, "Folk", |line| {
         for folk in Folk::ALL {
-            chip(line, fonts, &folk.race().label, CreatorCommand::Folk(folk), draft.folk == folk);
+            chip(
+                line,
+                fonts,
+                &folk.race().label,
+                CreatorCommand::Folk(folk),
+                draft.folk == folk,
+            );
         }
     });
     row(form, fonts, "Sex", |line| {
         for sex in Sex::ALL {
-            chip(line, fonts, sex.label(), CreatorCommand::Sex(sex), draft.sex == sex);
+            chip(
+                line,
+                fonts,
+                sex.label(),
+                CreatorCommand::Sex(sex),
+                draft.sex == sex,
+            );
         }
     });
     row(form, fonts, "Class", |line| {
         for class in Class::ALL {
             let word = class.word();
             let label = word[..1].to_uppercase() + &word[1..];
-            chip(line, fonts, &label, CreatorCommand::Class(class), draft.class == class);
+            chip(
+                line,
+                fonts,
+                &label,
+                CreatorCommand::Class(class),
+                draft.class == class,
+            );
         }
-        line.spawn((Text::new(class_note(draft.class)), UiFonts::style(&fonts.body_italic, 18.0, MUTED)));
+        line.spawn((
+            Text::new(class_note(draft.class)),
+            UiFonts::style(&fonts.body_italic, 18.0, MUTED),
+        ));
     });
     row(form, fonts, "Name", |line| {
         line.spawn((
-            Node { width: px(300), padding: UiRect::axes(px(10), px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(4)), ..default() },
+            Node {
+                width: px(300),
+                padding: UiRect::axes(px(10), px(4)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(4)),
+                ..default()
+            },
             BackgroundColor(BG),
             BorderColor::all(if draft.can_begin() { LINE } else { GOLD }),
         ))
-        .with_child((Text::new(draft.name.clone()), UiFonts::style(&fonts.display, 24.0, BRIGHT), children![(TextSpan::new("_"), UiFonts::style(&fonts.display, 24.0, GOLD))]));
+        .with_child((
+            Text::new(draft.name.clone()),
+            UiFonts::style(&fonts.display, 24.0, BRIGHT),
+            children![(
+                TextSpan::new("_"),
+                UiFonts::style(&fonts.display, 24.0, GOLD)
+            )],
+        ));
         chip(line, fonts, "Roll a name", CreatorCommand::RollName, false);
     });
     row(form, fonts, "Scores", |line| {
-        line.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|table| {
+        line.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(2),
+            ..default()
+        })
+        .with_children(|table| {
             let scores = Character::scores_from(draft.folk, draft.nudges);
-            let values = [scores.strength, scores.dexterity, scores.constitution, scores.intelligence, scores.wisdom];
+            let values = [
+                scores.strength,
+                scores.dexterity,
+                scores.constitution,
+                scores.intelligence,
+                scores.wisdom,
+            ];
             for (i, ability) in ABILITIES.into_iter().enumerate() {
                 let base = draft.folk.race().stats[i];
-                table.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Baseline, column_gap: px(14), ..default() }).with_children(|line| {
-                    let cell = |width: f32| Node { width: px(width), ..default() };
-                    line.spawn((cell(130.0), children![(Text::new(ability), UiFonts::style(&fonts.body, 20.0, INK))]));
-                    line.spawn((cell(36.0), children![(Text::new(format!("{:>2}", values[i])), UiFonts::style(&fonts.mono_bold, 20.0, BRIGHT))]));
-                    line.spawn((cell(40.0), children![(Text::new(format!("{:+}", modifier(values[i]))), UiFonts::style(&fonts.mono, 18.0, MUTED))]));
-                    let note = format!("{} {base}, rolled {:+}", draft.folk.race().label.to_lowercase(), draft.nudges[i]);
-                    line.spawn((Text::new(note), UiFonts::style(&fonts.body_italic, 16.0, MUTED)));
-                });
+                table
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Baseline,
+                        column_gap: px(14),
+                        ..default()
+                    })
+                    .with_children(|line| {
+                        let cell = |width: f32| Node {
+                            width: px(width),
+                            ..default()
+                        };
+                        line.spawn((
+                            cell(130.0),
+                            children![(Text::new(ability), UiFonts::style(&fonts.body, 20.0, INK))],
+                        ));
+                        line.spawn((
+                            cell(36.0),
+                            children![(
+                                Text::new(format!("{:>2}", values[i])),
+                                UiFonts::style(&fonts.mono_bold, 20.0, BRIGHT)
+                            )],
+                        ));
+                        line.spawn((
+                            cell(40.0),
+                            children![(
+                                Text::new(format!("{:+}", modifier(values[i]))),
+                                UiFonts::style(&fonts.mono, 18.0, MUTED)
+                            )],
+                        ));
+                        let note = format!(
+                            "{} {base}, rolled {:+}",
+                            draft.folk.race().label.to_lowercase(),
+                            draft.nudges[i]
+                        );
+                        line.spawn((
+                            Text::new(note),
+                            UiFonts::style(&fonts.body_italic, 16.0, MUTED),
+                        ));
+                    });
             }
         });
-        chip(line, fonts, "Roll scores", CreatorCommand::RollScores, false);
+        chip(
+            line,
+            fonts,
+            "Roll scores",
+            CreatorCommand::RollScores,
+            false,
+        );
     });
-    row(form, fonts, "Look", |line| chip(line, fonts, "Roll a look", CreatorCommand::RollLook, false));
-    row(form, fonts, "Body", |line| shape_sliders(line, fonts, draft));
+    row(form, fonts, "Look", |line| {
+        chip(line, fonts, "Roll a look", CreatorCommand::RollLook, false)
+    });
+    row(form, fonts, "Body", |line| {
+        shape_sliders(line, fonts, draft)
+    });
 }
 
 #[cfg(test)]
@@ -585,10 +884,20 @@ mod tests {
         assert_eq!(draft.nudges, [4, -5, 0, 2, -1]);
         assert_eq!(goblin, Character::scores_from(Folk::Goblin, draft.nudges));
         let (h, g) = (Folk::Human.race().stats, Folk::Goblin.race().stats);
-        assert_eq!(goblin.constitution - human.constitution, g[2] - h[2], "a nudge of 0 moves with the folk's own score");
+        assert_eq!(
+            goblin.constitution - human.constitution,
+            g[2] - h[2],
+            "a nudge of 0 moves with the folk's own score"
+        );
         for nudges in [[9; 5], [-20; 5]] {
             let scores = Character::scores_from(Folk::Dwarf, nudges);
-            for value in [scores.strength, scores.dexterity, scores.constitution, scores.intelligence, scores.wisdom] {
+            for value in [
+                scores.strength,
+                scores.dexterity,
+                scores.constitution,
+                scores.intelligence,
+                scores.wisdom,
+            ] {
                 assert!((3..=18).contains(&value), "{value}");
             }
         }
@@ -630,7 +939,10 @@ mod tests {
             changed |= draft.character().attributes != before.attributes;
         }
         assert!(changed);
-        assert_eq!((draft.character().body_seed, draft.character().name), (before.body_seed, before.name.clone()));
+        assert_eq!(
+            (draft.character().body_seed, draft.character().name),
+            (before.body_seed, before.name.clone())
+        );
         let attributes = draft.character().attributes;
         draft.roll_look();
         assert_ne!(draft.body_seed, before.body_seed);
@@ -643,7 +955,19 @@ mod tests {
         let rolled = |d: &Draft| {
             let spec = d.character().spec();
             let roll = BodySpec::roll(d.folk, d.body_seed);
-            (spec.muscle, spec.slender, spec.stature, spec.frame, spec.jaw) == (roll.muscle, roll.slender, roll.stature, roll.frame, roll.jaw)
+            (
+                spec.muscle,
+                spec.slender,
+                spec.stature,
+                spec.frame,
+                spec.jaw,
+            ) == (
+                roll.muscle,
+                roll.slender,
+                roll.stature,
+                roll.frame,
+                roll.jaw,
+            )
         };
         assert!(rolled(&draft), "the rolled look to begin with");
         draft.set_shape("muscle", 1.0);
@@ -651,12 +975,20 @@ mod tests {
         let spec = draft.character().spec();
         assert_eq!((spec.muscle, spec.stature), (1.0, 0.9));
         // A new folk keeps a shape the sliders set; a new look rolls it again.
-        draft.set_folk(if draft.folk == Folk::Dwarf { Folk::Gnome } else { Folk::Dwarf });
+        draft.set_folk(if draft.folk == Folk::Dwarf {
+            Folk::Gnome
+        } else {
+            Folk::Dwarf
+        });
         assert_eq!(draft.character().spec().muscle, 1.0);
         draft.roll_look();
         assert!(!draft.shaped);
         assert!(rolled(&draft));
-        assert!(BodyShape::SLIDERS.iter().all(|s| !shape_value(&draft, s).is_empty()));
+        assert!(
+            BodyShape::SLIDERS
+                .iter()
+                .all(|s| !shape_value(&draft, s).is_empty())
+        );
     }
 
     #[test]
@@ -666,11 +998,17 @@ mod tests {
             draft.set_folk(Folk::Human);
             draft.set_sex(Sex::Female);
             let woman = draft.character().spec();
-            assert!(woman.figure >= 0.55 && woman.bust >= 0.3 && woman.beard == fb_body::Beard::None, "{woman:?}");
+            assert!(
+                woman.figure >= 0.55 && woman.bust >= 0.3 && woman.beard == fb_body::Beard::None,
+                "{woman:?}"
+            );
             draft.set_shape("muscle", 0.9);
             draft.set_sex(Sex::Male);
             let man = draft.character().spec();
-            assert!(man.figure <= 0.4 && man.bust == 0.0 && man.muscle == 0.9, "the other sliders stay: {man:?}");
+            assert!(
+                man.figure <= 0.4 && man.bust == 0.0 && man.muscle == 0.9,
+                "the other sliders stay: {man:?}"
+            );
             // Rolling a look keeps the sex.
             draft.roll_look();
             assert_eq!((draft.sex, draft.character().spec().bust), (Sex::Male, 0.0));
@@ -702,25 +1040,62 @@ mod tests {
     fn dragging_a_body_slider_moves_it() {
         use crate::keymap::{ActiveContext, Context, Keymap};
         let mut app = App::new();
-        app.init_resource::<Keymap>().init_resource::<ButtonInput<MouseButton>>().init_resource::<ShapeMoved>().insert_resource(ActiveContext(Context::Menus)).insert_resource(Draft::roll(8));
+        app.init_resource::<Keymap>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ShapeMoved>()
+            .insert_resource(ActiveContext(Context::Menus))
+            .insert_resource(Draft::roll(8));
         app.add_systems(Update, drag_shape);
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(150.0, 50.0)));
         let window = app.world_mut().spawn((window, PrimaryWindow)).id();
         // The muscle bar, 200 across from x 100 to 300.
-        app.world_mut().spawn((ShapeBar("muscle"), ComputedNode { size: Vec2::new(200.0, 20.0), inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from_translation(Vec2::new(200.0, 50.0))));
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().spawn((
+            ShapeBar("muscle"),
+            ComputedNode {
+                size: Vec2::new(200.0, 20.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from_translation(Vec2::new(200.0, 50.0)),
+        ));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
-        assert!((app.world().resource::<Draft>().shape.muscle - 0.25).abs() < 0.011, "the press sets it under the mouse");
-        assert!(app.world().resource::<ShapeMoved>().0 && !app.world().resource_ref::<Draft>().is_changed(), "without building the page again");
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
-        app.world_mut().get_mut::<Window>(window).unwrap().set_cursor_position(Some(Vec2::new(250.0, 90.0)));
+        assert!(
+            (app.world().resource::<Draft>().shape.muscle - 0.25).abs() < 0.011,
+            "the press sets it under the mouse"
+        );
+        assert!(
+            app.world().resource::<ShapeMoved>().0
+                && !app.world().resource_ref::<Draft>().is_changed(),
+            "without building the page again"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(250.0, 90.0)));
         app.update();
-        assert!((app.world().resource::<Draft>().shape.muscle - 0.75).abs() < 0.011, "and the drag carries it, off the bar too");
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        assert!(
+            (app.world().resource::<Draft>().shape.muscle - 0.75).abs() < 0.011,
+            "and the drag carries it, off the bar too"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
         app.update();
-        app.world_mut().get_mut::<Window>(window).unwrap().set_cursor_position(Some(Vec2::new(120.0, 50.0)));
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(120.0, 50.0)));
         app.update();
-        assert!((app.world().resource::<Draft>().shape.muscle - 0.75).abs() < 0.011, "let go, it stays");
+        assert!(
+            (app.world().resource::<Draft>().shape.muscle - 0.75).abs() < 0.011,
+            "let go, it stays"
+        );
     }
 }

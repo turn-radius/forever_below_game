@@ -11,7 +11,10 @@
 //! Drips play one-shots from emitters placed at level generation, each with a jittered interval
 //! timer. All ambient sounds are despawned when the delve ends, and sound volume 0 silences them all.
 
-use bevy::{audio::{SpatialAudioSink, Volume}, prelude::*};
+use bevy::{
+    audio::{SpatialAudioSink, Volume},
+    prelude::*,
+};
 use procgen_rng::Mulberry32;
 
 use crate::audio::ambience_volume;
@@ -52,12 +55,24 @@ pub struct AmbientPlugin;
 impl Plugin for AmbientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AmbientSounds>()
-            .add_systems(Startup, load_ambient_sounds.run_if(resource_exists::<AssetServer>))
+            .add_systems(
+                Startup,
+                load_ambient_sounds.run_if(resource_exists::<AssetServer>),
+            )
             .add_systems(OnEnter(AppState::Delving), spawn_rumble_schedule)
             .add_systems(OnExit(AppState::Delving), end_rumble_schedule)
             // Each level the delver comes to drips from its own spots.
-            .add_systems(Update, (clear_drips, spawn_ambient_emitters).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems))
-            .add_systems(Update, (play_drips, play_rumbles, turn_ambience_volume).in_set(DelveSystems));
+            .add_systems(
+                Update,
+                (clear_drips, spawn_ambient_emitters)
+                    .chain()
+                    .run_if(resource_exists_and_changed::<CurrentLevel>)
+                    .in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                (play_drips, play_rumbles, turn_ambience_volume).in_set(DelveSystems),
+            );
     }
 }
 
@@ -93,7 +108,11 @@ fn drip_positions(level: &fb_level::Level) -> Vec<Vec3> {
         if level.is_open(x, y) {
             let world_x = (x as f32 + 0.5) * fb_level::CELL;
             let world_z = (y as f32 + 0.5) * fb_level::CELL;
-            out.push(Vec3::new(world_x, crate::level::geometry::stone::ceiling_at(level, world_x, world_z) - DRIP_DROP, world_z));
+            out.push(Vec3::new(
+                world_x,
+                crate::level::geometry::stone::ceiling_at(level, world_x, world_z) - DRIP_DROP,
+                world_z,
+            ));
         }
 
         attempts += 1;
@@ -110,14 +129,20 @@ fn drip_interval(rng: &mut Mulberry32) -> f32 {
 
 /// A time in seconds drawn evenly from the tuning's rumble interval range.
 fn rumble_interval(rng: &mut Mulberry32, tuning: &SoundTuning) -> f32 {
-    rng.range(tuning.rumble_interval_min as f64, tuning.rumble_interval_max.max(tuning.rumble_interval_min) as f64) as f32
+    rng.range(
+        tuning.rumble_interval_min as f64,
+        tuning.rumble_interval_max.max(tuning.rumble_interval_min) as f64,
+    ) as f32
 }
 
 /// The rumble generator seeded with `seed`, and its first wait drawn from `sound`.
 fn new_rumble_schedule(seed: u32, sound: &SoundTuning) -> RumbleSchedule {
     let mut rng = Mulberry32::new(seed);
     let interval = rumble_interval(&mut rng, sound);
-    RumbleSchedule { rng, timer: Timer::from_seconds(interval, TimerMode::Once) }
+    RumbleSchedule {
+        rng,
+        timer: Timer::from_seconds(interval, TimerMode::Once),
+    }
 }
 
 fn clear_drips(mut commands: Commands, old: Query<Entity, With<DripEmitter>>) {
@@ -133,7 +158,9 @@ fn spawn_ambient_emitters(mut commands: Commands, level: Res<CurrentLevel>) {
         let interval = drip_interval(&mut rng);
         commands.spawn((
             Name::new("drip emitter"),
-            DripEmitter { timer: Timer::from_seconds(interval, TimerMode::Repeating) },
+            DripEmitter {
+                timer: Timer::from_seconds(interval, TimerMode::Repeating),
+            },
             Transform::from_translation(position),
             DespawnOnExit(AppState::Delving),
         ));
@@ -141,7 +168,10 @@ fn spawn_ambient_emitters(mut commands: Commands, level: Res<CurrentLevel>) {
 }
 
 fn spawn_rumble_schedule(mut commands: Commands, tuning: Res<Tuning>) {
-    commands.insert_resource(new_rumble_schedule(crate::launch::clock_seed(), &tuning.sound));
+    commands.insert_resource(new_rumble_schedule(
+        crate::launch::clock_seed(),
+        &tuning.sound,
+    ));
 }
 
 /// The rumble's schedule goes with the delve; the next delve draws its own.
@@ -165,7 +195,9 @@ fn play_drips(
                 Name::new("drip"),
                 Ambience,
                 AudioPlayer::new(sounds.drip.clone()),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)).with_spatial(true),
+                PlaybackSettings::DESPAWN
+                    .with_volume(Volume::Linear(volume))
+                    .with_spatial(true),
                 Transform::from_translation(at.translation),
                 DespawnOnExit(AppState::Delving),
             ));
@@ -239,7 +271,10 @@ mod tests {
             for pos in drip_positions(&level) {
                 let x = (pos.x / fb_level::CELL).floor() as i32;
                 let y = (pos.z / fb_level::CELL).floor() as i32;
-                assert!(level.is_open(x, y), "seed {seed}: drip at ({x}, {y}) is not in an open cell");
+                assert!(
+                    level.is_open(x, y),
+                    "seed {seed}: drip at ({x}, {y}) is not in an open cell"
+                );
             }
         }
     }
@@ -248,7 +283,12 @@ mod tests {
     fn drips_hang_a_little_below_the_ceiling() {
         let level = fb_level::generate(1207, 1);
         for pos in drip_positions(&level) {
-            assert!(pos.y < level.ceiling && pos.y > level.ceiling - 5.0, "drip at y={} under ceiling {}", pos.y, level.ceiling);
+            assert!(
+                pos.y < level.ceiling && pos.y > level.ceiling - 5.0,
+                "drip at y={} under ceiling {}",
+                pos.y,
+                level.ceiling
+            );
         }
     }
 
@@ -260,8 +300,16 @@ mod tests {
                 let level = fb_level::generate(seed, depth);
                 for pos in drip_positions(&level) {
                     let ceiling = ceiling_at(&level, pos.x, pos.z);
-                    assert!(pos.y > 0.0 && pos.y < ceiling, "depth {depth} seed {seed}: drip at y={} between the floor and ceiling {ceiling}", pos.y);
-                    assert!(pos.y > ceiling - 5.0, "depth {depth} seed {seed}: drip at y={} hangs far from ceiling {ceiling}", pos.y);
+                    assert!(
+                        pos.y > 0.0 && pos.y < ceiling,
+                        "depth {depth} seed {seed}: drip at y={} between the floor and ceiling {ceiling}",
+                        pos.y
+                    );
+                    assert!(
+                        pos.y > ceiling - 5.0,
+                        "depth {depth} seed {seed}: drip at y={} hangs far from ceiling {ceiling}",
+                        pos.y
+                    );
                 }
             }
         }
@@ -275,8 +323,14 @@ mod tests {
         let max = intervals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         assert!(min < DRIP_INTERVAL, "intervals vary below base");
         assert!(max > DRIP_INTERVAL, "intervals vary above base");
-        assert!(min >= DRIP_INTERVAL * (1.0 - DRIP_JITTER), "intervals respect jitter bound");
-        assert!(max <= DRIP_INTERVAL * (1.0 + DRIP_JITTER), "intervals respect jitter bound");
+        assert!(
+            min >= DRIP_INTERVAL * (1.0 - DRIP_JITTER),
+            "intervals respect jitter bound"
+        );
+        assert!(
+            max <= DRIP_INTERVAL * (1.0 + DRIP_JITTER),
+            "intervals respect jitter bound"
+        );
     }
 
     #[test]
@@ -285,19 +339,43 @@ mod tests {
         let mut rng = Mulberry32::new(42);
         for _ in 0..1000 {
             let interval = rumble_interval(&mut rng, &tuning);
-            assert!(interval >= tuning.rumble_interval_min && interval <= tuning.rumble_interval_max, "interval {interval} outside range");
+            assert!(
+                interval >= tuning.rumble_interval_min && interval <= tuning.rumble_interval_max,
+                "interval {interval} outside range"
+            );
         }
     }
 
     #[test]
     fn the_first_rumble_waits_by_the_live_tuning() {
-        let sound = SoundTuning { rumble_interval_min: 7.0, rumble_interval_max: 7.0, ..default() };
-        assert_eq!(new_rumble_schedule(5, &sound).timer.duration().as_secs_f32(), 7.0);
+        let sound = SoundTuning {
+            rumble_interval_min: 7.0,
+            rumble_interval_max: 7.0,
+            ..default()
+        };
+        assert_eq!(
+            new_rumble_schedule(5, &sound)
+                .timer
+                .duration()
+                .as_secs_f32(),
+            7.0
+        );
         // The system reads the resource, not the defaults.
         let mut app = App::new();
-        let tuning = Tuning { sound, ..Default::default() };
-        app.insert_resource(tuning).add_systems(Update, spawn_rumble_schedule);
+        let tuning = Tuning {
+            sound,
+            ..Default::default()
+        };
+        app.insert_resource(tuning)
+            .add_systems(Update, spawn_rumble_schedule);
         app.update();
-        assert_eq!(app.world().resource::<RumbleSchedule>().timer.duration().as_secs_f32(), 7.0);
+        assert_eq!(
+            app.world()
+                .resource::<RumbleSchedule>()
+                .timer
+                .duration()
+                .as_secs_f32(),
+            7.0
+        );
     }
 }

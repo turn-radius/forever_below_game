@@ -18,8 +18,20 @@ pub struct KindlePlugin;
 
 impl Plugin for KindlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, burn_fuel.after(advance_game_clock).in_set(DelveSystems));
-        app.add_systems(Update, (light_carried.run_if(level_has_focus), light_hovered.run_if(inventory_open).run_if(crate::barter::not_bartering)).in_set(DelveSystems));
+        app.add_systems(
+            FixedUpdate,
+            burn_fuel.after(advance_game_clock).in_set(DelveSystems),
+        );
+        app.add_systems(
+            Update,
+            (
+                light_carried.run_if(level_has_focus),
+                light_hovered
+                    .run_if(inventory_open)
+                    .run_if(crate::barter::not_bartering),
+            )
+                .in_set(DelveSystems),
+        );
     }
 }
 
@@ -27,13 +39,26 @@ impl Plugin for KindlePlugin {
 /// the hip lantern; the hip lantern alone with `hip` (Shift). Anything else in a hand is
 /// passed over.
 pub fn light_to_toggle(inventory: &Inventory, hip: bool) -> Option<ItemId> {
-    let slots: &[Slot] = if hip { &[Slot::Hip] } else { &[Slot::Mainhand, Slot::Offhand, Slot::Hip] };
-    slots.iter().filter_map(|&slot| inventory.worn(slot)).find(|&id| inventory.item(id).is_some_and(|item| item.shape.lit().is_some()))
+    let slots: &[Slot] = if hip {
+        &[Slot::Hip]
+    } else {
+        &[Slot::Mainhand, Slot::Offhand, Slot::Hip]
+    };
+    slots
+        .iter()
+        .filter_map(|&slot| inventory.worn(slot))
+        .find(|&id| {
+            inventory
+                .item(id)
+                .is_some_and(|item| item.shape.lit().is_some())
+        })
 }
 
 /// Lights `id` or puts it out, and says so.
 pub fn toggle_and_say(inventory: &mut Inventory, id: ItemId) -> String {
-    let what = inventory.item(id).map_or("light".to_string(), |item| item.shape.family().key().to_string());
+    let what = inventory.item(id).map_or("light".to_string(), |item| {
+        item.shape.family().key().to_string()
+    });
     match inventory.toggle_light(id) {
         Ok(true) => format!("You light the {what}"),
         Ok(false) => format!("You put out the {what}"),
@@ -48,7 +73,11 @@ pub fn toggle_and_say(inventory: &mut Inventory, id: ItemId) -> String {
 /// first, or that there is no lantern to fill or room in it.
 pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
     let lanterns = inventory.equipped_lanterns();
-    let what = if lanterns.len() > 1 { "lanterns" } else { "lantern" };
+    let what = if lanterns.len() > 1 {
+        "lanterns"
+    } else {
+        "lantern"
+    };
     if lanterns.is_empty() {
         return "You hold no lantern to fill".to_string();
     }
@@ -56,9 +85,16 @@ pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
         return "The flask is empty".to_string();
     }
     let filled = inventory.refill_lanterns(flask);
-    let what_filled = if filled.len() > 1 { "lanterns" } else { "lantern" };
+    let what_filled = if filled.len() > 1 {
+        "lanterns"
+    } else {
+        "lantern"
+    };
     if filled.is_empty() {
-        format!("Your {what} {} already full", if lanterns.len() > 1 { "are" } else { "is" })
+        format!(
+            "Your {what} {} already full",
+            if lanterns.len() > 1 { "are" } else { "is" }
+        )
     } else if inventory.lantern_wants_oil() {
         format!("You pour the last of the oil into the {what_filled}")
     } else {
@@ -68,7 +104,12 @@ pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
 
 /// Burns every lit light's fuel by the game time that passed since the last step, wherever
 /// the light is.
-fn burn_fuel(clock: Res<GameClock>, mut inventory: ResMut<Inventory>, mut last: Local<f64>, mut jumps: Local<u32>) {
+fn burn_fuel(
+    clock: Res<GameClock>,
+    mut inventory: ResMut<Inventory>,
+    mut last: Local<f64>,
+    mut jumps: Local<u32>,
+) {
     let now = clock.game_seconds();
     // A clock set at a stroke (a delve resumed) burns nothing for the time it skipped.
     let jumped = std::mem::replace(&mut *jumps, clock.jumps()) != clock.jumps();
@@ -77,7 +118,10 @@ fn burn_fuel(clock: Res<GameClock>, mut inventory: ResMut<Inventory>, mut last: 
     if passed > 0.0 {
         // Burning is not a change anyone sees until a card's minute, a state or a held torch's
         // char moves, so only then is the inventory marked changed.
-        if inventory.bypass_change_detection().burn_lights(passed as f32) {
+        if inventory
+            .bypass_change_detection()
+            .burn_lights(passed as f32)
+        {
             inventory.set_changed();
         }
     }
@@ -88,7 +132,12 @@ fn now(time: Option<Res<Time<Real>>>) -> f32 {
 }
 
 /// L in the level: the carried light ([`light_to_toggle`]), Shift+L the hip lantern.
-fn light_carried(input: ActionInput, mut inventory: ResMut<Inventory>, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
+fn light_carried(
+    input: ActionInput,
+    mut inventory: ResMut<Inventory>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
     if !input.just_pressed(Action::Light) {
         return;
     }
@@ -98,17 +147,33 @@ fn light_carried(input: ActionInput, mut inventory: ResMut<Inventory>, mut toast
             let said = toggle_and_say(&mut inventory, id);
             toast.say(said, now(time));
         }
-        None => toast.say(if hip { "No lantern hangs at your hip" } else { "You carry no torch or lantern" }, now(time)),
+        None => toast.say(
+            if hip {
+                "No lantern hangs at your hip"
+            } else {
+                "You carry no torch or lantern"
+            },
+            now(time),
+        ),
     }
 }
 
 /// L in the inventory: the torch or lantern under the mouse, wherever it lies.
-fn light_hovered(input: ActionInput, hovered: Res<Hovered>, mut inventory: ResMut<Inventory>, mut toast: ResMut<Toast>, time: Option<Res<Time<Real>>>) {
+fn light_hovered(
+    input: ActionInput,
+    hovered: Res<Hovered>,
+    mut inventory: ResMut<Inventory>,
+    mut toast: ResMut<Toast>,
+    time: Option<Res<Time<Real>>>,
+) {
     if !input.just_pressed(Action::Light) {
         return;
     }
     let Some((id, _)) = hovered.0 else { return };
-    if inventory.item(id).is_some_and(|item| item.shape.lit().is_some()) {
+    if inventory
+        .item(id)
+        .is_some_and(|item| item.shape.lit().is_some())
+    {
         let said = toggle_and_say(&mut inventory, id);
         toast.say(said, now(time));
     }
@@ -147,12 +212,28 @@ mod tests {
     #[test]
     fn l_acts_on_the_hand_first_then_the_hip() {
         let mut inventory = Inventory::default();
-        equip(&mut inventory, fb_items::roll_item("Belt", 1).unwrap(), Slot::Belt);
+        equip(
+            &mut inventory,
+            fb_items::roll_item("Belt", 1).unwrap(),
+            Slot::Belt,
+        );
         let hip = equip(&mut inventory, lantern(true), Slot::Hip);
-        assert_eq!(light_to_toggle(&inventory, false), Some(hip), "only the hip lantern");
+        assert_eq!(
+            light_to_toggle(&inventory, false),
+            Some(hip),
+            "only the hip lantern"
+        );
         let hand = equip(&mut inventory, torch(BurnState::Burning), Slot::Offhand);
-        assert_eq!(light_to_toggle(&inventory, false), Some(hand), "the hand first");
-        assert_eq!(light_to_toggle(&inventory, true), Some(hip), "Shift: the hip");
+        assert_eq!(
+            light_to_toggle(&inventory, false),
+            Some(hand),
+            "the hand first"
+        );
+        assert_eq!(
+            light_to_toggle(&inventory, true),
+            Some(hip),
+            "Shift: the hip"
+        );
     }
 
     #[test]
@@ -160,7 +241,9 @@ mod tests {
         let mut inventory = Inventory::default();
         let id = equip(&mut inventory, torch(BurnState::Burning), Slot::Offhand);
         assert_eq!(toggle_and_say(&mut inventory, id), "You put out the torch");
-        assert!(matches!(&inventory.item(id).unwrap().shape, armory::Item::Torch(s) if s.burn.state == BurnState::Doused));
+        assert!(
+            matches!(&inventory.item(id).unwrap().shape, armory::Item::Torch(s) if s.burn.state == BurnState::Doused)
+        );
         assert!(crate::carry::item_light(&inventory.item(id).unwrap().shape).is_none());
         assert_eq!(toggle_and_say(&mut inventory, id), "You light the torch");
         assert_eq!(lit(&inventory, id), Some(true));
@@ -170,7 +253,10 @@ mod tests {
     fn a_spent_torch_refuses() {
         let mut inventory = Inventory::default();
         let id = equip(&mut inventory, torch(BurnState::Spent), Slot::Offhand);
-        assert_eq!(toggle_and_say(&mut inventory, id), "The torch is spent and will not light");
+        assert_eq!(
+            toggle_and_say(&mut inventory, id),
+            "The torch is spent and will not light"
+        );
         assert_eq!(lit(&inventory, id), Some(false));
     }
 
@@ -201,9 +287,15 @@ mod tests {
     fn lamp_oil_fills_an_empty_held_lantern_so_it_lights_again() {
         let mut inventory = Inventory::default();
         let id = equip(&mut inventory, lantern_at(0.0), Slot::Offhand);
-        assert_eq!(toggle_and_say(&mut inventory, id), "The lantern is out of fuel and will not light");
+        assert_eq!(
+            toggle_and_say(&mut inventory, id),
+            "The lantern is out of fuel and will not light"
+        );
         let flask = inventory.add(oil(1.0));
-        assert_eq!(refill_and_say(&mut inventory, flask), "You fill the lantern");
+        assert_eq!(
+            refill_and_say(&mut inventory, flask),
+            "You fill the lantern"
+        );
         assert!((share(&inventory, id) - 1.0).abs() < 1e-6);
         assert!(!inventory.item(flask).unwrap().has_oil());
         assert_eq!(toggle_and_say(&mut inventory, id), "You light the lantern");
@@ -213,13 +305,26 @@ mod tests {
     #[test]
     fn lamp_oil_fills_the_hand_first_then_the_hip_until_it_runs_out() {
         let mut inventory = Inventory::default();
-        equip(&mut inventory, fb_items::roll_item("Belt", 1).unwrap(), Slot::Belt);
+        equip(
+            &mut inventory,
+            fb_items::roll_item("Belt", 1).unwrap(),
+            Slot::Belt,
+        );
         let hip = equip(&mut inventory, lantern_at(0.0), Slot::Hip);
         let hand = equip(&mut inventory, lantern_at(0.5), Slot::Mainhand);
         let flask = inventory.add(oil(0.8));
-        assert_eq!(refill_and_say(&mut inventory, flask), "You pour the last of the oil into the lanterns");
-        assert!((share(&inventory, hand) - 1.0).abs() < 1e-4, "the hand first");
-        assert!((share(&inventory, hip) - 0.3).abs() < 1e-4, "the hip takes the rest");
+        assert_eq!(
+            refill_and_say(&mut inventory, flask),
+            "You pour the last of the oil into the lanterns"
+        );
+        assert!(
+            (share(&inventory, hand) - 1.0).abs() < 1e-4,
+            "the hand first"
+        );
+        assert!(
+            (share(&inventory, hip) - 0.3).abs() < 1e-4,
+            "the hip takes the rest"
+        );
         assert!(!inventory.item(flask).unwrap().has_oil());
     }
 
@@ -227,12 +332,22 @@ mod tests {
     fn lamp_oil_needs_a_lantern_with_room() {
         let mut inventory = Inventory::default();
         let flask = inventory.add(oil(1.0));
-        assert_eq!(refill_and_say(&mut inventory, flask), "You hold no lantern to fill");
+        assert_eq!(
+            refill_and_say(&mut inventory, flask),
+            "You hold no lantern to fill"
+        );
         let bagged = inventory.add(lantern_at(0.0));
-        assert_eq!(refill_and_say(&mut inventory, flask), "You hold no lantern to fill", "a lantern on the floor or in a bag is not filled");
+        assert_eq!(
+            refill_and_say(&mut inventory, flask),
+            "You hold no lantern to fill",
+            "a lantern on the floor or in a bag is not filled"
+        );
         assert_eq!(share(&inventory, bagged), 0.0);
         equip(&mut inventory, lantern_at(1.0), Slot::Offhand);
-        assert_eq!(refill_and_say(&mut inventory, flask), "Your lantern is already full");
+        assert_eq!(
+            refill_and_say(&mut inventory, flask),
+            "Your lantern is already full"
+        );
         assert!(inventory.item(flask).unwrap().has_oil());
     }
 
@@ -267,7 +382,10 @@ mod tests {
                 .init_resource::<ScreenOpen>()
                 .init_resource::<Inventory>()
                 .add_plugins(GameClockPlugin)
-                .add_systems(FixedUpdate, burn_fuel.after(advance_game_clock).in_set(DelveSystems));
+                .add_systems(
+                    FixedUpdate,
+                    burn_fuel.after(advance_game_clock).in_set(DelveSystems),
+                );
             run_delve_systems_while_delving(&mut app);
             app.update();
             app.update();
@@ -278,7 +396,9 @@ mod tests {
         /// minutes of it are a game hour.
         fn run(app: &mut App, seconds: u32) {
             for _ in 0..seconds {
-                app.world_mut().resource_mut::<Time<Fixed>>().advance_by(Duration::from_secs(1));
+                app.world_mut()
+                    .resource_mut::<Time<Fixed>>()
+                    .advance_by(Duration::from_secs(1));
                 app.world_mut().run_schedule(FixedUpdate);
             }
         }
@@ -301,7 +421,12 @@ mod tests {
         }
 
         fn left(app: &App, id: ItemId) -> f32 {
-            app.world().resource::<Inventory>().item(id).unwrap().fuel_left().unwrap()
+            app.world()
+                .resource::<Inventory>()
+                .item(id)
+                .unwrap()
+                .fuel_left()
+                .unwrap()
         }
 
         fn spent(app: &App, id: ItemId) -> bool {
@@ -316,9 +441,15 @@ mod tests {
             let id = light(&mut app, fresh_torch(1.0), true);
             run(&mut app, 2);
             let before = left(&app, id);
-            app.world_mut().resource_mut::<crate::game_clock::GameClock>().jump_to(fb_character::GameTime::from_seconds(30.0 * 3600.0));
+            app.world_mut()
+                .resource_mut::<crate::game_clock::GameClock>()
+                .jump_to(fb_character::GameTime::from_seconds(30.0 * 3600.0));
             run(&mut app, 1);
-            assert!(before - left(&app, id) < 30.0, "{before} then {}", left(&app, id));
+            assert!(
+                before - left(&app, id) < 30.0,
+                "{before} then {}",
+                left(&app, id)
+            );
             assert!(!spent(&app, id));
             run(&mut app, 100);
             assert!(left(&app, id) < before - 100.0, "and it burns on after");
@@ -341,7 +472,11 @@ mod tests {
             let id = light(&mut app, fresh_torch(2.0), true);
             run(&mut app, 300);
             assert!(!spent(&app, id), "still burning at an hour");
-            assert!((left(&app, id) - 3_600.0).abs() < 60.0, "{}", left(&app, id));
+            assert!(
+                (left(&app, id) - 3_600.0).abs() < 60.0,
+                "{}",
+                left(&app, id)
+            );
             run(&mut app, 305);
             assert!(spent(&app, id));
         }
@@ -351,9 +486,15 @@ mod tests {
             let mut app = app();
             let id = light(&mut app, fresh_torch(1.0), true);
             run(&mut app, 100);
-            app.world_mut().resource_mut::<Inventory>().toggle_light(id).unwrap();
+            app.world_mut()
+                .resource_mut::<Inventory>()
+                .toggle_light(id)
+                .unwrap();
             run(&mut app, 300);
-            app.world_mut().resource_mut::<Inventory>().toggle_light(id).unwrap();
+            app.world_mut()
+                .resource_mut::<Inventory>()
+                .toggle_light(id)
+                .unwrap();
             let minutes = left(&app, id) / 60.0;
             assert!((minutes - 40.0).abs() < 0.5, "{minutes}");
         }
@@ -368,10 +509,17 @@ mod tests {
                 let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
                 inventory.wear(pack, Slot::Back).unwrap();
                 inventory.stow(bagged).unwrap();
-                assert!(matches!(inventory.location(bagged), Some(crate::inventory::Location::In { .. })));
+                assert!(matches!(
+                    inventory.location(bagged),
+                    Some(crate::inventory::Location::In { .. })
+                ));
             }
             run(&mut app, 150);
-            assert!((left(&app, floor) - 1_800.0).abs() < 60.0, "{}", left(&app, floor));
+            assert!(
+                (left(&app, floor) - 1_800.0).abs() < 60.0,
+                "{}",
+                left(&app, floor)
+            );
             assert_eq!(left(&app, bagged), 3_600.0);
         }
 
@@ -417,17 +565,29 @@ mod tests {
             let mut app = app();
             let id = light(&mut app, fresh_torch(1.0), true);
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            assert!(inventory.bypass_change_detection().burn_lights(1.0e6), "spent is a shown change");
+            assert!(
+                inventory.bypass_change_detection().burn_lights(1.0e6),
+                "spent is a shown change"
+            );
             assert!(spent(&app, id));
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            assert!(!inventory.bypass_change_detection().burn_lights(10.0), "nothing lit now");
+            assert!(
+                !inventory.bypass_change_detection().burn_lights(10.0),
+                "nothing lit now"
+            );
         }
 
         #[test]
         fn a_held_candle_lights_burns_down_and_goes_out_with_l() {
             use fb_items::Slot;
             let mut inventory = Inventory::default();
-            let mut candle = (1..200).filter_map(|s| fb_items::roll_item("Chamberstick", s).or_else(|| fb_items::roll_item("Candle", s))).find(|i| matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder)).unwrap();
+            let mut candle = (1..200)
+                .filter_map(|s| {
+                    fb_items::roll_item("Chamberstick", s)
+                        .or_else(|| fb_items::roll_item("Candle", s))
+                })
+                .find(|i| matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder))
+                .unwrap();
             if let armory::Item::Sundry(s) = &mut candle.shape {
                 s.article.lit = true;
                 s.article.burnt = 0.0;
@@ -436,13 +596,23 @@ mod tests {
             for hand in [Slot::Offhand, Slot::Mainhand] {
                 assert!(inventory.item(id).unwrap().fits(hand));
                 inventory.equip(id, hand).unwrap();
-                assert_eq!(crate::carry::carried_lights(&inventory), vec![(hand, id)], "held lit, it lights");
+                assert_eq!(
+                    crate::carry::carried_lights(&inventory),
+                    vec![(hand, id)],
+                    "held lit, it lights"
+                );
             }
             let full = inventory.item(id).unwrap().fuel_left().unwrap();
             assert!(inventory.burn_lights(600.0));
-            assert!(inventory.item(id).unwrap().fuel_left().unwrap() < full, "burns down while held");
+            assert!(
+                inventory.item(id).unwrap().fuel_left().unwrap() < full,
+                "burns down while held"
+            );
             assert_eq!(inventory.toggle_light(id), Ok(false));
-            assert!(crate::carry::carried_lights(&inventory).is_empty(), "out, it gives no light");
+            assert!(
+                crate::carry::carried_lights(&inventory).is_empty(),
+                "out, it gives no light"
+            );
             let left = inventory.item(id).unwrap().fuel_left();
             inventory.burn_lights(600.0);
             assert_eq!(inventory.item(id).unwrap().fuel_left(), left);
@@ -464,7 +634,10 @@ mod tests {
             item.shape.set_lit(true).unwrap();
             item.burn(1.0e9);
             let id = inventory.add(item);
-            assert_eq!(toggle_and_say(&mut inventory, id), "The lantern is out of fuel and will not light");
+            assert_eq!(
+                toggle_and_say(&mut inventory, id),
+                "The lantern is out of fuel and will not light"
+            );
         }
     }
 }

@@ -30,7 +30,12 @@ impl Shelf {
     /// A new day's shelf: the rolled wares again, the sold-in ones kept, and the purse
     /// topped up (never cut) to what the trade's tier carries.
     pub fn restocked(self, person: &Person, day: u32) -> Shelf {
-        Shelf { day, wares: roll_shelf(person, day), purse: self.purse.max(starting_purse(person)), sold: self.sold }
+        Shelf {
+            day,
+            wares: roll_shelf(person, day),
+            purse: self.purse.max(starting_purse(person)),
+            sold: self.sold,
+        }
     }
 
     /// Every ware on the shelf, rolled ones first and then the sold-in.
@@ -41,7 +46,10 @@ impl Shelf {
 
 /// The coin a trader begins with, by tier.
 pub fn starting_purse(person: &Person) -> u64 {
-    person.spot.trade.map_or(0, |t| crate::barter::purse_copper(t.tier))
+    person
+        .spot
+        .trade
+        .map_or(0, |t| crate::barter::purse_copper(t.tier))
 }
 
 /// The game day `clock` is on: whole days elapsed.
@@ -57,7 +65,13 @@ pub fn shelf_seed(spot_seed: u32, day: u32) -> u32 {
 /// What `person` has to sell on `day`: empty for someone with no trade, or one who sells
 /// nothing (guards, enchanters). Pure in the person and the day.
 pub fn roll_shelf(person: &Person, day: u32) -> Vec<Item> {
-    let Some(shop) = person.spot.trade.and_then(|t| t.shop(&person.name, &person.faction.name)) else { return vec![] };
+    let Some(shop) = person
+        .spot
+        .trade
+        .and_then(|t| t.shop(&person.name, &person.faction.name))
+    else {
+        return vec![];
+    };
     fb_items::stock::stock(&shop, person.depth, shelf_seed(person.spot.seed, day))
 }
 
@@ -79,10 +93,13 @@ pub fn stock_shelves(
         }
         // What the record kept, if any: today's shelf as it was left, or an older one, which
         // keeps what the delver sold it and rolls the rest again.
-        let left = record.as_deref().and_then(|r| r.level(level.0.depth)).and_then(|l| {
-            let index = level.0.folk.iter().position(|s| *s == person.spot)?;
-            l.shelves.get(&index)
-        });
+        let left = record
+            .as_deref()
+            .and_then(|r| r.level(level.0.depth))
+            .and_then(|l| {
+                let index = level.0.folk.iter().position(|s| *s == person.spot)?;
+                l.shelves.get(&index)
+            });
         let shelf = match left {
             Some(saved) => {
                 let was = Shelf {
@@ -91,15 +108,32 @@ pub fn stock_shelves(
                     sold: saved.sold.iter().filter_map(rebuild_item).collect(),
                     purse: saved.purse.unwrap_or_else(|| starting_purse(person)),
                 };
-                if saved.day == today { was } else { was.restocked(person, today) }
+                if saved.day == today {
+                    was
+                } else {
+                    was.restocked(person, today)
+                }
             }
-            None => Shelf { day: today, wares: roll_shelf(person, today), sold: vec![], purse: starting_purse(person) },
+            None => Shelf {
+                day: today,
+                wares: roll_shelf(person, today),
+                sold: vec![],
+                purse: starting_purse(person),
+            },
         };
         commands.entity(entity).insert(shelf);
     }
     for (denizen, mut shelf) in &mut old {
         if shelf.day != today {
-            let old = std::mem::replace(&mut *shelf, Shelf { day: today, wares: vec![], sold: vec![], purse: 0 });
+            let old = std::mem::replace(
+                &mut *shelf,
+                Shelf {
+                    day: today,
+                    wares: vec![],
+                    sold: vec![],
+                    purse: 0,
+                },
+            );
             *shelf = old.restocked(&denizen.person, today);
         }
     }
@@ -122,14 +156,26 @@ mod tests {
     /// A master mailwright standing at a first-level spot of 1207.
     fn mailwright() -> Person {
         let spot = fb_level::generate(1207, 1).folk[0];
-        let trade = Trade { profession: Profession::Armorer, tier: Tier::Master, style: Some(Style::Mail) };
-        crate::folk::person_1207(&FolkSpot { trade: Some(trade), ..spot })
+        let trade = Trade {
+            profession: Profession::Armorer,
+            tier: Tier::Master,
+            style: Some(Style::Mail),
+        };
+        crate::folk::person_1207(&FolkSpot {
+            trade: Some(trade),
+            ..spot
+        })
     }
 
     #[test]
     fn a_shelf_restocks_on_a_new_day_and_not_before() {
         let person = mailwright();
-        let titles = |day| roll_shelf(&person, day).iter().map(|i| (i.title().to_string(), i.seed)).collect::<Vec<_>>();
+        let titles = |day| {
+            roll_shelf(&person, day)
+                .iter()
+                .map(|i| (i.title().to_string(), i.seed))
+                .collect::<Vec<_>>()
+        };
         assert!(!titles(0).is_empty());
         assert_eq!(titles(0), titles(0));
         assert_ne!(titles(0), titles(1));
@@ -147,21 +193,46 @@ mod tests {
         let mut person = mailwright();
         let level = fb_level::generate(1207, 1);
         person.spot = level.folk[0];
-        person.spot.trade = Some(Trade { profession: Profession::Armorer, tier: Tier::Master, style: Some(Style::Mail) });
+        person.spot.trade = Some(Trade {
+            profession: Profession::Armorer,
+            tier: Tier::Master,
+            style: Some(Style::Mail),
+        });
         let mut level = level;
         level.folk[0] = person.spot;
         // What the delver left on the shelf: one dagger, not what the roll would be.
         let kept = fb_items::roll_item("Dagger", 3).unwrap();
         let mut record = WorldRecord::default();
         let mut left = LevelRecord::default();
-        left.shelves.insert(0, ShelfRecord { day: 0, wares: vec![item_record(&kept)], sold: vec![], purse: None });
+        left.shelves.insert(
+            0,
+            ShelfRecord {
+                day: 0,
+                wares: vec![item_record(&kept)],
+                sold: vec![],
+                purse: None,
+            },
+        );
         record.levels.insert(level.depth, left);
         let mut app = App::new();
-        app.insert_resource(CurrentLevel(level)).insert_resource(record).insert_resource(GameClock::default()).add_systems(Update, stock_shelves);
-        let folk = app.world_mut().spawn(Denizen { person, radius: 1.0, min: Vec3::ZERO, max: Vec3::ONE }).id();
+        app.insert_resource(CurrentLevel(level))
+            .insert_resource(record)
+            .insert_resource(GameClock::default())
+            .add_systems(Update, stock_shelves);
+        let folk = app
+            .world_mut()
+            .spawn(Denizen {
+                person,
+                radius: 1.0,
+                min: Vec3::ZERO,
+                max: Vec3::ONE,
+            })
+            .id();
         app.update();
         assert_eq!(app.world().get::<Shelf>(folk).unwrap().wares, vec![kept]);
-        app.world_mut().resource_mut::<GameClock>().advance(86_400.0);
+        app.world_mut()
+            .resource_mut::<GameClock>()
+            .advance(86_400.0);
         app.update();
         let shelf = app.world().get::<Shelf>(folk).unwrap();
         assert_eq!(shelf.day, 1);
@@ -172,8 +243,14 @@ mod tests {
     fn the_shelf_carries_the_makers_line_with_the_traders_name_and_faction() {
         let person = mailwright();
         let wares = roll_shelf(&person, 0);
-        let line = format!("Made by {}, master mailwright of {}.", person.name, person.faction.name);
-        assert!(wares.iter().all(|i| i.history == vec![line.clone()]), "{line}");
+        let line = format!(
+            "Made by {}, master mailwright of {}.",
+            person.name, person.faction.name
+        );
+        assert!(
+            wares.iter().all(|i| i.history == vec![line.clone()]),
+            "{line}"
+        );
     }
 
     #[test]

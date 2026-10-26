@@ -79,7 +79,9 @@ impl WorldRecord {
 
     /// Whether `faction` is already noted as met on level `depth`.
     pub fn was_met_on(&self, faction: fb_faction::Faction, depth: u32) -> bool {
-        self.met_on.get(&faction).is_some_and(|d| d.contains(&depth))
+        self.met_on
+            .get(&faction)
+            .is_some_and(|d| d.contains(&depth))
     }
 
     /// Notes that `faction` was met on level `depth`. Callers check [`Self::was_met_on`] first,
@@ -158,7 +160,11 @@ pub struct FolkRecord {
 impl FolkRecord {
     /// The transform they stand at.
     pub fn transform(&self) -> Transform {
-        Transform { translation: Vec3::from_array(self.at), rotation: Quat::from_array(self.turn), scale: Vec3::ONE }
+        Transform {
+            translation: Vec3::from_array(self.at),
+            rotation: Quat::from_array(self.turn),
+            scale: Vec3::ONE,
+        }
     }
 }
 
@@ -229,7 +235,11 @@ pub struct CreatureRecord {
 impl CreatureRecord {
     /// The transform it stands at (or stood at, as it fell).
     pub fn transform(&self) -> Transform {
-        Transform { translation: Vec3::from_array(self.at), rotation: Quat::from_array(self.turn), scale: Vec3::splat(self.scale) }
+        Transform {
+            translation: Vec3::from_array(self.at),
+            rotation: Quat::from_array(self.turn),
+            scale: Vec3::splat(self.scale),
+        }
     }
 }
 
@@ -237,13 +247,34 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
+        WorldRecord {
+            levels: BTreeMap::new(),
+            standings: fb_faction::Standings::start_from_alignment(
+                alignment,
+                &fb_faction::World::new(run_seed),
+            ),
+            orders: Vec::new(),
+            keys_given: Vec::new(),
+            met_on: BTreeMap::new(),
+            lexicon: fb_denizens::tongue::Lexicon::new(),
+        }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
+        WorldRecord {
+            levels: BTreeMap::new(),
+            standings: fb_faction::Standings::start_as(
+                &fb_faction::StandingRules::default(),
+                delver,
+                &fb_faction::World::new(run_seed),
+            ),
+            orders: Vec::new(),
+            keys_given: Vec::new(),
+            met_on: BTreeMap::new(),
+            lexicon: fb_denizens::tongue::Lexicon::new(),
+        }
     }
 
     /// The record of the level at `depth`, if it has been visited.
@@ -266,7 +297,10 @@ impl WorldRecord {
 /// `id` as it is now, with everything in it, if the inventory knows it.
 pub fn record_item(inventory: &Inventory, id: ItemId) -> Option<ItemRecord> {
     let item = inventory.item(id)?;
-    Some(ItemRecord { contents: record_contents(inventory, id), ..item_record(item) })
+    Some(ItemRecord {
+        contents: record_contents(inventory, id),
+        ..item_record(item)
+    })
 }
 
 /// `item` as it is now, without any contents.
@@ -290,10 +324,19 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
 
 /// What is in `container`'s grid.
 pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> {
-    let Some(grid) = inventory.grid(container) else { return vec![] };
+    let Some(grid) = inventory.grid(container) else {
+        return vec![];
+    };
     grid.entries()
         .iter()
-        .filter_map(|e| Some(Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)? }))
+        .filter_map(|e| {
+            Some(Stowed {
+                x: e.at.x,
+                y: e.at.y,
+                turned: e.at.turned,
+                item: record_item(inventory, e.id)?,
+            })
+        })
         .collect()
 }
 
@@ -317,7 +360,10 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         .filter_map(|n| {
             let found = fb_items::tables::affix_named(n);
             if found.is_none() {
-                warn!("recorded item {} (seed {}) has unknown affix {n:?}; leaving it off", record.base, record.seed);
+                warn!(
+                    "recorded item {} (seed {}) has unknown affix {n:?}; leaving it off",
+                    record.base, record.seed
+                );
             }
             found
         })
@@ -337,7 +383,10 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         teaching: record.teaching.clone(),
     });
     if item.is_none() {
-        warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
+        warn!(
+            "recorded item has unknown base {:?} (seed {}); dropping it",
+            record.base, record.seed
+        );
     }
     item
 }
@@ -345,8 +394,17 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
 /// Puts `contents` back into `container`'s grid, each where it lay.
 pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: &[Stowed]) {
     for stowed in contents {
-        let Some(id) = restore_item(inventory, &stowed.item) else { continue };
-        if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_err() {
+        let Some(id) = restore_item(inventory, &stowed.item) else {
+            continue;
+        };
+        if inventory
+            .put(
+                id,
+                container,
+                Placement::new(stowed.x, stowed.y, stowed.turned),
+            )
+            .is_err()
+        {
             inventory.forget(id);
         }
     }
@@ -362,19 +420,42 @@ pub fn record_level_left(
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
-    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>)>,
+    folk: Query<(
+        &Denizen,
+        &Transform,
+        Option<&Health>,
+        Option<&Hostility>,
+        Option<&Corpse>,
+        Option<&crate::shelf::Shelf>,
+    )>,
     doors: Option<Res<crate::doors::Doors>>,
 ) {
     let mut left = LevelRecord::default();
     left.doors = doors.map_or_else(Vec::new, |d| d.records());
     let mut lying: Vec<&FloorItem> = floor.iter().collect();
     lying.sort_by_key(|f| f.id);
-    left.floor = lying.into_iter().filter_map(|f| Some(FloorRecord { spot: f.spot, item: record_item(&inventory, f.id)? })).collect();
+    left.floor = lying
+        .into_iter()
+        .filter_map(|f| {
+            Some(FloorRecord {
+                spot: f.spot,
+                item: record_item(&inventory, f.id)?,
+            })
+        })
+        .collect();
     for (piece, container) in &containers {
-        left.containers.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
+        left.containers.insert(
+            piece.index,
+            ContainerRecord {
+                opened: container.opened,
+                contents: record_contents(&inventory, container.id),
+            },
+        );
     }
     for (critter, transform, health, corpse) in &creatures {
-        let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else { continue };
+        let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else {
+            continue;
+        };
         let stood = corpse.map_or(*transform, |c| c.fell);
         let Some(health) = health else { continue };
         left.creatures.insert(
@@ -390,9 +471,19 @@ pub fn record_level_left(
         );
     }
     for (denizen, transform, health, hostility, corpse, shelf) in &folk {
-        let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
+        let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else {
+            continue;
+        };
         if let Some(shelf) = shelf.filter(|_| corpse.is_none()) {
-            left.shelves.insert(index, ShelfRecord { day: shelf.day, wares: shelf.wares.iter().map(item_record).collect(), sold: shelf.sold.iter().map(item_record).collect(), purse: Some(shelf.purse) });
+            left.shelves.insert(
+                index,
+                ShelfRecord {
+                    day: shelf.day,
+                    wares: shelf.wares.iter().map(item_record).collect(),
+                    sold: shelf.sold.iter().map(item_record).collect(),
+                    purse: Some(shelf.purse),
+                },
+            );
         }
         let Some(health) = health else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
@@ -448,14 +539,21 @@ mod tests {
         let text = serde_json::to_string(&record).unwrap();
         let back: WorldRecord = serde_json::from_str(&text).unwrap();
         assert_eq!(back.met_on, record.met_on);
-        assert_eq!(back.met_on[&a].iter().copied().collect::<Vec<_>>(), vec![2, 5]);
+        assert_eq!(
+            back.met_on[&a].iter().copied().collect::<Vec<_>>(),
+            vec![2, 5]
+        );
     }
 
     #[test]
     fn a_record_saved_before_met_on_loads_with_none_noted() {
         let record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
         let mut value = serde_json::to_value(&record).unwrap();
-        value.as_object_mut().unwrap().remove("met_on").expect("the field is written");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("met_on")
+            .expect("the field is written");
         let back: WorldRecord = serde_json::from_value(value).unwrap();
         assert!(back.met_on.is_empty());
     }
@@ -463,8 +561,15 @@ mod tests {
     #[test]
     fn an_unchanged_rolled_item_rebuilds_identically() {
         let odds = fb_items::Odds::loot(8);
-        let legend = (1..2_000).filter_map(|s| fb_items::roll_item_with("Sword", s, odds)).find(|i| i.rarity == fb_items::Rarity::Legendary).unwrap();
-        for item in [fb_items::roll_item("Cloak", 4).unwrap(), fb_items::roll_item("Purse", 11).unwrap(), legend] {
+        let legend = (1..2_000)
+            .filter_map(|s| fb_items::roll_item_with("Sword", s, odds))
+            .find(|i| i.rarity == fb_items::Rarity::Legendary)
+            .unwrap();
+        for item in [
+            fb_items::roll_item("Cloak", 4).unwrap(),
+            fb_items::roll_item("Purse", 11).unwrap(),
+            legend,
+        ] {
             assert_eq!(through_record(&item), item);
         }
     }
@@ -476,7 +581,10 @@ mod tests {
         let plain = fb_items::Item::from_parts(parts.clone()).unwrap();
         let quick = fb_items::tables::affix_named("Quick").unwrap();
         parts.affixes = vec![quick];
-        parts.name = fb_items::naming::item_name(&fb_items::naming::noun(&parts.base, &parts.shape), &parts.affixes);
+        parts.name = fb_items::naming::item_name(
+            &fb_items::naming::noun(&parts.base, &parts.shape),
+            &parts.affixes,
+        );
         let changed = fb_items::Item::from_parts(parts).unwrap();
         assert!(changed.profile.stats.attack_rate > plain.profile.stats.attack_rate);
         let again = through_record(&changed);
@@ -493,17 +601,29 @@ mod tests {
         assert_eq!(rebuilt, scroll);
         let mut record = WorldRecord::default();
         record.lexicon.learn_teaching(scroll.teaching().unwrap());
-        let reloaded: WorldRecord = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        let reloaded: WorldRecord =
+            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
         assert_eq!(reloaded.lexicon(), record.lexicon());
-        assert!(reloaded.lexicon().known_share(fb_denizens::DenizenKind::Faun) > 0.0);
+        assert!(
+            reloaded
+                .lexicon()
+                .known_share(fb_denizens::DenizenKind::Faun)
+                > 0.0
+        );
         let fresh = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 5);
-        assert_eq!(fresh.lexicon().known_share(fb_denizens::DenizenKind::Faun), 0.0, "a new delve starts with none");
+        assert_eq!(
+            fresh.lexicon().known_share(fb_denizens::DenizenKind::Faun),
+            0.0,
+            "a new delve starts with none"
+        );
     }
 
     #[test]
     fn a_note_keeps_its_words_through_a_record() {
         let level = fb_level::generate(5, 2);
-        let note = fb_items::roll_item("Note", 31).unwrap().in_world(&level.lore());
+        let note = fb_items::roll_item("Note", 31)
+            .unwrap()
+            .in_world(&level.lore());
         assert!(note.words.is_some());
         assert_eq!(through_record(&note), note);
     }
@@ -516,7 +636,20 @@ mod tests {
         record.affixes = vec!["Nope".into()];
         let again = rebuild_item(&record).unwrap();
         assert!(again.affixes.is_empty());
-        assert_eq!((again.name.as_str(), again.rarity, again.history.clone(), again.shape.clone()), (item.name.as_str(), item.rarity, item.history.clone(), item.shape.clone()));
+        assert_eq!(
+            (
+                again.name.as_str(),
+                again.rarity,
+                again.history.clone(),
+                again.shape.clone()
+            ),
+            (
+                item.name.as_str(),
+                item.rarity,
+                item.history.clone(),
+                item.shape.clone()
+            )
+        );
         let mut inventory = Inventory::default();
         assert!(restore_item(&mut inventory, &record).is_some());
         record.base = "Nothing".into();
@@ -526,21 +659,39 @@ mod tests {
     #[test]
     fn a_shelf_round_trips_through_the_level_record() {
         let odds = fb_items::Odds::loot(8);
-        let mut wares = vec![fb_items::roll_item_with("Mail", 4, odds).unwrap(), fb_items::roll_item_with("Sword", 5, odds).unwrap()];
-        wares[0].history.push("Made by Bera, master mailwright of the Ash Choir.".into());
+        let mut wares = vec![
+            fb_items::roll_item_with("Mail", 4, odds).unwrap(),
+            fb_items::roll_item_with("Sword", 5, odds).unwrap(),
+        ];
+        wares[0]
+            .history
+            .push("Made by Bera, master mailwright of the Ash Choir.".into());
         let mut world = WorldRecord::default();
         let mut level = LevelRecord::default();
-        level.shelves.insert(3, ShelfRecord { day: 2, wares: wares.iter().map(item_record).collect(), sold: vec![], purse: None });
+        level.shelves.insert(
+            3,
+            ShelfRecord {
+                day: 2,
+                wares: wares.iter().map(item_record).collect(),
+                sold: vec![],
+                purse: None,
+            },
+        );
         world.levels.insert(8, level);
         let json = serde_json::to_string(&world).unwrap();
         let again: WorldRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(again, world);
         let shelf = &again.level(8).unwrap().shelves[&3];
         assert_eq!(shelf.day, 2);
-        let rebuilt: Vec<_> = shelf.wares.iter().map(|r| rebuild_item(r).unwrap()).collect();
+        let rebuilt: Vec<_> = shelf
+            .wares
+            .iter()
+            .map(|r| rebuild_item(r).unwrap())
+            .collect();
         assert_eq!(rebuilt, wares);
         // A record from before shelves has none.
-        let old: LevelRecord = serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
+        let old: LevelRecord =
+            serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
         assert!(old.shelves.is_empty());
     }
 
@@ -558,7 +709,11 @@ mod tests {
         let mut inventory = Inventory::default();
         let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
         let sword = inventory.add(fb_items::roll_item("Sword", 9).unwrap());
-        let at = inventory.grid(sack).unwrap().first_free(inventory.footprint(sword).unwrap()).unwrap();
+        let at = inventory
+            .grid(sack)
+            .unwrap()
+            .first_free(inventory.footprint(sword).unwrap())
+            .unwrap();
         inventory.put(sword, sack, at).unwrap();
         let record = record_item(&inventory, sack).unwrap();
         assert_eq!(record.contents.len(), 1);
@@ -574,11 +729,29 @@ mod tests {
     fn liveried_gear_keeps_its_colours_through_a_record() {
         use armory::heraldry::{Field, Tincture};
         use fb_items::outfit::{ArmourLean, Livery, outfit};
-        let field = Field { tincture: Tincture::Vert, tincture2: Tincture::Or, ..Field::default() };
+        let field = Field {
+            tincture: Tincture::Vert,
+            tincture2: Tincture::Or,
+            ..Field::default()
+        };
         let livery = Livery::from_field(field, ArmourLean::Plate);
-        let robe = outfit("mage").unwrap().roll_in(1, "human", fb_items::Odds::default(), Some(&livery)).worn.into_iter().find(|(_, i)| i.base == "Robe").unwrap().1;
+        let robe = outfit("mage")
+            .unwrap()
+            .roll_in(1, "human", fb_items::Odds::default(), Some(&livery))
+            .worn
+            .into_iter()
+            .find(|(_, i)| i.base == "Robe")
+            .unwrap()
+            .1;
         let shield = (0..40)
-            .filter_map(|s| outfit("fighter").unwrap().roll_in(s, "human", fb_items::Odds::default(), Some(&livery)).worn.into_iter().find(|(_, i)| i.base == "Shield"))
+            .filter_map(|s| {
+                outfit("fighter")
+                    .unwrap()
+                    .roll_in(s, "human", fb_items::Odds::default(), Some(&livery))
+                    .worn
+                    .into_iter()
+                    .find(|(_, i)| i.base == "Shield")
+            })
             .next()
             .unwrap()
             .1;
@@ -587,7 +760,10 @@ mod tests {
         for item in [robe, shield] {
             let want = item.shape.clone();
             let id = inventory.add(item);
-            let record: ItemRecord = serde_json::from_str(&serde_json::to_string(&record_item(&inventory, id).unwrap()).unwrap()).unwrap();
+            let record: ItemRecord = serde_json::from_str(
+                &serde_json::to_string(&record_item(&inventory, id).unwrap()).unwrap(),
+            )
+            .unwrap();
             let again = restore_item(&mut other, &record).unwrap();
             assert_eq!(other.item(again).unwrap().shape, want);
             if let armory::Item::Shield(s) = &other.item(again).unwrap().shape {
@@ -602,7 +778,11 @@ mod tests {
         let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
         for seed in 0..20 {
             let arrow = inventory.add(fb_items::roll_item("Arrow", seed).unwrap());
-            let at = inventory.grid(quiver).unwrap().first_free(inventory.footprint(arrow).unwrap()).unwrap();
+            let at = inventory
+                .grid(quiver)
+                .unwrap()
+                .first_free(inventory.footprint(arrow).unwrap())
+                .unwrap();
             inventory.put(arrow, quiver, at).unwrap();
         }
         let json = serde_json::to_string(&record_item(&inventory, quiver).unwrap()).unwrap();
@@ -612,13 +792,21 @@ mod tests {
         assert_eq!(other.item(again), inventory.item(quiver));
         // A shot that came to rest is a level spot of its family and seed, which rolls the arrow again.
         let arrow = fb_items::roll_item("Arrow", 77).unwrap();
-        assert_eq!(fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds), Some(arrow));
+        assert_eq!(
+            fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds),
+            Some(arrow)
+        );
     }
 
     #[test]
     fn a_deep_find_restores_with_the_rarity_it_rolled() {
         let odds = fb_items::Odds::loot(8);
-        let seed = (1..500).find(|&s| fb_items::roll_item_with("Sword", s, odds).unwrap().rarity != fb_items::roll_item("Sword", s).unwrap().rarity).unwrap();
+        let seed = (1..500)
+            .find(|&s| {
+                fb_items::roll_item_with("Sword", s, odds).unwrap().rarity
+                    != fb_items::roll_item("Sword", s).unwrap().rarity
+            })
+            .unwrap();
         let mut inventory = Inventory::default();
         let sword = inventory.add(fb_items::roll_item_with("Sword", seed, odds).unwrap());
         let json = serde_json::to_string(&record_item(&inventory, sword).unwrap()).unwrap();
@@ -631,20 +819,36 @@ mod tests {
     fn standing_is_shared_by_a_factions_camps_on_every_level() {
         let seed = 1207;
         let params = fb_level::LevelParams::default();
-        let levels: Vec<_> = (1..=12).map(|d| fb_level::generate_in(seed, d, &params)).collect();
+        let levels: Vec<_> = (1..=12)
+            .map(|d| fb_level::generate_in(seed, d, &params))
+            .collect();
         let faction = levels
             .iter()
             .flat_map(|l| l.factions.iter().map(|f| f.id))
-            .find(|id| levels.iter().filter(|l| l.folk.iter().any(|s| s.faction == *id)).count() >= 2)
+            .find(|id| {
+                levels
+                    .iter()
+                    .filter(|l| l.folk.iter().any(|s| s.faction == *id))
+                    .count()
+                    >= 2
+            })
             .expect("a faction with camps on two levels");
-        let camps: Vec<_> = levels.iter().filter(|l| l.folk.iter().any(|s| s.faction == faction)).collect();
+        let camps: Vec<_> = levels
+            .iter()
+            .filter(|l| l.folk.iter().any(|s| s.faction == faction))
+            .collect();
         let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, seed);
         let before = record.standings.get(faction).value();
         // Standing raised at a camp on one level reads the same at a camp on another.
         record.standings.shift(faction, 25);
         for level in camps {
             let spot = level.folk.iter().find(|s| s.faction == faction).unwrap();
-            assert_eq!(record.standings.get(spot.faction).value(), before + 25, "depth {}", level.depth);
+            assert_eq!(
+                record.standings.get(spot.faction).value(),
+                before + 25,
+                "depth {}",
+                level.depth
+            );
         }
     }
 
@@ -666,7 +870,11 @@ mod tests {
     #[test]
     fn a_faction_that_turns_reads_hostile_and_the_record_keeps_it() {
         let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 9);
-        let faction = fb_faction::World::new(9).factions().iter().find(|f| f.alignment == fb_faction::Alignment::LawfulGood).map_or(fb_faction::Faction(0), |f| f.id);
+        let faction = fb_faction::World::new(9)
+            .factions()
+            .iter()
+            .find(|f| f.alignment == fb_faction::Alignment::LawfulGood)
+            .map_or(fb_faction::Faction(0), |f| f.id);
         record.standings.turn_hostile(faction);
         assert_eq!(record.standings.band(faction), fb_faction::Band::Hostile);
         let json = serde_json::to_string(&record).unwrap();
@@ -677,8 +885,11 @@ mod tests {
     fn claims_round_trip_and_come_back_as_left() {
         let level = fb_level::generate(1207, 1);
         let faction = level.claims[0].faction;
-        let mut alive: Vec<Option<(f32, f32)>> = level.folk.iter().map(|f| Some((f.x, f.y))).collect();
-        let members: Vec<usize> = (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction).collect();
+        let mut alive: Vec<Option<(f32, f32)>> =
+            level.folk.iter().map(|f| Some((f.x, f.y))).collect();
+        let members: Vec<usize> = (0..level.folk.len())
+            .filter(|&i| level.folk[i].faction == faction)
+            .collect();
         members[1..].iter().for_each(|&i| alive[i] = None);
         let mut saved = LevelRecord::default();
         saved.claims = Some(settle_claims(&level, &alive));
@@ -695,7 +906,8 @@ mod tests {
         let mut fresh = fb_level::generate(1207, 1);
         WorldRecord::default().apply_to(&mut fresh);
         assert_eq!(fresh.claims, level.claims);
-        let old: LevelRecord = serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
+        let old: LevelRecord =
+            serde_json::from_str(r#"{"floor":[],"containers":{},"creatures":{}}"#).unwrap();
         assert_eq!(old.claims, None);
     }
 
@@ -705,12 +917,48 @@ mod tests {
         let item = fb_items::roll_item("Purse", 11).unwrap();
         let mut level = LevelRecord::default();
         level.floor.push(FloorRecord {
-            spot: ItemSpot { x: 3.25, y: 4.5, yaw: 0.3, family: item.shape.family(), seed: item.seed },
-            item: ItemRecord { coins: Some([1, 2, 3]), odds: fb_items::Odds::kit(4), ..record_of(&item) },
+            spot: ItemSpot {
+                x: 3.25,
+                y: 4.5,
+                yaw: 0.3,
+                family: item.shape.family(),
+                seed: item.seed,
+            },
+            item: ItemRecord {
+                coins: Some([1, 2, 3]),
+                odds: fb_items::Odds::kit(4),
+                ..record_of(&item)
+            },
         });
-        level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
-        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });
-        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false });
+        level.containers.insert(
+            2,
+            ContainerRecord {
+                opened: true,
+                contents: vec![],
+            },
+        );
+        level.creatures.insert(
+            1,
+            CreatureRecord {
+                hp: 2,
+                max: 5,
+                at: [1.5, 0.0, 2.25],
+                turn: [0.0, 0.7, 0.0, 0.7],
+                scale: 1.25,
+                dead: false,
+            },
+        );
+        level.folk.insert(
+            0,
+            FolkRecord {
+                hp: 3,
+                max: 9,
+                at: [4.0, 0.0, 6.5],
+                turn: [0.0, 0.0, 0.0, 1.0],
+                hostile: true,
+                dead: false,
+            },
+        );
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());
         let json = serde_json::to_string(&record).unwrap();

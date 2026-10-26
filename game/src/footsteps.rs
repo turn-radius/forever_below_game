@@ -62,10 +62,13 @@ const SPEED_SPREAD: f32 = 0.06;
 /// Playback for one step: `gain` against the effects volume, varied by up to `GAIN_SPREAD` and
 /// `SPEED_SPREAD` from the entity's seeded RNG.
 fn step_settings(rng: &mut Mulberry32, gain: f32, effects: f32) -> PlaybackSettings {
-    let jitter = |rng: &mut Mulberry32, spread: f32| 1.0 + spread * (rng.next_f64() as f32 * 2.0 - 1.0);
+    let jitter =
+        |rng: &mut Mulberry32, spread: f32| 1.0 + spread * (rng.next_f64() as f32 * 2.0 - 1.0);
     let volume = effects * gain * jitter(rng, GAIN_SPREAD);
     let speed = jitter(rng, SPEED_SPREAD);
-    PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)).with_speed(speed)
+    PlaybackSettings::DESPAWN
+        .with_volume(Volume::Linear(volume))
+        .with_speed(speed)
 }
 
 /// Marker for entities (folk/creatures) that walk and need spatial footsteps.
@@ -77,8 +80,20 @@ pub struct FootstepsPlugin;
 impl Plugin for FootstepsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FootstepSounds>()
-            .add_systems(Startup, load_footstep_sounds.run_if(resource_exists::<AssetServer>))
-            .add_systems(Update, (init_delver_steps, play_delver_steps, init_creature_steps, play_creature_steps).in_set(DelveSystems));
+            .add_systems(
+                Startup,
+                load_footstep_sounds.run_if(resource_exists::<AssetServer>),
+            )
+            .add_systems(
+                Update,
+                (
+                    init_delver_steps,
+                    play_delver_steps,
+                    init_creature_steps,
+                    play_creature_steps,
+                )
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -115,7 +130,12 @@ fn next_sample(rng: &mut Mulberry32, last: usize) -> usize {
 /// Gives the delver their step state as they spawn.
 fn init_delver_steps(mut commands: Commands, new: Query<Entity, Added<Player>>) {
     for entity in &new {
-        commands.entity(entity).insert(StepState { rng: Mulberry32::new(0x5733_d317), last_sample: 0, prev_phase: 0.0, last_pos: None });
+        commands.entity(entity).insert(StepState {
+            rng: Mulberry32::new(0x5733_d317),
+            last_sample: 0,
+            prev_phase: 0.0,
+            last_pos: None,
+        });
     }
 }
 
@@ -158,11 +178,19 @@ fn play_delver_steps(
     let is_burdened = match (character, inventory) {
         (Some(character), Some(inventory)) => {
             let derived = character.derive_with(crate::rules::GameRules::of(&rules), &inventory);
-            burden_threshold(crate::rules::GameRules::of(&rules), derived.load, derived.capacity)
+            burden_threshold(
+                crate::rules::GameRules::of(&rules),
+                derived.load,
+                derived.capacity,
+            )
         }
         _ => false,
     };
-    let samples = if is_burdened { &sounds.heavy } else { &sounds.light };
+    let samples = if is_burdened {
+        &sounds.heavy
+    } else {
+        &sounds.light
+    };
     let settings = step_settings(&mut state.rng, STEP_GAIN, effect_volume(&game, &tuning));
 
     commands.spawn((
@@ -174,7 +202,10 @@ fn play_delver_steps(
 }
 
 /// Add step state to creatures when they become Driven (active in behaviour).
-fn init_creature_steps(mut commands: Commands, new: Query<(Entity, &Critter, &Transform), Added<Driven>>) {
+fn init_creature_steps(
+    mut commands: Commands,
+    new: Query<(Entity, &Critter, &Transform), Added<Driven>>,
+) {
     for (entity, critter, transform) in &new {
         // What flies makes no footsteps.
         if critter.spot.species.is_flying() {
@@ -183,7 +214,12 @@ fn init_creature_steps(mut commands: Commands, new: Query<(Entity, &Critter, &Tr
         let rng = Mulberry32::new(critter.spot.seed ^ 0x5733_7570);
         let pos = transform.translation.xz();
         commands.entity(entity).insert((
-            StepState { rng, last_sample: 0, prev_phase: 0.0, last_pos: Some(pos) },
+            StepState {
+                rng,
+                last_sample: 0,
+                prev_phase: 0.0,
+                last_pos: Some(pos),
+            },
             WalksWithSteps,
         ));
     }
@@ -197,9 +233,21 @@ fn play_creature_steps(
     game: Res<GameSettings>,
     tuning: Res<Tuning>,
     bones: Option<Res<crate::creatures::skeletons::BoneSounds>>,
-    mut creatures: Query<(&Critter, &Transform, &mut StepState, Option<&crate::creatures::trolls::Troll>), (With<Driven>, With<WalksWithSteps>, Without<crate::combat::feedback::Corpse>)>,
+    mut creatures: Query<
+        (
+            &Critter,
+            &Transform,
+            &mut StepState,
+            Option<&crate::creatures::trolls::Troll>,
+        ),
+        (
+            With<Driven>,
+            With<WalksWithSteps>,
+            Without<crate::combat::feedback::Corpse>,
+        ),
+    >,
 ) {
-    const RAT_STRIDE: f32 = 0.5;  // World units per step for rats.
+    const RAT_STRIDE: f32 = 0.5; // World units per step for rats.
 
     for (critter, transform, mut state, troll) in &mut creatures {
         // Snakes don't make footsteps; they slither.
@@ -217,13 +265,19 @@ fn play_creature_steps(
             // A troll's heavy tread keeps to its own long stride.
             (_, Some(troll), _) => 0.7 * (troll.dims.thigh + troll.dims.shin) * critter.size,
             // A spider's eight feet patter: a tick every quarter of its radius.
-            _ if critter.spot.species.is_spider() => 0.25 * critter.creature.radius() * critter.size,
+            _ if critter.spot.species.is_spider() => {
+                0.25 * critter.creature.radius() * critter.size
+            }
             // A centipede's many feet patter: a quick tick every tenth of its length.
-            _ if critter.spot.species.is_centipede() => CENTIPEDE_PATTER * critter.creature.radius() * critter.size,
+            _ if critter.spot.species.is_centipede() => {
+                CENTIPEDE_PATTER * critter.creature.radius() * critter.size
+            }
             _ => RAT_STRIDE,
         };
         let current_pos = transform.translation.xz();
-        let moved = state.last_pos.map_or(0.0, |last| current_pos.distance(last));
+        let moved = state
+            .last_pos
+            .map_or(0.0, |last| current_pos.distance(last));
 
         // Accumulate movement distance in prev_phase.
         state.prev_phase += moved;
@@ -274,14 +328,34 @@ mod tests {
     fn what_flies_makes_no_footsteps_and_what_walks_does() {
         let mut app = App::new();
         app.add_systems(Update, init_creature_steps);
-        let spot = |species| fb_level::CreatureSpot { x: 1.0, y: 1.0, yaw: 0.0, species, seed: 3, pack: 0 };
+        let spot = |species| fb_level::CreatureSpot {
+            x: 1.0,
+            y: 1.0,
+            yaw: 0.0,
+            species,
+            seed: 3,
+            pack: 0,
+        };
         let mut spawn = |species| {
             let spot = spot(species);
-            app.world_mut().spawn((Critter::new(spot, spot.creature()), Transform::default(), Driven)).id()
+            app.world_mut()
+                .spawn((
+                    Critter::new(spot, spot.creature()),
+                    Transform::default(),
+                    Driven,
+                ))
+                .id()
         };
-        let (bat, giant, rat) = (spawn(fb_creatures::Species::Bat), spawn(fb_creatures::Species::GiantBat), spawn(fb_creatures::Species::Rat));
+        let (bat, giant, rat) = (
+            spawn(fb_creatures::Species::Bat),
+            spawn(fb_creatures::Species::GiantBat),
+            spawn(fb_creatures::Species::Rat),
+        );
         app.update();
-        assert!(!app.world().entity(bat).contains::<WalksWithSteps>() && !app.world().entity(giant).contains::<WalksWithSteps>());
+        assert!(
+            !app.world().entity(bat).contains::<WalksWithSteps>()
+                && !app.world().entity(giant).contains::<WalksWithSteps>()
+        );
         assert!(app.world().entity(rat).contains::<WalksWithSteps>());
     }
 
@@ -312,9 +386,19 @@ mod tests {
         let (mut volumes, mut speeds) = (Vec::new(), Vec::new());
         for _ in 0..200 {
             let settings = step_settings(&mut rng, STEP_GAIN, 1.0);
-            let Volume::Linear(volume) = settings.volume else { panic!("linear volume") };
-            assert!((STEP_GAIN * (1.0 - GAIN_SPREAD)..=STEP_GAIN * (1.0 + GAIN_SPREAD)).contains(&volume), "{volume}");
-            assert!((1.0 - SPEED_SPREAD..=1.0 + SPEED_SPREAD).contains(&settings.speed), "{}", settings.speed);
+            let Volume::Linear(volume) = settings.volume else {
+                panic!("linear volume")
+            };
+            assert!(
+                (STEP_GAIN * (1.0 - GAIN_SPREAD)..=STEP_GAIN * (1.0 + GAIN_SPREAD))
+                    .contains(&volume),
+                "{volume}"
+            );
+            assert!(
+                (1.0 - SPEED_SPREAD..=1.0 + SPEED_SPREAD).contains(&settings.speed),
+                "{}",
+                settings.speed
+            );
             volumes.push(volume);
             speeds.push(settings.speed);
         }
@@ -328,12 +412,28 @@ mod tests {
         for _ in 0..20 {
             app.update();
         }
-        let effects = effect_volume(app.world().resource::<GameSettings>(), app.world().resource::<Tuning>());
-        let settings: Vec<_> = app.world_mut().query::<&PlaybackSettings>().iter(app.world()).cloned().collect();
+        let effects = effect_volume(
+            app.world().resource::<GameSettings>(),
+            app.world().resource::<Tuning>(),
+        );
+        let settings: Vec<_> = app
+            .world_mut()
+            .query::<&PlaybackSettings>()
+            .iter(app.world())
+            .cloned()
+            .collect();
         assert_eq!(settings.len(), 1);
-        let Volume::Linear(volume) = settings[0].volume else { panic!("linear volume") };
-        assert!(volume <= effects * STEP_GAIN * (1.0 + GAIN_SPREAD) + 1e-6, "{volume} vs {effects}");
-        assert!(volume >= effects * STEP_GAIN * (1.0 - GAIN_SPREAD) - 1e-6, "{volume} vs {effects}");
+        let Volume::Linear(volume) = settings[0].volume else {
+            panic!("linear volume")
+        };
+        assert!(
+            volume <= effects * STEP_GAIN * (1.0 + GAIN_SPREAD) + 1e-6,
+            "{volume} vs {effects}"
+        );
+        assert!(
+            volume >= effects * STEP_GAIN * (1.0 - GAIN_SPREAD) - 1e-6,
+            "{volume} vs {effects}"
+        );
     }
 
     #[test]
@@ -372,7 +472,10 @@ mod tests {
     }
 
     fn steps(app: &mut App) -> usize {
-        app.world_mut().query::<&AudioPlayer>().iter(app.world()).count()
+        app.world_mut()
+            .query::<&AudioPlayer>()
+            .iter(app.world())
+            .count()
     }
 
     #[test]
@@ -382,7 +485,11 @@ mod tests {
         for _ in 0..20 {
             app.update();
         }
-        let state = app.world_mut().query_filtered::<&StepState, With<Player>>().single(app.world()).is_ok();
+        let state = app
+            .world_mut()
+            .query_filtered::<&StepState, With<Player>>()
+            .single(app.world())
+            .is_ok();
         assert!(state, "the player gets a StepState");
         assert_eq!(steps(&mut app), 1);
     }
@@ -423,8 +530,16 @@ mod tests {
 
         app.world_mut().spawn((
             Player,
-            Gait { phase: 0.0, pace: 0.0 },
-            StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: None },
+            Gait {
+                phase: 0.0,
+                pace: 0.0,
+            },
+            StepState {
+                rng: Mulberry32::new(42),
+                last_sample: 0,
+                prev_phase: 0.0,
+                last_pos: None,
+            },
         ));
 
         app.add_systems(Update, play_delver_steps);
@@ -452,24 +567,37 @@ mod tests {
             .init_resource::<FootstepSounds>();
 
         // Create a rat creature spot
-        let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Rat, seed: 42, pack: 0 };
+        let spot = fb_level::CreatureSpot {
+            x: 0.0,
+            y: 0.0,
+            yaw: 0.0,
+            species: Species::Rat,
+            seed: 42,
+            pack: 0,
+        };
         let creature = spot.creature();
         let critter = Critter::new(spot, creature);
 
         // Spawn rat with Driven component and movement
-        let rat_entity = app.world_mut().spawn((
-            critter,
-            Driven,
-            Transform::from_translation(Vec3::ZERO),
-            Visibility::default(),
-        )).id();
+        let rat_entity = app
+            .world_mut()
+            .spawn((
+                critter,
+                Driven,
+                Transform::from_translation(Vec3::ZERO),
+                Visibility::default(),
+            ))
+            .id();
 
         // Initialize creature steps (adds StepState and WalksWithSteps)
         app.add_systems(Update, init_creature_steps);
         app.update();
 
         // Move the rat and play steps
-        app.world_mut().get_mut::<Transform>(rat_entity).unwrap().translation = Vec3::new(1.0, 0.0, 0.0);
+        app.world_mut()
+            .get_mut::<Transform>(rat_entity)
+            .unwrap()
+            .translation = Vec3::new(1.0, 0.0, 0.0);
 
         app.add_systems(Update, play_creature_steps);
         app.update();
@@ -496,7 +624,14 @@ mod tests {
             .init_resource::<FootstepSounds>();
 
         // Create a rat creature spot
-        let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Rat, seed: 42, pack: 0 };
+        let spot = fb_level::CreatureSpot {
+            x: 0.0,
+            y: 0.0,
+            yaw: 0.0,
+            species: Species::Rat,
+            seed: 42,
+            pack: 0,
+        };
         let creature = spot.creature();
         let critter = Critter::new(spot, creature);
 
@@ -506,7 +641,12 @@ mod tests {
             Driven,
             Transform::from_translation(Vec3::ZERO),
             Visibility::default(),
-            StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) },
+            StepState {
+                rng: Mulberry32::new(42),
+                last_sample: 0,
+                prev_phase: 0.0,
+                last_pos: Some(Vec2::ZERO),
+            },
             WalksWithSteps,
         ));
 
@@ -535,22 +675,40 @@ mod tests {
             .init_resource::<FootstepSounds>();
 
         // Create a snake creature spot
-        let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::PoisonousSnake, seed: 42, pack: 0 };
+        let spot = fb_level::CreatureSpot {
+            x: 0.0,
+            y: 0.0,
+            yaw: 0.0,
+            species: Species::PoisonousSnake,
+            seed: 42,
+            pack: 0,
+        };
         let creature = spot.creature();
         let critter = Critter::new(spot, creature);
 
         // Spawn snake with Driven component and movement
-        let snake_entity = app.world_mut().spawn((
-            critter,
-            Driven,
-            Transform::from_translation(Vec3::ZERO),
-            Visibility::default(),
-            StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) },
-            WalksWithSteps,
-        )).id();
+        let snake_entity = app
+            .world_mut()
+            .spawn((
+                critter,
+                Driven,
+                Transform::from_translation(Vec3::ZERO),
+                Visibility::default(),
+                StepState {
+                    rng: Mulberry32::new(42),
+                    last_sample: 0,
+                    prev_phase: 0.0,
+                    last_pos: Some(Vec2::ZERO),
+                },
+                WalksWithSteps,
+            ))
+            .id();
 
         // Move the snake
-        app.world_mut().get_mut::<Transform>(snake_entity).unwrap().translation = Vec3::new(1.0, 0.0, 0.0);
+        app.world_mut()
+            .get_mut::<Transform>(snake_entity)
+            .unwrap()
+            .translation = Vec3::new(1.0, 0.0, 0.0);
 
         app.add_systems(Update, play_creature_steps);
         app.update();
@@ -570,17 +728,48 @@ mod tests {
         use bevy::state::app::StatesPlugin;
         use fb_creatures::Species;
 
-        let bone: Handle<AudioSource> = Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(0xB0), std::marker::PhantomData);
-        let bone_steps = [bone.clone(), Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(0xB1), std::marker::PhantomData), Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(0xB2), std::marker::PhantomData)];
-        let light = [0x10, 0x11, 0x12].map(|n| Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData));
+        let bone: Handle<AudioSource> = Handle::Uuid(
+            bevy::asset::uuid::Uuid::from_u128(0xB0),
+            std::marker::PhantomData,
+        );
+        let bone_steps = [
+            bone.clone(),
+            Handle::Uuid(
+                bevy::asset::uuid::Uuid::from_u128(0xB1),
+                std::marker::PhantomData,
+            ),
+            Handle::Uuid(
+                bevy::asset::uuid::Uuid::from_u128(0xB2),
+                std::marker::PhantomData,
+            ),
+        ];
+        let light = [0x10, 0x11, 0x12].map(|n| {
+            Handle::Uuid(
+                bevy::asset::uuid::Uuid::from_u128(n),
+                std::marker::PhantomData,
+            )
+        });
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .insert_state(AppState::Delving)
             .init_resource::<GameSettings>()
             .init_resource::<Tuning>()
-            .insert_resource(FootstepSounds { light: light.clone(), heavy: light.clone() })
-            .insert_resource(BoneSounds { steps: bone_steps.clone(), ..default() });
-        let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species: Species::Skeleton, seed: 42, pack: 0 };
+            .insert_resource(FootstepSounds {
+                light: light.clone(),
+                heavy: light.clone(),
+            })
+            .insert_resource(BoneSounds {
+                steps: bone_steps.clone(),
+                ..default()
+            });
+        let spot = fb_level::CreatureSpot {
+            x: 0.0,
+            y: 0.0,
+            yaw: 0.0,
+            species: Species::Skeleton,
+            seed: 42,
+            pack: 0,
+        };
         let critter = Critter::new(spot, spot.creature());
         let stride = {
             let kit = critter.kit.as_ref().unwrap();
@@ -588,18 +777,51 @@ mod tests {
         };
         let skeleton = app
             .world_mut()
-            .spawn((critter, Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps))
+            .spawn((
+                critter,
+                Driven,
+                Transform::default(),
+                Visibility::default(),
+                StepState {
+                    rng: Mulberry32::new(42),
+                    last_sample: 0,
+                    prev_phase: 0.0,
+                    last_pos: Some(Vec2::ZERO),
+                },
+                WalksWithSteps,
+            ))
             .id();
         app.add_systems(Update, play_creature_steps);
         // A rat's stride is half a unit: a skeleton walking that far is not yet at its first step.
-        app.world_mut().get_mut::<Transform>(skeleton).unwrap().translation = Vec3::new(0.6, 0.0, 0.0);
+        app.world_mut()
+            .get_mut::<Transform>(skeleton)
+            .unwrap()
+            .translation = Vec3::new(0.6, 0.0, 0.0);
         app.update();
-        assert_eq!(app.world_mut().query::<&AudioPlayer>().iter(app.world()).count(), 0, "a skeleton's step is its own stride, not a rat's");
-        app.world_mut().get_mut::<Transform>(skeleton).unwrap().translation = Vec3::new(stride + 1.0, 0.0, 0.0);
+        assert_eq!(
+            app.world_mut()
+                .query::<&AudioPlayer>()
+                .iter(app.world())
+                .count(),
+            0,
+            "a skeleton's step is its own stride, not a rat's"
+        );
+        app.world_mut()
+            .get_mut::<Transform>(skeleton)
+            .unwrap()
+            .translation = Vec3::new(stride + 1.0, 0.0, 0.0);
         app.update();
-        let heard: Vec<Handle<AudioSource>> = app.world_mut().query::<&AudioPlayer<AudioSource>>().iter(app.world()).map(|p| p.0.clone()).collect();
+        let heard: Vec<Handle<AudioSource>> = app
+            .world_mut()
+            .query::<&AudioPlayer<AudioSource>>()
+            .iter(app.world())
+            .map(|p| p.0.clone())
+            .collect();
         assert_eq!(heard.len(), 1, "one step for a stride walked");
-        assert!(bone_steps.contains(&heard[0]), "bone, not the delver's or a rat's light step");
+        assert!(
+            bone_steps.contains(&heard[0]),
+            "bone, not the delver's or a rat's light step"
+        );
     }
 
     #[test]
@@ -609,25 +831,57 @@ mod tests {
 
         let heard = |species: Species| {
             let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin)).insert_state(AppState::Delving).init_resource::<GameSettings>().init_resource::<Tuning>().init_resource::<FootstepSounds>();
-            let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed: 42, pack: 0 };
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+                .insert_state(AppState::Delving)
+                .init_resource::<GameSettings>()
+                .init_resource::<Tuning>()
+                .init_resource::<FootstepSounds>();
+            let spot = fb_level::CreatureSpot {
+                x: 0.0,
+                y: 0.0,
+                yaw: 0.0,
+                species,
+                seed: 42,
+                pack: 0,
+            };
             let critter = Critter::new(spot, spot.creature());
             let radius = critter.creature.radius();
             let id = app
                 .world_mut()
-                .spawn((critter, Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps))
+                .spawn((
+                    critter,
+                    Driven,
+                    Transform::default(),
+                    Visibility::default(),
+                    StepState {
+                        rng: Mulberry32::new(42),
+                        last_sample: 0,
+                        prev_phase: 0.0,
+                        last_pos: Some(Vec2::ZERO),
+                    },
+                    WalksWithSteps,
+                ))
                 .id();
             app.add_systems(Update, play_creature_steps);
-            app.world_mut().get_mut::<Transform>(id).unwrap().translation = Vec3::new(CENTIPEDE_PATTER * radius * 3.5, 0.0, 0.0);
+            app.world_mut()
+                .get_mut::<Transform>(id)
+                .unwrap()
+                .translation = Vec3::new(CENTIPEDE_PATTER * radius * 3.5, 0.0, 0.0);
             app.update();
             let mut query = app.world_mut().query::<&PlaybackSettings>();
-            let volumes: Vec<f32> = query.iter(app.world()).map(|p| p.volume.to_linear()).collect();
+            let volumes: Vec<f32> = query
+                .iter(app.world())
+                .map(|p| p.volume.to_linear())
+                .collect();
             volumes
         };
         let patter = heard(Species::GiantCentipede);
         assert!(!patter.is_empty(), "a centipede on the move patters");
         let rat = heard(Species::Rat);
-        assert!(patter[0] < rat[0], "softer than a rat's step: {patter:?} against {rat:?}");
+        assert!(
+            patter[0] < rat[0],
+            "softer than a rat's step: {patter:?} against {rat:?}"
+        );
     }
 
     #[test]
@@ -635,16 +889,47 @@ mod tests {
         use bevy::state::app::StatesPlugin;
         use fb_creatures::Species;
 
-        let handle = |n: u128| Handle::<AudioSource>::Uuid(bevy::asset::uuid::Uuid::from_u128(n), std::marker::PhantomData);
+        let handle = |n: u128| {
+            Handle::<AudioSource>::Uuid(
+                bevy::asset::uuid::Uuid::from_u128(n),
+                std::marker::PhantomData,
+            )
+        };
         let light = [0x10, 0x11, 0x12].map(handle);
         let heavy = [0x20, 0x21, 0x22].map(handle);
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin)).insert_state(AppState::Delving).init_resource::<GameSettings>().init_resource::<Tuning>().insert_resource(FootstepSounds { light: light.clone(), heavy: heavy.clone() });
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(AppState::Delving)
+            .init_resource::<GameSettings>()
+            .init_resource::<Tuning>()
+            .insert_resource(FootstepSounds {
+                light: light.clone(),
+                heavy: heavy.clone(),
+            });
         app.add_systems(Update, play_creature_steps);
         let spawn = |app: &mut App, species: Species| {
-            let spot = fb_level::CreatureSpot { x: 0.0, y: 0.0, yaw: 0.0, species, seed: 42, pack: 0 };
+            let spot = fb_level::CreatureSpot {
+                x: 0.0,
+                y: 0.0,
+                yaw: 0.0,
+                species,
+                seed: 42,
+                pack: 0,
+            };
             let critter = Critter::new(spot, spot.creature());
-            let mut entity = app.world_mut().spawn((critter.clone(), Driven, Transform::default(), Visibility::default(), StepState { rng: Mulberry32::new(42), last_sample: 0, prev_phase: 0.0, last_pos: Some(Vec2::ZERO) }, WalksWithSteps));
+            let mut entity = app.world_mut().spawn((
+                critter.clone(),
+                Driven,
+                Transform::default(),
+                Visibility::default(),
+                StepState {
+                    rng: Mulberry32::new(42),
+                    last_sample: 0,
+                    prev_phase: 0.0,
+                    last_pos: Some(Vec2::ZERO),
+                },
+                WalksWithSteps,
+            ));
             if let fb_creatures::Creature::Troll(state) = &critter.creature {
                 entity.insert(crate::creatures::trolls::Troll::new(state));
             }
@@ -652,18 +937,42 @@ mod tests {
         };
         let troll = spawn(&mut app, Species::Troll);
         let stride = {
-            let body = app.world().get::<crate::creatures::trolls::Troll>(troll).unwrap();
+            let body = app
+                .world()
+                .get::<crate::creatures::trolls::Troll>(troll)
+                .unwrap();
             0.7 * (body.dims.thigh + body.dims.shin)
         };
         assert!(stride > 2.0, "a troll's stride is long: {stride}");
         // A rat's half unit is nowhere near a step for it.
-        app.world_mut().get_mut::<Transform>(troll).unwrap().translation = Vec3::new(0.6, 0.0, 0.0);
+        app.world_mut()
+            .get_mut::<Transform>(troll)
+            .unwrap()
+            .translation = Vec3::new(0.6, 0.0, 0.0);
         app.update();
-        assert_eq!(app.world_mut().query::<&AudioPlayer>().iter(app.world()).count(), 0, "not yet a stride");
-        app.world_mut().get_mut::<Transform>(troll).unwrap().translation = Vec3::new(stride + 1.0, 0.0, 0.0);
+        assert_eq!(
+            app.world_mut()
+                .query::<&AudioPlayer>()
+                .iter(app.world())
+                .count(),
+            0,
+            "not yet a stride"
+        );
+        app.world_mut()
+            .get_mut::<Transform>(troll)
+            .unwrap()
+            .translation = Vec3::new(stride + 1.0, 0.0, 0.0);
         app.update();
-        let heard: Vec<(Handle<AudioSource>, f32)> = app.world_mut().query::<(&AudioPlayer<AudioSource>, &PlaybackSettings)>().iter(app.world()).map(|(p, s)| (p.0.clone(), s.volume.to_linear())).collect();
+        let heard: Vec<(Handle<AudioSource>, f32)> = app
+            .world_mut()
+            .query::<(&AudioPlayer<AudioSource>, &PlaybackSettings)>()
+            .iter(app.world())
+            .map(|(p, s)| (p.0.clone(), s.volume.to_linear()))
+            .collect();
         assert_eq!(heard.len(), 1, "one tread for a stride walked");
-        assert!(heavy.contains(&heard[0].0), "the heavy tread, not a rat's light one");
+        assert!(
+            heavy.contains(&heard[0].0),
+            "the heavy tread, not a rat's light one"
+        );
     }
 }

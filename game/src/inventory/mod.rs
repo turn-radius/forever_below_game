@@ -52,9 +52,9 @@ use bevy::{
 };
 use fb_items::{Kind, Rarity, Slot, footprint::Footprint};
 
+pub use doll::{DollAssets, DollStage, DollView, SlotView};
 pub use grid::{Grid, Placement};
 pub use icon::{IconCache, Icons};
-pub use doll::{DollAssets, DollStage, DollView, SlotView};
 pub use items::{Displaced, Inventory, ItemId, Location, Refusal, char_bucket};
 pub use underfoot::{FloorChange, FloorChanges, Underfoot};
 
@@ -62,12 +62,14 @@ use crate::carry::ViewModelCamera;
 use crate::character::{Character, ChosenDelver, character_for};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::play::{CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens};
+use crate::play::{
+    CurrentLevel, DelveSystems, Screen, ScreenOpen, SheetTab, show_screen, switch_screens,
+};
 use crate::quickslots::{QuickslotDrop, Quickslots};
+use crate::tuning::Tuning;
 pub use crate::ui::node_rect;
 use crate::ui::{BAD, BG, BRIGHT, CELL, INK, LINE, MUTED, OK, UiFonts, rarity_color, ui_cursor};
 use header::ToastText;
-use crate::tuning::Tuning;
 
 /// Width of a grid line, in logical pixels.
 const LINE_PX: f32 = 2.0;
@@ -141,8 +143,24 @@ impl Plugin for InventoryPlugin {
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
-            .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")), give_for_capture).chain())
-            .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
+            .add_systems(
+                OnEnter(AppState::Delving),
+                (
+                    roll_character,
+                    give_starting_kit,
+                    give_debug_kit.run_if(debug_kit_wanted),
+                    hold_for_capture.run_if(|| env_flag("FB_HOLD")),
+                    give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")),
+                    give_for_capture,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                PostStartup,
+                open_for_capture
+                    .run_if(in_state(AppState::Delving))
+                    .run_if(|| env_flag("FB_OPEN_INVENTORY")),
+            )
             .add_systems(
                 Update,
                 (
@@ -152,7 +170,13 @@ impl Plugin for InventoryPlugin {
                         // Screens open and close in `switch_screens`.
                         underfoot::track_underfoot,
                         close_container_with_screen,
-                        (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
+                        (
+                            factions::note_levels_met,
+                            meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()),
+                            header::click_tabs,
+                            reset_scroll_on_tab,
+                        )
+                            .chain(),
                         build_screen,
                         scroll_column,
                         scroll_shelf,
@@ -160,8 +184,21 @@ impl Plugin for InventoryPlugin {
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
                         crate::character::wear_abilities,
-                        (sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::update_conditions, sheet::update_enchanting, sheet::update_tongues).run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
-                        (sheet::hover_numbers, sheet::spawn_tip, sheet::show_breakdown).chain(),
+                        (
+                            sheet::update_status,
+                            sheet::update_vitals,
+                            sheet::update_gear,
+                            sheet::update_conditions,
+                            sheet::update_enchanting,
+                            sheet::update_tongues,
+                        )
+                            .run_if(|open: Res<ScreenOpen>| open.is(Screen::Inventory)),
+                        (
+                            sheet::hover_numbers,
+                            sheet::spawn_tip,
+                            sheet::show_breakdown,
+                        )
+                            .chain(),
                         debug_hover.run_if(|| std::env::var("FB_DEBUG_HOVER").is_ok()),
                         underfoot::apply_floor_changes,
                         show_drag,
@@ -170,10 +207,22 @@ impl Plugin for InventoryPlugin {
                     )
                         .chain()
                         .after(switch_screens),
-                    (icon::draw_icons, icon::reveal_icons).chain().after(build_screen),
-                    underfoot::drop_hovered.run_if(crate::play::inventory_open).run_if(crate::barter::not_bartering).after(drag_items).before(underfoot::apply_floor_changes),
+                    (icon::draw_icons, icon::reveal_icons)
+                        .chain()
+                        .after(build_screen),
+                    underfoot::drop_hovered
+                        .run_if(crate::play::inventory_open)
+                        .run_if(crate::barter::not_bartering)
+                        .after(drag_items)
+                        .before(underfoot::apply_floor_changes),
                     doll::turn_seal,
-                    (doll::start_doll_fitting, doll::poll_doll_fitting, doll::show_doll, doll::turn_doll.after(drag_items)).chain(),
+                    (
+                        doll::start_doll_fitting,
+                        doll::poll_doll_fitting,
+                        doll::show_doll,
+                        doll::turn_doll.after(drag_items),
+                    )
+                        .chain(),
                 )
                     .in_set(DelveSystems),
             );
@@ -184,7 +233,11 @@ impl Plugin for InventoryPlugin {
 /// and cameras (despawned with the delve), the icons still being drawn, what lay underfoot, a
 /// container left open, a hovered item, a toast and the fits kept ([`crate::fitting::FitCache`]), none of which belong to the next delve's
 /// delver and items.
-pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut icons: ResMut<icon::IconCache>) {
+pub fn leave_the_delve(
+    mut commands: Commands,
+    mut stage: ResMut<DollStage>,
+    mut icons: ResMut<icon::IconCache>,
+) {
     *stage = DollStage::default();
     commands.insert_resource(crate::fitting::FitCache::default());
     icons.abandon_drawing();
@@ -207,14 +260,22 @@ fn debug_kit_wanted() -> bool {
 
 /// A seed for the starting kit, from the level's seed so a delve always starts the same.
 fn kit_seed(level: Option<&CurrentLevel>, salt: u32) -> u32 {
-    level.map_or(1, |l| l.0.seed).wrapping_mul(0x2545_f491).wrapping_add(salt)
+    level
+        .map_or(1, |l| l.0.seed)
+        .wrapping_mul(0x2545_f491)
+        .wrapping_add(salt)
 }
 
 /// The outfit the delver starts in (`data/outfits.json`).
 pub const STARTING_OUTFIT: &str = "fallen";
 
 /// The delver chosen on the title, taken up, or one rolled from the level's seed.
-fn roll_character(mut commands: Commands, mut character: ResMut<Character>, chosen: Option<Res<ChosenDelver>>, level: Option<Res<CurrentLevel>>) {
+fn roll_character(
+    mut commands: Commands,
+    mut character: ResMut<Character>,
+    chosen: Option<Res<ChosenDelver>>,
+    level: Option<Res<CurrentLevel>>,
+) {
     *character = match chosen {
         Some(chosen) => {
             commands.remove_resource::<ChosenDelver>();
@@ -228,7 +289,11 @@ fn roll_character(mut commands: Commands, mut character: ResMut<Character>, chos
 /// is their first grid, and a burning torch in the off hand so they start with a carried light.
 /// All of it is common. The outfit's goods and the things it leaves at its wearer's feet (a
 /// spare torch, bread) are not given; folk in the same outfit still carry them.
-fn give_starting_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
+fn give_starting_kit(
+    mut inventory: ResMut<Inventory>,
+    character: Res<Character>,
+    level: Option<Res<CurrentLevel>>,
+) {
     if inventory.worn(Slot::Belt).is_some() {
         return;
     }
@@ -265,7 +330,10 @@ fn starting_odds() -> fb_items::Odds {
 fn starting_torch(seed: u32) -> fb_items::Item {
     (0..u32::MAX)
         .map(|k| seed.wrapping_add(k))
-        .find_map(|s| fb_items::roll_item_with("Torch", s, starting_odds()).filter(|item| crate::carry::item_light(&item.shape).is_some()))
+        .find_map(|s| {
+            fb_items::roll_item_with("Torch", s, starting_odds())
+                .filter(|item| crate::carry::item_light(&item.shape).is_some())
+        })
         .expect("some seed rolls a burning torch")
 }
 
@@ -286,7 +354,11 @@ fn equip_kit(inventory: &mut Inventory, item: fb_items::Item, slot: Slot) {
 /// For captures and trying the screen: the delver's class outfit, with a lit light in the off
 /// hand (a lantern if the outfit gave none), and a pack on the back filled with one of most
 /// things.
-fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, level: Option<Res<CurrentLevel>>) {
+fn give_debug_kit(
+    mut inventory: ResMut<Inventory>,
+    character: Res<Character>,
+    level: Option<Res<CurrentLevel>>,
+) {
     let seed = |salt| kit_seed(level.as_deref(), salt);
     if let Some(outfit) = fb_items::outfit::outfit(character.class.outfit_key()) {
         for (slot, item) in outfit.roll(seed(2), character.folk.key()).worn {
@@ -294,7 +366,9 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         }
     }
     if doll::lit_hand(&inventory) != Some(Slot::Offhand)
-        && let Some(lantern) = (seed(3)..seed(3).wrapping_add(500)).filter_map(|s| fb_items::roll_item("Lantern", s)).find(|i| crate::carry::item_light(&i.shape).is_some())
+        && let Some(lantern) = (seed(3)..seed(3).wrapping_add(500))
+            .filter_map(|s| fb_items::roll_item("Lantern", s))
+            .find(|i| crate::carry::item_light(&i.shape).is_some())
     {
         equip_kit(&mut inventory, lantern, Slot::Offhand);
     }
@@ -304,9 +378,28 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let pack = inventory.add(pack);
         let _ = inventory.wear(pack, Slot::Back);
     }
-    let legendary = (1..4_000).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|i| i.rarity == Rarity::Legendary);
-    let things = ["Sword", "Healing draught", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
-    for item in legendary.into_iter().chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {
+    let legendary = (1..4_000)
+        .filter_map(|s| fb_items::roll_item("Dagger", s))
+        .find(|i| i.rarity == Rarity::Legendary);
+    let things = [
+        "Sword",
+        "Healing draught",
+        "Bread",
+        "Ring",
+        "Lantern",
+        "Apple",
+        "Lockpicks",
+        "Gloves",
+        "Candle",
+        "Amulet",
+        "Cheese",
+    ];
+    for item in legendary.into_iter().chain(
+        things
+            .iter()
+            .enumerate()
+            .filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32))),
+    ) {
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
             inventory.forget(id);
@@ -318,12 +411,24 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
 /// or bolt case ([`fb_items::outfit::AMMUNITION_CARRIED`]), slung in the quiver slot, else carried.
 /// One the kit already gave is filled up.
 fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
-    let Some((_, ranged)) = crate::combat::shoot::ranged_in_hand(&inventory) else { return };
-    let (holder_base, ammo_base) = if ranged.ammunition == armory::Family::Bolt { ("Bolt case", "Bolt") } else { ("Quiver", "Arrow") };
+    let Some((_, ranged)) = crate::combat::shoot::ranged_in_hand(&inventory) else {
+        return;
+    };
+    let (holder_base, ammo_base) = if ranged.ammunition == armory::Family::Bolt {
+        ("Bolt case", "Bolt")
+    } else {
+        ("Quiver", "Arrow")
+    };
     let holder = match crate::combat::shoot::holder_of(&inventory, ranged.ammunition) {
         Some(holder) => holder,
         None => {
-            let Some(item) = fb_items::roll_item_with(holder_base, kit_seed(level.as_deref(), 0xa770), starting_odds()) else { return };
+            let Some(item) = fb_items::roll_item_with(
+                holder_base,
+                kit_seed(level.as_deref(), 0xa770),
+                starting_odds(),
+            ) else {
+                return;
+            };
             let holder = inventory.add(item);
             if inventory.wear(holder, Slot::Quiver).is_err() && inventory.stow(holder).is_err() {
                 inventory.forget(holder);
@@ -334,9 +439,17 @@ fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLe
     };
     let have = inventory.contents_count(holder);
     for k in have..fb_items::outfit::AMMUNITION_CARRIED {
-        let Some(item) = fb_items::roll_item_with(ammo_base, kit_seed(level.as_deref(), 0xa770 + 1 + k as u32), starting_odds()) else { return };
+        let Some(item) = fb_items::roll_item_with(
+            ammo_base,
+            kit_seed(level.as_deref(), 0xa770 + 1 + k as u32),
+            starting_odds(),
+        ) else {
+            return;
+        };
         let id = inventory.add(item);
-        let at = inventory.grid(holder).and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 }));
+        let at = inventory
+            .grid(holder)
+            .and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 }));
         if at.is_none_or(|at| inventory.put(id, holder, at).is_err()) {
             inventory.forget(id);
             break;
@@ -361,16 +474,28 @@ pub fn hold_spec(spec: &str) -> (Option<Option<String>>, Option<Option<String>>)
 /// The first item of `base` rolled at or after `seed`, lit if it is a light that can be.
 /// `Chamberstick` is a candle in its holder.
 fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
-    let (base, holder) = if base == "Chamberstick" { ("Candle", true) } else { (base, false) };
+    let (base, holder) = if base == "Chamberstick" {
+        ("Candle", true)
+    } else {
+        (base, false)
+    };
     let rolled = |s: u32| fb_items::roll_item(base, s);
-    let wanted = |i: &fb_items::Item| crate::carry::item_light(&i.shape).is_some() && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder));
-    let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(wanted);
-    lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle")).or_else(|| rolled(seed))
+    let wanted = |i: &fb_items::Item| {
+        crate::carry::item_light(&i.shape).is_some()
+            && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder))
+    };
+    let lit = (0..500)
+        .filter_map(|k| rolled(seed.wrapping_add(k)))
+        .find(wanted);
+    lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle"))
+        .or_else(|| rolled(seed))
 }
 
 /// For captures: the hands hold what `FB_HOLD` names ([`hold_spec`]), whatever the kit gave.
 fn hold_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLevel>>) {
-    let Ok(spec) = std::env::var("FB_HOLD") else { return };
+    let Ok(spec) = std::env::var("FB_HOLD") else {
+        return;
+    };
     let (main, off) = hold_spec(&spec);
     for (slot, want) in [(Slot::Mainhand, main), (Slot::Offhand, off)] {
         let Some(want) = want else { continue };
@@ -378,7 +503,14 @@ fn hold_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
             empty_hand(&mut inventory, slot);
             continue;
         };
-        if hold_rolled(&mut inventory, slot, &base, kit_seed(level.as_deref(), 0x401d + slot as u32)).is_none() {
+        if hold_rolled(
+            &mut inventory,
+            slot,
+            &base,
+            kit_seed(level.as_deref(), 0x401d + slot as u32),
+        )
+        .is_none()
+        {
             warn!("FB_HOLD: no base called {base:?}");
         }
     }
@@ -408,7 +540,10 @@ pub fn hold_rolled(inventory: &mut Inventory, slot: Slot, base: &str, seed: u32)
 /// (`Lantern@hip`, `Sword@offhand`).
 pub fn equip_entry(entry: &str) -> (&str, Option<Slot>) {
     match entry.split_once('@') {
-        Some((base, slot)) => (base.trim(), serde_json::from_str(&format!("\"{}\"", slot.trim().to_lowercase())).ok()),
+        Some((base, slot)) => (
+            base.trim(),
+            serde_json::from_str(&format!("\"{}\"", slot.trim().to_lowercase())).ok(),
+        ),
         None => (entry, None),
     }
 }
@@ -437,7 +572,9 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     }
     let taught = std::env::var("FB_TEACH").unwrap_or_default();
     for (i, spec) in bases_in(&taught).enumerate() {
-        let Some(item) = crate::reading::teaching_for_capture(spec, i as u32) else { continue };
+        let Some(item) = crate::reading::teaching_for_capture(spec, i as u32) else {
+            continue;
+        };
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
             warn!("FB_TEACH: no room for {spec:?}");
@@ -458,8 +595,16 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     }
 }
 
-fn open_for_capture(mut open: ResMut<ScreenOpen>, mut tab: ResMut<SheetTab>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
-    show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+fn open_for_capture(
+    mut open: ResMut<ScreenOpen>,
+    mut tab: ResMut<SheetTab>,
+    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+) {
+    show_screen(
+        &mut open,
+        Some(Screen::Inventory),
+        cursor.as_deref_mut().map(|c| &mut **c),
+    );
     if std::env::var("FB_OPEN_INVENTORY").is_ok_and(|v| v.eq_ignore_ascii_case("character")) {
         *tab = SheetTab::Character;
     } else if std::env::var("FB_OPEN_INVENTORY").is_ok_and(|v| v.eq_ignore_ascii_case("factions")) {
@@ -469,13 +614,27 @@ fn open_for_capture(mut open: ResMut<ScreenOpen>, mut tab: ResMut<SheetTab>, mut
 
 /// `FB_MEET=<n>[,<n>...]` has the delver meet the factions at those places in the world's pool
 /// (on the level they stand on), for captures of the factions tab.
-fn meet_for_capture(record: Option<ResMut<crate::record::WorldRecord>>, abyss: Option<Res<crate::travel::Abyss>>, level: Option<Res<CurrentLevel>>, mut done: Local<bool>) {
-    let (Some(mut record), Some(abyss), Some(level)) = (record, abyss, level) else { return };
-    let Some(spec) = std::env::var("FB_MEET").ok().filter(|_| !*done) else { return };
+fn meet_for_capture(
+    record: Option<ResMut<crate::record::WorldRecord>>,
+    abyss: Option<Res<crate::travel::Abyss>>,
+    level: Option<Res<CurrentLevel>>,
+    mut done: Local<bool>,
+) {
+    let (Some(mut record), Some(abyss), Some(level)) = (record, abyss, level) else {
+        return;
+    };
+    let Some(spec) = std::env::var("FB_MEET").ok().filter(|_| !*done) else {
+        return;
+    };
     *done = true;
     let world = fb_faction::World::new(abyss.run_seed);
-    for place in spec.split(',').filter_map(|p| p.trim().parse::<usize>().ok()) {
-        let Some(faction) = world.factions().get(place) else { continue };
+    for place in spec
+        .split(',')
+        .filter_map(|p| p.trim().parse::<usize>().ok())
+    {
+        let Some(faction) = world.factions().get(place) else {
+            continue;
+        };
         record.standings.meet(faction.id);
         record.note_met_on(faction.id, level.0.depth);
         if place == 0 {
@@ -601,15 +760,22 @@ pub struct Drag {
 impl Drag {
     /// Turns it a quarter turn about the cell it was grabbed by.
     pub fn turn(&mut self) {
-        self.size = Footprint { cols: self.size.rows, rows: self.size.cols };
+        self.size = Footprint {
+            cols: self.size.rows,
+            rows: self.size.cols,
+        };
         self.turned = !self.turned;
-        self.grab = IVec2::new(self.grab.y.min(self.size.cols as i32 - 1), self.grab.x.min(self.size.rows as i32 - 1));
+        self.grab = IVec2::new(
+            self.grab.y.min(self.size.cols as i32 - 1),
+            self.grab.x.min(self.size.rows as i32 - 1),
+        );
     }
 
     /// Where its top-left cell lands with the grabbed cell over `cell`.
     pub fn placement_at(&self, cell: IVec2) -> Option<Placement> {
         let at = cell - self.grab;
-        (at.x >= 0 && at.y >= 0 && at.x < 256 && at.y < 256).then(|| Placement::new(at.x as u8, at.y as u8, self.turned))
+        (at.x >= 0 && at.y >= 0 && at.x < 256 && at.y < 256)
+            .then(|| Placement::new(at.x as u8, at.y as u8, self.turned))
     }
 }
 
@@ -677,7 +843,11 @@ impl Toasts<'_> {
     pub fn add(&mut self, text: &str) {
         let now = self.now();
         if let Some(toast) = self.toast.as_deref_mut() {
-            let line = if toast.showing(now) && !toast.text.contains(text) { format!("{} \u{b7} {text}", toast.text) } else { text.to_string() };
+            let line = if toast.showing(now) && !toast.text.contains(text) {
+                format!("{} \u{b7} {text}", toast.text)
+            } else {
+                text.to_string()
+            };
             toast.say(line, now);
         }
     }
@@ -686,13 +856,23 @@ impl Toasts<'_> {
 /// Where `drag` lands in `container` with its grabbed cell over `cell`: as it lies now; or,
 /// for something being taken off (worn things are drawn upright) and not turned with R since,
 /// turned a quarter turn if it fits only that way.
-pub fn landing(inventory: &Inventory, drag: &Drag, container: ItemId, cell: IVec2) -> Result<Placement, Refusal> {
+pub fn landing(
+    inventory: &Inventory,
+    drag: &Drag,
+    container: ItemId,
+    cell: IVec2,
+) -> Result<Placement, Refusal> {
     let at = drag.placement_at(cell).ok_or(Refusal::NoRoom)?;
     match inventory.check_put(drag.id, container, at) {
-        Err(refusal) if !drag.turned && matches!(inventory.location(drag.id), Some(Location::Worn(_))) => {
+        Err(refusal)
+            if !drag.turned && matches!(inventory.location(drag.id), Some(Location::Worn(_))) =>
+        {
             let mut turned = *drag;
             turned.turn();
-            turned.placement_at(cell).filter(|&at| inventory.check_put(drag.id, container, at).is_ok()).ok_or(refusal)
+            turned
+                .placement_at(cell)
+                .filter(|&at| inventory.check_put(drag.id, container, at).is_ok())
+                .ok_or(refusal)
         }
         fits => fits.map(|()| at),
     }
@@ -701,21 +881,40 @@ pub fn landing(inventory: &Inventory, drag: &Drag, container: ItemId, cell: IVec
 /// Whether `drag` may be let go at `target`.
 pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<(), Refusal> {
     match target {
-        Target::Cell { view: GridView::Container(container), cell } => landing(inventory, drag, container, cell).map(|_| ()),
+        Target::Cell {
+            view: GridView::Container(container),
+            cell,
+        } => landing(inventory, drag, container, cell).map(|_| ()),
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
-        Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
+        Target::Doll => inventory
+            .target_slot(drag.id)
+            .map_or(Err(Refusal::NotWearable), |slot| {
+                inventory.check_wear(drag.id, slot)
+            }),
         Target::Quickslot(_) => crate::quickslots::check_bind(inventory, drag.id),
-        Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
+        Target::Cell {
+            view: GridView::Underfoot,
+            ..
+        }
+        | Target::Page
+        | Target::Level => Ok(()),
     }
 }
 
 /// Equips `id` in `slot` ([`Inventory::equip`]) and says what that changes in the level: the
 /// item lifted if it lay there, and whatever it displaced set down if it found no room where
 /// the item came from.
-pub fn equip(inventory: &mut Inventory, id: ItemId, slot: Slot) -> Result<Vec<FloorChange>, Refusal> {
+pub fn equip(
+    inventory: &mut Inventory,
+    id: ItemId,
+    slot: Slot,
+) -> Result<Vec<FloorChange>, Refusal> {
     let lying = inventory.location(id) == Some(Location::Loose);
     let displaced = inventory.equip(id, slot)?;
-    let mut changes: Vec<FloorChange> = lying.then_some(FloorChange::Lifted(id)).into_iter().collect();
+    let mut changes: Vec<FloorChange> = lying
+        .then_some(FloorChange::Lifted(id))
+        .into_iter()
+        .collect();
     if let Some((old, Displaced::Underfoot)) = displaced {
         changes.push(FloorChange::SetDown(old, 0.0));
     }
@@ -736,14 +935,20 @@ impl FloorEquip {
     /// The line the toast shows for it: what is now worn or held, and where what it displaced
     /// went.
     pub fn message(&self, inventory: &Inventory, id: ItemId) -> String {
-        let title = |id| inventory.item(id).map_or_else(String::new, |item| item.title().to_string());
+        let title = |id| {
+            inventory
+                .item(id)
+                .map_or_else(String::new, |item| item.title().to_string())
+        };
         let mut line = match self.slot {
             Slot::Mainhand | Slot::Offhand => format!("Holding {}.", title(id)),
             Slot::Hip => format!("{} hangs from the belt.", title(id)),
             _ => format!("Wearing {}.", title(id)),
         };
         match self.displaced {
-            Some((old, Some(bag))) => line += &format!(" {} went into the {}.", title(old), title(bag)),
+            Some((old, Some(bag))) => {
+                line += &format!(" {} went into the {}.", title(old), title(bag))
+            }
             Some((old, None)) => line += &format!(" {} was set down.", title(old)),
             None => {}
         }
@@ -758,14 +963,25 @@ impl FloorEquip {
 /// displaces is stowed in a carried bag if one has room, or else set down where `id` lay.
 /// Equipping from the floor without the screen is the user's call; where the displaced item
 /// goes is this build's own rule.
-pub fn equip_from_floor(inventory: &mut Inventory, id: ItemId, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
+pub fn equip_from_floor(
+    inventory: &mut Inventory,
+    id: ItemId,
+    at: Vec2,
+    yaw: f32,
+) -> Result<FloorEquip, Refusal> {
     let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable)?;
     equip_from_floor_in(inventory, id, slot, at, yaw)
 }
 
 /// [`equip_from_floor`] into `slot` rather than the one it is made for: Hang at hip sends a
 /// lantern to the hip ([`crate::interact::Verb::HangAtHip`]).
-pub fn equip_from_floor_in(inventory: &mut Inventory, id: ItemId, slot: Slot, at: Vec2, yaw: f32) -> Result<FloorEquip, Refusal> {
+pub fn equip_from_floor_in(
+    inventory: &mut Inventory,
+    id: ItemId,
+    slot: Slot,
+    at: Vec2,
+    yaw: f32,
+) -> Result<FloorEquip, Refusal> {
     let mut changes = equip(inventory, id, slot)?;
     let slot = match inventory.location(id) {
         Some(Location::Worn(worn)) => worn,
@@ -784,7 +1000,11 @@ pub fn equip_from_floor_in(inventory: &mut Inventory, id: ItemId, slot: Slot, at
         }
     }
     changes.retain(|change| !matches!(change, FloorChange::SetDown(..)));
-    Ok(FloorEquip { slot, displaced, changes })
+    Ok(FloorEquip {
+        slot,
+        displaced,
+        changes,
+    })
 }
 
 /// A double-click on `id` (the plate's `quick`): something worn is taken off and stowed, or set
@@ -816,16 +1036,26 @@ pub fn quick(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, 
 /// Empties purse `id` into the delver's coin purse ([`Inventory::coins`]) and forgets it,
 /// wherever it is: in a pack, in a chest, or lying in the level, which it is lifted from.
 pub fn open_purse(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
-    let coins = inventory.item(id).and_then(|i| i.coins).ok_or(Refusal::Unknown)?;
+    let coins = inventory
+        .item(id)
+        .and_then(|i| i.coins)
+        .ok_or(Refusal::Unknown)?;
     let lying = inventory.location(id) == Some(Location::Loose);
     inventory.add_coins(coins);
     inventory.forget(id);
-    Ok(lying.then_some(FloorChange::Lifted(id)).into_iter().collect())
+    Ok(lying
+        .then_some(FloorChange::Lifted(id))
+        .into_iter()
+        .collect())
 }
 
 /// What the toast says when a purse holding `coins` is opened.
 pub fn opened_line(coins: fb_items::Coins) -> String {
-    if coins.is_empty() { "The purse is empty.".to_string() } else { format!("You empty the purse: {}.", coins.short()) }
+    if coins.is_empty() {
+        "The purse is empty.".to_string()
+    } else {
+        format!("You empty the purse: {}.", coins.short())
+    }
 }
 
 /// Takes `id` into the carried grids if it is not carried: lying underfoot it is picked up
@@ -834,8 +1064,12 @@ pub fn opened_line(coins: fb_items::Coins) -> String {
 /// carried or worn stays where it is. Refused (no room), it stays where it was.
 pub fn take_up(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>, Refusal> {
     match inventory.location(id) {
-        Some(Location::Loose) => inventory.pick_up(id).map(|()| vec![FloorChange::Lifted(id)]),
-        Some(Location::In { .. }) if !inventory.is_carried(id) => inventory.stow(id).map(|_| vec![]),
+        Some(Location::Loose) => inventory
+            .pick_up(id)
+            .map(|()| vec![FloorChange::Lifted(id)]),
+        Some(Location::In { .. }) if !inventory.is_carried(id) => {
+            inventory.stow(id).map(|_| vec![])
+        }
         Some(_) => Ok(vec![]),
         None => Err(Refusal::Unknown),
     }
@@ -844,7 +1078,12 @@ pub fn take_up(inventory: &mut Inventory, id: ItemId) -> Result<Vec<FloorChange>
 /// Lets `drag` go at `target`, and says what that changes in the level: an item lying there
 /// put into a bag is lifted from it; anything let go on the underfoot grid or the level is
 /// set down, to the side the underfoot column says (`underfoot_cols` wide).
-pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot_cols: u8) -> Result<Vec<FloorChange>, Refusal> {
+pub fn drop_at(
+    inventory: &mut Inventory,
+    drag: &Drag,
+    target: Target,
+    underfoot_cols: u8,
+) -> Result<Vec<FloorChange>, Refusal> {
     let lying = inventory.location(drag.id) == Some(Location::Loose);
     let set_down = |inventory: &mut Inventory, aside: f32| {
         if lying {
@@ -854,14 +1093,30 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
         vec![FloorChange::SetDown(drag.id, aside)]
     };
     match target {
-        Target::Cell { view: GridView::Container(container), cell } => {
+        Target::Cell {
+            view: GridView::Container(container),
+            cell,
+        } => {
             let at = landing(inventory, drag, container, cell)?;
             inventory.put(drag.id, container, at)?;
-            Ok(lying.then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
+            Ok(lying
+                .then_some(FloorChange::Lifted(drag.id))
+                .into_iter()
+                .collect())
         }
         Target::Slot(slot) => equip(inventory, drag.id, slot),
-        Target::Doll => equip(inventory, drag.id, inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?),
-        Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
+        Target::Doll => equip(
+            inventory,
+            drag.id,
+            inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?,
+        ),
+        Target::Cell {
+            view: GridView::Underfoot,
+            cell,
+        } => Ok(set_down(
+            inventory,
+            underfoot::aside_for_column(cell.x, underfoot_cols),
+        )),
         Target::Level => Ok(set_down(inventory, 0.0)),
         Target::Page | Target::Quickslot(_) => Ok(vec![]),
     }
@@ -870,7 +1125,13 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
 /// The grid cell under `point`, for a grid of `cell`-pixel cells (`cell_size`,
 /// [`crate::tuning::InterfaceTuning`]) drawn at `rect`.
 pub fn cell_under(rect: Rect, point: Vec2, cell: f32) -> IVec2 {
-    let (x, y) = grid::cell_at((point.x - rect.min.x - LINE_PX * 0.5, point.y - rect.min.y - LINE_PX * 0.5), cell);
+    let (x, y) = grid::cell_at(
+        (
+            point.x - rect.min.x - LINE_PX * 0.5,
+            point.y - rect.min.y - LINE_PX * 0.5,
+        ),
+        cell,
+    );
     IVec2::new(x, y)
 }
 
@@ -889,10 +1150,25 @@ pub(crate) fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
-    (tuning, scrolled, barter, shelf_scrolled, record, abyss): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::travel::Abyss>>),
+    (tuning, scrolled, barter, shelf_scrolled, record, abyss): (
+        Res<Tuning>,
+        Res<ColumnScroll>,
+        Res<crate::barter::Barter>,
+        Res<ShelfScrolled>,
+        Option<Res<crate::record::WorldRecord>>,
+        Option<Res<crate::travel::Abyss>>,
+    ),
     rules: Option<Res<crate::rules::GameRules>>,
     keymap: Option<Res<Keymap>>,
-    players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
+    players: Query<
+        (
+            &crate::character::DelverNeeds,
+            &crate::exhaustion::Exhaustion,
+            Option<&crate::character::DelverStamina>,
+            Option<&crate::character::DelverMana>,
+        ),
+        With<crate::play::Player>,
+    >,
     mut icons: Icons,
 ) {
     let existing = screens.iter().next();
@@ -902,17 +1178,35 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed())) && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
+    if existing.is_some()
+        && !inventory.is_changed()
+        && !underfoot.is_changed()
+        && !showing.is_changed()
+        && !tab.is_changed()
+        && !character.is_changed()
+        && !tuning.is_changed()
+        && !barter.is_changed()
+        && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed()))
+        && !rules.as_ref().is_some_and(|r| r.is_changed())
+        && !keymap.as_ref().is_some_and(|k| k.is_changed())
+    {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
-    let Some(camera) = cameras.iter().next() else { return };
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
     if let Some(screen) = existing {
         commands.entity(screen).despawn();
     }
     let fallback = Keymap::default();
     let keymap = keymap.as_deref().unwrap_or(&fallback);
-    let screen = ScreenLayout { inventory: &inventory, barter: &barter, fonts: &fonts, cell: tuning.interface.cell_size };
+    let screen = ScreenLayout {
+        inventory: &inventory,
+        barter: &barter,
+        fonts: &fonts,
+        cell: tuning.interface.cell_size,
+    };
     commands
         .spawn((
             Name::new("Inventory"),
@@ -1070,7 +1364,11 @@ pub fn cell_tag(price: card::Price) -> Option<(String, Color, Color)> {
     match price {
         card::Price::Costs { price, afford, .. } => {
             let (text, metal) = crate::ui::coin_tag(price.total_copper());
-            Some((text, if afford { metal } else { BAD }, crate::ui::FRAME_GOLD))
+            Some((
+                text,
+                if afford { metal } else { BAD },
+                crate::ui::FRAME_GOLD,
+            ))
         }
         card::Price::SellsFor { price, .. } => {
             let (text, metal) = crate::ui::coin_tag(price.total_copper());
@@ -1093,54 +1391,138 @@ struct ScreenLayout<'a> {
 impl ScreenLayout<'_> {
     /// The floor within reach, as a paler grid under its name, always there to drop things on;
     /// bare, its empty cells and a line under the name that says so.
-    fn underfoot(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot) {
-        parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(36), ..default() }).with_children(|head| {
-                head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
-                if underfoot.grid.is_empty() {
-                    head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
-                }
+    fn underfoot(
+        &self,
+        parent: &mut ChildSpawnerCommands,
+        icons: &mut Icons,
+        underfoot: &Underfoot,
+    ) {
+        parent
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                ..default()
+            })
+            .with_children(|column| {
+                column
+                    .spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: px(10),
+                        height: px(36),
+                        ..default()
+                    })
+                    .with_children(|head| {
+                        head.spawn((
+                            Text::new("underfoot"),
+                            UiFonts::style(&self.fonts.display, 18.0, INK),
+                        ));
+                        if underfoot.grid.is_empty() {
+                            head.spawn((
+                                Text::new("Bare stone. Drop things here."),
+                                UiFonts::style(&self.fonts.body, 14.0, MUTED),
+                            ));
+                        }
+                    });
+                self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
             });
-            self.grid(column, icons, GridView::Underfoot, &underfoot.grid, true);
-        });
     }
 
     /// A container's grid under its name, with a small picture of it.
-    fn container(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, view: GridView, suffix: &str) {
+    fn container(
+        &self,
+        parent: &mut ChildSpawnerCommands,
+        icons: &mut Icons,
+        id: ItemId,
+        view: GridView,
+        suffix: &str,
+    ) {
         self.container_in(parent, icons, id, view, suffix, None);
     }
 
     /// [`ScreenLayout::container`], with the grid in a scroll area of its own at `scroll` pixels
     /// down if that is given (the trader's shelf).
-    fn container_in(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, view: GridView, suffix: &str, scroll: Option<f32>) {
-        let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else { return };
-        let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
-        parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-            column.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), height: px(36), ..default() }).with_children(|head| {
-                let size = icon::icon_size(item, false).as_vec2();
-                let size = size * (34.0 / size.max_element());
-                icons.spawn(head, item, false, Node { width: px(size.x), height: px(size.y), ..default() }, size.min_element().max(14.0));
-                head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 18.0, INK)));
-            });
-            match scroll {
-                None => self.grid(column, icons, view, grid, false),
-                Some(y) => {
-                    let size = grid_size(grid, self.cell);
-                    column
-                        .spawn((
-                            ShelfScroll,
-                            ScrollPosition(Vec2::new(0.0, y)),
-                            Node { width: px(size.x), height: px(shelf_view_height(size.y)), flex_shrink: 0.0, overflow: Overflow::scroll_y(), ..default() },
-                        ))
-                        .with_children(|area| self.grid(area, icons, view, grid, false));
+    fn container_in(
+        &self,
+        parent: &mut ChildSpawnerCommands,
+        icons: &mut Icons,
+        id: ItemId,
+        view: GridView,
+        suffix: &str,
+        scroll: Option<f32>,
+    ) {
+        let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else {
+            return;
+        };
+        let label = item
+            .profile
+            .holds
+            .as_ref()
+            .map_or_else(|| item.name.clone(), |h| h.label.clone());
+        parent
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                ..default()
+            })
+            .with_children(|column| {
+                column
+                    .spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: px(8),
+                        height: px(36),
+                        ..default()
+                    })
+                    .with_children(|head| {
+                        let size = icon::icon_size(item, false).as_vec2();
+                        let size = size * (34.0 / size.max_element());
+                        icons.spawn(
+                            head,
+                            item,
+                            false,
+                            Node {
+                                width: px(size.x),
+                                height: px(size.y),
+                                ..default()
+                            },
+                            size.min_element().max(14.0),
+                        );
+                        head.spawn((
+                            Text::new(format!("{label}{suffix}")),
+                            UiFonts::style(&self.fonts.display, 18.0, INK),
+                        ));
+                    });
+                match scroll {
+                    None => self.grid(column, icons, view, grid, false),
+                    Some(y) => {
+                        let size = grid_size(grid, self.cell);
+                        column
+                            .spawn((
+                                ShelfScroll,
+                                ScrollPosition(Vec2::new(0.0, y)),
+                                Node {
+                                    width: px(size.x),
+                                    height: px(shelf_view_height(size.y)),
+                                    flex_shrink: 0.0,
+                                    overflow: Overflow::scroll_y(),
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|area| self.grid(area, icons, view, grid, false));
+                    }
                 }
-            }
-        });
+            });
     }
 
     /// A grid of cells with its items drawn at their footprints. `faded` draws the cells paler,
     /// as for what lies underfoot.
-    fn grid(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, view: GridView, grid: &Grid<ItemId>, faded: bool) {
+    fn grid(
+        &self,
+        parent: &mut ChildSpawnerCommands,
+        icons: &mut Icons,
+        view: GridView,
+        grid: &Grid<ItemId>,
+        faded: bool,
+    ) {
         let size = grid_size(grid, self.cell);
         let cell = self.cell;
         parent
@@ -1158,8 +1540,15 @@ impl ScreenLayout<'_> {
                 let cell_colour = if faded { CELL.mix(&BG, 0.5) } else { CELL };
                 for y in 0..grid.rows {
                     for x in 0..grid.cols {
-                        let round = |at_x: bool, at_y: bool| CornerRadius::from(if at_x && at_y { px(GRID_RADIUS_PX - LINE_PX) } else { px(0) });
-                        let (left, top, right, bottom) = (x == 0, y == 0, x + 1 == grid.cols, y + 1 == grid.rows);
+                        let round = |at_x: bool, at_y: bool| {
+                            CornerRadius::from(if at_x && at_y {
+                                px(GRID_RADIUS_PX - LINE_PX)
+                            } else {
+                                px(0)
+                            })
+                        };
+                        let (left, top, right, bottom) =
+                            (x == 0, y == 0, x + 1 == grid.cols, y + 1 == grid.rows);
                         cells.spawn((
                             Node {
                                 position_type: PositionType::Absolute,
@@ -1180,7 +1569,9 @@ impl ScreenLayout<'_> {
                     }
                 }
                 for entry in grid.entries() {
-                    let Some(item) = self.inventory.item(entry.id) else { continue };
+                    let Some(item) = self.inventory.item(entry.id) else {
+                        continue;
+                    };
                     cells
                         .spawn((
                             ItemView { id: entry.id },
@@ -1197,8 +1588,21 @@ impl ScreenLayout<'_> {
                             BackgroundColor(Color::NONE),
                         ))
                         .with_children(|slot| {
-                            let glyph = (entry.size.cols.min(entry.size.rows) as f32 * cell * 0.5).min(40.0);
-                            icons.spawn(slot, item, entry.at.turned, Node { width: percent(100), height: percent(100), ..default() }, glyph).insert(ItemIcon);
+                            let glyph = (entry.size.cols.min(entry.size.rows) as f32 * cell * 0.5)
+                                .min(40.0);
+                            icons
+                                .spawn(
+                                    slot,
+                                    item,
+                                    entry.at.turned,
+                                    Node {
+                                        width: percent(100),
+                                        height: percent(100),
+                                        ..default()
+                                    },
+                                    glyph,
+                                )
+                                .insert(ItemIcon);
                             if item.profile.kind == Kind::Gear && item.rarity != Rarity::Common {
                                 slot.spawn((
                                     Node {
@@ -1213,7 +1617,9 @@ impl ScreenLayout<'_> {
                                     BackgroundColor(rarity_color(item.rarity)),
                                 ));
                             }
-                            if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {
+                            if let Some((text, ink, edge)) =
+                                self.barter.tag(self.inventory, entry.id).and_then(cell_tag)
+                            {
                                 slot.spawn((
                                     PriceTag,
                                     Node {
@@ -1228,7 +1634,10 @@ impl ScreenLayout<'_> {
                                     BackgroundColor(BG.with_alpha(0.88)),
                                     BorderColor::all(edge),
                                 ))
-                                .with_child((Text::new(text), UiFonts::style(&self.fonts.mono_bold, 11.0, ink)));
+                                .with_child((
+                                    Text::new(text),
+                                    UiFonts::style(&self.fonts.mono_bold, 11.0, ink),
+                                ));
                             }
                         });
                 }
@@ -1254,10 +1663,16 @@ fn target_under(
     shelf: Option<(GridView, Rect)>,
     cell: f32,
 ) -> Target {
-    if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+    if let Some((slot, ..)) = drops
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    {
         return Target::Quickslot(slot.0);
     }
-    if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+    if let Some((slot, ..)) = slots
+        .iter()
+        .find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    {
         return Target::Slot(slot.0);
     }
     // The grids' rectangles follow the scroll (`UiGlobalTransform` includes it), but a grid
@@ -1266,7 +1681,10 @@ fn target_under(
         let rect = node_rect(node, transform);
         let in_shelf = shelf.is_none_or(|(shelved, area)| shelved != *view || area.contains(point));
         if rect.contains(point) && column.is_none_or(|c| c.contains(point)) && in_shelf {
-            return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
+            return Target::Cell {
+                view: *view,
+                cell: cell_under(rect, point, cell),
+            };
         }
     }
     if doll.is_some_and(|rect| rect.contains(point)) {
@@ -1282,7 +1700,10 @@ fn target_under(
 fn reset_scroll_on_tab(tab: Res<SheetTab>, mut remembered: ResMut<ColumnScroll>) {
     if tab.is_changed() {
         // `FB_INVENTORY_SCROLL=<px>` starts the page scrolled that far, for captures.
-        let start = std::env::var("FB_INVENTORY_SCROLL").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+        let start = std::env::var("FB_INVENTORY_SCROLL")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(0.0);
         remembered.set_if_neq(ColumnScroll(start));
     }
 }
@@ -1298,19 +1719,26 @@ fn scroll_column(
     time: Res<Time<Real>>,
     dragging: Res<Dragging>,
     mut remembered: ResMut<ColumnScroll>,
-    mut columns: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
+    mut columns: Query<
+        (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
+        With<ScrollColumn>,
+    >,
     shelf: Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
 ) {
     if !open.is(Screen::Inventory) {
         remembered.set_if_neq(ColumnScroll(0.0));
         return;
     }
-    let Ok((mut position, node, transform)) = columns.single_mut() else { return };
+    let Ok((mut position, node, transform)) = columns.single_mut() else {
+        return;
+    };
     // Not laid out yet: leave the remembered place alone.
     if node.size().y <= 0.0 {
         return;
     }
-    let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+    let max = ((node.content_size() - node.size()) * node.inverse_scale_factor)
+        .y
+        .max(0.0);
     let rect = node_rect(node, transform);
     let point = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     let mut by = 0.0;
@@ -1332,7 +1760,9 @@ fn scroll_column(
             // Deeper into the edge zone, or past the edge, scrolls faster.
             let top = (EDGE_SCROLL_PX - (point.y - rect.min.y)) / EDGE_SCROLL_PX;
             let bottom = (EDGE_SCROLL_PX - (rect.max.y - point.y)) / EDGE_SCROLL_PX;
-            by += (bottom.clamp(0.0, 1.0) - top.clamp(0.0, 1.0)) * EDGE_SCROLL_SPEED * time.delta_secs();
+            by += (bottom.clamp(0.0, 1.0) - top.clamp(0.0, 1.0))
+                * EDGE_SCROLL_SPEED
+                * time.delta_secs();
         }
     }
     let to = (position.y + by).clamp(0.0, max);
@@ -1359,11 +1789,15 @@ fn scroll_shelf(
         remembered.set_if_neq(ShelfScrolled(0.0));
         return;
     }
-    let Ok((mut position, node, transform)) = areas.single_mut() else { return };
+    let Ok((mut position, node, transform)) = areas.single_mut() else {
+        return;
+    };
     if node.size().y <= 0.0 {
         return;
     }
-    let max = ((node.content_size() - node.size()) * node.inverse_scale_factor).y.max(0.0);
+    let max = ((node.content_size() - node.size()) * node.inverse_scale_factor)
+        .y
+        .max(0.0);
     let rect = node_rect(node, transform);
     let point = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     let mut by = 0.0;
@@ -1381,7 +1815,9 @@ fn scroll_shelf(
         if dragging.0.is_some_and(|d| d.active) {
             let top = (EDGE_SCROLL_PX - (point.y - rect.min.y)) / EDGE_SCROLL_PX;
             let bottom = (EDGE_SCROLL_PX - (rect.max.y - point.y)) / EDGE_SCROLL_PX;
-            by += (bottom.clamp(0.0, 1.0) - top.clamp(0.0, 1.0)) * EDGE_SCROLL_SPEED * time.delta_secs();
+            by += (bottom.clamp(0.0, 1.0) - top.clamp(0.0, 1.0))
+                * EDGE_SCROLL_SPEED
+                * time.delta_secs();
         }
     }
     let to = (position.y + by).clamp(0.0, max);
@@ -1392,7 +1828,11 @@ fn scroll_shelf(
 }
 
 /// The grid a view shows.
-fn grid_of<'a>(inventory: &'a Inventory, underfoot: &'a Underfoot, view: GridView) -> Option<&'a Grid<ItemId>> {
+fn grid_of<'a>(
+    inventory: &'a Inventory,
+    underfoot: &'a Underfoot,
+    view: GridView,
+) -> Option<&'a Grid<ItemId>> {
     match view {
         GridView::Container(id) => inventory.grid(id),
         GridView::Underfoot => Some(&underfoot.grid),
@@ -1415,7 +1855,12 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    (time, tuning, ui_scale, mut barter): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>),
+    (time, tuning, ui_scale, mut barter): (
+        Res<Time<Real>>,
+        Res<Tuning>,
+        Option<Res<UiScale>>,
+        ResMut<crate::barter::Barter>,
+    ),
     (drops, mut quickslots, columns, shelf_areas): (
         Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
         ResMut<Quickslots>,
@@ -1435,27 +1880,67 @@ fn drag_items(
     let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t));
     let column = columns.iter().next().map(|(n, t)| node_rect(n, t));
     // The shelf's grid is clipped to its own scroll area.
-    let shelf = barter.session.as_ref().zip(shelf_areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
-    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, shelf, cell_px);
+    let shelf = barter
+        .session
+        .as_ref()
+        .zip(shelf_areas.iter().next())
+        .map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
+    let target = target_under(
+        point, &drops, &grids, &slots, doll, ledger, column, shelf, cell_px,
+    );
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
     let over: Option<(Rect, Drag)> = match target {
-        Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).and_then(|entry| {
-            let (_, node, transform) = grids.iter().find(|(v, ..)| **v == view)?;
-            let min = node_rect(node, transform).min + Vec2::new(entry.at.x as f32, entry.at.y as f32) * cell_px + LINE_PX;
-            let rect = Rect::from_corners(min, min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * cell_px - LINE_PX);
-            let grab = cell - IVec2::new(entry.at.x as i32, entry.at.y as i32);
-            Some((rect, Drag { id: entry.id, grab, size: entry.size, turned: entry.at.turned, press: point, active: false, target: None }))
-        }),
+        Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view)
+            .and_then(|g| g.at_cell(cell.x, cell.y).copied())
+            .and_then(|entry| {
+                let (_, node, transform) = grids.iter().find(|(v, ..)| **v == view)?;
+                let min = node_rect(node, transform).min
+                    + Vec2::new(entry.at.x as f32, entry.at.y as f32) * cell_px
+                    + LINE_PX;
+                let rect = Rect::from_corners(
+                    min,
+                    min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * cell_px
+                        - LINE_PX,
+                );
+                let grab = cell - IVec2::new(entry.at.x as i32, entry.at.y as i32);
+                Some((
+                    rect,
+                    Drag {
+                        id: entry.id,
+                        grab,
+                        size: entry.size,
+                        turned: entry.at.turned,
+                        press: point,
+                        active: false,
+                        target: None,
+                    },
+                ))
+            }),
         Target::Slot(slot) => inventory.worn(slot).and_then(|id| {
             let (_, node, transform) = slots.iter().find(|(s, ..)| s.0 == slot)?;
             let size = inventory.footprint(id)?;
-            Some((node_rect(node, transform), Drag { id, grab: IVec2::ZERO, size, turned: false, press: point, active: false, target: None }))
+            Some((
+                node_rect(node, transform),
+                Drag {
+                    id,
+                    grab: IVec2::ZERO,
+                    size,
+                    turned: false,
+                    press: point,
+                    active: false,
+                    target: None,
+                },
+            ))
         }),
         _ => None,
     };
-    let now_over = if dragging.0.is_some_and(|d| d.active) { None } else { over.map(|(rect, d)| (d.id, rect)) };
+    let now_over = if dragging.0.is_some_and(|d| d.active) {
+        None
+    } else {
+        over.map(|(rect, d)| (d.id, rect))
+    };
     hovered.set_if_neq(Hovered(now_over));
 
     if input.just_pressed(Action::DragItem)
@@ -1463,14 +1948,23 @@ fn drag_items(
     {
         dragging.0 = Some(drag);
     }
-    let Some(drag) = dragging.0.as_mut() else { return };
+    let Some(drag) = dragging.0.as_mut() else {
+        return;
+    };
     if !drag.active && point.distance(drag.press) >= DRAG_START_PX {
         drag.active = true;
     }
     if drag.active && input.just_pressed(Action::TurnItem) {
         drag.turn();
     }
-    drag.target = drag.active.then(|| (target, barter.check(&inventory, drag, target).unwrap_or_else(|| check_drop(&inventory, drag, target))));
+    drag.target = drag.active.then(|| {
+        (
+            target,
+            barter
+                .check(&inventory, drag, target)
+                .unwrap_or_else(|| check_drop(&inventory, drag, target)),
+        )
+    });
     if input.just_released(Action::DragItem) {
         let drag = dragging.0.take().expect("a drag");
         let now = time.elapsed_secs();
@@ -1478,15 +1972,29 @@ fn drag_items(
         if drag.active
             && let Target::Quickslot(slot) = target
         {
-            let said = crate::quickslots::bind_dropped(&mut quickslots, &inventory, drag.id, slot).unwrap_or_else(|refusal| refusal.reason().to_string());
+            let said = crate::quickslots::bind_dropped(&mut quickslots, &inventory, drag.id, slot)
+                .unwrap_or_else(|refusal| refusal.reason().to_string());
             toast.say(said, now);
             return;
         }
         let purse = inventory.item(drag.id).and_then(|i| i.coins);
         let outcome = if drag.active {
-            (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
-        } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
-            (if barter.active() { barter.quick(&mut inventory, drag.id) } else { None }).unwrap_or_else(|| quick(&mut inventory, drag.id))
+            (if barter.active() {
+                barter.drop_at(&mut inventory, &drag, target)
+            } else {
+                None
+            })
+            .unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
+        } else if last_click
+            .take()
+            .is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS)
+        {
+            (if barter.active() {
+                barter.quick(&mut inventory, drag.id)
+            } else {
+                None
+            })
+            .unwrap_or_else(|| quick(&mut inventory, drag.id))
         } else {
             *last_click = Some((drag.id, now));
             return;
@@ -1533,7 +2041,12 @@ fn debug_hover(
         _ => (None, spec.as_str()),
     };
     let index: usize = number.parse().unwrap_or(0);
-    let nth_in = |container: Option<ItemId>| container.and_then(|c| inventory.grid(c)).and_then(|g| g.entries().get(index)).map(|e| e.id);
+    let nth_in = |container: Option<ItemId>| {
+        container
+            .and_then(|c| inventory.grid(c))
+            .and_then(|g| g.entries().get(index))
+            .map(|e| e.id)
+    };
     let id = match place {
         Some('u') => underfoot.grid.entries().get(index).map(|e| e.id),
         Some(_) => nth_in(open.0),
@@ -1559,8 +2072,19 @@ fn show_drag(
     inventory: Res<Inventory>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     grids: Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
-    mut ghosts: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<DragGhost>, Without<DropHint>)>,
-    mut hints: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor, &mut Visibility), (With<DropHint>, Without<DragGhost>)>,
+    mut ghosts: Query<
+        (&mut Node, &mut ImageNode, &mut Visibility),
+        (With<DragGhost>, Without<DropHint>),
+    >,
+    mut hints: Query<
+        (
+            &mut Node,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &mut Visibility,
+        ),
+        (With<DropHint>, Without<DragGhost>),
+    >,
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
     mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
@@ -1571,7 +2095,9 @@ fn show_drag(
     let drag = dragging.0.filter(|d| d.active);
     let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     for (mut node, mut image, mut visibility) in &mut ghosts {
-        let (Some(drag), Some(point), Some(item)) = (drag, cursor, drag.and_then(|d| inventory.item(d.id))) else {
+        let (Some(drag), Some(point), Some(item)) =
+            (drag, cursor, drag.and_then(|d| inventory.item(d.id)))
+        else {
             *visibility = Visibility::Hidden;
             continue;
         };
@@ -1587,10 +2113,15 @@ fn show_drag(
         *visibility = Visibility::Inherited;
     }
     for (mut node, mut background, mut border, mut visibility) in &mut hints {
-        let shown = drag.and_then(|d| d.target.map(|t| (d, t))).and_then(|(d, (target, fits))| match target {
-            Target::Cell { view, cell } => grids.iter().find(|(v, ..)| **v == view).map(|(_, n, t)| (d, node_rect(n, t), cell, fits)),
-            _ => None,
-        });
+        let shown = drag
+            .and_then(|d| d.target.map(|t| (d, t)))
+            .and_then(|(d, (target, fits))| match target {
+                Target::Cell { view, cell } => grids
+                    .iter()
+                    .find(|(v, ..)| **v == view)
+                    .map(|(_, n, t)| (d, node_rect(n, t), cell, fits)),
+                _ => None,
+            });
         let Some((drag, rect, cell, fits)) = shown else {
             *visibility = Visibility::Hidden;
             continue;
@@ -1609,11 +2140,17 @@ fn show_drag(
     // A slot under a dragged item shows whether it may go there, green or red, as the
     // plate's `drop-ok` and `drop-bad`; otherwise filled slots are cream and empty ones tan.
     for (slot, mut border) in &mut slot_borders {
-        let hint = drag.and_then(|d| d.target).and_then(|(target, fits)| match target {
-            Target::Slot(s) if s == slot.0 => Some(if fits.is_ok() { OK } else { BAD }),
-            _ => None,
+        let hint = drag
+            .and_then(|d| d.target)
+            .and_then(|(target, fits)| match target {
+                Target::Slot(s) if s == slot.0 => Some(if fits.is_ok() { OK } else { BAD }),
+                _ => None,
+            });
+        let colour = hint.unwrap_or(if inventory.worn(slot.0).is_some() {
+            BRIGHT
+        } else {
+            LINE
         });
-        let colour = hint.unwrap_or(if inventory.worn(slot.0).is_some() { BRIGHT } else { LINE });
         if border.top != colour {
             *border = BorderColor::all(colour);
         }
@@ -1621,7 +2158,11 @@ fn show_drag(
     for (view, mut background, children) in &mut views {
         let dragged = drag.is_some_and(|d| d.id == view.id);
         let over = hovered.0.is_some_and(|(id, _)| id == view.id);
-        let wanted = if over { BRIGHT.with_alpha(0.1) } else { Color::NONE };
+        let wanted = if over {
+            BRIGHT.with_alpha(0.1)
+        } else {
+            Color::NONE
+        };
         if background.0 != wanted {
             background.0 = wanted;
         }
@@ -1636,8 +2177,16 @@ fn show_drag(
     }
 }
 
-fn show_toast(toast: Res<Toast>, time: Res<Time<Real>>, mut texts: Query<&mut Text, With<ToastText>>) {
-    let shown = if time.elapsed_secs() < toast.until { toast.text.as_str() } else { "" };
+fn show_toast(
+    toast: Res<Toast>,
+    time: Res<Time<Real>>,
+    mut texts: Query<&mut Text, With<ToastText>>,
+) {
+    let shown = if time.elapsed_secs() < toast.until {
+        toast.text.as_str()
+    } else {
+        ""
+    };
     for mut text in &mut texts {
         if text.0 != shown {
             text.0 = shown.to_string();
@@ -1651,9 +2200,17 @@ mod tests {
     fn the_help_names_the_bound_keys() {
         use crate::keymap::Input;
         let help = help_text(&Keymap::default());
-        assert!(help.contains("Right click while dragging") && help.contains("the keys 1 to 0 use it"), "{help}");
+        assert!(
+            help.contains("Right click while dragging") && help.contains("the keys 1 to 0 use it"),
+            "{help}"
+        );
         let mut keymap = Keymap::default();
-        keymap.bindings.iter_mut().find(|b| b.action == Action::TurnItem).unwrap().inputs = vec![Input::Key(KeyCode::KeyR)];
+        keymap
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::TurnItem)
+            .unwrap()
+            .inputs = vec![Input::Key(KeyCode::KeyR)];
         assert!(help_text(&keymap).contains("R while dragging"));
     }
 
@@ -1665,30 +2222,60 @@ mod tests {
     #[test]
     fn a_delve_begins_as_the_chosen_delver_or_rolls_one() {
         let mut app = App::new();
-        app.init_resource::<Character>().add_systems(Update, roll_character);
+        app.init_resource::<Character>()
+            .add_systems(Update, roll_character);
         app.update();
         let rolled = app.world().resource::<Character>().clone();
         assert_eq!(rolled, character_for(kit_seed(None, 0xc4a7)));
-        let chosen = Character { name: "Brakka".into(), folk: fb_body::Folk::Dwarf, class: crate::character::Class::Cleric, ..Character::roll(11) };
+        let chosen = Character {
+            name: "Brakka".into(),
+            folk: fb_body::Folk::Dwarf,
+            class: crate::character::Class::Cleric,
+            ..Character::roll(11)
+        };
         app.insert_resource(ChosenDelver(chosen.clone()));
         app.update();
         assert_eq!(*app.world().resource::<Character>(), chosen);
-        assert!(app.world().get_resource::<ChosenDelver>().is_none(), "the delve takes it up");
+        assert!(
+            app.world().get_resource::<ChosenDelver>().is_none(),
+            "the delve takes it up"
+        );
     }
 
     #[test]
     fn the_delver_starts_with_clothes_a_belt_and_a_burning_torch() {
         let mut app = App::new();
-        app.init_resource::<Inventory>().init_resource::<Character>().add_systems(Update, give_starting_kit);
+        app.init_resource::<Inventory>()
+            .init_resource::<Character>()
+            .add_systems(Update, give_starting_kit);
         app.update();
         let inventory = app.world().resource::<Inventory>();
         // Only what is worn and held, the folk's own headwear among it: nothing in the pouch.
-        assert!(inventory.ids().all(|id| inventory.equipped().iter().any(|(slot, _)| inventory.worn(*slot) == Some(id))));
+        assert!(inventory.ids().all(|id| {
+            inventory
+                .equipped()
+                .iter()
+                .any(|(slot, _)| inventory.worn(*slot) == Some(id))
+        }));
         for base in ["Belt", "Tunic", "Trousers", "Torch"] {
-            assert!(inventory.ids().filter_map(|id| inventory.item(id)).any(|item| item.base == base), "{base}");
+            assert!(
+                inventory
+                    .ids()
+                    .filter_map(|id| inventory.item(id))
+                    .any(|item| item.base == base),
+                "{base}"
+            );
         }
-        assert!(inventory.ids().filter_map(|id| inventory.item(id)).all(|item| item.rarity == Rarity::Common));
-        let torch = inventory.worn(Slot::Offhand).and_then(|id| inventory.item(id)).expect("a torch in the off hand");
+        assert!(
+            inventory
+                .ids()
+                .filter_map(|id| inventory.item(id))
+                .all(|item| item.rarity == Rarity::Common)
+        );
+        let torch = inventory
+            .worn(Slot::Offhand)
+            .and_then(|id| inventory.item(id))
+            .expect("a torch in the off hand");
         assert!(crate::carry::item_light(&torch.shape).is_some());
     }
 
@@ -1703,7 +2290,10 @@ mod tests {
         // At 1920 by 1080 the screen is at its own size: a 1 by 3 dagger is 72 by 216.
         let dagger = Grid::<ItemId>::new(1, 3);
         assert_eq!(interface.scale(Vec2::new(1920.0, 1080.0)), 1.0);
-        assert_eq!(grid_size(&dagger, interface.cell_px(Vec2::new(1920.0, 1080.0))) - LINE_PX, Vec2::new(72.0, 216.0));
+        assert_eq!(
+            grid_size(&dagger, interface.cell_px(Vec2::new(1920.0, 1080.0))) - LINE_PX,
+            Vec2::new(72.0, 216.0)
+        );
         // At 720 lines it is two thirds the size; never under the 36 floor.
         assert!((interface.cell_px(Vec2::new(1280.0, 720.0)) - 48.0).abs() < 1e-4);
         assert!((interface.cell_px(Vec2::new(640.0, 360.0)) - 36.0).abs() < 1e-4);
@@ -1718,12 +2308,20 @@ mod tests {
         assert_eq!(hold_spec("Bow"), (some("Bow"), None));
         assert_eq!(hold_spec(",Shield"), (None, some("Shield")));
         // A torch or lantern asked for is lit; a weapon is as rolled.
-        assert!(roll_held("Torch", 4).is_some_and(|t| crate::carry::item_light(&t.shape).is_some()));
-        assert_eq!(roll_held("Sword", 4).map(|s| s.shape.family()), Some(armory::Family::Sword));
+        assert!(
+            roll_held("Torch", 4).is_some_and(|t| crate::carry::item_light(&t.shape).is_some())
+        );
+        assert_eq!(
+            roll_held("Sword", 4).map(|s| s.shape.family()),
+            Some(armory::Family::Sword)
+        );
     }
 
     fn dagger() -> fb_items::Item {
-        (1..500).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|d| d.profile.footprint == Footprint { cols: 1, rows: 2 }).unwrap()
+        (1..500)
+            .filter_map(|s| fb_items::roll_item("Dagger", s))
+            .find(|d| d.profile.footprint == Footprint { cols: 1, rows: 2 })
+            .unwrap()
     }
 
     #[test]
@@ -1738,8 +2336,14 @@ mod tests {
             target: None,
         };
         drag.turn();
-        assert_eq!((drag.size, drag.turned, drag.grab), (Footprint { cols: 3, rows: 1 }, true, IVec2::new(2, 0)));
-        assert_eq!(drag.placement_at(IVec2::new(4, 1)), Some(Placement::new(2, 1, true)));
+        assert_eq!(
+            (drag.size, drag.turned, drag.grab),
+            (Footprint { cols: 3, rows: 1 }, true, IVec2::new(2, 0))
+        );
+        assert_eq!(
+            drag.placement_at(IVec2::new(4, 1)),
+            Some(Placement::new(2, 1, true))
+        );
         assert_eq!(drag.placement_at(IVec2::new(1, 1)), None);
     }
 
@@ -1753,29 +2357,96 @@ mod tests {
         let (a, b) = (inventory.add(dagger()), inventory.add(dagger()));
         inventory.put(a, pack, Placement::new(0, 0, false)).unwrap();
         inventory.put(b, pack, Placement::new(3, 0, false)).unwrap();
-        let drag = |id| Drag { id, grab: IVec2::new(0, 1), size: Footprint { cols: 1, rows: 2 }, turned: false, press: Vec2::ZERO, active: true, target: None };
+        let drag = |id| Drag {
+            id,
+            grab: IVec2::new(0, 1),
+            size: Footprint { cols: 1, rows: 2 },
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
         // Grabbed by its lower cell and let go over the belt pouch's cell (2, 1).
-        let into_belt = Target::Cell { view: GridView::Container(belt), cell: IVec2::new(2, 1) };
+        let into_belt = Target::Cell {
+            view: GridView::Container(belt),
+            cell: IVec2::new(2, 1),
+        };
         assert_eq!(drop_at(&mut inventory, &drag(a), into_belt, 6), Ok(vec![]));
-        assert_eq!(inventory.location(a), Some(Location::In { container: belt, at: Placement::new(2, 0, false) }));
+        assert_eq!(
+            inventory.location(a),
+            Some(Location::In {
+                container: belt,
+                at: Placement::new(2, 0, false)
+            })
+        );
         // Onto the other dagger: refused, and it stays where it was.
-        let onto_b = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(3, 1) };
-        assert_eq!(check_drop(&inventory, &drag(a), onto_b), Err(Refusal::NoRoom));
-        assert_eq!(drop_at(&mut inventory, &drag(a), onto_b, 6), Err(Refusal::NoRoom));
-        assert_eq!(inventory.location(a), Some(Location::In { container: belt, at: Placement::new(2, 0, false) }));
+        let onto_b = Target::Cell {
+            view: GridView::Container(pack),
+            cell: IVec2::new(3, 1),
+        };
+        assert_eq!(
+            check_drop(&inventory, &drag(a), onto_b),
+            Err(Refusal::NoRoom)
+        );
+        assert_eq!(
+            drop_at(&mut inventory, &drag(a), onto_b, 6),
+            Err(Refusal::NoRoom)
+        );
+        assert_eq!(
+            inventory.location(a),
+            Some(Location::In {
+                container: belt,
+                at: Placement::new(2, 0, false)
+            })
+        );
         // The pack cannot go into itself.
-        let pack_drag = Drag { id: pack, grab: IVec2::ZERO, size: Footprint { cols: 2, rows: 3 }, turned: false, press: Vec2::ZERO, active: true, target: None };
-        let into_itself = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(5, 0) };
-        assert_eq!(drop_at(&mut inventory, &pack_drag, into_itself, 6), Err(Refusal::IntoItself));
-        assert_eq!(drop_at(&mut inventory, &drag(b), Target::Page, 6), Ok(vec![]));
+        let pack_drag = Drag {
+            id: pack,
+            grab: IVec2::ZERO,
+            size: Footprint { cols: 2, rows: 3 },
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
+        let into_itself = Target::Cell {
+            view: GridView::Container(pack),
+            cell: IVec2::new(5, 0),
+        };
+        assert_eq!(
+            drop_at(&mut inventory, &pack_drag, into_itself, 6),
+            Err(Refusal::IntoItself)
+        );
+        assert_eq!(
+            drop_at(&mut inventory, &drag(b), Target::Page, 6),
+            Ok(vec![])
+        );
     }
 
     #[test]
     fn cells_are_read_from_the_grid_rectangle() {
-        let rect = Rect::new(100.0, 50.0, 100.0 + 8.0 * CELL_PX + LINE_PX, 50.0 + 5.0 * CELL_PX + LINE_PX);
-        assert_eq!(cell_under(rect, Vec2::new(103.0, 53.0), CELL_PX), IVec2::new(0, 0));
-        assert_eq!(cell_under(rect, Vec2::new(100.0 + 7.5 * CELL_PX, 50.0 + 4.5 * CELL_PX), CELL_PX), IVec2::new(7, 4));
-        assert_eq!(cell_under(rect, Vec2::new(100.0 + 2.0 * CELL_PX + 5.0, 60.0), CELL_PX), IVec2::new(2, 0));
+        let rect = Rect::new(
+            100.0,
+            50.0,
+            100.0 + 8.0 * CELL_PX + LINE_PX,
+            50.0 + 5.0 * CELL_PX + LINE_PX,
+        );
+        assert_eq!(
+            cell_under(rect, Vec2::new(103.0, 53.0), CELL_PX),
+            IVec2::new(0, 0)
+        );
+        assert_eq!(
+            cell_under(
+                rect,
+                Vec2::new(100.0 + 7.5 * CELL_PX, 50.0 + 4.5 * CELL_PX),
+                CELL_PX
+            ),
+            IVec2::new(7, 4)
+        );
+        assert_eq!(
+            cell_under(rect, Vec2::new(100.0 + 2.0 * CELL_PX + 5.0, 60.0), CELL_PX),
+            IVec2::new(2, 0)
+        );
     }
 
     /// The screen opens and closes over an app with the inventory plugin's state and systems,
@@ -1809,13 +2480,34 @@ mod tests {
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
             .add_systems(PreUpdate, crate::keymap::track_context)
-            .add_systems(Update, (switch_screens, header::click_tabs, reset_scroll_on_tab, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
-        app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
+            .add_systems(
+                Update,
+                (
+                    switch_screens,
+                    header::click_tabs,
+                    reset_scroll_on_tab,
+                    build_screen,
+                    crate::character::wear_abilities,
+                    sheet::update_status,
+                    sheet::update_vitals,
+                    sheet::update_gear,
+                    sheet::spawn_tip,
+                    sheet::show_breakdown,
+                    drag_items,
+                    icon::reveal_icons,
+                )
+                    .chain(),
+            );
+        app.world_mut().spawn(ViewModelCamera {
+            follows: Entity::PLACEHOLDER,
+        });
         app
     }
 
     fn press(app: &mut App, key: KeyCode) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
         app.update();
         // As Bevy's input system does at the start of the next frame.
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -1828,7 +2520,11 @@ mod tests {
     fn strip_slot(app: &mut App, slot: usize, at: Vec2) {
         app.world_mut().spawn((
             QuickslotDrop(slot),
-            ComputedNode { size: Vec2::splat(44.0), inverse_scale_factor: 1.0, ..default() },
+            ComputedNode {
+                size: Vec2::splat(44.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
             UiGlobalTransform::from(bevy::math::Affine2::from_translation(at)),
         ));
     }
@@ -1840,8 +2536,15 @@ mod tests {
         app.world_mut().spawn((window, PrimaryWindow));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         let size = app.world().resource::<Inventory>().footprint(id).unwrap();
-        app.world_mut().resource_mut::<Dragging>().0 =
-            Some(Drag { id, grab: IVec2::ZERO, size, turned: false, press: at, active: true, target: None });
+        app.world_mut().resource_mut::<Dragging>().0 = Some(Drag {
+            id,
+            grab: IVec2::ZERO,
+            size,
+            turned: false,
+            press: at,
+            active: true,
+            target: None,
+        });
         let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
         mouse.press(MouseButton::Left);
         mouse.release(MouseButton::Left);
@@ -1856,15 +2559,31 @@ mod tests {
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
             inventory.wear(pack, Slot::Back).unwrap();
             let loaf = inventory.add(fb_items::roll_item("Bread", 5).unwrap());
-            inventory.put(loaf, pack, Placement::new(3, 1, false)).unwrap();
+            inventory
+                .put(loaf, pack, Placement::new(3, 1, false))
+                .unwrap();
             (pack, loaf)
         };
         strip_slot(&mut app, 2, Vec2::new(300.0, 300.0));
         strip_slot(&mut app, 3, Vec2::new(350.0, 300.0));
         let_go_at(&mut app, loaf, Vec2::new(303.0, 296.0));
         assert_eq!(app.world().resource::<Quickslots>().get(2), Some(loaf));
-        assert_eq!(app.world().resource::<Inventory>().location(loaf), Some(Location::In { container: pack, at: Placement::new(3, 1, false) }), "bound, not moved");
-        assert!(app.world().resource::<Toast>().text.ends_with("is bound to slot 3"), "{}", app.world().resource::<Toast>().text);
+        assert_eq!(
+            app.world().resource::<Inventory>().location(loaf),
+            Some(Location::In {
+                container: pack,
+                at: Placement::new(3, 1, false)
+            }),
+            "bound, not moved"
+        );
+        assert!(
+            app.world()
+                .resource::<Toast>()
+                .text
+                .ends_with("is bound to slot 3"),
+            "{}",
+            app.world().resource::<Toast>().text
+        );
         assert!(app.world().resource::<Dragging>().0.is_none());
     }
 
@@ -1876,17 +2595,39 @@ mod tests {
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
             inventory.wear(pack, Slot::Back).unwrap();
             let ring = inventory.add(fb_items::roll_item("Ring", 5).unwrap());
-            inventory.put(ring, pack, Placement::new(0, 0, false)).unwrap();
-            (ring, inventory.add(fb_items::roll_item("Bread", 5).unwrap()))
+            inventory
+                .put(ring, pack, Placement::new(0, 0, false))
+                .unwrap();
+            (
+                ring,
+                inventory.add(fb_items::roll_item("Bread", 5).unwrap()),
+            )
         };
         strip_slot(&mut app, 0, Vec2::new(100.0, 100.0));
-        let drag = |id| Drag { id, grab: IVec2::ZERO, size: Footprint { cols: 1, rows: 1 }, turned: false, press: Vec2::ZERO, active: true, target: None };
+        let drag = |id| Drag {
+            id,
+            grab: IVec2::ZERO,
+            size: Footprint { cols: 1, rows: 1 },
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
         let inventory = app.world().resource::<Inventory>();
-        assert_eq!(check_drop(inventory, &drag(ring), Target::Quickslot(0)), Err(Refusal::NotUsable));
-        assert_eq!(check_drop(inventory, &drag(loose), Target::Quickslot(0)), Err(Refusal::NotCarried));
+        assert_eq!(
+            check_drop(inventory, &drag(ring), Target::Quickslot(0)),
+            Err(Refusal::NotUsable)
+        );
+        assert_eq!(
+            check_drop(inventory, &drag(loose), Target::Quickslot(0)),
+            Err(Refusal::NotCarried)
+        );
         let_go_at(&mut app, ring, Vec2::new(100.0, 100.0));
         assert_eq!(*app.world().resource::<Quickslots>(), Quickslots::default());
-        assert_eq!(app.world().resource::<Toast>().text, Refusal::NotUsable.reason());
+        assert_eq!(
+            app.world().resource::<Toast>().text,
+            Refusal::NotUsable.reason()
+        );
     }
 
     #[test]
@@ -1900,7 +2641,11 @@ mod tests {
         // Under the mouse, a strip slot is the target before anything beneath it.
         press(&mut app, KeyCode::KeyI);
         let mut strip = app.world_mut().query::<&QuickslotDrop>();
-        assert_eq!(strip.iter(app.world()).count(), 0, "the strip goes with the screen");
+        assert_eq!(
+            strip.iter(app.world()).count(),
+            0,
+            "the strip goes with the screen"
+        );
     }
 
     #[test]
@@ -1911,24 +2656,43 @@ mod tests {
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
             inventory.wear(pack, Slot::Back).unwrap();
             let knife = inventory.add(dagger());
-            inventory.put(knife, pack, Placement::new(5, 2, true)).unwrap();
+            inventory
+                .put(knife, pack, Placement::new(5, 2, true))
+                .unwrap();
             (pack, knife)
         };
         let shown = |app: &mut App| {
             let mut views = app.world_mut().query::<(&ItemView, &Node)>();
-            views.iter(app.world()).map(|(v, n)| (v.id, n.left, n.top, n.width)).collect::<Vec<_>>()
+            views
+                .iter(app.world())
+                .map(|(v, n)| (v.id, n.left, n.top, n.width))
+                .collect::<Vec<_>>()
         };
         press(&mut app, KeyCode::KeyI);
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         let first = shown(&mut app);
         assert_eq!(first.len(), 1);
-        assert_eq!(first[0], (knife, px(5.0 * CELL_PX + LINE_PX), px(2.0 * CELL_PX + LINE_PX), px(2.0 * CELL_PX - LINE_PX)));
+        assert_eq!(
+            first[0],
+            (
+                knife,
+                px(5.0 * CELL_PX + LINE_PX),
+                px(2.0 * CELL_PX + LINE_PX),
+                px(2.0 * CELL_PX - LINE_PX)
+            )
+        );
         press(&mut app, KeyCode::KeyI);
         assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         assert!(shown(&mut app).is_empty());
         press(&mut app, KeyCode::KeyI);
         assert_eq!(shown(&mut app), first);
-        assert_eq!(app.world().resource::<Inventory>().location(knife), Some(Location::In { container: pack, at: Placement::new(5, 2, true) }));
+        assert_eq!(
+            app.world().resource::<Inventory>().location(knife),
+            Some(Location::In {
+                container: pack,
+                at: Placement::new(5, 2, true)
+            })
+        );
     }
 
     #[test]
@@ -1939,27 +2703,59 @@ mod tests {
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
             inventory.wear(pack, Slot::Back).unwrap();
             let knife = inventory.add(dagger());
-            inventory.put(knife, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(knife, pack, Placement::new(0, 0, false))
+                .unwrap();
             knife
         };
         press(&mut app, KeyCode::KeyI);
         let initials = |app: &mut App| {
-            let mut placeholders = app.world_mut().query_filtered::<&Children, With<icon::IconPlaceholder>>();
+            let mut placeholders = app
+                .world_mut()
+                .query_filtered::<&Children, With<icon::IconPlaceholder>>();
             let world = app.world();
-            placeholders.iter(world).flat_map(|c| c.iter()).filter_map(|c| world.get::<Text>(c)).map(|t| t.0.clone()).collect::<Vec<_>>()
+            placeholders
+                .iter(world)
+                .flat_map(|c| c.iter())
+                .filter_map(|c| world.get::<Text>(c))
+                .map(|t| t.0.clone())
+                .collect::<Vec<_>>()
         };
         // The knife in its cell, the pack in the back slot and the pack by its grid's name.
         let waiting = initials(&mut app);
         assert_eq!(waiting.len(), 3, "{waiting:?}");
-        let name = app.world().resource::<Inventory>().item(knife).unwrap().name.clone();
+        let name = app
+            .world()
+            .resource::<Inventory>()
+            .item(knife)
+            .unwrap()
+            .name
+            .clone();
         assert!(waiting.contains(&icon::initial(&name)), "{waiting:?}");
 
-        let mut knife_icon = app.world_mut().query_filtered::<&ImageNode, With<ItemIcon>>();
-        let image = knife_icon.iter(app.world()).next().expect("the knife's icon").image.clone();
-        app.world_mut().resource_mut::<IconCache>().mark_drawn(&image);
+        let mut knife_icon = app
+            .world_mut()
+            .query_filtered::<&ImageNode, With<ItemIcon>>();
+        let image = knife_icon
+            .iter(app.world())
+            .next()
+            .expect("the knife's icon")
+            .image
+            .clone();
+        app.world_mut()
+            .resource_mut::<IconCache>()
+            .mark_drawn(&image);
         app.update();
         assert_eq!(initials(&mut app).len(), 2, "the knife's initial is gone");
-        assert_eq!(knife_icon.iter(app.world()).next().expect("the knife's icon").image, image, "the slot shows the drawn icon");
+        assert_eq!(
+            knife_icon
+                .iter(app.world())
+                .next()
+                .expect("the knife's icon")
+                .image,
+            image,
+            "the slot shows the drawn icon"
+        );
         let mut awaiting = app.world_mut().query::<&icon::AwaitingIcon>();
         assert_eq!(awaiting.iter(app.world()).count(), 2);
     }
@@ -1977,7 +2773,9 @@ mod tests {
     }
 
     fn shift_tab(app: &mut App) {
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
         press(app, KeyCode::Tab);
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(KeyCode::ShiftLeft);
@@ -1996,7 +2794,11 @@ mod tests {
             assert_eq!(node.width, px(LEAF_PX), "{tab:?}");
             let mut ledgers = app.world_mut().query_filtered::<&Node, With<Ledger>>();
             let ledger = ledgers.single(app.world()).unwrap();
-            assert_eq!((ledger.height, ledger.max_height), (percent(92), percent(92)), "{tab:?}: the ledger holds one height, so the page holds one place");
+            assert_eq!(
+                (ledger.height, ledger.max_height),
+                (percent(92), percent(92)),
+                "{tab:?}: the ledger holds one height, so the page holds one place"
+            );
         }
     }
 
@@ -2011,16 +2813,30 @@ mod tests {
         let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
         assert_eq!(pages.single(app.world()).unwrap().width, Val::Auto);
         press(&mut app, KeyCode::Tab);
-        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "Tab leaves the trader's shelf up");
+        assert_eq!(
+            *app.world().resource::<SheetTab>(),
+            SheetTab::Inventory,
+            "Tab leaves the trader's shelf up"
+        );
     }
 
     #[test]
     fn tab_can_be_rebound() {
         let mut app = screen_app();
-        app.world_mut().resource_mut::<Keymap>().bindings.iter_mut().find(|b| b.action == Action::NextTab).unwrap().inputs = vec![crate::keymap::Input::Key(KeyCode::KeyG)];
+        app.world_mut()
+            .resource_mut::<Keymap>()
+            .bindings
+            .iter_mut()
+            .find(|b| b.action == Action::NextTab)
+            .unwrap()
+            .inputs = vec![crate::keymap::Input::Key(KeyCode::KeyG)];
         press(&mut app, KeyCode::KeyI);
         press(&mut app, KeyCode::Tab);
-        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "the old key does nothing");
+        assert_eq!(
+            *app.world().resource::<SheetTab>(),
+            SheetTab::Inventory,
+            "the old key does nothing"
+        );
         press(&mut app, KeyCode::KeyG);
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions);
     }
@@ -2035,10 +2851,18 @@ mod tests {
         app.world_mut().spawn((window, PrimaryWindow));
         app.world_mut().spawn((
             header::TabLabel(SheetTab::Factions),
-            ComputedNode { size: Vec2::new(100.0, 24.0), inverse_scale_factor: 1.0, ..default() },
-            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(130.0, 20.0))),
+            ComputedNode {
+                size: Vec2::new(100.0, 24.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                130.0, 20.0,
+            ))),
         ));
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions);
         assert_eq!(app.world().resource::<ColumnScroll>().0, 0.0);
@@ -2069,8 +2893,12 @@ mod tests {
     }
 
     fn page_text(app: &mut App) -> Vec<String> {
-        let mut pages = app.world_mut().query_filtered::<Entity, With<factions::FactionsPage>>();
-        let Some(page) = pages.iter(app.world()).next() else { return Vec::new() };
+        let mut pages = app
+            .world_mut()
+            .query_filtered::<Entity, With<factions::FactionsPage>>();
+        let Some(page) = pages.iter(app.world()).next() else {
+            return Vec::new();
+        };
         let mut texts = app.world_mut().query::<(&Text, Option<&ChildOf>)>();
         let world = app.world();
         let mut lines = Vec::new();
@@ -2092,17 +2920,28 @@ mod tests {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         press(&mut app, KeyCode::Tab);
-        assert_eq!(page_text(&mut app), vec![factions::NO_FACTIONS_MET.to_string()]);
+        assert_eq!(
+            page_text(&mut app),
+            vec![factions::NO_FACTIONS_MET.to_string()]
+        );
     }
 
     #[test]
     fn the_factions_tab_lists_the_met_factions_with_their_standing() {
         let mut app = screen_app();
         let run_seed = 11;
-        app.insert_resource(crate::travel::Abyss { run_seed, ..default() });
-        let mut record = crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, run_seed);
+        app.insert_resource(crate::travel::Abyss {
+            run_seed,
+            ..default()
+        });
+        let mut record =
+            crate::record::WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, run_seed);
         let world = fb_faction::World::new(run_seed);
-        let (first, second, unmet) = (world.factions()[0].id, world.factions()[2].id, world.factions()[1].id);
+        let (first, second, unmet) = (
+            world.factions()[0].id,
+            world.factions()[2].id,
+            world.factions()[1].id,
+        );
         record.standings.meet(first);
         record.standings.meet(second);
         record.keys_given.push(second);
@@ -2111,11 +2950,26 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         press(&mut app, KeyCode::Tab);
         let lines = page_text(&mut app);
-        assert!(lines.contains(&world.faction(first).name) && lines.contains(&world.faction(second).name), "{lines:?}");
+        assert!(
+            lines.contains(&world.faction(first).name)
+                && lines.contains(&world.faction(second).name),
+            "{lines:?}"
+        );
         assert!(!lines.contains(&world.faction(unmet).name));
-        let band = app.world().resource::<crate::record::WorldRecord>().standings.band(first);
-        assert!(lines.iter().any(|l| l.starts_with(band.label())), "{lines:?}");
-        assert!(lines.contains(&"Given you their key".to_string()) && lines.contains(&"Not yet given".to_string()), "{lines:?}");
+        let band = app
+            .world()
+            .resource::<crate::record::WorldRecord>()
+            .standings
+            .band(first);
+        assert!(
+            lines.iter().any(|l| l.starts_with(band.label())),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"Given you their key".to_string())
+                && lines.contains(&"Not yet given".to_string()),
+            "{lines:?}"
+        );
         assert!(lines.contains(&"Depth 1".to_string()), "{lines:?}");
         assert!(!lines.contains(&factions::NO_FACTIONS_MET.to_string()));
     }
@@ -2124,18 +2978,32 @@ mod tests {
     fn the_character_and_factions_pages_scroll_under_the_header() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyK);
-        let mut columns = app.world_mut().query_filtered::<&Node, With<ScrollColumn>>();
+        let mut columns = app
+            .world_mut()
+            .query_filtered::<&Node, With<ScrollColumn>>();
         let node = columns.single(app.world()).unwrap();
-        assert_eq!(node.overflow.y, OverflowAxis::Scroll, "the character sheet scrolls");
+        assert_eq!(
+            node.overflow.y,
+            OverflowAxis::Scroll,
+            "the character sheet scrolls"
+        );
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Tab);
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Factions);
-        let mut columns = app.world_mut().query_filtered::<&Node, With<ScrollColumn>>();
-        assert_eq!(columns.single(app.world()).unwrap().overflow.y, OverflowAxis::Scroll, "so does the factions page");
+        let mut columns = app
+            .world_mut()
+            .query_filtered::<&Node, With<ScrollColumn>>();
+        assert_eq!(
+            columns.single(app.world()).unwrap().overflow.y,
+            OverflowAxis::Scroll,
+            "so does the factions page"
+        );
     }
 
     fn sheet_showing(app: &mut App) -> bool {
-        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        let mut sheets = app
+            .world_mut()
+            .query_filtered::<Entity, With<sheet::CharacterSheet>>();
         sheets.iter(app.world()).count() == 1
     }
 
@@ -2147,20 +3015,37 @@ mod tests {
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Character);
         assert!(sheet_showing(&mut app));
         let mut grids = app.world_mut().query::<&GridView>();
-        assert_eq!(grids.iter(app.world()).count(), 0, "the sheet replaces the grids");
+        assert_eq!(
+            grids.iter(app.world()).count(),
+            0,
+            "the sheet replaces the grids"
+        );
         press(&mut app, KeyCode::KeyI);
-        assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory), "I swaps to the inventory tab");
+        assert!(
+            app.world().resource::<ScreenOpen>().is(Screen::Inventory),
+            "I swaps to the inventory tab"
+        );
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory);
         assert!(!sheet_showing(&mut app));
         press(&mut app, KeyCode::KeyK);
         assert!(sheet_showing(&mut app));
         press(&mut app, KeyCode::KeyK);
-        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "K closes the character tab");
+        assert!(
+            !app.world().resource::<ScreenOpen>().is(Screen::Inventory),
+            "K closes the character tab"
+        );
         press(&mut app, KeyCode::KeyK);
         press(&mut app, KeyCode::Escape);
-        assert!(!app.world().resource::<ScreenOpen>().is(Screen::Inventory), "Esc closes it");
+        assert!(
+            !app.world().resource::<ScreenOpen>().is(Screen::Inventory),
+            "Esc closes it"
+        );
         press(&mut app, KeyCode::KeyI);
-        assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "the screen reopens on the inventory tab");
+        assert_eq!(
+            *app.world().resource::<SheetTab>(),
+            SheetTab::Inventory,
+            "the screen reopens on the inventory tab"
+        );
     }
 
     /// Every line of text under the character sheet, in order.
@@ -2184,14 +3069,25 @@ mod tests {
     fn delver_with(app: &mut App, hunger: f64, exhaustion: u32) -> Entity {
         let mut needs = fb_character::Needs::default();
         needs.hunger.value = hunger;
-        app.world_mut().spawn((crate::play::Player, crate::character::DelverNeeds(needs), crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)), crate::character::DelverStamina::default(), crate::character::DelverMana::default())).id()
+        app.world_mut()
+            .spawn((
+                crate::play::Player,
+                crate::character::DelverNeeds(needs),
+                crate::exhaustion::Exhaustion(fb_character::Exhaustion::new(exhaustion)),
+                crate::character::DelverStamina::default(),
+                crate::character::DelverMana::default(),
+            ))
+            .id()
     }
 
     /// A rolled `base` with the real affix `name` applied and its weight set to `weight`.
     fn weighed_with(base: &str, seed: u32, affix: Option<&str>, weight: f32) -> fb_items::Item {
         let mut item = fb_items::roll_item(base, seed).unwrap();
         if let Some(name) = affix {
-            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            let affix = fb_items::tables::affixes()
+                .iter()
+                .find(|a| a.name == name)
+                .unwrap();
             affix.apply_to_stats(&mut item.profile.stats);
             item.affixes.push(affix);
         }
@@ -2202,16 +3098,32 @@ mod tests {
     /// The value on the gear row `label`.
     fn gear_row(app: &mut App, label: usize) -> String {
         let mut lines = app.world_mut().query::<(&sheet::GearLine, &Text)>();
-        lines.iter(app.world()).find(|(l, _)| l.0 == label).map(|(_, t)| t.0.clone()).expect("a gear line")
+        lines
+            .iter(app.world())
+            .find(|(l, _)| l.0 == label)
+            .map(|(_, t)| t.0.clone())
+            .expect("a gear line")
     }
 
     #[test]
     fn the_attributes_read_with_their_modifiers() {
         let mut app = screen_app();
-        app.world_mut().resource_mut::<Character>().attributes = fb_character::Attributes { strength: 14, dexterity: 9, constitution: 10, intelligence: 18, wisdom: 3 };
+        app.world_mut().resource_mut::<Character>().attributes = fb_character::Attributes {
+            strength: 14,
+            dexterity: 9,
+            constitution: 10,
+            intelligence: 18,
+            wisdom: 3,
+        };
         press(&mut app, KeyCode::KeyK);
         let text = sheet_text(&mut app);
-        for want in ["STR 14 (+2)", "DEX 9 (-1)", "CON 10 (+0)", "INT 18 (+4)", "WIS 3 (-4)"] {
+        for want in [
+            "STR 14 (+2)",
+            "DEX 9 (-1)",
+            "CON 10 (+0)",
+            "INT 18 (+4)",
+            "WIS 3 (-4)",
+        ] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
         }
     }
@@ -2220,16 +3132,30 @@ mod tests {
     fn a_belt_of_the_ox_from_the_pack_changes_the_load_while_the_tab_is_open() {
         use sheet::GEAR_ROWS;
         let mut app = screen_app();
-        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        let attributes = fb_character::Attributes {
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        *app.world_mut().resource_mut::<Character>() = Character {
+            folk: fb_body::Folk::Human,
+            attributes,
+            ..Character::roll(4)
+        };
         let belt = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let pack = inventory.add(weighed_with("Pack", 7, None, 0.0));
             inventory.wear(pack, Slot::Back).unwrap();
             let load = inventory.add(weighed_with("Dagger", 3, None, 55.0));
-            inventory.put(load, pack, Placement::new(0, 0, false)).unwrap();
+            inventory
+                .put(load, pack, Placement::new(0, 0, false))
+                .unwrap();
             let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 0.0));
-            inventory.put(belt, pack, Placement::new(4, 0, false)).unwrap();
+            inventory
+                .put(belt, pack, Placement::new(4, 0, false))
+                .unwrap();
             belt
         };
         press(&mut app, KeyCode::KeyK);
@@ -2250,7 +3176,10 @@ mod tests {
         press(&mut app, KeyCode::KeyK);
         let character = app.world().resource::<Character>().clone();
         let derived = character.derive(app.world().resource::<Inventory>());
-        assert_eq!(gear_row(&mut app, 1), format!("{:.0} / {:.0}", derived.warmth, character.warmth_need()));
+        assert_eq!(
+            gear_row(&mut app, 1),
+            format!("{:.0} / {:.0}", derived.warmth, character.warmth_need())
+        );
         assert_eq!(gear_row(&mut app, 4), derived.armour_class.to_string());
         assert_eq!(gear_row(&mut app, 2), "none");
         assert!(header_stats(&mut app).contains(&format!("AC {}", derived.armour_class)));
@@ -2261,39 +3190,96 @@ mod tests {
         use sheet::{GEAR_ROWS, breakdown};
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyK);
-        assert_eq!(&GEAR_ROWS[5..8], ["Hunger rate", "Sleepiness rate", "Heal on a kill"]);
-        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("usual".to_string(), "usual".to_string(), "none".to_string()));
+        assert_eq!(
+            &GEAR_ROWS[5..8],
+            ["Hunger rate", "Sleepiness rate", "Heal on a kill"]
+        );
+        assert_eq!(
+            (
+                gear_row(&mut app, 5),
+                gear_row(&mut app, 6),
+                gear_row(&mut app, 7)
+            ),
+            ("usual".to_string(), "usual".to_string(), "none".to_string())
+        );
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             // Seeds that roll no affix of their own, so each shows only the one added.
-            let plain = |base: &str| (0..).find(|&s| fb_items::roll_item(base, s).unwrap().affixes.is_empty()).unwrap();
+            let plain = |base: &str| {
+                (0..)
+                    .find(|&s| fb_items::roll_item(base, s).unwrap().affixes.is_empty())
+                    .unwrap()
+            };
             let belt = inventory.add(weighed_with("Belt", plain("Belt"), Some("of Plenty"), 1.0));
             equip(&mut inventory, belt, Slot::Belt).unwrap();
-            let ring = inventory.add(weighed_with("Ring", plain("Ring"), Some("of Wakefulness"), 0.0));
+            let ring = inventory.add(weighed_with(
+                "Ring",
+                plain("Ring"),
+                Some("of Wakefulness"),
+                0.0,
+            ));
             equip(&mut inventory, ring, Slot::Ring1).unwrap();
-            let sword = inventory.add(weighed_with("Sword", plain("Sword"), Some("of the Leech"), 3.0));
+            let sword = inventory.add(weighed_with(
+                "Sword",
+                plain("Sword"),
+                Some("of the Leech"),
+                3.0,
+            ));
             equip(&mut inventory, sword, Slot::Mainhand).unwrap();
         }
         app.update();
-        assert_eq!((gear_row(&mut app, 5), gear_row(&mut app, 6), gear_row(&mut app, 7)), ("\u{d7}0.85".to_string(), "\u{d7}0.85".to_string(), "+1 HP".to_string()));
+        assert_eq!(
+            (
+                gear_row(&mut app, 5),
+                gear_row(&mut app, 6),
+                gear_row(&mut app, 7)
+            ),
+            (
+                "\u{d7}0.85".to_string(),
+                "\u{d7}0.85".to_string(),
+                "+1 HP".to_string()
+            )
+        );
         let character = app.world().resource::<Character>().clone();
         let inventory = app.world().resource::<Inventory>();
         let hunger = breakdown(fb_character::rules::defaults(), &character, inventory, 5).join(" ");
-        assert!(hunger.starts_with("Hunger rate") && hunger.contains("(0.85)"), "{hunger}");
-        let sleepiness = breakdown(fb_character::rules::defaults(), &character, inventory, 6).join(" ");
-        assert!(sleepiness.starts_with("Sleepiness rate") && sleepiness.contains("(0.85)"), "{sleepiness}");
+        assert!(
+            hunger.starts_with("Hunger rate") && hunger.contains("(0.85)"),
+            "{hunger}"
+        );
+        let sleepiness =
+            breakdown(fb_character::rules::defaults(), &character, inventory, 6).join(" ");
+        assert!(
+            sleepiness.starts_with("Sleepiness rate") && sleepiness.contains("(0.85)"),
+            "{sleepiness}"
+        );
         let leech = breakdown(fb_character::rules::defaults(), &character, inventory, 7).join(" ");
-        assert!(leech.starts_with("Heal on a kill 1") && leech.contains("(+1)"), "{leech}");
+        assert!(
+            leech.starts_with("Heal on a kill 1") && leech.contains("(+1)"),
+            "{leech}"
+        );
     }
 
     #[test]
     fn a_ring_of_the_giant_boots_of_haste_and_a_shield_of_the_rampart_show_on_the_sheet() {
         let mut app = screen_app();
-        let attributes = fb_character::Attributes { strength: 13, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        *app.world_mut().resource_mut::<Character>() = Character { attributes, ..Character::roll(4) };
+        let attributes = fb_character::Attributes {
+            strength: 13,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        *app.world_mut().resource_mut::<Character>() = Character {
+            attributes,
+            ..Character::roll(4)
+        };
         press(&mut app, KeyCode::KeyK);
         let rows = |app: &mut App| [8, 9, 10, 11].map(|row| gear_row(app, row));
-        assert_eq!(rows(&mut app), ["usual", "none", "none", "none"].map(String::from));
+        assert_eq!(
+            rows(&mut app),
+            ["usual", "none", "none", "none"].map(String::from)
+        );
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let ring = inventory.add(weighed_with("Ring", 4, Some("of the Giant"), 0.0));
@@ -2307,15 +3293,24 @@ mod tests {
         }
         app.update();
         app.update();
-        assert_eq!(rows(&mut app), ["\u{d7}1.2", "80%", "+2", "+2 STR"].map(String::from));
+        assert_eq!(
+            rows(&mut app),
+            ["\u{d7}1.2", "80%", "+2", "+2 STR"].map(String::from)
+        );
         assert_eq!(app.world().resource::<Character>().strength(), 15);
-        assert!(sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"), "the attribute line shows the score as it stands");
+        assert!(
+            sheet_text(&mut app).iter().any(|t| t == "STR 15 (+2)"),
+            "the attribute line shows the score as it stands"
+        );
     }
 
     #[test]
     fn a_goblin_shows_60_ft_of_darkvision_and_a_lizardfolk_needs_more_warmth() {
         let mut app = screen_app();
-        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
+        *app.world_mut().resource_mut::<Character>() = Character {
+            folk: fb_body::Folk::Goblin,
+            ..Character::roll(4)
+        };
         press(&mut app, KeyCode::KeyK);
         assert_eq!(gear_row(&mut app, 3), "60 ft");
         {
@@ -2335,11 +3330,20 @@ mod tests {
     fn tip_text(app: &mut App) -> Vec<String> {
         let mut texts = app.world_mut().query::<(&Text, &ChildOf)>();
         let world = app.world();
-        texts.iter(world).filter(|(_, p)| world.get::<sheet::BreakdownTip>(p.parent()).is_some()).map(|(t, _)| t.0.clone()).collect()
+        texts
+            .iter(world)
+            .filter(|(_, p)| world.get::<sheet::BreakdownTip>(p.parent()).is_some())
+            .map(|(t, _)| t.0.clone())
+            .collect()
     }
 
     fn hover_row(app: &mut App, row: Option<usize>) {
-        app.world_mut().resource_mut::<sheet::HoveredNumber>().0 = row.map(|r| (r, Rect::new(10.0, 10.0 + 22.0 * r as f32, 300.0, 30.0 + 22.0 * r as f32)));
+        app.world_mut().resource_mut::<sheet::HoveredNumber>().0 = row.map(|r| {
+            (
+                r,
+                Rect::new(10.0, 10.0 + 22.0 * r as f32, 300.0, 30.0 + 22.0 * r as f32),
+            )
+        });
         app.update();
         app.update();
     }
@@ -2347,8 +3351,18 @@ mod tests {
     #[test]
     fn hovering_capacity_lists_the_strength_and_the_belt_of_the_ox() {
         let mut app = screen_app();
-        let attributes = fb_character::Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        let attributes = fb_character::Attributes {
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        *app.world_mut().resource_mut::<Character>() = Character {
+            folk: fb_body::Folk::Human,
+            attributes,
+            ..Character::roll(4)
+        };
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let belt = inventory.add(weighed_with("Belt", 2, Some("of the Ox"), 1.0));
@@ -2358,9 +3372,17 @@ mod tests {
         assert!(tip_text(&mut app).is_empty());
         hover_row(&mut app, Some(0));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR 10 \u{d7} 15 + ") && l.contains("Belt") && l.ends_with("(+25.0) = 175 lb")), "{tip:?}");
+        assert!(
+            tip.iter()
+                .any(|l| l.starts_with("Capacity: STR 10 \u{d7} 15 + ")
+                    && l.contains("Belt")
+                    && l.ends_with("(+25.0) = 175 lb")),
+            "{tip:?}"
+        );
         assert!(tip.iter().any(|l| l == "Carried: 1 lb"), "{tip:?}");
-        let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
+        let mut tips = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
         assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
         hover_row(&mut app, None);
         assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Hidden);
@@ -2369,7 +3391,10 @@ mod tests {
     #[test]
     fn hovering_a_goblin_s_darkvision_names_the_folk_as_the_winner() {
         let mut app = screen_app();
-        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Goblin, ..Character::roll(4) };
+        *app.world_mut().resource_mut::<Character>() = Character {
+            folk: fb_body::Folk::Goblin,
+            ..Character::roll(4)
+        };
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let belt = inventory.add(weighed_with("Belt", 2, Some("of the Mole"), 1.0));
@@ -2378,7 +3403,13 @@ mod tests {
         press(&mut app, KeyCode::KeyK);
         hover_row(&mut app, Some(3));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.starts_with("Darkvision 60 ft = best of Goblin 60, ") && l.contains("Belt") && l.ends_with("(Goblin)")), "{tip:?}");
+        assert!(
+            tip.iter()
+                .any(|l| l.starts_with("Darkvision 60 ft = best of Goblin 60, ")
+                    && l.contains("Belt")
+                    && l.ends_with("(Goblin)")),
+            "{tip:?}"
+        );
     }
 
     #[test]
@@ -2387,16 +3418,30 @@ mod tests {
         press(&mut app, KeyCode::KeyK);
         hover_row(&mut app, Some(1));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.starts_with("Warmth ")) && tip.iter().any(|l| l == "Warmth needed 6"), "{tip:?}");
+        assert!(
+            tip.iter().any(|l| l.starts_with("Warmth "))
+                && tip.iter().any(|l| l == "Warmth needed 6"),
+            "{tip:?}"
+        );
         hover_row(&mut app, Some(4));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.starts_with("Armour class ") && l.contains("= base (10) + DEX ")), "{tip:?}");
+        assert!(
+            tip.iter()
+                .any(|l| l.starts_with("Armour class ") && l.contains("= base (10) + DEX ")),
+            "{tip:?}"
+        );
     }
 
     #[test]
     fn the_mouse_over_a_row_picks_it() {
-        let rows = [(0, Rect::new(0.0, 0.0, 100.0, 20.0)), (1, Rect::new(0.0, 20.0, 100.0, 40.0))];
-        assert_eq!(sheet::row_under(rows, Vec2::new(5.0, 25.0)).map(|r| r.0), Some(1));
+        let rows = [
+            (0, Rect::new(0.0, 0.0, 100.0, 20.0)),
+            (1, Rect::new(0.0, 20.0, 100.0, 40.0)),
+        ];
+        assert_eq!(
+            sheet::row_under(rows, Vec2::new(5.0, 25.0)).map(|r| r.0),
+            Some(1)
+        );
         assert_eq!(sheet::row_under(rows, Vec2::new(150.0, 5.0)), None);
     }
 
@@ -2406,7 +3451,15 @@ mod tests {
         delver_with(&mut app, 0.0, 2);
         press(&mut app, KeyCode::KeyK);
         let text = sheet_text(&mut app);
-        for want in ["Hunger", "Thirst", "Sleepiness", "Fed", "Quenched", "Rested", "Exhaustion 2: half speed"] {
+        for want in [
+            "Hunger",
+            "Thirst",
+            "Sleepiness",
+            "Fed",
+            "Quenched",
+            "Rested",
+            "Exhaustion 2: half speed",
+        ] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
         }
     }
@@ -2417,21 +3470,47 @@ mod tests {
         let delver = delver_with(&mut app, 0.0, 0);
         press(&mut app, KeyCode::KeyK);
         let before = {
-            let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+            let mut sheets = app
+                .world_mut()
+                .query_filtered::<Entity, With<sheet::CharacterSheet>>();
             sheets.single(app.world()).unwrap()
         };
         assert!(sheet_text(&mut app).contains(&"Fed".to_string()));
-        app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.hunger.value = 0.55;
-        app.world_mut().get_mut::<crate::exhaustion::Exhaustion>(delver).unwrap().0 = fb_character::Exhaustion::new(2);
+        app.world_mut()
+            .get_mut::<crate::character::DelverNeeds>(delver)
+            .unwrap()
+            .0
+            .hunger
+            .value = 0.55;
+        app.world_mut()
+            .get_mut::<crate::exhaustion::Exhaustion>(delver)
+            .unwrap()
+            .0 = fb_character::Exhaustion::new(2);
         app.update();
         let text = sheet_text(&mut app);
-        assert!(text.contains(&"Hungry".to_string()) && !text.contains(&"Fed".to_string()), "{text:?}");
-        assert!(text.contains(&"Exhaustion 2: half speed".to_string()), "{text:?}");
+        assert!(
+            text.contains(&"Hungry".to_string()) && !text.contains(&"Fed".to_string()),
+            "{text:?}"
+        );
+        assert!(
+            text.contains(&"Exhaustion 2: half speed".to_string()),
+            "{text:?}"
+        );
         let mut fills = app.world_mut().query::<(&sheet::NeedFill, &Node)>();
-        let hunger = fills.iter(app.world()).find(|(f, _)| f.0 == fb_character::MeterKind::Hunger).map(|(_, n)| n.width).unwrap();
+        let hunger = fills
+            .iter(app.world())
+            .find(|(f, _)| f.0 == fb_character::MeterKind::Hunger)
+            .map(|(_, n)| n.width)
+            .unwrap();
         assert_eq!(hunger, percent(55.0));
-        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
-        assert_eq!(sheets.single(app.world()).unwrap(), before, "the sheet was updated, not rebuilt");
+        let mut sheets = app
+            .world_mut()
+            .query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        assert_eq!(
+            sheets.single(app.world()).unwrap(),
+            before,
+            "the sheet was updated, not rebuilt"
+        );
     }
 
     #[test]
@@ -2443,18 +3522,44 @@ mod tests {
         for want in ["Stamina", "Mana", "Fresh", "4 / 4"] {
             assert!(text.iter().any(|t| t == want), "{want} in {text:?}");
         }
-        let mut sheets = app.world_mut().query_filtered::<Entity, With<sheet::CharacterSheet>>();
+        let mut sheets = app
+            .world_mut()
+            .query_filtered::<Entity, With<sheet::CharacterSheet>>();
         let before = sheets.single(app.world()).unwrap();
-        app.world_mut().get_mut::<crate::character::DelverStamina>(delver).unwrap().0 = fb_character::Stamina { value: 0.0, winded: true };
-        app.world_mut().get_mut::<crate::character::DelverMana>(delver).unwrap().0.points = 2.0;
+        app.world_mut()
+            .get_mut::<crate::character::DelverStamina>(delver)
+            .unwrap()
+            .0 = fb_character::Stamina {
+            value: 0.0,
+            winded: true,
+        };
+        app.world_mut()
+            .get_mut::<crate::character::DelverMana>(delver)
+            .unwrap()
+            .0
+            .points = 2.0;
         app.update();
         let text = sheet_text(&mut app);
-        assert!(text.contains(&"Winded".to_string()) && !text.contains(&"Fresh".to_string()), "{text:?}");
+        assert!(
+            text.contains(&"Winded".to_string()) && !text.contains(&"Fresh".to_string()),
+            "{text:?}"
+        );
         assert!(text.contains(&"2 / 4".to_string()), "{text:?}");
         let mut fills = app.world_mut().query::<(&sheet::VitalFill, &Node)>();
-        let widths: Vec<_> = fills.iter(app.world()).map(|(f, n)| (f.0, n.width)).collect();
-        assert!(widths.contains(&(sheet::Vital::Stamina, percent(0.0))) && widths.contains(&(sheet::Vital::Mana, percent(50.0))), "{widths:?}");
-        assert_eq!(sheets.single(app.world()).unwrap(), before, "the sheet was updated, not rebuilt");
+        let widths: Vec<_> = fills
+            .iter(app.world())
+            .map(|(f, n)| (f.0, n.width))
+            .collect();
+        assert!(
+            widths.contains(&(sheet::Vital::Stamina, percent(0.0)))
+                && widths.contains(&(sheet::Vital::Mana, percent(50.0))),
+            "{widths:?}"
+        );
+        assert_eq!(
+            sheets.single(app.world()).unwrap(),
+            before,
+            "the sheet was updated, not rebuilt"
+        );
     }
 
     #[test]
@@ -2463,7 +3568,11 @@ mod tests {
         let delver = delver_with(&mut app, 0.6, 0);
         press(&mut app, KeyCode::KeyK);
         assert!(sheet_text(&mut app).contains(&"Hungry".to_string()));
-        app.world_mut().get_mut::<crate::character::DelverNeeds>(delver).unwrap().0.consume(1.0, 0.0);
+        app.world_mut()
+            .get_mut::<crate::character::DelverNeeds>(delver)
+            .unwrap()
+            .0
+            .consume(1.0, 0.0);
         app.update();
         assert!(sheet_text(&mut app).contains(&"Fed".to_string()));
     }
@@ -2474,43 +3583,78 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         let size = grid_size(&app.world().resource::<Underfoot>().grid, CELL_PX);
         let mut views = app.world_mut().query::<(&GridView, &Node, &Children)>();
-        let (_, node, children) = views.iter(app.world()).find(|(v, ..)| **v == GridView::Underfoot).expect("the underfoot grid");
+        let (_, node, children) = views
+            .iter(app.world())
+            .find(|(v, ..)| **v == GridView::Underfoot)
+            .expect("the underfoot grid");
         assert_eq!((node.width, node.height), (px(size.x), px(size.y)));
         // In an empty corridor: 18 empty cells, 6 by 3, and nothing in them.
         let children = children.to_vec();
         assert_eq!(children.len(), 18);
-        assert!(children.iter().all(|c| app.world().get::<ItemView>(*c).is_none()));
+        assert!(
+            children
+                .iter()
+                .all(|c| app.world().get::<ItemView>(*c).is_none())
+        );
         let mut texts = app.world_mut().query::<&Text>();
         let said: Vec<String> = texts.iter(app.world()).map(|t| t.0.clone()).collect();
-        assert!(said.contains(&"underfoot".to_string()) && said.contains(&"Bare stone. Drop things here.".to_string()), "{said:?}");
+        assert!(
+            said.contains(&"underfoot".to_string())
+                && said.contains(&"Bare stone. Drop things here.".to_string()),
+            "{said:?}"
+        );
     }
 
     /// The header's line of numbers, as read from its spans.
     fn header_stats(app: &mut App) -> String {
-        header_spans(app).into_iter().map(|parts| parts.into_iter().map(|(text, _)| text).collect::<String>()).collect::<Vec<_>>().join("   ")
+        header_spans(app)
+            .into_iter()
+            .map(|parts| parts.into_iter().map(|(text, _)| text).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("   ")
     }
 
     /// The header's stats as spans with their colours, one list for each part.
     fn header_spans(app: &mut App) -> Vec<Vec<(String, Color)>> {
-        let mut lines = app.world_mut().query_filtered::<&Children, With<header::HeaderStats>>();
+        let mut lines = app
+            .world_mut()
+            .query_filtered::<&Children, With<header::HeaderStats>>();
         let parts = lines.single(app.world()).unwrap().to_vec();
         parts
             .into_iter()
             .map(|part| {
                 let text = app.world().get::<Children>(part).unwrap()[0];
-                let spans: Vec<Entity> = app.world().get::<Children>(text).map(|c| c.to_vec()).unwrap_or_default();
-                spans.iter().filter_map(|s| Some((app.world().get::<TextSpan>(*s)?.0.clone(), app.world().get::<TextColor>(*s)?.0))).collect()
+                let spans: Vec<Entity> = app
+                    .world()
+                    .get::<Children>(text)
+                    .map(|c| c.to_vec())
+                    .unwrap_or_default();
+                spans
+                    .iter()
+                    .filter_map(|s| {
+                        Some((
+                            app.world().get::<TextSpan>(*s)?.0.clone(),
+                            app.world().get::<TextColor>(*s)?.0,
+                        ))
+                    })
+                    .collect()
             })
             .collect()
     }
 
     /// The header's purse line, as read from its text and spans.
     fn header_purse(app: &mut App) -> String {
-        let mut lines = app.world_mut().query_filtered::<(&Text, &Children), With<header::HeaderPurse>>();
+        let mut lines = app
+            .world_mut()
+            .query_filtered::<(&Text, &Children), With<header::HeaderPurse>>();
         let (text, spans) = lines.single(app.world()).unwrap();
         let spans = spans.to_vec();
         let head = text.0.clone();
-        head + &spans.iter().filter_map(|s| app.world().get::<TextSpan>(*s)).map(|t| t.0.clone()).collect::<String>()
+        head + &spans
+            .iter()
+            .filter_map(|s| app.world().get::<TextSpan>(*s))
+            .map(|t| t.0.clone())
+            .collect::<String>()
     }
 
     #[test]
@@ -2518,10 +3662,29 @@ mod tests {
         use card::Price;
         use fb_items::Coins;
         let worth = Coins::default();
-        let costs = |cp, afford| cell_tag(Price::Costs { price: Coins::from_copper(cp), worth, afford });
-        assert_eq!(costs(250, true), Some(("2.5g".to_string(), crate::ui::COIN_GOLD, crate::ui::FRAME_GOLD)));
+        let costs = |cp, afford| {
+            cell_tag(Price::Costs {
+                price: Coins::from_copper(cp),
+                worth,
+                afford,
+            })
+        };
+        assert_eq!(
+            costs(250, true),
+            Some((
+                "2.5g".to_string(),
+                crate::ui::COIN_GOLD,
+                crate::ui::FRAME_GOLD
+            ))
+        );
         assert_eq!(costs(250, false).map(|t| t.1), Some(BAD), "out of reach");
-        assert_eq!(cell_tag(Price::SellsFor { price: Coins::from_copper(8 * 10), worth }), Some(("8s".to_string(), crate::ui::COIN_SILVER, OK)));
+        assert_eq!(
+            cell_tag(Price::SellsFor {
+                price: Coins::from_copper(8 * 10),
+                worth
+            }),
+            Some(("8s".to_string(), crate::ui::COIN_SILVER, OK))
+        );
         assert_eq!(cell_tag(Price::Worth(worth)), None);
     }
 
@@ -2529,30 +3692,73 @@ mod tests {
     fn bartering_tags_every_ware_and_good_with_its_price() {
         let mut app = screen_app();
         let spot = fb_level::generate(1207, 1).folk[0];
-        let trade = fb_faction::Trade { profession: fb_faction::Profession::Weaponsmith, tier: fb_faction::Tier::Apprentice, style: None };
-        let person = crate::folk::person_1207(&fb_level::FolkSpot { trade: Some(trade), ..spot });
-        let wares: Vec<_> = (1..4).filter_map(|s| fb_items::roll_item("Sword", s)).collect();
-        let shelf = crate::shelf::Shelf { day: 0, wares: wares.clone(), sold: vec![], purse: 6000 };
+        let trade = fb_faction::Trade {
+            profession: fb_faction::Profession::Weaponsmith,
+            tier: fb_faction::Tier::Apprentice,
+            style: None,
+        };
+        let person = crate::folk::person_1207(&fb_level::FolkSpot {
+            trade: Some(trade),
+            ..spot
+        });
+        let wares: Vec<_> = (1..4)
+            .filter_map(|s| fb_items::roll_item("Sword", s))
+            .collect();
+        let shelf = crate::shelf::Shelf {
+            day: 0,
+            wares: wares.clone(),
+            sold: vec![],
+            purse: 6000,
+        };
         let session = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
             inventory.wear(pack, Slot::Back).unwrap();
             let dagger = inventory.add(fb_items::roll_item("Dagger", 6).unwrap());
             inventory.stow(dagger).unwrap();
-            let purse = inventory.add(purse_of(fb_items::Coins { gp: 1, sp: 0, cp: 0 }));
+            let purse = inventory.add(purse_of(fb_items::Coins {
+                gp: 1,
+                sp: 0,
+                cp: 0,
+            }));
             inventory.stow(purse).unwrap();
-            crate::barter::begin(&mut inventory, Entity::PLACEHOLDER, &person, fb_faction::Band::Neutral, &shelf).unwrap()
+            crate::barter::begin(
+                &mut inventory,
+                Entity::PLACEHOLDER,
+                &person,
+                fb_faction::Band::Neutral,
+                &shelf,
+            )
+            .unwrap()
         };
         let shelf_id = session.shelf;
-        app.world_mut().resource_mut::<crate::barter::Barter>().session = Some(session);
+        app.world_mut()
+            .resource_mut::<crate::barter::Barter>()
+            .session = Some(session);
         app.world_mut().resource_mut::<OpenContainer>().0 = Some(shelf_id);
         press(&mut app, KeyCode::KeyI);
-        let tags = app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count();
-        assert_eq!(tags, wares.len() + 1, "the swords on the shelf and the dagger, not the purse or the pack");
+        let tags = app
+            .world_mut()
+            .query_filtered::<(), With<PriceTag>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            tags,
+            wares.len() + 1,
+            "the swords on the shelf and the dagger, not the purse or the pack"
+        );
         // No barter, no tags.
-        app.world_mut().resource_mut::<crate::barter::Barter>().session = None;
+        app.world_mut()
+            .resource_mut::<crate::barter::Barter>()
+            .session = None;
         app.update();
-        assert_eq!(app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count(), 0);
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<(), With<PriceTag>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -2562,7 +3768,11 @@ mod tests {
         assert_eq!(header_purse(&mut app), "Purse empty");
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let purse = inventory.add(purse_of(fb_items::Coins { gp: 2, sp: 3, cp: 0 }));
+            let purse = inventory.add(purse_of(fb_items::Coins {
+                gp: 2,
+                sp: 3,
+                cp: 0,
+            }));
             quick(&mut inventory, purse).unwrap();
         }
         app.update();
@@ -2571,9 +3781,18 @@ mod tests {
 
     /// The colour of the header's span that reads `word`, and of the gear row 0 text.
     fn load_colours(app: &mut App, word: &str) -> (Color, Color) {
-        let header = header_spans(app).into_iter().flatten().find(|(text, _)| text.trim() == word).unwrap_or_else(|| panic!("a span reading {word}")).1;
+        let header = header_spans(app)
+            .into_iter()
+            .flatten()
+            .find(|(text, _)| text.trim() == word)
+            .unwrap_or_else(|| panic!("a span reading {word}"))
+            .1;
         let mut rows = app.world_mut().query::<(&sheet::GearLine, &TextColor)>();
-        let row = rows.iter(app.world()).find(|(l, _)| l.0 == 0).map(|(_, c)| c.0).expect("the load row");
+        let row = rows
+            .iter(app.world())
+            .find(|(l, _)| l.0 == 0)
+            .map(|(_, c)| c.0)
+            .expect("the load row");
         (header, row)
     }
 
@@ -2583,8 +3802,24 @@ mod tests {
         use crate::exhaustion::Exhaustion;
         use crate::play::Player;
         let mut app = screen_app();
-        app.init_resource::<crate::status::ShownConditions>().init_resource::<crate::rules::GameRules>().add_systems(Update, (crate::status::read_conditions, sheet::update_conditions).chain().after(build_screen));
-        let delver = app.world_mut().spawn((Player, DelverNeeds::default(), Exhaustion::default(), DelverStamina::default(), Load::of(65.0, 165.0))).id();
+        app.init_resource::<crate::status::ShownConditions>()
+            .init_resource::<crate::rules::GameRules>()
+            .add_systems(
+                Update,
+                (crate::status::read_conditions, sheet::update_conditions)
+                    .chain()
+                    .after(build_screen),
+            );
+        let delver = app
+            .world_mut()
+            .spawn((
+                Player,
+                DelverNeeds::default(),
+                Exhaustion::default(),
+                DelverStamina::default(),
+                Load::of(65.0, 165.0),
+            ))
+            .id();
         press(&mut app, KeyCode::KeyK);
         app.update();
         let said = sheet_text(&mut app);
@@ -2602,12 +3837,27 @@ mod tests {
     fn the_carried_load_is_coloured_by_its_band_in_the_header_and_on_the_sheet() {
         use crate::ui::{AMBER, BRIGHT, ORANGE, RED};
         let mut app = screen_app();
-        let attributes = fb_character::Attributes { strength: 11, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
-        *app.world_mut().resource_mut::<Character>() = Character { folk: fb_body::Folk::Human, attributes, ..Character::roll(4) };
+        let attributes = fb_character::Attributes {
+            strength: 11,
+            dexterity: 10,
+            constitution: 10,
+            intelligence: 10,
+            wisdom: 10,
+        };
+        *app.world_mut().resource_mut::<Character>() = Character {
+            folk: fb_body::Folk::Human,
+            attributes,
+            ..Character::roll(4)
+        };
         press(&mut app, KeyCode::KeyK);
         let mut pack = None;
         // STR 11 carries 165 lb: Light to 55, Burdened to 110, Encumbered to 165.
-        for (lb, word, colour) in [(40.0, "40/165", BRIGHT), (65.0, "65/165", AMBER), (137.5, "138/165", ORANGE), (172.0, "172/165", RED)] {
+        for (lb, word, colour) in [
+            (40.0, "40/165", BRIGHT),
+            (65.0, "65/165", AMBER),
+            (137.5, "138/165", ORANGE),
+            (172.0, "172/165", RED),
+        ] {
             {
                 let mut inventory = app.world_mut().resource_mut::<Inventory>();
                 if let Some(old) = pack {
@@ -2628,16 +3878,32 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         let mut targets = app.world_mut().query::<(&sheet::GearRow, &Children)>();
         let found: Vec<usize> = targets.iter(app.world()).map(|(row, _)| row.0).collect();
-        assert_eq!(found, vec![0], "only the load part of the header is a target, on the inventory tab");
+        assert_eq!(
+            found,
+            vec![0],
+            "only the load part of the header is a target, on the inventory tab"
+        );
         let (_, children) = targets.single(app.world()).unwrap();
         let text = children[0];
-        let spans: String = app.world().get::<Children>(text).unwrap().iter().filter_map(|s| app.world().get::<TextSpan>(s)).map(|t| t.0.clone()).collect();
+        let spans: String = app
+            .world()
+            .get::<Children>(text)
+            .unwrap()
+            .iter()
+            .filter_map(|s| app.world().get::<TextSpan>(s))
+            .map(|t| t.0.clone())
+            .collect();
         assert!(spans.starts_with("Load "), "{spans:?}");
         // Hovered from the header, on the inventory tab, the breakdown opens.
         hover_row(&mut app, Some(0));
         let tip = tip_text(&mut app);
-        assert!(tip.iter().any(|l| l.starts_with("Capacity: STR ")), "{tip:?}");
-        let mut tips = app.world_mut().query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
+        assert!(
+            tip.iter().any(|l| l.starts_with("Capacity: STR ")),
+            "{tip:?}"
+        );
+        let mut tips = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<sheet::BreakdownTip>>();
         assert_eq!(*tips.single(app.world()).unwrap(), Visibility::Inherited);
     }
 
@@ -2646,8 +3912,14 @@ mod tests {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         let bare = header_stats(&mut app);
-        assert!(bare.starts_with("AC ") && bare.contains("Load 0/"), "{bare}");
-        let helm = (1..300).filter_map(|s| fb_items::roll_item("Helm", s)).find(|i| i.profile.stats.armour >= 1.0).unwrap();
+        assert!(
+            bare.starts_with("AC ") && bare.contains("Load 0/"),
+            "{bare}"
+        );
+        let helm = (1..300)
+            .filter_map(|s| fb_items::roll_item("Helm", s))
+            .find(|i| i.profile.stats.armour >= 1.0)
+            .unwrap();
         {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let id = inventory.add(helm);
@@ -2657,7 +3929,10 @@ mod tests {
         let helmed = header_stats(&mut app);
         assert_ne!(helmed, bare);
         let character = app.world().resource::<Character>().clone();
-        assert_eq!(helmed, header::stats_line(&character.derive(app.world().resource::<Inventory>())));
+        assert_eq!(
+            helmed,
+            header::stats_line(&character.derive(app.world().resource::<Inventory>()))
+        );
     }
 
     #[test]
@@ -2665,7 +3940,10 @@ mod tests {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
-        let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
+        let found: Vec<(Slot, Node, Vec<Entity>)> = slots
+            .iter(app.world())
+            .map(|(s, n, c)| (s.0, n.clone(), c.to_vec()))
+            .collect();
         assert_eq!(found.len(), fb_items::tables::slot_places().len());
         for place in fb_items::tables::slot_places() {
             let (_, node, children) = found.iter().find(|(s, ..)| *s == place.slot).unwrap();
@@ -2675,11 +3953,18 @@ mod tests {
                 fb_items::tables::SlotSide::Right => assert_eq!(node.right, x, "{:?}", place.slot),
             }
             assert_eq!(node.top, px(doll::FRAME.y * place.y_percent / 100.0));
-            let labels: Vec<String> = children.iter().filter_map(|c| app.world().get::<Text>(*c)).map(|t| t.0.clone()).collect();
+            let labels: Vec<String> = children
+                .iter()
+                .filter_map(|c| app.world().get::<Text>(*c))
+                .map(|t| t.0.clone())
+                .collect();
             assert_eq!(labels, vec![place.label.clone()], "{:?}", place.slot);
         }
         let mut views = app.world_mut().query::<&DollView>();
-        assert_eq!(views.single(app.world()).unwrap().image, app.world().resource::<DollAssets>().doll);
+        assert_eq!(
+            views.single(app.world()).unwrap().image,
+            app.world().resource::<DollAssets>().doll
+        );
     }
 
     #[test]
@@ -2688,15 +3973,34 @@ mod tests {
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
         let gloves = inventory.add(fb_items::roll_item("Gloves", 4).unwrap());
-        inventory.put(gloves, pack, Placement::new(0, 0, false)).unwrap();
-        let drag = Drag { id: gloves, grab: IVec2::ZERO, size: inventory.footprint(gloves).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
-        assert_eq!(check_drop(&inventory, &drag, Target::Slot(Slot::Head)), Err(Refusal::WrongSlot));
-        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Hands), 6), Ok(vec![]));
+        inventory
+            .put(gloves, pack, Placement::new(0, 0, false))
+            .unwrap();
+        let drag = Drag {
+            id: gloves,
+            grab: IVec2::ZERO,
+            size: inventory.footprint(gloves).unwrap(),
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
+        assert_eq!(
+            check_drop(&inventory, &drag, Target::Slot(Slot::Head)),
+            Err(Refusal::WrongSlot)
+        );
+        assert_eq!(
+            drop_at(&mut inventory, &drag, Target::Slot(Slot::Hands), 6),
+            Ok(vec![])
+        );
         assert_eq!(inventory.worn(Slot::Hands), Some(gloves));
         // Lying on the floor, it is lifted from the level as it goes on.
         let ring = inventory.add(fb_items::roll_item("Ring", 2).unwrap());
         let drag = Drag { id: ring, ..drag };
-        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Ring2), 6), Ok(vec![FloorChange::Lifted(ring)]));
+        assert_eq!(
+            drop_at(&mut inventory, &drag, Target::Slot(Slot::Ring2), 6),
+            Ok(vec![FloorChange::Lifted(ring)])
+        );
     }
 
     #[test]
@@ -2705,8 +4009,18 @@ mod tests {
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
         let sword = inventory.add(fb_items::roll_item("Sword", 4).unwrap());
-        inventory.put(sword, pack, Placement::new(0, 0, false)).unwrap();
-        let drag = Drag { id: sword, grab: IVec2::ZERO, size: inventory.footprint(sword).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        inventory
+            .put(sword, pack, Placement::new(0, 0, false))
+            .unwrap();
+        let drag = Drag {
+            id: sword,
+            grab: IVec2::ZERO,
+            size: inventory.footprint(sword).unwrap(),
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
         assert_eq!(check_drop(&inventory, &drag, Target::Doll), Ok(()));
         assert_eq!(drop_at(&mut inventory, &drag, Target::Doll, 6), Ok(vec![]));
         assert_eq!(inventory.worn(Slot::Mainhand), Some(sword));
@@ -2714,15 +4028,31 @@ mod tests {
         // to go back to but the floor.
         let mace = inventory.add(fb_items::roll_item("Mace", 2).unwrap());
         let drag = Drag { id: mace, ..drag };
-        assert_eq!(drop_at(&mut inventory, &drag, Target::Slot(Slot::Mainhand), 6), Ok(vec![FloorChange::Lifted(mace), FloorChange::SetDown(sword, 0.0)]));
+        assert_eq!(
+            drop_at(&mut inventory, &drag, Target::Slot(Slot::Mainhand), 6),
+            Ok(vec![
+                FloorChange::Lifted(mace),
+                FloorChange::SetDown(sword, 0.0)
+            ])
+        );
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
-        assert_eq!(check_drop(&inventory, &Drag { id: bread, ..drag }, Target::Doll), Err(Refusal::NotWearable));
+        assert_eq!(
+            check_drop(&inventory, &Drag { id: bread, ..drag }, Target::Doll),
+            Err(Refusal::NotWearable)
+        );
     }
 
     /// Whether `item` posed for its icon lying `turned` stands as it is worn: its own up (+Y)
     /// still up the image and its front (+Z) toward the viewer.
     fn icon_upright(item: &fb_items::Item, turned: bool) -> bool {
-        let points: Vec<Vec3> = item.shape.build().parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+        let points: Vec<Vec3> = item
+            .shape
+            .build()
+            .parts
+            .iter()
+            .flat_map(|p| &p.positions)
+            .map(|&p| Vec3::from_array(p))
+            .collect();
         let (rotation, ..) = icon::icon_pose(&points, icon::stands_upright(item), turned).unwrap();
         (rotation * Vec3::Y).y > 0.9 && (rotation * Vec3::Z).z > 0.9
     }
@@ -2733,12 +4063,25 @@ mod tests {
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
         let coif = fb_items::roll_item("Mail coif", 3).unwrap();
-        assert!(icon_upright(&coif, false), "a coif's icon stands as it is worn");
+        assert!(
+            icon_upright(&coif, false),
+            "a coif's icon stands as it is worn"
+        );
         assert!(!icon_upright(&coif, true));
         let coif = inventory.add(coif);
-        inventory.put(coif, pack, Placement::new(0, 0, true)).unwrap();
+        inventory
+            .put(coif, pack, Placement::new(0, 0, true))
+            .unwrap();
         let entry = *inventory.grid(pack).unwrap().get(coif).unwrap();
-        let mut drag = Drag { id: coif, grab: IVec2::ZERO, size: entry.size, turned: entry.at.turned, press: Vec2::ZERO, active: true, target: None };
+        let mut drag = Drag {
+            id: coif,
+            grab: IVec2::ZERO,
+            size: entry.size,
+            turned: entry.at.turned,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
         // R steps through both ways the footprint lies, back to upright.
         drag.turn();
         assert!(!drag.turned && icon_upright(inventory.item(coif).unwrap(), drag.turned));
@@ -2746,21 +4089,52 @@ mod tests {
         drag.turn();
         assert!(drag.turned);
         drag.turn();
-        let into_pack = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(4, 2) };
+        let into_pack = Target::Cell {
+            view: GridView::Container(pack),
+            cell: IVec2::new(4, 2),
+        };
         assert_eq!(drop_at(&mut inventory, &drag, into_pack, 6), Ok(vec![]));
-        assert_eq!(inventory.location(coif), Some(Location::In { container: pack, at: Placement::new(4, 2, false) }));
+        assert_eq!(
+            inventory.location(coif),
+            Some(Location::In {
+                container: pack,
+                at: Placement::new(4, 2, false)
+            })
+        );
     }
 
     #[test]
     fn worn_gear_icons_stand_upright_and_weapons_lie_along_their_length() {
-        for base in ["Mail coif", "Hood", "Helm", "Pointed hat", "Tunic", "Cloak", "Trousers", "Gloves", "Boots", "Belt", "Amulet", "Ring", "Charm", "Pack", "Sack"] {
+        for base in [
+            "Mail coif",
+            "Hood",
+            "Helm",
+            "Pointed hat",
+            "Tunic",
+            "Cloak",
+            "Trousers",
+            "Gloves",
+            "Boots",
+            "Belt",
+            "Amulet",
+            "Ring",
+            "Charm",
+            "Pack",
+            "Sack",
+        ] {
             for seed in [1, 2, 1207] {
                 let item = fb_items::roll_item(base, seed).unwrap();
-                assert!(icon::stands_upright(&item) && icon_upright(&item, false), "{base} {seed}");
+                assert!(
+                    icon::stands_upright(&item) && icon_upright(&item, false),
+                    "{base} {seed}"
+                );
             }
         }
         for base in ["Sword", "Staff", "Spear", "Dagger", "Mace", "Bow", "Torch"] {
-            assert!(!icon::stands_upright(&fb_items::roll_item(base, 1).unwrap()), "{base}");
+            assert!(
+                !icon::stands_upright(&fb_items::roll_item(base, 1).unwrap()),
+                "{base}"
+            );
         }
     }
 
@@ -2772,25 +4146,54 @@ mod tests {
         // The belt pouch is 4 by 2. Rings fill all but its top-left two cells.
         for (x, y) in [(2, 0), (3, 0), (0, 1), (1, 1), (2, 1), (3, 1)] {
             let ring = inventory.add(fb_items::roll_item("Ring", x + 4 * y).unwrap());
-            inventory.put(ring, belt, Placement::new(x as u8, y as u8, false)).unwrap();
+            inventory
+                .put(ring, belt, Placement::new(x as u8, y as u8, false))
+                .unwrap();
         }
         let gloves = inventory.add(fb_items::roll_item("Gloves", 4).unwrap());
         inventory.wear(gloves, Slot::Hands).unwrap();
         let size = inventory.footprint(gloves).unwrap();
-        assert_eq!(size, Footprint { cols: 1, rows: 2 }, "gloves stand a cell wide and two tall");
+        assert_eq!(
+            size,
+            Footprint { cols: 1, rows: 2 },
+            "gloves stand a cell wide and two tall"
+        );
         // Taken off by the slot and let go over the top-left cell: upright it would run onto a
         // ring, so it lies turned.
-        let drag = Drag { id: gloves, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
-        let corner = Target::Cell { view: GridView::Container(belt), cell: IVec2::ZERO };
+        let drag = Drag {
+            id: gloves,
+            grab: IVec2::ZERO,
+            size,
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
+        let corner = Target::Cell {
+            view: GridView::Container(belt),
+            cell: IVec2::ZERO,
+        };
         assert_eq!(check_drop(&inventory, &drag, corner), Ok(()));
         assert_eq!(drop_at(&mut inventory, &drag, corner, 6), Ok(vec![]));
-        assert_eq!(inventory.location(gloves), Some(Location::In { container: belt, at: Placement::new(0, 0, true) }));
+        assert_eq!(
+            inventory.location(gloves),
+            Some(Location::In {
+                container: belt,
+                at: Placement::new(0, 0, true)
+            })
+        );
         // Where it fits upright, it lies upright.
         inventory.wear(gloves, Slot::Hands).unwrap();
         let ring = inventory.grid(belt).unwrap().at_cell(0, 1).unwrap().id;
         inventory.take_out(ring);
         assert_eq!(drop_at(&mut inventory, &drag, corner, 6), Ok(vec![]));
-        assert_eq!(inventory.location(gloves), Some(Location::In { container: belt, at: Placement::new(0, 0, false) }));
+        assert_eq!(
+            inventory.location(gloves),
+            Some(Location::In {
+                container: belt,
+                at: Placement::new(0, 0, false)
+            })
+        );
     }
 
     #[test]
@@ -2799,14 +4202,21 @@ mod tests {
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
         let gloves = inventory.add(fb_items::roll_item("Gloves", 4).unwrap());
-        inventory.put(gloves, pack, Placement::new(0, 0, false)).unwrap();
+        inventory
+            .put(gloves, pack, Placement::new(0, 0, false))
+            .unwrap();
         assert_eq!(quick(&mut inventory, gloves), Ok(vec![]));
         assert_eq!(inventory.worn(Slot::Hands), Some(gloves));
         assert_eq!(quick(&mut inventory, gloves), Ok(vec![]));
-        assert!(matches!(inventory.location(gloves), Some(Location::In { container, .. }) if container == pack));
+        assert!(
+            matches!(inventory.location(gloves), Some(Location::In { container, .. }) if container == pack)
+        );
         // Bread lying underfoot is picked up.
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
-        assert_eq!(quick(&mut inventory, bread), Ok(vec![FloorChange::Lifted(bread)]));
+        assert_eq!(
+            quick(&mut inventory, bread),
+            Ok(vec![FloorChange::Lifted(bread)])
+        );
     }
 
     fn purse_of(coins: fb_items::Coins) -> fb_items::Item {
@@ -2821,19 +4231,55 @@ mod tests {
         let mut inventory = Inventory::default();
         let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
-        inventory.set_coins(Coins { gp: 1, sp: 0, cp: 0 });
-        let purse = inventory.add(purse_of(Coins { gp: 2, sp: 3, cp: 0 }));
+        inventory.set_coins(Coins {
+            gp: 1,
+            sp: 0,
+            cp: 0,
+        });
+        let purse = inventory.add(purse_of(Coins {
+            gp: 2,
+            sp: 3,
+            cp: 0,
+        }));
         inventory.stow(purse).unwrap();
         assert_eq!(quick(&mut inventory, purse), Ok(vec![]));
-        assert_eq!(inventory.coins(), Coins { gp: 3, sp: 3, cp: 0 });
+        assert_eq!(
+            inventory.coins(),
+            Coins {
+                gp: 3,
+                sp: 3,
+                cp: 0
+            }
+        );
         assert_eq!(inventory.item(purse), None);
         assert_eq!(inventory.contents_count(pack), 0);
-        assert_eq!(opened_line(Coins { gp: 2, sp: 3, cp: 0 }), "You empty the purse: 2 gp 3 sp.");
+        assert_eq!(
+            opened_line(Coins {
+                gp: 2,
+                sp: 3,
+                cp: 0
+            }),
+            "You empty the purse: 2 gp 3 sp."
+        );
         assert_eq!(opened_line(Coins::default()), "The purse is empty.");
         // One lying underfoot is lifted from the level as it is opened.
-        let lying = inventory.add(purse_of(Coins { gp: 0, sp: 0, cp: 7 }));
-        assert_eq!(quick(&mut inventory, lying), Ok(vec![FloorChange::Lifted(lying)]));
-        assert_eq!(inventory.coins(), Coins { gp: 3, sp: 3, cp: 7 });
+        let lying = inventory.add(purse_of(Coins {
+            gp: 0,
+            sp: 0,
+            cp: 7,
+        }));
+        assert_eq!(
+            quick(&mut inventory, lying),
+            Ok(vec![FloorChange::Lifted(lying)])
+        );
+        assert_eq!(
+            inventory.coins(),
+            Coins {
+                gp: 3,
+                sp: 3,
+                cp: 7
+            }
+        );
         assert_eq!(inventory.item(lying), None);
     }
 
@@ -2842,17 +4288,29 @@ mod tests {
         let mut inventory = Inventory::default();
         let (chest, bread) = chest_with_bread(&mut inventory);
         inventory.forget(bread);
-        let purse = inventory.add(purse_of(fb_items::Coins { gp: 5, sp: 0, cp: 0 }));
-        inventory.put(purse, chest, Placement::new(0, 0, false)).unwrap();
+        let purse = inventory.add(purse_of(fb_items::Coins {
+            gp: 5,
+            sp: 0,
+            cp: 0,
+        }));
+        inventory
+            .put(purse, chest, Placement::new(0, 0, false))
+            .unwrap();
         assert_eq!(quick(&mut inventory, purse), Ok(vec![]));
         assert_eq!(inventory.coins().gp, 5);
         assert_eq!(inventory.contents_count(chest), 0);
     }
 
     fn chest_with_bread(inventory: &mut Inventory) -> (ItemId, ItemId) {
-        let chest = inventory.add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 3, false)));
+        let chest = inventory.add(fb_items::container_item(fb_level::chest_state(
+            armory::families::chests::ChestStyle::Chest,
+            3,
+            false,
+        )));
         let bread = inventory.add(fb_items::roll_item("Bread", 1).unwrap());
-        inventory.put(bread, chest, Placement::new(2, 1, false)).unwrap();
+        inventory
+            .put(bread, chest, Placement::new(2, 1, false))
+            .unwrap();
         (chest, bread)
     }
 
@@ -2863,14 +4321,21 @@ mod tests {
         inventory.wear(pack, Slot::Back).unwrap();
         let (chest, bread) = chest_with_bread(&mut inventory);
         assert_eq!(quick(&mut inventory, bread), Ok(vec![]));
-        assert!(matches!(inventory.location(bread), Some(Location::In { container, .. }) if container == pack));
+        assert!(
+            matches!(inventory.location(bread), Some(Location::In { container, .. }) if container == pack)
+        );
         assert_eq!(inventory.contents_count(chest), 0);
     }
 
     #[test]
     fn an_open_container_shows_as_its_own_grid_until_the_screen_closes() {
         let mut app = screen_app();
-        app.add_systems(Update, close_container_with_screen.after(switch_screens).before(build_screen));
+        app.add_systems(
+            Update,
+            close_container_with_screen
+                .after(switch_screens)
+                .before(build_screen),
+        );
         let (chest, _) = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>());
         let grids = |app: &mut App| {
             let mut views = app.world_mut().query::<&GridView>();
@@ -2879,7 +4344,11 @@ mod tests {
         app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         app.update();
-        assert!(grids(&mut app).contains(&GridView::Container(chest)), "{:?}", grids(&mut app));
+        assert!(
+            grids(&mut app).contains(&GridView::Container(chest)),
+            "{:?}",
+            grids(&mut app)
+        );
         let mut items = app.world_mut().query::<&ItemView>();
         assert_eq!(items.iter(app.world()).count(), 1, "the bread in it");
         press(&mut app, KeyCode::KeyI);
@@ -2907,17 +4376,28 @@ mod tests {
             .spawn((
                 ScrollColumn,
                 ScrollPosition::default(),
-                ComputedNode { size: Vec2::new(400.0, 300.0), content_size: Vec2::new(400.0, content), inverse_scale_factor: 1.0, ..default() },
-                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(200.0, 150.0))),
+                ComputedNode {
+                    size: Vec2::new(400.0, 300.0),
+                    content_size: Vec2::new(400.0, content),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                    200.0, 150.0,
+                ))),
             ))
             .id();
         (app, column)
     }
 
     fn wheel(app: &mut App, lines: f32) {
-        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::new(0.0, lines);
+        app.world_mut()
+            .resource_mut::<AccumulatedMouseScroll>()
+            .delta = Vec2::new(0.0, lines);
         app.update();
-        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::ZERO;
+        app.world_mut()
+            .resource_mut::<AccumulatedMouseScroll>()
+            .delta = Vec2::ZERO;
     }
 
     fn offset(app: &App, column: Entity) -> f32 {
@@ -2931,7 +4411,11 @@ mod tests {
         assert_eq!(offset(&app, column), SCROLL_LINE_PX);
         wheel(&mut app, -100.0);
         assert_eq!(offset(&app, column), 600.0, "900 of content in 300");
-        assert_eq!(app.world().resource::<ColumnScroll>().0, 600.0, "remembered for the next rebuild");
+        assert_eq!(
+            app.world().resource::<ColumnScroll>().0,
+            600.0,
+            "remembered for the next rebuild"
+        );
         wheel(&mut app, 100.0);
         assert_eq!(offset(&app, column), 0.0);
     }
@@ -2946,19 +4430,31 @@ mod tests {
     #[test]
     fn the_wheel_scrolls_the_shelf_and_not_the_column_under_it() {
         let (mut app, column) = scroll_app(900.0, Vec2::new(200.0, 150.0));
-        app.init_resource::<ShelfScrolled>().add_systems(Update, scroll_shelf);
+        app.init_resource::<ShelfScrolled>()
+            .add_systems(Update, scroll_shelf);
         let shelf = app
             .world_mut()
             .spawn((
                 ShelfScroll,
                 ScrollPosition::default(),
-                ComputedNode { size: Vec2::new(300.0, 200.0), content_size: Vec2::new(300.0, 500.0), inverse_scale_factor: 1.0, ..default() },
-                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(200.0, 150.0))),
+                ComputedNode {
+                    size: Vec2::new(300.0, 200.0),
+                    content_size: Vec2::new(300.0, 500.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(
+                    200.0, 150.0,
+                ))),
             ))
             .id();
         wheel(&mut app, -1.0);
         assert_eq!(offset(&app, shelf), SCROLL_LINE_PX);
-        assert_eq!(offset(&app, column), 0.0, "the column stays while the mouse is over the shelf");
+        assert_eq!(
+            offset(&app, column),
+            0.0,
+            "the column stays while the mouse is over the shelf"
+        );
         wheel(&mut app, -100.0);
         assert_eq!(offset(&app, shelf), 300.0, "500 of content in 200");
         assert_eq!(app.world().resource::<ShelfScrolled>().0, 300.0);
@@ -2972,7 +4468,11 @@ mod tests {
         let cell = Tuning::default().interface.cell_size;
         let grid = grid_size(&Grid::<ItemId>::new(5, 12), cell).y;
         assert!(grid > SHELF_MAX_PX && shelf_view_height(grid) == SHELF_MAX_PX);
-        assert_eq!(shelf_view_height(100.0), 100.0, "a short shelf does not scroll");
+        assert_eq!(
+            shelf_view_height(100.0),
+            100.0,
+            "a short shelf does not scroll"
+        );
         // Header (about 200), the balance panel (about 200) and the shelf's label leave room.
         let ledger = crate::tuning::InterfaceTuning::REFERENCE_HEIGHT * 0.92 - 44.0;
         assert!(200.0 + 200.0 + 40.0 + SHELF_MAX_PX <= ledger, "{ledger}");
@@ -2988,10 +4488,20 @@ mod tests {
     #[test]
     fn a_held_item_near_the_bottom_edge_scrolls_down_and_near_the_top_back_up() {
         let (mut app, column) = scroll_app(900.0, Vec2::new(200.0, 295.0));
-        let held = Drag { id: ItemId(1), grab: IVec2::ZERO, size: Footprint { cols: 1, rows: 1 }, turned: false, press: Vec2::ZERO, active: true, target: None };
+        let held = Drag {
+            id: ItemId(1),
+            grab: IVec2::ZERO,
+            size: Footprint { cols: 1, rows: 1 },
+            turned: false,
+            press: Vec2::ZERO,
+            active: true,
+            target: None,
+        };
         app.world_mut().resource_mut::<Dragging>().0 = Some(held);
         let frame = |app: &mut App| {
-            app.world_mut().resource_mut::<Time<Real>>().advance_by(std::time::Duration::from_millis(100));
+            app.world_mut()
+                .resource_mut::<Time<Real>>()
+                .advance_by(std::time::Duration::from_millis(100));
             app.update();
         };
         frame(&mut app);
@@ -3001,7 +4511,10 @@ mod tests {
         }
         assert_eq!(offset(&app, column), 600.0);
         let mut windows = app.world_mut().query::<&mut Window>();
-        windows.single_mut(app.world_mut()).unwrap().set_cursor_position(Some(Vec2::new(200.0, 5.0)));
+        windows
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(200.0, 5.0)));
         frame(&mut app);
         assert!(offset(&app, column) < 600.0);
         // Carrying nothing, the edge does nothing.
@@ -3016,7 +4529,11 @@ mod tests {
         let mut world = World::new();
         world.spawn((
             GridView::Underfoot,
-            ComputedNode { size: Vec2::new(100.0, 100.0), inverse_scale_factor: 1.0, ..default() },
+            ComputedNode {
+                size: Vec2::new(100.0, 100.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
             UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(50.0, 50.0))),
         ));
         let mut state = bevy::ecs::system::SystemState::<(
@@ -3026,9 +4543,23 @@ mod tests {
         )>::new(&mut world);
         let (drops, grids, slots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
-        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, None, 72.0);
+        let at = |column: Option<Rect>| {
+            target_under(
+                Vec2::new(10.0, 10.0),
+                &drops,
+                &grids,
+                &slots,
+                None,
+                page,
+                column,
+                None,
+                72.0,
+            )
+        };
         assert!(matches!(at(None), Target::Cell { .. }));
-        assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
+        assert!(
+            matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO)
+        );
         // The column starts below this point: the grid is under the header, clipped away.
         assert_eq!(at(Some(Rect::new(0.0, 80.0, 200.0, 200.0))), Target::Page);
     }

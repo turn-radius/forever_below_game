@@ -7,7 +7,10 @@
 //! --count 6` ([`SceneryView::from_args`]); the kinds are `Scenery`'s snake_case names.
 
 use armory::{build::scenery::Scenery, cond::ConditionState};
-use bevy::{camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera, window::PrimaryWindow};
+use bevy::{
+    camera::Exposure, prelude::*, render::view::Tonemapping, ui::IsDefaultUiCamera,
+    window::PrimaryWindow,
+};
 
 use crate::level::fixture_appearance;
 use crate::light::StudioLight;
@@ -27,7 +30,16 @@ impl Plugin for SceneryViewPlugin {
             .insert_resource(ClearColor(PLATE))
             .insert_resource(StudioLight::ARMORY.ambient_light(&Exposure::INDOOR))
             .add_systems(Startup, setup)
-            .add_systems(Update, (keys, show.run_if(resource_changed::<SceneryView>), frame_camera, status).chain());
+            .add_systems(
+                Update,
+                (
+                    keys,
+                    show.run_if(resource_changed::<SceneryView>),
+                    frame_camera,
+                    status,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -44,7 +56,13 @@ pub struct SceneryView {
 
 impl Default for SceneryView {
     fn default() -> Self {
-        SceneryView { kind: Scenery::Bunk, first_seed: 1207, count: 6, yaw: 0.35, pitch: 0.45 }
+        SceneryView {
+            kind: Scenery::Bunk,
+            first_seed: 1207,
+            count: 6,
+            yaw: 0.35,
+            pitch: 0.45,
+        }
     }
 }
 
@@ -59,7 +77,12 @@ impl SceneryView {
                 Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
                 None => (arg, None),
             };
-            let mut value = || inline.clone().or_else(|| args.next()).ok_or(format!("{flag} needs a value"));
+            let mut value = || {
+                inline
+                    .clone()
+                    .or_else(|| args.next())
+                    .ok_or(format!("{flag} needs a value"))
+            };
             match flag.as_str() {
                 "--scenery" => {}
                 "--kind" => view.kind = parse_kind(&value()?)?,
@@ -80,13 +103,17 @@ impl SceneryView {
 
     /// Steps to the next kind (or, negative, the previous).
     pub fn step_kind(&mut self, by: isize) {
-        let at = Scenery::ALL.iter().position(|&k| k == self.kind).unwrap_or(0) as isize;
+        let at = Scenery::ALL
+            .iter()
+            .position(|&k| k == self.kind)
+            .unwrap_or(0) as isize;
         self.kind = Scenery::ALL[(at + by).rem_euclid(Scenery::ALL.len() as isize) as usize];
     }
 }
 
 fn number<T: std::str::FromStr>(flag: &str, text: &str) -> Result<T, String> {
-    text.parse().map_err(|_| format!("{flag}: {text:?} is not a number"))
+    text.parse()
+        .map_err(|_| format!("{flag}: {text:?} is not a number"))
 }
 
 fn kind_key(kind: Scenery) -> String {
@@ -99,7 +126,12 @@ pub fn parse_kind(name: &str) -> Result<Scenery, String> {
     Scenery::ALL
         .into_iter()
         .find(|&k| kind_key(k) == wanted)
-        .ok_or_else(|| format!("unknown scenery {name:?}; one of: {}", Scenery::ALL.map(kind_key).join(", ")))
+        .ok_or_else(|| {
+            format!(
+                "unknown scenery {name:?}; one of: {}",
+                Scenery::ALL.map(kind_key).join(", ")
+            )
+        })
 }
 
 #[derive(Component)]
@@ -128,7 +160,12 @@ fn setup(mut commands: Commands) {
         Text::default(),
         TextFont::from_font_size(18.0),
         TextColor(PLATE_INK),
-        Node { position_type: PositionType::Absolute, top: px(16.0), left: px(20.0), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(16.0),
+            left: px(20.0),
+            ..default()
+        },
     ));
 }
 
@@ -144,7 +181,12 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<SceneryView>) {
     if keys.just_pressed(KeyCode::ArrowLeft) {
         view.first_seed = view.first_seed.wrapping_sub(count);
     }
-    for (key, dyaw, dpitch) in [(KeyCode::KeyA, -0.25, 0.0), (KeyCode::KeyD, 0.25, 0.0), (KeyCode::KeyW, 0.0, -0.1), (KeyCode::KeyS, 0.0, 0.1)] {
+    for (key, dyaw, dpitch) in [
+        (KeyCode::KeyA, -0.25, 0.0),
+        (KeyCode::KeyD, 0.25, 0.0),
+        (KeyCode::KeyW, 0.0, -0.1),
+        (KeyCode::KeyS, 0.0, 0.1),
+    ] {
         if keys.just_pressed(key) {
             view.yaw += dyaw;
             view.pitch = (view.pitch + dpitch).clamp(0.0, 1.4);
@@ -157,23 +199,37 @@ fn columns(count: u32) -> u32 {
     count.min(3)
 }
 
-fn show(mut commands: Commands, view: Res<SceneryView>, old: Query<Entity, With<OnView>>, mut spawner: ItemSpawner) {
+fn show(
+    mut commands: Commands,
+    view: Res<SceneryView>,
+    old: Query<Entity, With<OnView>>,
+    mut spawner: ItemSpawner,
+) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
     let seeds: Vec<u32> = view.seeds().collect();
-    let meshes: Vec<_> = seeds.iter().map(|&seed| view.kind.build(seed, CEILING)).collect();
+    let meshes: Vec<_> = seeds
+        .iter()
+        .map(|&seed| view.kind.build(seed, CEILING))
+        .collect();
     let cell = 2.0 * view.kind.radius() + GAP;
     let cols = columns(view.count);
     let rows = view.count.div_ceil(cols);
     for (i, (&seed, mesh)) in seeds.iter().zip(&meshes).enumerate() {
         let (col, row) = (i as u32 % cols, i as u32 / cols);
-        let at = Vec3::new((col as f32 - (cols - 1) as f32 * 0.5) * cell, 0.0, (row as f32 - (rows - 1) as f32 * 0.5) * cell);
+        let at = Vec3::new(
+            (col as f32 - (cols - 1) as f32 * 0.5) * cell,
+            0.0,
+            (row as f32 - (rows - 1) as f32 * 0.5) * cell,
+        );
         if item_bounds(mesh).is_none() {
             continue;
         }
         let appearance = fixture_appearance(seed, ConditionState::Serviceable);
-        spawner.spawn(mesh, &appearance).insert((OnView, Transform::from_translation(at)));
+        spawner
+            .spawn(mesh, &appearance)
+            .insert((OnView, Transform::from_translation(at)));
     }
 }
 
@@ -183,8 +239,12 @@ fn frame_camera(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<(&Projection, &mut Transform), With<ViewCamera>>,
 ) {
-    let Ok((Projection::Perspective(lens), mut transform)) = cameras.single_mut() else { return };
-    let aspect = windows.single().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    let Ok((Projection::Perspective(lens), mut transform)) = cameras.single_mut() else {
+        return;
+    };
+    let aspect = windows
+        .single()
+        .map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
     let cell = 2.0 * view.kind.radius() + GAP;
     let cols = columns(view.count);
     let rows = view.count.div_ceil(cols);
@@ -234,8 +294,12 @@ mod tests {
 
     #[test]
     fn parses_the_command_line() {
-        let view = SceneryView::from_args(args("--scenery --kind weapon_rack --seed=42 --count 3")).unwrap();
-        assert_eq!((view.kind, view.first_seed, view.count), (Scenery::WeaponRack, 42, 3));
+        let view = SceneryView::from_args(args("--scenery --kind weapon_rack --seed=42 --count 3"))
+            .unwrap();
+        assert_eq!(
+            (view.kind, view.first_seed, view.count),
+            (Scenery::WeaponRack, 42, 3)
+        );
         assert!(SceneryView::from_args(args("--kind chair")).is_err());
     }
 
@@ -248,7 +312,10 @@ mod tests {
 
     #[test]
     fn tab_wraps_round_the_kinds() {
-        let mut view = SceneryView { kind: Scenery::WeaponRack, ..default() };
+        let mut view = SceneryView {
+            kind: Scenery::WeaponRack,
+            ..default()
+        };
         view.step_kind(1);
         assert_eq!(view.kind, Scenery::Rubble);
         view.step_kind(-1);

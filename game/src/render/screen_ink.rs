@@ -20,11 +20,16 @@ use bevy::{
         camera::ExtractedCamera,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_resource::{
-            BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-            DynamicUniformBuffer, FragmentState, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
-            RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
+            BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
+            CachedRenderPipelineId, ColorTargetState, ColorWrites, DynamicUniformBuffer,
+            FragmentState, Operations, PipelineCache, RenderPassColorAttachment,
+            RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages, ShaderType,
+            SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
             TextureSampleType,
-            binding_types::{texture_2d, texture_2d_multisampled, texture_depth_2d, texture_depth_2d_multisampled, uniform_buffer},
+            binding_types::{
+                texture_2d, texture_2d_multisampled, texture_depth_2d,
+                texture_depth_2d_multisampled, uniform_buffer,
+            },
         },
         renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery},
         view::{ExtractedView, Msaa, ViewTarget},
@@ -86,7 +91,10 @@ struct ScreenInkAddedNormal;
 impl ScreenInk {
     /// The same 2 px of Armory ink as the hull's default.
     pub fn new() -> Self {
-        ScreenInk { color: ARMORY_INK.into(), width_px: 2.0 }
+        ScreenInk {
+            color: ARMORY_INK.into(),
+            width_px: 2.0,
+        }
     }
 }
 
@@ -109,14 +117,27 @@ pub(super) fn add(app: &mut App) {
     let style = InkStyle::from_env().unwrap_or_default();
     app.insert_resource(style)
         .add_plugins(ExtractComponentPlugin::<ScreenInk>::default())
-        .add_systems(Update, (apply_ink_style, hide_new_hulls, add_ink_to_new_cameras).chain());
-    let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
+        .add_systems(
+            Update,
+            (apply_ink_style, hide_new_hulls, add_ink_to_new_cameras).chain(),
+        );
+    let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+        return;
+    };
     render_app
         .init_resource::<SpecializedRenderPipelines<ScreenInkPipeline>>()
         .init_resource::<ScreenInkUniforms>()
         .add_systems(RenderStartup, init_pipeline)
-        .add_systems(Render, (prepare_pipelines, prepare_uniforms).in_set(RenderSystems::Prepare))
-        .add_systems(Core3d, screen_ink.in_set(Core3dSystems::PostProcess).before(tonemapping));
+        .add_systems(
+            Render,
+            (prepare_pipelines, prepare_uniforms).in_set(RenderSystems::Prepare),
+        )
+        .add_systems(
+            Core3d,
+            screen_ink
+                .in_set(Core3dSystems::PostProcess)
+                .before(tonemapping),
+        );
 }
 
 /// When the style changes, shows or hides every hull and adds or removes the screen pass on
@@ -132,7 +153,11 @@ fn apply_ink_style(
     }
     let screen = *style == InkStyle::Screen;
     for mut visibility in &mut hulls {
-        visibility.set_if_neq(if screen { Visibility::Hidden } else { Visibility::Inherited });
+        visibility.set_if_neq(if screen {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
     }
     for camera in &cameras {
         set_camera_ink(&mut commands, camera, screen);
@@ -161,11 +186,22 @@ fn add_ink_to_new_cameras(
     }
 }
 
-type CameraInk = (Entity, Has<ScreenInk>, Has<DepthPrepass>, Has<NormalPrepass>, Has<ScreenInkAddedDepth>, Has<ScreenInkAddedNormal>);
+type CameraInk = (
+    Entity,
+    Has<ScreenInk>,
+    Has<DepthPrepass>,
+    Has<NormalPrepass>,
+    Has<ScreenInkAddedDepth>,
+    Has<ScreenInkAddedNormal>,
+);
 
 /// Puts the screen pass and the prepasses it reads on a camera, or takes them off. Only a
 /// prepass the pass added (it carries a marker) is taken off.
-fn set_camera_ink(commands: &mut Commands, camera: <CameraInk as bevy::ecs::query::QueryData>::Item<'_, '_>, screen: bool) {
+fn set_camera_ink(
+    commands: &mut Commands,
+    camera: <CameraInk as bevy::ecs::query::QueryData>::Item<'_, '_>,
+    screen: bool,
+) {
     let (entity, has_ink, has_depth, has_normal, added_depth, added_normal) = camera;
     let mut camera = commands.entity(entity);
     if screen && !has_ink {
@@ -220,7 +256,11 @@ struct ScreenInkOffset(u32);
 #[derive(Component)]
 struct ScreenInkPipelineId(CachedRenderPipelineId);
 
-fn init_pipeline(mut commands: Commands, fullscreen_shader: Res<FullscreenShader>, asset_server: Res<AssetServer>) {
+fn init_pipeline(
+    mut commands: Commands,
+    fullscreen_shader: Res<FullscreenShader>,
+    asset_server: Res<AssetServer>,
+) {
     let layout_for = |multisampled: bool| {
         BindGroupLayoutDescriptor::new(
             "screen ink bind group layout",
@@ -229,7 +269,11 @@ fn init_pipeline(mut commands: Commands, fullscreen_shader: Res<FullscreenShader
                 (
                     texture_2d(TextureSampleType::Float { filterable: false }),
                     uniform_buffer::<ScreenInkUniform>(true),
-                    if multisampled { texture_depth_2d_multisampled() } else { texture_depth_2d() },
+                    if multisampled {
+                        texture_depth_2d_multisampled()
+                    } else {
+                        texture_depth_2d()
+                    },
                     if multisampled {
                         texture_2d_multisampled(TextureSampleType::Float { filterable: false })
                     } else {
@@ -253,12 +297,24 @@ impl SpecializedRenderPipeline for ScreenInkPipeline {
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         RenderPipelineDescriptor {
             label: Some("screen ink".into()),
-            layout: vec![if key.multisampled { self.layout_multisampled.clone() } else { self.layout.clone() }],
+            layout: vec![if key.multisampled {
+                self.layout_multisampled.clone()
+            } else {
+                self.layout.clone()
+            }],
             vertex: self.fullscreen_shader.to_vertex_state(),
             fragment: Some(FragmentState {
                 shader: self.shader.clone(),
-                shader_defs: if key.multisampled { vec![ShaderDefVal::Bool("MULTISAMPLED".into(), true)] } else { vec![] },
-                targets: vec![Some(ColorTargetState { format: key.target_format, blend: None, write_mask: ColorWrites::ALL })],
+                shader_defs: if key.multisampled {
+                    vec![ShaderDefVal::Bool("MULTISAMPLED".into(), true)]
+                } else {
+                    vec![]
+                },
+                targets: vec![Some(ColorTargetState {
+                    format: key.target_format,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
                 ..default()
             }),
             ..default()
@@ -275,7 +331,10 @@ fn prepare_pipelines(
     views: Query<(Entity, &ExtractedView, &Msaa), (With<ScreenInk>, With<ExtractedCamera>)>,
 ) {
     for (view, extracted, msaa) in &views {
-        let key = ScreenInkPipelineKey { target_format: extracted.target_format, multisampled: msaa.samples() > 1 };
+        let key = ScreenInkPipelineKey {
+            target_format: extracted.target_format,
+            multisampled: msaa.samples() > 1,
+        };
         let id = pipelines.specialize(&pipeline_cache, &pipeline, key);
         commands.entity(view).insert(ScreenInkPipelineId(id));
     }
@@ -295,8 +354,16 @@ fn prepare_uniforms(
         let uniform = ScreenInkUniform {
             color: Vec4::from_array(ink.color.to_f32_array()),
             width: ink.width_px * extracted.viewport.w as f32 / 1080.0,
-            ortho_scale: if orthographic { clip_from_view.z_axis.z.abs() } else { 0.0 },
-            depth_threshold: if orthographic { ORTHO_DEPTH_THRESHOLD } else { DEPTH_THRESHOLD },
+            ortho_scale: if orthographic {
+                clip_from_view.z_axis.z.abs()
+            } else {
+                0.0
+            },
+            depth_threshold: if orthographic {
+                ORTHO_DEPTH_THRESHOLD
+            } else {
+                DEPTH_THRESHOLD
+            },
             normal_threshold: NORMAL_THRESHOLD,
         };
         let offset = uniforms.0.push(&uniform);
@@ -306,19 +373,38 @@ fn prepare_uniforms(
 }
 
 fn screen_ink(
-    view: ViewQuery<(&ViewTarget, &ScreenInkPipelineId, &ScreenInkOffset, &ViewPrepassTextures, &Msaa), With<ScreenInk>>,
+    view: ViewQuery<
+        (
+            &ViewTarget,
+            &ScreenInkPipelineId,
+            &ScreenInkOffset,
+            &ViewPrepassTextures,
+            &Msaa,
+        ),
+        With<ScreenInk>,
+    >,
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<ScreenInkPipeline>,
     uniforms: Res<ScreenInkUniforms>,
     mut ctx: RenderContext,
 ) {
     let (view_target, pipeline_id, offset, prepass, msaa) = view.into_inner();
-    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline_id.0) else { return };
-    let Some(uniform) = uniforms.0.binding() else { return };
-    let (Some(depth), Some(normal)) = (prepass.depth_only_view(), prepass.normal_view()) else { return };
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline_id.0) else {
+        return;
+    };
+    let Some(uniform) = uniforms.0.binding() else {
+        return;
+    };
+    let (Some(depth), Some(normal)) = (prepass.depth_only_view(), prepass.normal_view()) else {
+        return;
+    };
 
     let post_process = view_target.post_process_write();
-    let layout = if msaa.samples() > 1 { &pipeline.layout_multisampled } else { &pipeline.layout };
+    let layout = if msaa.samples() > 1 {
+        &pipeline.layout_multisampled
+    } else {
+        &pipeline.layout
+    };
     let bind_group = ctx.render_device().create_bind_group(
         Some("screen ink bind group"),
         &pipeline_cache.get_bind_group_layout(layout),
@@ -349,8 +435,10 @@ mod tests {
 
     fn app(style: InkStyle) -> App {
         let mut app = App::new();
-        app.insert_resource(style)
-            .add_systems(Update, (apply_ink_style, hide_new_hulls, add_ink_to_new_cameras).chain());
+        app.insert_resource(style).add_systems(
+            Update,
+            (apply_ink_style, hide_new_hulls, add_ink_to_new_cameras).chain(),
+        );
         app
     }
 
@@ -365,19 +453,38 @@ mod tests {
     #[test]
     fn the_screen_style_hides_the_hulls_and_the_hull_style_brings_them_back() {
         let mut app = app(InkStyle::Hull);
-        let hull = app.world_mut().spawn((InkOutline, Visibility::default())).id();
+        let hull = app
+            .world_mut()
+            .spawn((InkOutline, Visibility::default()))
+            .id();
         app.update();
-        assert_eq!(*app.world().get::<Visibility>(hull).unwrap(), Visibility::Inherited);
+        assert_eq!(
+            *app.world().get::<Visibility>(hull).unwrap(),
+            Visibility::Inherited
+        );
         *app.world_mut().resource_mut::<InkStyle>() = InkStyle::Screen;
         app.update();
-        assert_eq!(*app.world().get::<Visibility>(hull).unwrap(), Visibility::Hidden);
-        let late = app.world_mut().spawn((InkOutline, Visibility::default())).id();
+        assert_eq!(
+            *app.world().get::<Visibility>(hull).unwrap(),
+            Visibility::Hidden
+        );
+        let late = app
+            .world_mut()
+            .spawn((InkOutline, Visibility::default()))
+            .id();
         app.update();
-        assert_eq!(*app.world().get::<Visibility>(late).unwrap(), Visibility::Hidden, "a hull spawned later is hidden too");
+        assert_eq!(
+            *app.world().get::<Visibility>(late).unwrap(),
+            Visibility::Hidden,
+            "a hull spawned later is hidden too"
+        );
         *app.world_mut().resource_mut::<InkStyle>() = InkStyle::Hull;
         app.update();
         for hull in [hull, late] {
-            assert_eq!(*app.world().get::<Visibility>(hull).unwrap(), Visibility::Inherited);
+            assert_eq!(
+                *app.world().get::<Visibility>(hull).unwrap(),
+                Visibility::Inherited
+            );
         }
     }
 
@@ -385,7 +492,10 @@ mod tests {
     fn cameras_get_the_pass_and_its_prepasses_only_on_the_screen_style() {
         let mut app = app(InkStyle::Hull);
         let bare = app.world_mut().spawn(Camera3d::default()).id();
-        let with_depth = app.world_mut().spawn((Camera3d::default(), DepthPrepass)).id();
+        let with_depth = app
+            .world_mut()
+            .spawn((Camera3d::default(), DepthPrepass))
+            .id();
         app.update();
         assert!(app.world().get::<ScreenInk>(bare).is_none());
 
@@ -404,30 +514,57 @@ mod tests {
             assert!(app.world().get::<ScreenInk>(camera).is_none());
             assert!(app.world().get::<NormalPrepass>(camera).is_none());
         }
-        assert!(app.world().get::<DepthPrepass>(bare).is_none(), "the depth prepass the pass added goes with it");
-        assert!(app.world().get::<DepthPrepass>(with_depth).is_some(), "a depth prepass something else added stays");
+        assert!(
+            app.world().get::<DepthPrepass>(bare).is_none(),
+            "the depth prepass the pass added goes with it"
+        );
+        assert!(
+            app.world().get::<DepthPrepass>(with_depth).is_some(),
+            "a depth prepass something else added stays"
+        );
     }
 
     #[test]
     fn prepasses_someone_else_added_survive_the_switch_back() {
         let mut app = app(InkStyle::Hull);
-        let both = app.world_mut().spawn((Camera3d::default(), DepthPrepass, NormalPrepass)).id();
-        let normal = app.world_mut().spawn((Camera3d::default(), NormalPrepass)).id();
+        let both = app
+            .world_mut()
+            .spawn((Camera3d::default(), DepthPrepass, NormalPrepass))
+            .id();
+        let normal = app
+            .world_mut()
+            .spawn((Camera3d::default(), NormalPrepass))
+            .id();
         *app.world_mut().resource_mut::<InkStyle>() = InkStyle::Screen;
         app.update();
         *app.world_mut().resource_mut::<InkStyle>() = InkStyle::Hull;
         app.update();
-        assert!(app.world().get::<NormalPrepass>(both).is_some() && app.world().get::<DepthPrepass>(both).is_some());
-        assert!(app.world().get::<NormalPrepass>(normal).is_some(), "a normal prepass something else added stays");
-        assert!(app.world().get::<DepthPrepass>(normal).is_none(), "the depth prepass the pass added goes");
+        assert!(
+            app.world().get::<NormalPrepass>(both).is_some()
+                && app.world().get::<DepthPrepass>(both).is_some()
+        );
+        assert!(
+            app.world().get::<NormalPrepass>(normal).is_some(),
+            "a normal prepass something else added stays"
+        );
+        assert!(
+            app.world().get::<DepthPrepass>(normal).is_none(),
+            "the depth prepass the pass added goes"
+        );
         assert!(app.world().get::<ScreenInkAddedDepth>(normal).is_none());
     }
 
     #[test]
     fn exempt_cameras_get_nothing() {
         let mut app = app(InkStyle::Screen);
-        let overlay = app.world_mut().spawn((Camera3d::default(), ScreenInkExempt)).id();
+        let overlay = app
+            .world_mut()
+            .spawn((Camera3d::default(), ScreenInkExempt))
+            .id();
         app.update();
-        assert!(app.world().get::<ScreenInk>(overlay).is_none() && app.world().get::<NormalPrepass>(overlay).is_none());
+        assert!(
+            app.world().get::<ScreenInk>(overlay).is_none()
+                && app.world().get::<NormalPrepass>(overlay).is_none()
+        );
     }
 }

@@ -111,12 +111,19 @@ pub struct SheetView {
 /// A word with its first letter capital.
 pub fn capitalised(word: &str) -> String {
     let mut chars = word.chars();
-    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// A signed amount: `+2`, `+0`, `−1`.
 pub fn signed(amount: f64) -> String {
-    if amount < 0.0 { format!("\u{2212}{}", number(-amount)) } else { format!("+{}", number(amount)) }
+    if amount < 0.0 {
+        format!("\u{2212}{}", number(-amount))
+    } else {
+        format!("+{}", number(amount))
+    }
 }
 
 /// What a slot is called on a card: `Head`, `Main hand`, `Ring`.
@@ -124,19 +131,28 @@ pub fn slot_word(slot: Slot) -> String {
     match slot {
         Slot::Ring1 | Slot::Ring2 => "Ring".to_string(),
         Slot::Body => "Body".to_string(),
-        _ => slot_places().iter().find(|p| p.slot == slot).map_or_else(|| format!("{slot:?}"), |p| capitalised(&p.label.to_lowercase())),
+        _ => slot_places().iter().find(|p| p.slot == slot).map_or_else(
+            || format!("{slot:?}"),
+            |p| capitalised(&p.label.to_lowercase()),
+        ),
     }
 }
 
 /// A term's label as the tooltip writes it: an attribute and its score (`DEX 10`) is the
 /// attribute alone, and the first letter is capital.
 fn term_label(label: &str) -> String {
-    if is_attribute_label(label) { label[..3].to_string() } else { capitalised(label) }
+    if is_attribute_label(label) {
+        label[..3].to_string()
+    } else {
+        capitalised(label)
+    }
 }
 
 /// Whether a term's label is an attribute and its score: `DEX 10`.
 fn is_attribute_label(label: &str) -> bool {
-    label.split_once(' ').is_some_and(|(name, score)| ATTRIBUTE_NAMES.contains(&name) && score.parse::<i32>().is_ok())
+    label.split_once(' ').is_some_and(|(name, score)| {
+        ATTRIBUTE_NAMES.contains(&name) && score.parse::<i32>().is_ok()
+    })
 }
 
 /// The rows a number's terms make: each term's label and what it brought.
@@ -160,11 +176,20 @@ pub fn tip_rows(explained: &Explained) -> Vec<(String, String)> {
 }
 
 fn section(heading: Option<String>, explained: &Explained) -> TipSection {
-    TipSection { heading, rows: tip_rows(explained) }
+    TipSection {
+        heading,
+        rows: tip_rows(explained),
+    }
 }
 
 fn bar(label: &'static str, fill: f32, text: impl Into<String>, colour: Color) -> Bar {
-    Bar { label, fill: fill.clamp(0.0, 1.0), text: text.into(), colour, was: None }
+    Bar {
+        label,
+        fill: fill.clamp(0.0, 1.0),
+        text: text.into(),
+        colour,
+        was: None,
+    }
 }
 
 /// A need's bar: the meter's value, so a full bar is the worst, in the band's word.
@@ -185,7 +210,11 @@ fn card(slot: Slot, rolled: &Rolled, off: &std::collections::BTreeSet<String>) -
         adds.push(format!("AC {}", signed(s.armour as f64)));
     }
     if let Some(dice) = s.damage {
-        let bonus = if s.damage_bonus != 0.0 { signed(s.damage_bonus as f64) } else { String::new() };
+        let bonus = if s.damage_bonus != 0.0 {
+            signed(s.damage_bonus as f64)
+        } else {
+            String::new()
+        };
         adds.push(format!("{dice}{bonus}"));
     }
     adds.push(format!("{} lb", number(s.weight as f64)));
@@ -194,14 +223,30 @@ fn card(slot: Slot, rolled: &Rolled, off: &std::collections::BTreeSet<String>) -
         title: item.title().to_string(),
         rarity: item.rarity,
         slot_word: slot_word(slot),
-        affixes: rolled.affixes.iter().map(|a| AffixRow { name: a.name.clone(), text: a.text.clone(), good: a.good, on: !off.contains(&a.name) }).collect(),
+        affixes: rolled
+            .affixes
+            .iter()
+            .map(|a| AffixRow {
+                name: a.name.clone(),
+                text: a.text.clone(),
+                good: a.good,
+                on: !off.contains(&a.name),
+            })
+            .collect(),
         adds,
     }
 }
 
 /// The card of an item not yet put on, for the picker's preview: every affix on.
 pub fn preview_card(slot: Slot, item: &fb_items::Item) -> GearCard {
-    card(slot, &Rolled { item: item.clone(), affixes: item.affixes.clone() }, &std::collections::BTreeSet::new())
+    card(
+        slot,
+        &Rolled {
+            item: item.clone(),
+            affixes: item.affixes.clone(),
+        },
+        &std::collections::BTreeSet::new(),
+    )
 }
 
 /// The sheet for `state`, with the time the lab has had so far, under `rules`.
@@ -210,7 +255,9 @@ pub fn view(state: &LabState, time: &TimeLab, rules: &Rules) -> SheetView {
     let inventory = state.inventory();
     let loadout = character.loadout(&inventory);
     let strength = character.strength();
-    let held = inventory.worn(Slot::Mainhand).and_then(|id| inventory.item(id));
+    let held = inventory
+        .worn(Slot::Mainhand)
+        .and_then(|id| inventory.item(id));
     let range = Weapon::of_stats(held).damage_range_explained(modifier(strength));
     let capacity = loadout.capacity_with(rules, strength);
     let load = character.load_explained(&inventory);
@@ -218,21 +265,47 @@ pub fn view(state: &LabState, time: &TimeLab, rules: &Rules) -> SheetView {
     let (least, most) = (range.min.value(), range.max.value());
     let hit_points = first_level_hit_points_explained_with(rules, character).value() as i32;
     let hp = hit_points;
-    let attributes = [character.attributes.strength, character.attributes.dexterity, character.attributes.constitution, character.attributes.intelligence, character.attributes.wisdom]
-        .iter()
-        .zip(ATTRIBUTE_NAMES)
-        .map(|(&score, name)| Attribute { name, score, modifier: modifier(score) })
-        .collect();
+    let attributes = [
+        character.attributes.strength,
+        character.attributes.dexterity,
+        character.attributes.constitution,
+        character.attributes.intelligence,
+        character.attributes.wisdom,
+    ]
+    .iter()
+    .zip(ATTRIBUTE_NAMES)
+    .map(|(&score, name)| Attribute {
+        name,
+        score,
+        modifier: modifier(score),
+    })
+    .collect();
     let mana = character.mana_pool_with(rules);
     let tiles = vec![
-        Tile { label: "Armour", value: number(armour.value().round()), small: None, tip: Tip { title: format!("Armour {}", number(armour.value().round())), sections: vec![section(None, &armour)] }, was: None },
+        Tile {
+            label: "Armour",
+            value: number(armour.value().round()),
+            small: None,
+            tip: Tip {
+                title: format!("Armour {}", number(armour.value().round())),
+                sections: vec![section(None, &armour)],
+            },
+            was: None,
+        },
         Tile {
             label: "Damage",
             value: format!("{}\u{2013}{}", number(least), number(most)),
             small: None,
             tip: Tip {
                 title: format!("Damage {}\u{2013}{}", number(least), number(most)),
-                sections: vec![section(Some(format!("Least {}", number(least))), &range.min), section(Some(format!("Most {}", number(most))), &range.max), section(Some(format!("Average {}", number(range.mean.value()))), &range.mean)],
+                sections: vec![
+                    section(Some(format!("Least {}", number(least))), &range.min),
+                    section(Some(format!("Most {}", number(most))), &range.max),
+                    section(
+                        Some(format!("Average {}", number(range.mean.value()))),
+                        &range.mean,
+                    ),
+                ],
             },
             was: None,
         },
@@ -240,40 +313,116 @@ pub fn view(state: &LabState, time: &TimeLab, rules: &Rules) -> SheetView {
             label: "Load",
             value: number(load.value()),
             small: Some(format!(" / {}", number(capacity.value()))),
-            tip: Tip { title: format!("Load {} of {} lb", number(load.value()), number(capacity.value())), sections: vec![section(Some("Carrying".into()), &load), section(Some("Can carry".into()), &capacity)] },
+            tip: Tip {
+                title: format!(
+                    "Load {} of {} lb",
+                    number(load.value()),
+                    number(capacity.value())
+                ),
+                sections: vec![
+                    section(Some("Carrying".into()), &load),
+                    section(Some("Can carry".into()), &capacity),
+                ],
+            },
             was: None,
         },
     ];
     SheetView {
-        title: format!("{} {}", character.folk.race().label, capitalised(character.class.word())),
+        title: format!(
+            "{} {}",
+            character.folk.race().label,
+            capitalised(character.class.word())
+        ),
         caption: format!("seed {}", state.seed),
         attributes,
-        life: bar("Life", hp as f32 / hit_points.max(1) as f32, format!("{} / {hit_points}", hp.max(0)), crate::lab_view::LIFE),
-        stamina: bar("Stamina", 1.0, format!("{} s", number(rules.stamina.sprint_seconds)), crate::lab_view::STAMINA),
-        mana: bar("Mana", 1.0, format!("{} / {}", number(mana), number(mana)), crate::lab_view::MANA),
-        needs: [("Hunger", &time.needs.hunger), ("Thirst", &time.needs.thirst), ("Sleepiness", &time.needs.sleepiness)].into_iter().map(|(label, meter)| need(label, meter, rules)).collect(),
-        exhaustion: (time.exhaustion.level, if time.exhaustion.is_dead() { "Dead".to_string() } else { format!("{} of {EXHAUSTION_STEPS}", time.exhaustion.level) }),
+        life: bar(
+            "Life",
+            hp as f32 / hit_points.max(1) as f32,
+            format!("{} / {hit_points}", hp.max(0)),
+            crate::lab_view::LIFE,
+        ),
+        stamina: bar(
+            "Stamina",
+            1.0,
+            format!("{} s", number(rules.stamina.sprint_seconds)),
+            crate::lab_view::STAMINA,
+        ),
+        mana: bar(
+            "Mana",
+            1.0,
+            format!("{} / {}", number(mana), number(mana)),
+            crate::lab_view::MANA,
+        ),
+        needs: [
+            ("Hunger", &time.needs.hunger),
+            ("Thirst", &time.needs.thirst),
+            ("Sleepiness", &time.needs.sleepiness),
+        ]
+        .into_iter()
+        .map(|(label, meter)| need(label, meter, rules))
+        .collect(),
+        exhaustion: (
+            time.exhaustion.level,
+            if time.exhaustion.is_dead() {
+                "Dead".to_string()
+            } else {
+                format!("{} of {EXHAUSTION_STEPS}", time.exhaustion.level)
+            },
+        ),
         tiles,
-        cards: state.slots.iter().filter_map(|s| Some(card(s.slot, &s.roll()?, &s.off))).collect(),
+        cards: state
+            .slots
+            .iter()
+            .filter_map(|s| Some(card(s.slot, &s.roll()?, &s.off)))
+            .collect(),
     }
 }
 
 /// The sheet for `state` under its own rules, with what each number was under `saved` beside the
 /// ones the edit moved ([`crate::lab_rules::was_text`]).
-pub fn view_marked(state: &LabState, time: &TimeLab, saved: &crate::lab_rules::RuleSet) -> SheetView {
+pub fn view_marked(
+    state: &LabState,
+    time: &TimeLab,
+    saved: &crate::lab_rules::RuleSet,
+) -> SheetView {
     let mut now = view(state, time, &state.ruleset.rules);
-    let before = view(&LabState { ruleset: saved.clone(), ..state.clone() }, time, &saved.rules);
+    let before = view(
+        &LabState {
+            ruleset: saved.clone(),
+            ..state.clone()
+        },
+        time,
+        &saved.rules,
+    );
     for (tile, was) in now.tiles.iter_mut().zip(&before.tiles) {
         tile.was = if tile.value == was.value {
-            let small = |t: &Tile| t.small.as_deref().map(|s| s.trim_start_matches(" / ").to_string()).unwrap_or_default();
+            let small = |t: &Tile| {
+                t.small
+                    .as_deref()
+                    .map(|s| s.trim_start_matches(" / ").to_string())
+                    .unwrap_or_default()
+            };
             was_text(&small(tile), &small(was))
         } else {
-            was_text(&format!("{}{}", tile.value, tile.small.clone().unwrap_or_default()), &format!("{}{}", was.value, was.small.clone().unwrap_or_default()))
+            was_text(
+                &format!("{}{}", tile.value, tile.small.clone().unwrap_or_default()),
+                &format!("{}{}", was.value, was.small.clone().unwrap_or_default()),
+            )
         };
     }
-    let pairs = |v: &SheetView| -> Vec<String> { [&v.life, &v.stamina, &v.mana].into_iter().chain(&v.needs).map(|b| b.text.clone()).collect() };
+    let pairs = |v: &SheetView| -> Vec<String> {
+        [&v.life, &v.stamina, &v.mana]
+            .into_iter()
+            .chain(&v.needs)
+            .map(|b| b.text.clone())
+            .collect()
+    };
     let was_texts = pairs(&before);
-    for (bar, was) in [&mut now.life, &mut now.stamina, &mut now.mana].into_iter().chain(now.needs.iter_mut()).zip(was_texts) {
+    for (bar, was) in [&mut now.life, &mut now.stamina, &mut now.mana]
+        .into_iter()
+        .chain(now.needs.iter_mut())
+        .zip(was_texts)
+    {
         bar.was = was_text(&bar.text, &was);
     }
     now
@@ -282,15 +431,33 @@ pub fn view_marked(state: &LabState, time: &TimeLab, saved: &crate::lab_rules::R
 /// Every word on the sheet, for a test that no formula is written out.
 pub fn sheet_text(view: &SheetView) -> Vec<String> {
     let mut text = vec![view.title.clone(), view.caption.clone()];
-    text.extend(view.attributes.iter().map(|a| format!("{} {} {}", a.name, a.score, signed(a.modifier as f64))));
-    text.extend([&view.life, &view.stamina, &view.mana].into_iter().chain(&view.needs).map(|b| format!("{} {}", b.label, b.text)));
+    text.extend(
+        view.attributes
+            .iter()
+            .map(|a| format!("{} {} {}", a.name, a.score, signed(a.modifier as f64))),
+    );
+    text.extend(
+        [&view.life, &view.stamina, &view.mana]
+            .into_iter()
+            .chain(&view.needs)
+            .map(|b| format!("{} {}", b.label, b.text)),
+    );
     text.push(view.exhaustion.1.clone());
     for tile in &view.tiles {
-        text.push(format!("{} {}{}", tile.label, tile.value, tile.small.clone().unwrap_or_default()));
+        text.push(format!(
+            "{} {}{}",
+            tile.label,
+            tile.value,
+            tile.small.clone().unwrap_or_default()
+        ));
     }
     for card in &view.cards {
         text.push(format!("{} {}", card.title, card.slot_word));
-        text.extend(card.affixes.iter().map(|a| format!("{}: {}", a.name, a.text)));
+        text.extend(
+            card.affixes
+                .iter()
+                .map(|a| format!("{}: {}", a.name, a.text)),
+        );
         text.extend(card.adds.iter().cloned());
     }
     text
@@ -307,7 +474,11 @@ mod tests {
     }
 
     fn seed_with(base: &str, affix: &str) -> u32 {
-        (1..2000).find(|&s| roll_item(base, s).is_some_and(|i| i.affixes.iter().any(|a| a.name == affix))).unwrap_or_else(|| panic!("no {base} of {affix}"))
+        (1..2000)
+            .find(|&s| {
+                roll_item(base, s).is_some_and(|i| i.affixes.iter().any(|a| a.name == affix))
+            })
+            .unwrap_or_else(|| panic!("no {base} of {affix}"))
     }
 
     fn tile<'a>(view: &'a SheetView, label: &str) -> &'a Tile {
@@ -317,13 +488,50 @@ mod tests {
     #[test]
     fn the_default_fighter_reads_as_a_sheet() {
         let view = default_view();
-        assert_eq!((view.title.as_str(), view.caption.as_str()), ("Human Fighter", "seed 1207"));
-        assert_eq!((tile(&view, "Armour").value.as_str(), tile(&view, "Damage").value.as_str()), ("15", "1\u{2013}8"));
+        assert_eq!(
+            (view.title.as_str(), view.caption.as_str()),
+            ("Human Fighter", "seed 1207")
+        );
+        assert_eq!(
+            (
+                tile(&view, "Armour").value.as_str(),
+                tile(&view, "Damage").value.as_str()
+            ),
+            ("15", "1\u{2013}8")
+        );
         let load = tile(&view, "Load");
-        assert_eq!((load.value.as_str(), load.small.as_deref()), ("27", Some(" / 150")));
-        assert_eq!(view.attributes.iter().map(|a| (a.name, a.score, a.modifier)).collect::<Vec<_>>(), vec![("STR", 10, 0), ("DEX", 10, 0), ("CON", 10, 0), ("INT", 10, 0), ("WIS", 10, 0)]);
-        assert_eq!((view.life.text.as_str(), view.mana.text.as_str(), view.stamina.text.as_str()), ("10 / 10", "4 / 4", "30 s"));
-        assert_eq!(view.needs.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), vec!["Fed", "Quenched", "Rested"]);
+        assert_eq!(
+            (load.value.as_str(), load.small.as_deref()),
+            ("27", Some(" / 150"))
+        );
+        assert_eq!(
+            view.attributes
+                .iter()
+                .map(|a| (a.name, a.score, a.modifier))
+                .collect::<Vec<_>>(),
+            vec![
+                ("STR", 10, 0),
+                ("DEX", 10, 0),
+                ("CON", 10, 0),
+                ("INT", 10, 0),
+                ("WIS", 10, 0)
+            ]
+        );
+        assert_eq!(
+            (
+                view.life.text.as_str(),
+                view.mana.text.as_str(),
+                view.stamina.text.as_str()
+            ),
+            ("10 / 10", "4 / 4", "30 s")
+        );
+        assert_eq!(
+            view.needs
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Fed", "Quenched", "Rested"]
+        );
         assert_eq!(view.exhaustion, (0, "0 of 6".to_string()));
     }
 
@@ -332,14 +540,26 @@ mod tests {
         let view = default_view();
         let rows = &tile(&view, "Armour").tip.sections[0].rows;
         let row = |label: &str, value: &str| (label.to_string(), value.to_string());
-        assert_eq!(rows, &vec![row("Base", "10"), row("DEX", "+0"), row("Sallet", "+2"), row("Mail Hauberk", "+3")]);
+        assert_eq!(
+            rows,
+            &vec![
+                row("Base", "10"),
+                row("DEX", "+0"),
+                row("Sallet", "+2"),
+                row("Mail Hauberk", "+3")
+            ]
+        );
         assert_eq!(tile(&view, "Armour").tip.title, "Armour 15");
     }
 
     #[test]
     fn the_default_fighter_wears_a_sallet_and_a_hauberk_and_holds_a_messer() {
         let view = default_view();
-        let cards: Vec<(&str, &str, &[String])> = view.cards.iter().map(|c| (c.title.as_str(), c.slot_word.as_str(), c.adds.as_slice())).collect();
+        let cards: Vec<(&str, &str, &[String])> = view
+            .cards
+            .iter()
+            .map(|c| (c.title.as_str(), c.slot_word.as_str(), c.adds.as_slice()))
+            .collect();
         assert_eq!(cards.len(), 3, "{cards:?}");
         for (title, slot, adds) in &cards {
             match *title {
@@ -357,11 +577,25 @@ mod tests {
         state.equip(Slot::Belt, "Belt", seed_with("Belt", "of the Ox"));
         let view = view(&state, &TimeLab::default(), defaults());
         assert_eq!(tile(&view, "Load").small.as_deref(), Some(" / 175"));
-        let belt = view.cards.iter().find(|c| c.slot == Slot::Belt).expect("the belt's card");
+        let belt = view
+            .cards
+            .iter()
+            .find(|c| c.slot == Slot::Belt)
+            .expect("the belt's card");
         assert!(belt.title.contains("of the Ox"), "{}", belt.title);
-        assert!(belt.affixes.iter().any(|a| a.name == "of the Ox" && a.on), "{:?}", belt.affixes);
+        assert!(
+            belt.affixes.iter().any(|a| a.name == "of the Ox" && a.on),
+            "{:?}",
+            belt.affixes
+        );
         let capacity = &tile(&view, "Load").tip.sections[1];
-        assert!(capacity.rows.iter().any(|(label, value)| label.contains("of the Ox") && value == "+25"), "{capacity:?}");
+        assert!(
+            capacity
+                .rows
+                .iter()
+                .any(|(label, value)| label.contains("of the Ox") && value == "+25"),
+            "{capacity:?}"
+        );
     }
 
     #[test]
@@ -380,7 +614,13 @@ mod tests {
         let mut state = LabState::default();
         state.set_score(0, 14);
         let view = view(&state, &TimeLab::default(), defaults());
-        assert_eq!((tile(&view, "Damage").value.as_str(), tile(&view, "Load").small.as_deref()), ("3\u{2013}10", Some(" / 210")));
+        assert_eq!(
+            (
+                tile(&view, "Damage").value.as_str(),
+                tile(&view, "Load").small.as_deref()
+            ),
+            ("3\u{2013}10", Some(" / 210"))
+        );
         assert_eq!(view.attributes[0].modifier, 2);
     }
 
@@ -419,16 +659,32 @@ mod tests {
 
     #[test]
     fn term_rows_are_labels_and_amounts() {
-        let e = Explained::new("Thing", "").base("base", 10.0).add("DEX 14", 2.0).add("Cursed", -1.0).times("Halved", 0.5);
+        let e = Explained::new("Thing", "")
+            .base("base", 10.0)
+            .add("DEX 14", 2.0)
+            .add("Cursed", -1.0)
+            .times("Halved", 0.5);
         let row = |l: &str, v: &str| (l.to_string(), v.to_string());
-        assert_eq!(tip_rows(&e), vec![row("Base", "10"), row("DEX", "+2"), row("Cursed", "\u{2212}1"), row("Halved", "\u{d7}0.5")]);
+        assert_eq!(
+            tip_rows(&e),
+            vec![
+                row("Base", "10"),
+                row("DEX", "+2"),
+                row("Cursed", "\u{2212}1"),
+                row("Halved", "\u{d7}0.5")
+            ]
+        );
     }
 
     #[test]
     fn slots_are_named_as_the_doll_names_them() {
         assert_eq!(slot_word(Slot::Head), "Head");
         assert_eq!(slot_word(Slot::Ring2), "Ring");
-        assert!(slot_word(Slot::Mainhand).to_lowercase().contains("hand"), "{}", slot_word(Slot::Mainhand));
+        assert!(
+            slot_word(Slot::Mainhand).to_lowercase().contains("hand"),
+            "{}",
+            slot_word(Slot::Mainhand)
+        );
     }
 
     #[test]
@@ -437,24 +693,58 @@ mod tests {
         let mut state = LabState::default();
         let plain = view_marked(&state, &TimeLab::default(), &saved);
         assert!(plain.tiles.iter().all(|t| t.was.is_none()) && plain.stamina.was.is_none());
-        crate::lab_rules::set_leaf(&mut state.ruleset, "load/capacity_per_strength", crate::lab_rules::Leaf::Float(20.0));
-        crate::lab_rules::set_leaf(&mut state.ruleset, "combat/armour_base", crate::lab_rules::Leaf::Int(13));
-        crate::lab_rules::set_leaf(&mut state.ruleset, "stamina/sprint_seconds", crate::lab_rules::Leaf::Float(25.0));
+        crate::lab_rules::set_leaf(
+            &mut state.ruleset,
+            "load/capacity_per_strength",
+            crate::lab_rules::Leaf::Float(20.0),
+        );
+        crate::lab_rules::set_leaf(
+            &mut state.ruleset,
+            "combat/armour_base",
+            crate::lab_rules::Leaf::Int(13),
+        );
+        crate::lab_rules::set_leaf(
+            &mut state.ruleset,
+            "stamina/sprint_seconds",
+            crate::lab_rules::Leaf::Float(25.0),
+        );
         let view = view_marked(&state, &TimeLab::default(), &saved);
         let load = tile(&view, "Load");
-        assert_eq!((load.value.as_str(), load.small.as_deref(), load.was.as_deref()), ("27", Some(" / 200"), Some("was 150")));
+        assert_eq!(
+            (
+                load.value.as_str(),
+                load.small.as_deref(),
+                load.was.as_deref()
+            ),
+            ("27", Some(" / 200"), Some("was 150"))
+        );
         let armour = tile(&view, "Armour");
-        assert_eq!((armour.value.as_str(), armour.was.as_deref()), ("18", Some("was 15")));
-        assert_eq!((view.stamina.text.as_str(), view.stamina.was.as_deref()), ("25 s", Some("was 30 s")));
+        assert_eq!(
+            (armour.value.as_str(), armour.was.as_deref()),
+            ("18", Some("was 15"))
+        );
+        assert_eq!(
+            (view.stamina.text.as_str(), view.stamina.was.as_deref()),
+            ("25 s", Some("was 30 s"))
+        );
         assert!(tile(&view, "Damage").was.is_none());
     }
 
     #[test]
     fn exhaustion_at_the_death_level_reads_dead() {
-        let mut time = TimeLab { exhaustion: fb_character::Exhaustion::new(5), ..Default::default() };
-        assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (5, "5 of 6".to_string()));
+        let mut time = TimeLab {
+            exhaustion: fb_character::Exhaustion::new(5),
+            ..Default::default()
+        };
+        assert_eq!(
+            view(&LabState::default(), &time, defaults()).exhaustion,
+            (5, "5 of 6".to_string())
+        );
         time.exhaustion = fb_character::Exhaustion::new(6);
-        assert_eq!(view(&LabState::default(), &time, defaults()).exhaustion, (6, "Dead".to_string()));
+        assert_eq!(
+            view(&LabState::default(), &time, defaults()).exhaustion,
+            (6, "Dead".to_string())
+        );
     }
 
     #[test]
@@ -463,21 +753,49 @@ mod tests {
         let with = view(&state, &TimeLab::default(), defaults());
         state.remove(Slot::Body);
         let without = view(&state, &TimeLab::default(), defaults());
-        assert_eq!((tile(&with, "Armour").value.as_str(), tile(&without, "Armour").value.as_str()), ("15", "12"));
-        assert_eq!((tile(&with, "Load").value.as_str(), tile(&without, "Load").value.as_str()), ("27", "7"));
+        assert_eq!(
+            (
+                tile(&with, "Armour").value.as_str(),
+                tile(&without, "Armour").value.as_str()
+            ),
+            ("15", "12")
+        );
+        assert_eq!(
+            (
+                tile(&with, "Load").value.as_str(),
+                tile(&without, "Load").value.as_str()
+            ),
+            ("27", "7")
+        );
         assert!(without.cards.iter().all(|c| c.slot != Slot::Body));
     }
 
     #[test]
     fn a_moth_eaten_cloak_shows_its_flaw_on_its_card() {
-        let seed = (1..4000).find(|&s| roll_item("Cloak", s).is_some_and(|i| i.affixes.iter().any(|a| a.name == "Moth-eaten"))).expect("some cloak is moth-eaten");
+        let seed = (1..4000)
+            .find(|&s| {
+                roll_item("Cloak", s)
+                    .is_some_and(|i| i.affixes.iter().any(|a| a.name == "Moth-eaten"))
+            })
+            .expect("some cloak is moth-eaten");
         let item = roll_item("Cloak", seed).unwrap();
         let preview = preview_card(Slot::Cloak, &item);
-        assert!(preview.affixes.iter().any(|a| a.name == "Moth-eaten" && !a.good && a.on), "{:?}", preview.affixes);
+        assert!(
+            preview
+                .affixes
+                .iter()
+                .any(|a| a.name == "Moth-eaten" && !a.good && a.on),
+            "{:?}",
+            preview.affixes
+        );
         let mut state = LabState::default();
         state.equip(Slot::Cloak, "Cloak", seed);
         let view = view(&state, &TimeLab::default(), defaults());
         let worn = view.cards.iter().find(|c| c.slot == Slot::Cloak).unwrap();
-        assert!(worn.affixes.iter().any(|a| a.name == "Moth-eaten"), "{:?}", worn.affixes);
+        assert!(
+            worn.affixes.iter().any(|a| a.name == "Moth-eaten"),
+            "{:?}",
+            worn.affixes
+        );
     }
 }

@@ -51,7 +51,12 @@ struct Veil(Vec<Handle<Image>>);
 /// `None` while it is whole.
 pub fn veil(sight: f64) -> Option<(usize, f32)> {
     let lost = (1.0 - sight).clamp(0.0, 1.0) as f32;
-    (lost > 1e-3).then(|| (((lost * STEPS as f32).ceil() as usize).clamp(1, STEPS) - 1, DARKEST * lost.sqrt()))
+    (lost > 1e-3).then(|| {
+        (
+            ((lost * STEPS as f32).ceil() as usize).clamp(1, STEPS) - 1,
+            DARKEST * lost.sqrt(),
+        )
+    })
 }
 
 /// The shade's opacity at `(x, y)` (each -1 to 1 across the view) for gradient `step`: clear in
@@ -70,23 +75,51 @@ fn shade_image(step: usize) -> Image {
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for j in 0..h {
         for i in 0..w {
-            let (x, y) = ((i as f32 + 0.5) / w as f32 * 2.0 - 1.0, (j as f32 + 0.5) / h as f32 * 2.0 - 1.0);
+            let (x, y) = (
+                (i as f32 + 0.5) / w as f32 * 2.0 - 1.0,
+                (j as f32 + 0.5) / h as f32 * 2.0 - 1.0,
+            );
             rgba.extend_from_slice(&[255, 255, 255, (shade_at(x, y, step) * 255.0).round() as u8]);
         }
     }
-    Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
+    Image::new(
+        Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
 }
 
 /// Draws the gradients once and lays a shade over each new view.
-fn spawn_veil(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera>>, mut images: ResMut<Assets<Image>>) {
+fn spawn_veil(
+    mut commands: Commands,
+    new: Query<Entity, Added<ViewModelCamera>>,
+    mut images: ResMut<Assets<Image>>,
+) {
     for camera in &new {
-        let handles: Vec<Handle<Image>> = (0..STEPS).map(|step| images.add(shade_image(step))).collect();
+        let handles: Vec<Handle<Image>> = (0..STEPS)
+            .map(|step| images.add(shade_image(step)))
+            .collect();
         commands.spawn((
             Name::new("Sight veil"),
             Hud,
             UiTargetCamera(camera),
-            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
-            ImageNode { image: handles[0].clone(), color: SHADE.with_alpha(0.0), ..default() },
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            ImageNode {
+                image: handles[0].clone(),
+                color: SHADE.with_alpha(0.0),
+                ..default()
+            },
             Visibility::Hidden,
             Pickable::IGNORE,
             // Under the rest of the HUD, so the orbs and badges stay readable through it.
@@ -98,7 +131,12 @@ fn spawn_veil(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera>>
             Glare,
             Hud,
             UiTargetCamera(camera),
-            Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
             BackgroundColor(GLARE.with_alpha(0.0)),
             Pickable::IGNORE,
             GlobalZIndex(-1),
@@ -107,8 +145,15 @@ fn spawn_veil(mut commands: Commands, new: Query<Entity, Added<ViewModelCamera>>
 }
 
 /// Picks the shade and its darkness for the delver's sight now.
-fn close_in(rules: Option<Res<crate::rules::GameRules>>, players: Query<Option<&DelverEffects>, With<Player>>, mut veils: Query<(&Veil, &mut ImageNode, &mut Visibility)>, mut glares: Query<&mut BackgroundColor, With<Glare>>) {
-    let Some(effects) = players.iter().next() else { return };
+fn close_in(
+    rules: Option<Res<crate::rules::GameRules>>,
+    players: Query<Option<&DelverEffects>, With<Player>>,
+    mut veils: Query<(&Veil, &mut ImageNode, &mut Visibility)>,
+    mut glares: Query<&mut BackgroundColor, With<Glare>>,
+) {
+    let Some(effects) = players.iter().next() else {
+        return;
+    };
     let defs = &crate::rules::GameRules::of(&rules).effects;
     let sight = effects.map_or(1.0, |e| e.0.sight(defs));
     let glare = effects.map_or(0.0, |e| e.0.glare(defs)) as f32;
@@ -117,13 +162,21 @@ fn close_in(rules: Option<Res<crate::rules::GameRules>>, players: Query<Option<&
     }
     let shown = veil(sight);
     for (shades, mut node, mut visibility) in &mut veils {
-        visibility.set_if_neq(if shown.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+        visibility.set_if_neq(if shown.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
         if let Some((step, dark)) = shown {
             if node.image != shades.0[step] {
                 node.image = shades.0[step].clone();
             }
             // Glare whitens the edge as darkness shades it: dazzled eyes see a bright rim.
-            let colour = if glare > 0.0 { GLARE.with_alpha(dark) } else { SHADE.with_alpha(dark) };
+            let colour = if glare > 0.0 {
+                GLARE.with_alpha(dark)
+            } else {
+                SHADE.with_alpha(dark)
+            };
             if node.color != colour {
                 node.color = colour;
             }
@@ -149,6 +202,9 @@ mod tests {
             assert_eq!(shade_at(0.0, 0.0, step), 0.0, "clear in the middle");
             assert!(shade_at(1.0, 1.0, step) > 0.99, "full at the corners");
         }
-        assert!(shade_at(0.6, 0.0, STEPS - 1) > shade_at(0.6, 0.0, 0), "the deepest reaches further in");
+        assert!(
+            shade_at(0.6, 0.0, STEPS - 1) > shade_at(0.6, 0.0, 0),
+            "the deepest reaches further in"
+        );
     }
 }

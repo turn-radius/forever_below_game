@@ -28,7 +28,7 @@ use fb_items::Slot;
 
 use super::callouts::{Callout, Outcome};
 use super::feedback::{Corpse, Struck};
-use super::swing::{SwungAt, Strikeable};
+use super::swing::{Strikeable, SwungAt};
 use super::{ArmourClass, Health, RunDice};
 use crate::carry::{HeldItem, ViewModelCamera, appearance_of};
 use crate::character::{Character, DelverEffects, modifier};
@@ -44,18 +44,32 @@ pub struct ShootPlugin;
 
 impl Plugin for ShootPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Marksman>().init_resource::<FloorChanges>().add_message::<Loosed>().add_systems(
-            Update,
-            (
-                shoot.before(super::swing::start_swing),
-                spawn_shots.after(shoot).run_if(resource_exists::<Assets<Mesh>>),
-                show_loaded.after(shoot),
-                fly_projectiles.after(shoot),
-                release_stuck.after(fly_projectiles),
-                (draw_held.after(crate::carry::sway_held).after(super::swing::swing_held), bend_held.after(crate::carry::show_held).run_if(resource_exists::<Assets<Mesh>>), show_ammunition_count).after(show_loaded),
-            )
-                .in_set(DelveSystems),
-        );
+        app.init_resource::<Marksman>()
+            .init_resource::<FloorChanges>()
+            .add_message::<Loosed>()
+            .add_systems(
+                Update,
+                (
+                    shoot.before(super::swing::start_swing),
+                    spawn_shots
+                        .after(shoot)
+                        .run_if(resource_exists::<Assets<Mesh>>),
+                    show_loaded.after(shoot),
+                    fly_projectiles.after(shoot),
+                    release_stuck.after(fly_projectiles),
+                    (
+                        draw_held
+                            .after(crate::carry::sway_held)
+                            .after(super::swing::swing_held),
+                        bend_held
+                            .after(crate::carry::show_held)
+                            .run_if(resource_exists::<Assets<Mesh>>),
+                        show_ammunition_count,
+                    )
+                        .after(show_loaded),
+                )
+                    .in_set(DelveSystems),
+            );
     }
 }
 
@@ -109,7 +123,8 @@ pub struct Reload {
 impl Marksman {
     /// How far through its draw the bow is, 0 to 1.
     pub fn drawn(&self) -> f32 {
-        self.draw.map_or(0.0, |t| (t / DRAW_SECONDS).clamp(0.0, 1.0))
+        self.draw
+            .map_or(0.0, |t| (t / DRAW_SECONDS).clamp(0.0, 1.0))
     }
 }
 
@@ -158,23 +173,34 @@ pub fn ranged_in_hand(inventory: &Inventory) -> Option<(ItemId, fb_items::profil
 
 /// The worn container that takes `ammunition`: a quiver for arrows, a bolt case for bolts.
 pub fn holder_of(inventory: &Inventory, ammunition: armory::Family) -> Option<ItemId> {
-    inventory
-        .carried_containers()
-        .into_iter()
-        .find(|&c| inventory.item(c).and_then(|i| i.profile.holds.as_ref()).is_some_and(|g| g.accepts.contains(&ammunition)))
+    inventory.carried_containers().into_iter().find(|&c| {
+        inventory
+            .item(c)
+            .and_then(|i| i.profile.holds.as_ref())
+            .is_some_and(|g| g.accepts.contains(&ammunition))
+    })
 }
 
 /// The ammunition in `holder`, in its grid's order.
 pub fn ammunition_in(inventory: &Inventory, holder: ItemId) -> Vec<ItemId> {
-    inventory.grid(holder).map_or_else(Vec::new, |g| g.entries().iter().map(|e| e.id).collect())
+    inventory
+        .grid(holder)
+        .map_or_else(Vec::new, |g| g.entries().iter().map(|e| e.id).collect())
 }
 
 /// How many pieces the delver can still shoot with what is in hand: those in the worn holder, and
 /// the one on the string or the deck.
-pub fn ammunition_left(inventory: &Inventory, marksman: &Marksman) -> Option<(armory::Family, usize)> {
+pub fn ammunition_left(
+    inventory: &Inventory,
+    marksman: &Marksman,
+) -> Option<(armory::Family, usize)> {
     let (_, ranged) = ranged_in_hand(inventory)?;
-    let held = holder_of(inventory, ranged.ammunition).map_or(0, |h| ammunition_in(inventory, h).len());
-    Some((ranged.ammunition, held + usize::from(marksman.nocked.is_some())))
+    let held =
+        holder_of(inventory, ranged.ammunition).map_or(0, |h| ammunition_in(inventory, h).len());
+    Some((
+        ranged.ammunition,
+        held + usize::from(marksman.nocked.is_some()),
+    ))
 }
 
 /// Whether the attack key shoots rather than swings: a bow or crossbow in hand with something to
@@ -182,7 +208,11 @@ pub fn ammunition_left(inventory: &Inventory, marksman: &Marksman) -> Option<(ar
 pub fn shoots(inventory: &Inventory, marksman: Option<&Marksman>) -> bool {
     let nocked = marksman.is_some_and(|m| m.nocked.is_some() || m.draw.is_some());
     match ranged_in_hand(inventory) {
-        Some((_, ranged)) => nocked || holder_of(inventory, ranged.ammunition).is_some_and(|h| !ammunition_in(inventory, h).is_empty()),
+        Some((_, ranged)) => {
+            nocked
+                || holder_of(inventory, ranged.ammunition)
+                    .is_some_and(|h| !ammunition_in(inventory, h).is_empty())
+        }
         None => false,
     }
 }
@@ -196,7 +226,11 @@ pub fn block_shoots(inventory: &Inventory) -> bool {
 
 /// How fast a shot leaves the weapon: a bow's by how far it was drawn, a crossbow's always full.
 pub fn launch_speed(crossbow: bool, draw: f32) -> f32 {
-    if crossbow { BOLT_SPEED } else { FULL_DRAW_SPEED * (SLOWEST + (1.0 - SLOWEST) * draw.clamp(0.0, 1.0)) }
+    if crossbow {
+        BOLT_SPEED
+    } else {
+        FULL_DRAW_SPEED * (SLOWEST + (1.0 - SLOWEST) * draw.clamp(0.0, 1.0))
+    }
 }
 
 /// The share of its damage a shot of `draw` does: a short draw is weak. Our own.
@@ -253,7 +287,12 @@ fn feet_flown(origin: Vec3, at: Vec3) -> f32 {
 /// Takes the ammunition at `nock` back into its holder (or the first carried container with
 /// room), or loses it if there is no room.
 fn put_back(inventory: &mut Inventory, ammo: ItemId, family: armory::Family) {
-    let at = holder_of(inventory, family).and_then(|h| inventory.grid(h).and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 })).map(|at| (h, at)));
+    let at = holder_of(inventory, family).and_then(|h| {
+        inventory
+            .grid(h)
+            .and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 }))
+            .map(|at| (h, at))
+    });
     match at {
         Some((holder, at)) if inventory.put(ammo, holder, at).is_ok() => {}
         _ => {
@@ -305,7 +344,9 @@ pub fn shoot(
         && (weapon.map(|w| w.0) != Some(nocked.weapon) || inventory.item(nocked.ammo).is_none())
     {
         if inventory.item(nocked.ammo).is_some() {
-            let family = inventory.item(nocked.ammo).map_or(armory::Family::Arrow, |i| i.shape.family());
+            let family = inventory
+                .item(nocked.ammo)
+                .map_or(armory::Family::Arrow, |i| i.shape.family());
             put_back(&mut inventory, nocked.ammo, family);
         }
         *marksman = Marksman::default();
@@ -319,8 +360,11 @@ pub fn shoot(
     if marksman.reload.is_some() && marksman.nocked.is_some() {
         marksman.reload = None;
     }
-    let screens = around.screens.as_ref().is_some_and(|s| s.0.is_some()) || around.journey.is_some();
-    let Ok((at, health, effects)) = players.single() else { return };
+    let screens =
+        around.screens.as_ref().is_some_and(|s| s.0.is_some()) || around.journey.is_some();
+    let Ok((at, health, effects)) = players.single() else {
+        return;
+    };
     if screens || around.fallen.is_some() || health.is_some_and(Health::is_down) {
         // The screen opened mid-draw: lower the bow and put the arrow back.
         if marksman.draw.is_some() || marksman.reload.is_some() {
@@ -332,7 +376,10 @@ pub fn shoot(
         }
         return;
     }
-    let looking = around.cursor.as_ref().is_none_or(|c| c.grab_mode != CursorGrabMode::None);
+    let looking = around
+        .cursor
+        .as_ref()
+        .is_none_or(|c| c.grab_mode != CursorGrabMode::None);
     let crossbow = ranged.ammunition == armory::Family::Bolt;
     // `FB_SHOOT=1` shoots over and over, for captures: a bow is drawn and loosed, a crossbow
     // reloaded and fired, each a moment after the last change so the view model is fitted
@@ -344,9 +391,13 @@ pub fn shoot(
     }
     let auto = crate::launch::env_set("FB_SHOOT") && *auto_gate >= AUTO_WAIT;
     let block_shoots = block_shoots(&inventory);
-    let pressed = ((input.just_pressed(Action::Attack) || (block_shoots && input.just_pressed(Action::Block))) && looking) || auto;
+    let pressed = ((input.just_pressed(Action::Attack)
+        || (block_shoots && input.just_pressed(Action::Block)))
+        && looking)
+        || auto;
     // Tertiary reloads a crossbow when nothing under the crosshair has a use for it.
-    let reload_pressed = input.just_pressed(Action::Tertiary) && !around.aimed.as_ref().is_some_and(|a| a.0.is_some());
+    let reload_pressed = input.just_pressed(Action::Tertiary)
+        && !around.aimed.as_ref().is_some_and(|a| a.0.is_some());
 
     let rate = character.gear(&inventory).attack_rate as f32;
     let mut loose = None;
@@ -355,19 +406,29 @@ pub fn shoot(
             reload.t += dt;
             if reload.t >= reload.total {
                 marksman.reload = None;
-                let ammo = holder_of(&inventory, ranged.ammunition).and_then(|h| ammunition_in(&inventory, h).first().copied());
+                let ammo = holder_of(&inventory, ranged.ammunition)
+                    .and_then(|h| ammunition_in(&inventory, h).first().copied());
                 if let Some(ammo) = ammo {
                     inventory.take_out(ammo);
-                    marksman.nocked = Some(Nocked { ammo, weapon: weapon_id });
+                    marksman.nocked = Some(Nocked {
+                        ammo,
+                        weapon: weapon_id,
+                    });
                 }
             }
         } else if marksman.nocked.is_none() && (reload_pressed || auto) {
-            let has = holder_of(&inventory, ranged.ammunition).is_some_and(|h| !ammunition_in(&inventory, h).is_empty());
+            let has = holder_of(&inventory, ranged.ammunition)
+                .is_some_and(|h| !ammunition_in(&inventory, h).is_empty());
             if has {
                 let item = inventory.item(weapon_id);
-                let heavy = item.and_then(|i| i.profile.stats.damage).is_some_and(|d| d.sides >= 10);
+                let heavy = item
+                    .and_then(|i| i.profile.stats.damage)
+                    .is_some_and(|d| d.sides >= 10);
                 let stirrup = matches!(item.map(|i| &i.shape), Some(armory::Item::Crossbow(s)) if s.stock.stirrup);
-                marksman.reload = Some(Reload { t: 0.0, total: reload_seconds(heavy, stirrup, rate) });
+                marksman.reload = Some(Reload {
+                    t: 0.0,
+                    total: reload_seconds(heavy, stirrup, rate),
+                });
             } else {
                 toasts.say_once("No bolts to load");
             }
@@ -381,15 +442,22 @@ pub fn shoot(
         }
     } else {
         if pressed && marksman.nocked.is_none() {
-            let ammo = holder_of(&inventory, ranged.ammunition).and_then(|h| ammunition_in(&inventory, h).first().copied());
+            let ammo = holder_of(&inventory, ranged.ammunition)
+                .and_then(|h| ammunition_in(&inventory, h).first().copied());
             if let Some(ammo) = ammo {
                 inventory.take_out(ammo);
-                marksman.nocked = Some(Nocked { ammo, weapon: weapon_id });
+                marksman.nocked = Some(Nocked {
+                    ammo,
+                    weapon: weapon_id,
+                });
                 marksman.draw = Some(0.0);
             }
         }
         if let Some(t) = marksman.draw {
-            if input.pressed(Action::Attack) || (block_shoots && input.pressed(Action::Block)) || (crate::launch::env_set("FB_SHOOT") && t < DRAW_SECONDS) {
+            if input.pressed(Action::Attack)
+                || (block_shoots && input.pressed(Action::Block))
+                || (crate::launch::env_set("FB_SHOOT") && t < DRAW_SECONDS)
+            {
                 marksman.draw = Some(advance_draw(t, dt, rate));
             } else {
                 loose = Some(marksman.drawn());
@@ -397,16 +465,26 @@ pub fn shoot(
         }
     }
     let Some(draw) = loose else { return };
-    let Some(eye) = eyes.iter().next() else { return };
-    let Some(nocked) = marksman.nocked.take() else { return };
+    let Some(eye) = eyes.iter().next() else {
+        return;
+    };
+    let Some(nocked) = marksman.nocked.take() else {
+        return;
+    };
     marksman.draw = None;
     let forward = eye.forward().as_vec3();
     let origin = eye.translation() + forward * MUZZLE_AHEAD - Vec3::Y * MUZZLE_DOWN;
-    let stats = inventory.item(weapon_id).map(|i| i.profile.stats).unwrap_or_default();
+    let stats = inventory
+        .item(weapon_id)
+        .map(|i| i.profile.stats)
+        .unwrap_or_default();
     let hostile_close = {
         let me = at.translation.xz();
         let reach = rules::CLOSE_COMBAT_FEET * FEET_TO_UNITS;
-        strikeable.hostile_within(me, reach) || folk.iter().any(|(t, h, d)| h.is_hostile() && t.translation.xz().distance(me) - d.radius <= reach)
+        strikeable.hostile_within(me, reach)
+            || folk.iter().any(|(t, h, d)| {
+                h.is_hostile() && t.translation.xz().distance(me) - d.radius <= reach
+            })
     };
     let shot = Shot {
         range: ranged.range,
@@ -423,16 +501,32 @@ pub fn shoot(
         return;
     }
     let velocity = forward * launch_speed(crossbow, draw);
-    loosed.write(Loosed(Projectile { item: nocked.ammo, velocity, origin, age: 0.0, shot, passed: Vec::new() }));
+    loosed.write(Loosed(Projectile {
+        item: nocked.ammo,
+        velocity,
+        origin,
+        age: 0.0,
+        shot,
+        passed: Vec::new(),
+    }));
     if let Some(sound) = &around.sound {
         let game = around.settings.as_deref().copied().unwrap_or_default();
-        commands.spawn((Name::new("loose"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &around.tuning), DespawnOnExit(crate::launch::AppState::Delving)));
+        commands.spawn((
+            Name::new("loose"),
+            AudioPlayer::new(sound.0.clone()),
+            crate::audio::sound_effect(&game, &around.tuning),
+            DespawnOnExit(crate::launch::AppState::Delving),
+        ));
     }
 }
 
 /// What a shot adds to its d20 besides the Dexterity modifier: the bow's own `ToHit`, the worn
 /// gear's, and the gear's `RangedToHit`, the bow's included ([`Character::gear`]).
-pub fn shot_to_hit(character: &Character, inventory: &Inventory, bow: &fb_items::stats::Stats) -> i32 {
+pub fn shot_to_hit(
+    character: &Character,
+    inventory: &Inventory,
+    bow: &fb_items::stats::Stats,
+) -> i32 {
     let gear = character.gear(inventory);
     (bow.to_hit as f64 + gear.to_hit + gear.ranged_to_hit).round() as i32
 }
@@ -442,16 +536,28 @@ pub fn shot_to_hit(character: &Character, inventory: &Inventory, bow: &fb_items:
 pub struct Loosed(pub Projectile);
 
 /// Draws each shot loosed as the item it is, turned along its flight.
-pub fn spawn_shots(mut loosed: MessageReader<Loosed>, inventory: Res<Inventory>, tuning: Res<crate::tuning::Tuning>, mut spawner: ItemSpawner) {
+pub fn spawn_shots(
+    mut loosed: MessageReader<Loosed>,
+    inventory: Res<Inventory>,
+    tuning: Res<crate::tuning::Tuning>,
+    mut spawner: ItemSpawner,
+) {
     for Loosed(projectile) in loosed.read() {
-        let Some(item) = inventory.item(projectile.item) else { continue };
+        let Some(item) = inventory.item(projectile.item) else {
+            continue;
+        };
         let mesh = item.shape.build();
         let appearance = appearance_of(&item.shape);
-        let rotation = Quat::from_rotation_arc(Vec3::X, projectile.velocity.normalize_or(Vec3::NEG_Z));
+        let rotation =
+            Quat::from_rotation_arc(Vec3::X, projectile.velocity.normalize_or(Vec3::NEG_Z));
         spawner.spawn(&mesh, &appearance).insert((
             Name::new("Shot"),
             projectile.clone(),
-            Transform { translation: projectile.origin, rotation, scale: Vec3::splat(tuning.view.floor_item_scale) },
+            Transform {
+                translation: projectile.origin,
+                rotation,
+                scale: Vec3::splat(tuning.view.floor_item_scale),
+            },
             DespawnOnExit(crate::launch::AppState::Delving),
         ));
     }
@@ -463,16 +569,22 @@ pub fn spawn_shots(mut loosed: MessageReader<Loosed>, inventory: Res<Inventory>,
 pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
     // Peek first: a write through the resource marks the whole inventory changed.
     let weapon = ranged_in_hand(&inventory).map(|(id, _)| id);
-    let ammo_state = |inventory: &Inventory, id: ItemId| match inventory.item(id).map(|i| &i.shape) {
+    let ammo_state = |inventory: &Inventory, id: ItemId| match inventory.item(id).map(|i| &i.shape)
+    {
         Some(armory::Item::Arrow(s)) | Some(armory::Item::Bolt(s)) => Some(s.clone()),
         _ => None,
     };
     let mut want_weapon = None;
     if let Some(weapon) = weapon {
-        let loaded = marksman.nocked.filter(|n| n.weapon == weapon).and_then(|n| ammo_state(&inventory, n.ammo));
+        let loaded = marksman
+            .nocked
+            .filter(|n| n.weapon == weapon)
+            .and_then(|n| ammo_state(&inventory, n.ammo));
         let differs = match inventory.item(weapon).map(|i| &i.shape) {
             Some(armory::Item::Bow(s)) => s.arrow.on != loaded.is_some(),
-            Some(armory::Item::Crossbow(s)) => s.arrow.on != loaded.is_some() || s.spanned != loaded.is_some(),
+            Some(armory::Item::Crossbow(s)) => {
+                s.arrow.on != loaded.is_some() || s.spanned != loaded.is_some()
+            }
             _ => false,
         };
         if differs {
@@ -481,13 +593,24 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
     }
     let mut holders = Vec::new();
     for container in inventory.carried_containers() {
-        let Some(armory::Item::Quiver(state) | armory::Item::BoltCase(state)) = inventory.item(container).map(|i| &i.shape) else { continue };
-        let capacity = if matches!(inventory.item(container).map(|i| &i.shape), Some(armory::Item::Quiver(_))) {
+        let Some(armory::Item::Quiver(state) | armory::Item::BoltCase(state)) =
+            inventory.item(container).map(|i| &i.shape)
+        else {
+            continue;
+        };
+        let capacity = if matches!(
+            inventory.item(container).map(|i| &i.shape),
+            Some(armory::Item::Quiver(_))
+        ) {
             armory::families::quiver::Quivers::capacity(state)
         } else {
             armory::families::quiver::BoltCases::capacity(state)
         };
-        let contents: Vec<_> = ammunition_in(&inventory, container).into_iter().filter_map(|id| ammo_state(&inventory, id)).take(capacity).collect();
+        let contents: Vec<_> = ammunition_in(&inventory, container)
+            .into_iter()
+            .filter_map(|id| ammo_state(&inventory, id))
+            .take(capacity)
+            .collect();
         if contents != state.contents {
             holders.push((container, contents));
         }
@@ -518,7 +641,9 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
         }
     }
     for (container, contents) in holders {
-        if let Some(armory::Item::Quiver(state) | armory::Item::BoltCase(state)) = inventory.shape_mut(container) {
+        if let Some(armory::Item::Quiver(state) | armory::Item::BoltCase(state)) =
+            inventory.shape_mut(container)
+        {
             state.contents = contents;
         }
     }
@@ -539,7 +664,10 @@ pub fn fly_projectiles(
     mut swung: MessageWriter<SwungAt>,
     mut callouts: MessageWriter<Callout>,
     rules: Option<Res<crate::rules::GameRules>>,
-    mut shots: Query<(Entity, &mut Projectile, &mut Transform), (Without<Critter>, Without<Denizen>)>,
+    mut shots: Query<
+        (Entity, &mut Projectile, &mut Transform),
+        (Without<Critter>, Without<Denizen>),
+    >,
     strikeable: Strikeable,
     armour: Query<&ArmourClass>,
     globals: Query<&GlobalTransform>,
@@ -558,29 +686,73 @@ pub fn fly_projectiles(
         for _ in 0..steps {
             let (next, velocity) = fly(position, shot.velocity, sub);
             // Bodies first: the nearest along this step.
-            let far = rules::units_to_feet(shot.origin.distance(position)) > shot.shot.range.long_feet;
+            let far =
+                rules::units_to_feet(shot.origin.distance(position)) > shot.shot.range.long_feet;
             let skip = shot.passed.clone();
-            if let Some((t, target)) = strikeable.first_body_hit(position, next, SHAFT_RADIUS, &skip) {
+            if let Some((t, target)) =
+                strikeable.first_body_hit(position, next, SHAFT_RADIUS, &skip)
+            {
                 let at = position.lerp(next, t);
                 let flown = feet_flown(shot.origin, at);
                 let incoming = (next - position).normalize_or(Vec3::NEG_Z);
                 match rules::ranged_shot(shot.shot.range, flown, shot.shot.close) {
                     Some(roll) if !far => {
                         swung.write(SwungAt { target });
-                        let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
+                        let ac = armour
+                            .get(target)
+                            .copied()
+                            .unwrap_or(ArmourClass::UNARMOURED);
                         let odds = roll.odds.and(shot.shot.odds);
-                        let attack = ToHit::dexterity(shot.shot.dexterity, shot.shot.to_hit).roll_with(crate::rules::GameRules::of(&rules), ac.0, odds, &mut dice.0);
+                        let attack = ToHit::dexterity(shot.shot.dexterity, shot.shot.to_hit)
+                            .roll_with(
+                                crate::rules::GameRules::of(&rules),
+                                ac.0,
+                                odds,
+                                &mut dice.0,
+                            );
                         info!("shot: {} ({})", attack.line(), flown.round());
                         if attack.hit {
-                            let full = rules::weapon_damage(shot.shot.dice, shot.shot.bonus, "DEX", shot.shot.dexterity, &mut dice.0).value() as f32;
-                            let drawn = ((full * draw_damage_share(shot.shot.draw)).round() as u32).max(1);
-                            let damage = drawn + super::bane_damage(&shot.shot.bane, strikeable.foe(target), &mut dice.0);
-                            struck.write(Struck { target, damage, from: shot.origin.xz(), bludgeoning: false, critical: attack.natural == 20, by_ally: false, graze: false });
+                            let full = rules::weapon_damage(
+                                shot.shot.dice,
+                                shot.shot.bonus,
+                                "DEX",
+                                shot.shot.dexterity,
+                                &mut dice.0,
+                            )
+                            .value() as f32;
+                            let drawn =
+                                ((full * draw_damage_share(shot.shot.draw)).round() as u32).max(1);
+                            let damage = drawn
+                                + super::bane_damage(
+                                    &shot.shot.bane,
+                                    strikeable.foe(target),
+                                    &mut dice.0,
+                                );
+                            struck.write(Struck {
+                                target,
+                                damage,
+                                from: shot.origin.xz(),
+                                bludgeoning: false,
+                                critical: attack.natural == 20,
+                                by_ally: false,
+                                graze: false,
+                            });
                             let broken = rules::ammunition_breaks(&attack);
                             if let Ok(body) = globals.get(target) {
-                                let world = Transform { translation: at, rotation: Quat::from_rotation_arc(Vec3::X, incoming), scale: transform.scale };
+                                let world = Transform {
+                                    translation: at,
+                                    rotation: Quat::from_rotation_arc(Vec3::X, incoming),
+                                    scale: transform.scale,
+                                };
                                 let local = GlobalTransform::from(world).reparented_to(body);
-                                commands.entity(entity).remove::<Projectile>().insert((local, ChildOf(target), Stuck { item: shot.item, broken }));
+                                commands.entity(entity).remove::<Projectile>().insert((
+                                    local,
+                                    ChildOf(target),
+                                    Stuck {
+                                        item: shot.item,
+                                        broken,
+                                    },
+                                ));
                             } else {
                                 commands.entity(entity).despawn();
                             }
@@ -588,7 +760,10 @@ pub fn fly_projectiles(
                             break;
                         }
                         // A miss flies on past.
-                        callouts.write(Callout { target, outcome: Outcome::Miss });
+                        callouts.write(Callout {
+                            target,
+                            outcome: Outcome::Miss,
+                        });
                     }
                     _ => {}
                 }
@@ -597,12 +772,22 @@ pub fn fly_projectiles(
             // Then the stone: a wall or a prop, the floor, the ceiling.
             let cell = (next.xz() / fb_level::CELL).floor().as_ivec2();
             let wall = solid(cell.x, cell.y);
-            let prop = obstacles.0.iter().any(|o| o.push_out(next.xz(), 0.0, position.xz()).is_some());
+            let prop = obstacles
+                .0
+                .iter()
+                .any(|o| o.push_out(next.xz(), 0.0, position.xz()).is_some());
             let floor = relief.floor_height(next.x, next.z);
             let ceiling = crate::level::geometry::stone::ceiling_at(level, next.x, next.z);
             if wall || prop || next.y <= floor || next.y >= ceiling || shot.age > LIFETIME {
                 let rest = if wall || prop { position } else { next };
-                land(&mut commands, &mut changes, entity, shot.item, rest.xz(), shot.velocity.xz());
+                land(
+                    &mut commands,
+                    &mut changes,
+                    entity,
+                    shot.item,
+                    rest.xz(),
+                    shot.velocity.xz(),
+                );
                 done = true;
                 break;
             }
@@ -621,10 +806,19 @@ pub fn fly_projectiles(
 
 /// Sets the shot's item down on the floor at `at` (world `(x, z)`), lying along `heading`, and
 /// takes its flying model away; the floor machinery spawns it as any dropped item.
-fn land(commands: &mut Commands, changes: &mut FloorChanges, entity: Entity, item: ItemId, at: Vec2, heading: Vec2) {
+fn land(
+    commands: &mut Commands,
+    changes: &mut FloorChanges,
+    entity: Entity,
+    item: ItemId,
+    at: Vec2,
+    heading: Vec2,
+) {
     let forward = heading.normalize_or(Vec2::NEG_Y);
     let yaw = (-forward.x).atan2(-forward.y);
-    changes.0.push(FloorChange::SetDownAt(item, at / fb_level::CELL, yaw));
+    changes
+        .0
+        .push(FloorChange::SetDownAt(item, at / fb_level::CELL, yaw));
     commands.entity(entity).despawn();
 }
 
@@ -642,17 +836,30 @@ pub fn release_stuck(
     tuning: Res<crate::tuning::Tuning>,
 ) {
     for (entity, stuck, parent) in &stuck {
-        let Ok(body) = corpses.get(parent.parent()) else { continue };
+        let Ok(body) = corpses.get(parent.parent()) else {
+            continue;
+        };
         commands.entity(entity).despawn();
         if stuck.broken {
             inventory.forget(stuck.item);
             continue;
         }
-        let Some(item) = inventory.item(stuck.item).cloned() else { continue };
+        let Some(item) = inventory.item(stuck.item).cloned() else {
+            continue;
+        };
         inventory.forget(stuck.item);
         let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
         let solid = crate::player::blocked_by(&level.0, &blocked);
-        crate::inventory::underfoot::set_down_around(body.translation.xz(), std::iter::once(&item), item.seed, &mut inventory, &mut changes, solid, &obstacles.0, tuning.view.floor_item_scale);
+        crate::inventory::underfoot::set_down_around(
+            body.translation.xz(),
+            std::iter::once(&item),
+            item.seed,
+            &mut inventory,
+            &mut changes,
+            solid,
+            &obstacles.0,
+            tuning.view.floor_item_scale,
+        );
     }
 }
 
@@ -667,12 +874,20 @@ const RAISE: f32 = 0.3;
 /// A bow drawn `draw` aimed: the arrow on its string running from [`ANCHOR`] to the
 /// crosshair, the limbs upright with a slight cant. `None` for anything but a bow.
 fn aimed_bow(item: &armory::Item, draw: f32, scale: Vec3) -> Option<(Vec3, Quat)> {
-    let armory::Item::Bow(bow) = item else { return None };
-    let (nock, dir) = armory::families::bow::BowState { draw, ..bow.clone() }.nocked_arrow();
+    let armory::Item::Bow(bow) = item else {
+        return None;
+    };
+    let (nock, dir) = armory::families::bow::BowState {
+        draw,
+        ..bow.clone()
+    }
+    .nocked_arrow();
     let (nock, dir) = (Vec3::from_array(nock), Vec3::from_array(dir));
     // The bow on its edge: the arrow (toward -X in the bow's space) ahead, the limbs up.
     let upright = Quat::from_rotation_z(CANT) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-    let rotation = crate::view_model::aimed_from(ANCHOR) * Quat::from_rotation_arc(upright * dir, Vec3::NEG_Z) * upright;
+    let rotation = crate::view_model::aimed_from(ANCHOR)
+        * Quat::from_rotation_arc(upright * dir, Vec3::NEG_Z)
+        * upright;
     Some((ANCHOR - rotation * (scale * nock), rotation))
 }
 
@@ -692,11 +907,22 @@ fn bent(item: &armory::Item, marksman: &Marksman) -> Option<(armory::Item, f32)>
     match item {
         armory::Item::Bow(s) => {
             let draw = marksman.drawn();
-            Some((armory::Item::Bow(armory::families::bow::BowState { draw, ..s.clone() }), draw))
+            Some((
+                armory::Item::Bow(armory::families::bow::BowState { draw, ..s.clone() }),
+                draw,
+            ))
         }
         armory::Item::Crossbow(s) => {
-            let span = marksman.reload.map_or(0.0, |r| (r.t / r.total).clamp(0.0, 1.0));
-            Some((armory::Item::Crossbow(armory::families::crossbow::CrossbowState { span, ..s.clone() }), span))
+            let span = marksman
+                .reload
+                .map_or(0.0, |r| (r.t / r.total).clamp(0.0, 1.0));
+            Some((
+                armory::Item::Crossbow(armory::families::crossbow::CrossbowState {
+                    span,
+                    ..s.clone()
+                }),
+                span,
+            ))
         }
         _ => None,
     }
@@ -717,7 +943,9 @@ pub fn bend_held(
         if item.hand != Slot::Mainhand || !view_models.contains(parent.parent()) {
             continue;
         }
-        let Some((shape, amount)) = bent(&item.item, &marksman) else { continue };
+        let Some((shape, amount)) = bent(&item.item, &marksman) else {
+            continue;
+        };
         // A freshly spawned model is built at rest.
         let last = shown.filter(|(e, _)| *e == entity).map_or(0.0, |(_, a)| a);
         if (amount - last).abs() < 0.002 {
@@ -726,7 +954,9 @@ pub fn bend_held(
         let mesh = shape.build();
         let mut built = mesh.parts.iter();
         for child in children.iter() {
-            let Ok((name, handle)) = parts.get(child) else { continue };
+            let Ok((name, handle)) = parts.get(child) else {
+                continue;
+            };
             let Some(part) = built.next() else { break };
             if part.name != name.as_str() {
                 // A different set of parts: leave it for the next fitting.
@@ -742,9 +972,15 @@ pub fn bend_held(
 
 /// Draws the bow in the view: raised into the aim at the start of the draw, the arrow pointing
 /// at the crosshair, trembling at full draw; a crossbow dips as it is reloaded. Our own.
-pub fn draw_held(marksman: Res<Marksman>, mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>, view_models: Query<(), With<ViewModelCamera>>) {
+pub fn draw_held(
+    marksman: Res<Marksman>,
+    mut held: Query<(&HeldItem, &mut Transform, &ChildOf)>,
+    view_models: Query<(), With<ViewModelCamera>>,
+) {
     let draw = marksman.drawn();
-    let reload = marksman.reload.map_or(0.0, |r| (r.t / r.total).clamp(0.0, 1.0));
+    let reload = marksman
+        .reload
+        .map_or(0.0, |r| (r.t / r.total).clamp(0.0, 1.0));
     if draw <= 0.0 && reload <= 0.0 {
         return;
     }
@@ -753,20 +989,29 @@ pub fn draw_held(marksman: Res<Marksman>, mut held: Query<(&HeldItem, &mut Trans
             continue;
         }
         if draw > 0.0 {
-            let Some((at, turn)) = aimed_bow(&item.item, draw, transform.scale) else { continue };
+            let Some((at, turn)) = aimed_bow(&item.item, draw, transform.scale) else {
+                continue;
+            };
             let raised = (draw / RAISE).clamp(0.0, 1.0);
             let raised = raised * raised * (3.0 - 2.0 * raised);
-            let shake = if draw >= 1.0 { (marksman.draw.unwrap_or(0.0) * 40.0).sin() * 0.03 } else { 0.0 };
+            let shake = if draw >= 1.0 {
+                (marksman.draw.unwrap_or(0.0) * 40.0).sin() * 0.03
+            } else {
+                0.0
+            };
             transform.translation = transform.translation.lerp(at, raised) + Vec3::Y * shake;
             transform.rotation = transform.rotation.slerp(turn, raised);
         } else {
             // Swung across the body about the nut, the stock turned to the left and its nose
             // dipped, so the deck is seen from the side as the string is hauled back to the
             // nut; brought back to the shoulder as the bolt is laid.
-            let armory::Item::Crossbow(bow) = &item.item else { continue };
+            let armory::Item::Crossbow(bow) = &item.item else {
+                continue;
+            };
             let dip = smoothstep((reload / RELOAD_EASE).min((1.0 - reload) / RELOAD_EASE));
             let nut = transform.transform_point(Vec3::Y * bow.stock.length * bow.stock.nut);
-            let swing = Quat::from_rotation_y(RELOAD_SWING * dip) * Quat::from_rotation_x(-0.3 * dip);
+            let swing =
+                Quat::from_rotation_y(RELOAD_SWING * dip) * Quat::from_rotation_x(-0.3 * dip);
             // Rolled on the stock so the deck faces the eye.
             let stock = swing * transform.rotation * Vec3::Y;
             transform.rotate_around(nut, Quat::from_axis_angle(stock, 0.6 * dip) * swing);
@@ -780,11 +1025,23 @@ pub fn draw_held(marksman: Res<Marksman>, mut held: Query<(&HeldItem, &mut Trans
 #[derive(Component, Debug)]
 pub struct AmmunitionCount;
 
-fn show_ammunition_count(inventory: Res<Inventory>, marksman: Res<Marksman>, mut labels: Query<&mut Text, With<AmmunitionCount>>) {
+fn show_ammunition_count(
+    inventory: Res<Inventory>,
+    marksman: Res<Marksman>,
+    mut labels: Query<&mut Text, With<AmmunitionCount>>,
+) {
     let text = match ammunition_left(&inventory, &marksman) {
         Some((family, count)) => {
-            let noun = if family == armory::Family::Bolt { "bolts" } else { "arrows" };
-            let state = if marksman.reload.is_some() { " (loading)" } else { "" };
+            let noun = if family == armory::Family::Bolt {
+                "bolts"
+            } else {
+                "arrows"
+            };
+            let state = if marksman.reload.is_some() {
+                " (loading)"
+            } else {
+                ""
+            };
             format!("{noun} {count}{state}")
         }
         None => String::new(),
@@ -802,7 +1059,10 @@ mod tests {
 
     fn with_affix(base: &str, seed: u32, name: &str) -> fb_items::Item {
         let mut item = fb_items::roll_item(base, seed).unwrap();
-        let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+        let affix = fb_items::tables::affixes()
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap();
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
         item
@@ -815,36 +1075,71 @@ mod tests {
         let bow = inventory.add(fb_items::roll_item("Bow", 7).unwrap());
         inventory.wear(bow, Slot::Mainhand).unwrap();
         let bow_stats = inventory.item(bow).unwrap().profile.stats;
-        let (swing, shot) = (super::super::Weapon::in_hand(&inventory, &character).to_hit, shot_to_hit(&character, &inventory, &bow_stats));
+        let (swing, shot) = (
+            super::super::Weapon::in_hand(&inventory, &character).to_hit,
+            shot_to_hit(&character, &inventory, &bow_stats),
+        );
         let hawk = inventory.add(with_affix("Ring", 4, "of the Hawk"));
         inventory.wear(hawk, Slot::Ring1).unwrap();
-        assert_eq!(super::super::Weapon::in_hand(&inventory, &character).to_hit, swing, "no help to a swing");
+        assert_eq!(
+            super::super::Weapon::in_hand(&inventory, &character).to_hit,
+            swing,
+            "no help to a swing"
+        );
         assert_eq!(shot_to_hit(&character, &inventory, &bow_stats), shot + 2);
         let steady = inventory.add(with_affix("Ring", 5, "of the Steady Hand"));
         inventory.wear(steady, Slot::Ring2).unwrap();
-        assert_eq!(super::super::Weapon::in_hand(&inventory, &character).to_hit, swing + 1);
+        assert_eq!(
+            super::super::Weapon::in_hand(&inventory, &character).to_hit,
+            swing + 1
+        );
         assert_eq!(shot_to_hit(&character, &inventory, &bow_stats), shot + 3);
         // A sighted bow counts its own, once.
         let sighted = inventory.add(with_affix("Bow", 7, "Sighted"));
         inventory.take_out(bow);
         inventory.wear(sighted, Slot::Mainhand).unwrap();
         let sighted_stats = inventory.item(sighted).unwrap().profile.stats;
-        assert_eq!(shot_to_hit(&character, &inventory, &sighted_stats), shot + 4);
-        assert_eq!(super::super::Weapon::in_hand(&inventory, &character).to_hit, swing + 1, "the swing never reads it");
+        assert_eq!(
+            shot_to_hit(&character, &inventory, &sighted_stats),
+            shot + 4
+        );
+        assert_eq!(
+            super::super::Weapon::in_hand(&inventory, &character).to_hit,
+            swing + 1,
+            "the swing never reads it"
+        );
     }
 
     #[test]
     fn a_segment_meets_a_sphere_where_it_enters() {
         let c = Vec3::new(10.0, 0.0, 0.0);
-        assert_eq!(segment_sphere(Vec3::ZERO, Vec3::new(20.0, 0.0, 0.0), c, 2.0), Some(0.4));
-        assert_eq!(segment_sphere(Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0), c, 2.0), None, "stops short");
-        assert_eq!(segment_sphere(Vec3::ZERO, Vec3::new(20.0, 5.0, 0.0), c, 2.0), None, "passes over");
-        assert_eq!(segment_sphere(c, Vec3::new(20.0, 0.0, 0.0), c, 2.0), Some(0.0), "starts inside");
+        assert_eq!(
+            segment_sphere(Vec3::ZERO, Vec3::new(20.0, 0.0, 0.0), c, 2.0),
+            Some(0.4)
+        );
+        assert_eq!(
+            segment_sphere(Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0), c, 2.0),
+            None,
+            "stops short"
+        );
+        assert_eq!(
+            segment_sphere(Vec3::ZERO, Vec3::new(20.0, 5.0, 0.0), c, 2.0),
+            None,
+            "passes over"
+        );
+        assert_eq!(
+            segment_sphere(c, Vec3::new(20.0, 0.0, 0.0), c, 2.0),
+            Some(0.0),
+            "starts inside"
+        );
     }
 
     #[test]
     fn a_short_draw_flies_slower_and_hits_softer() {
-        let speeds: Vec<f32> = [0.0, 0.5, 1.0].iter().map(|&d| launch_speed(false, d)).collect();
+        let speeds: Vec<f32> = [0.0, 0.5, 1.0]
+            .iter()
+            .map(|&d| launch_speed(false, d))
+            .collect();
         assert!(speeds[0] < speeds[1] && speeds[1] < speeds[2]);
         assert_eq!(speeds[2], FULL_DRAW_SPEED);
         assert_eq!(launch_speed(true, 0.0), BOLT_SPEED);
@@ -866,31 +1161,60 @@ mod tests {
         inventory.wear(bow, Slot::Mainhand).unwrap();
         let rate = character.gear(&inventory).attack_rate as f32;
         assert!((rate - 1.2).abs() < 1e-6);
-        let full = Marksman { draw: Some(advance_draw(0.0, 1.0 / 1.2, rate)), ..Marksman::default() };
+        let full = Marksman {
+            draw: Some(advance_draw(0.0, 1.0 / 1.2, rate)),
+            ..Marksman::default()
+        };
         assert!((full.drawn() - 1.0).abs() < 1e-5, "drawn in 1 / 1.2 s");
-        let part = Marksman { draw: Some(advance_draw(0.0, 0.5, 1.0)), ..Marksman::default() };
-        assert!((part.drawn() - 0.5).abs() < 1e-6, "half a second at the usual pace");
+        let part = Marksman {
+            draw: Some(advance_draw(0.0, 0.5, 1.0)),
+            ..Marksman::default()
+        };
+        assert!(
+            (part.drawn() - 0.5).abs() < 1e-6,
+            "half a second at the usual pace"
+        );
         assert!((reload_seconds(false, false, rate) - 1.25).abs() < 1e-5);
         assert!((reload_seconds(true, true, rate) - 3.0 * 0.75 / 1.2).abs() < 1e-5);
     }
 
     #[test]
     fn gravity_bends_the_flight_down() {
-        let (mut p, mut v) = (Vec3::new(0.0, 16.0, 0.0), Vec3::new(FULL_DRAW_SPEED, 0.0, 0.0));
+        let (mut p, mut v) = (
+            Vec3::new(0.0, 16.0, 0.0),
+            Vec3::new(FULL_DRAW_SPEED, 0.0, 0.0),
+        );
         for _ in 0..60 {
             (p, v) = fly(p, v, 1.0 / 60.0);
         }
         assert!((p.x - FULL_DRAW_SPEED).abs() < 1.0);
-        assert!((16.0 - p.y - 0.5 * GRAVITY).abs() < 2.0, "fell {} in a second", 16.0 - p.y);
+        assert!(
+            (16.0 - p.y - 0.5 * GRAVITY).abs() < 2.0,
+            "fell {} in a second",
+            16.0 - p.y
+        );
     }
 
     #[test]
     fn out_of_range_shots_cannot_hit_and_long_ones_are_at_disadvantage() {
         let range = Range::new(80.0, 320.0);
-        assert_eq!(rules::ranged_shot(range, 40.0, false).map(|s| s.odds), Some(Odds::Even));
-        assert_eq!(rules::ranged_shot(range, 120.0, false).map(|s| s.odds), Some(Odds::Disadvantage));
-        assert_eq!(rules::ranged_shot(range, 40.0, true).map(|s| s.odds), Some(Odds::Disadvantage), "a hostile within 5 feet");
-        assert!(rules::ranged_shot(range, 400.0, false).is_none(), "beyond long range");
+        assert_eq!(
+            rules::ranged_shot(range, 40.0, false).map(|s| s.odds),
+            Some(Odds::Even)
+        );
+        assert_eq!(
+            rules::ranged_shot(range, 120.0, false).map(|s| s.odds),
+            Some(Odds::Disadvantage)
+        );
+        assert_eq!(
+            rules::ranged_shot(range, 40.0, true).map(|s| s.odds),
+            Some(Odds::Disadvantage),
+            "a hostile within 5 feet"
+        );
+        assert!(
+            rules::ranged_shot(range, 400.0, false).is_none(),
+            "beyond long range"
+        );
         assert!(rules::ranged_shot(range, 1000.0 / FEET_TO_UNITS * FEET_TO_UNITS, false).is_none());
     }
 }
