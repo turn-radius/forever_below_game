@@ -303,6 +303,8 @@ const LABELS: &[(&str, &str)] = &[
     ("combat/natural_hit", "Roll that always hits"),
     ("combat/natural_miss", "Roll that always misses"),
     ("combat/venom_save_dc", "Venom save difficulty"),
+    ("combat/graze_chance", "Chance a miss grazes"),
+    ("combat/graze_damage", "Graze damage"),
     ("combat/hit_dice/fighter", "Fighter hit die"),
     ("combat/hit_dice/ranger", "Ranger hit die"),
     ("combat/hit_dice/mage", "Mage hit die"),
