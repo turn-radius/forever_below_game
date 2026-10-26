@@ -251,7 +251,8 @@ pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec
     let Prop::Container { style, seed, .. } = prop else { return None };
     let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
     for item in contents {
-        let id = inventory.add(item);
+        // What is found in a container is unknown if it is magic.
+        let id = inventory.add(crate::identify::found_unknown(item));
         let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
         let at = inventory.grid(container).and_then(|g| g.first_free(footprint));
         if at.is_none_or(|at| inventory.put(id, container, at).is_err()) {

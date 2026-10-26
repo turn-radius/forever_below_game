@@ -210,6 +210,10 @@ pub struct ItemRecord {
     /// The words it teaches, if it is written in a denizen tongue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teaching: Option<fb_denizens::tongue::Teaching>,
+    /// How much of its magic is known. Absent in a record from before items were unknown, which
+    /// reads as fully known.
+    #[serde(default, skip_serializing_if = "fb_items::Known::is_full")]
+    pub known: fb_items::Known,
 }
 
 /// An item in a container's grid.
@@ -301,6 +305,7 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         odds: item.odds,
         words: item.words.clone(),
         teaching: item.teaching.clone(),
+        known: item.known,
     }
 }
 
@@ -351,6 +356,7 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         odds: record.odds,
         words: record.words.clone(),
         teaching: record.teaching.clone(),
+        known: record.known,
     });
     if item.is_none() {
         warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
@@ -610,6 +616,27 @@ mod tests {
                 assert_eq!(s.field, field);
             }
         }
+    }
+
+    #[test]
+    fn an_items_known_state_survives_a_record_and_an_old_record_reads_as_known() {
+        use fb_items::Known;
+        let ring = (1..20_000).filter_map(|s| fb_items::roll_item_with("Ring", s, fb_items::Odds::loot(10))).find(|i| i.rarity >= fb_items::Rarity::Rare && i.affixes.len() >= 2).unwrap();
+        let mut unknown = ring.clone().unidentified();
+        assert_eq!(unknown.known, Known::Unknown);
+        let back = |item: &fb_items::Item| rebuild_item(&serde_json::from_str(&serde_json::to_string(&record_of(item)).unwrap()).unwrap()).unwrap();
+        assert_eq!(back(&unknown).known, Known::Unknown);
+        unknown.reveal(unknown.identify_dc() - 3);
+        let partly = unknown.known;
+        assert!(matches!(partly, Known::Partly(_)));
+        assert_eq!(back(&unknown).known, partly);
+        unknown.reveal(unknown.identify_dc());
+        assert_eq!(back(&unknown).known, Known::Full);
+        // A record from before items could be unknown has no such field, and reads as known.
+        let mut json: serde_json::Value = serde_json::to_value(record_of(&ring.unidentified())).unwrap();
+        json.as_object_mut().unwrap().remove("known");
+        let old: ItemRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(rebuild_item(&old).unwrap().known, Known::Full);
     }
 
     #[test]

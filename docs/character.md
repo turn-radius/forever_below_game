@@ -35,3 +35,8 @@ The delver has an alignment, which sets where each faction's standing starts (`f
 ## Checks
 
 A check (`fb_character::check`) rolls one die, usually a d20, plus named modifiers against a target, and meets it on a total at or over the target. Modifiers come from stats (the ability modifier), class, item affixes and faction standing; a zero modifier is left out. The roll is one draw from the seeded RNG and comes back with its breakdown as an `Explained`, so the screen, a tooltip and a test all read the same terms. Persuading folk and identifying items use checks, and the game shows each as a die rolling on screen.
+
+Persuading ([`game/src/talk/persuade.rs`]): the Persuade topic rolls a d20 against 14 to be let through a locked door of the folk's faction, or 16 for a little coin when there is none, with Wisdom, class, worn charisma and standing (one per 25 points) as modifiers. A failure costs 2 standing, a Hostile faction cannot be persuaded, and each folk gives once.
+
+Identifying ([`crates/fb_items/src/identify.rs`], [`game/src/identify.rs`]): magic and better items found in containers are unknown, shown as "Unknown ring" with their affixes hidden (what they do still counts). Y over one in the inventory rolls a d20 against 12, 15 or 18 by rarity with Intelligence and class as modifiers: meeting it reveals every affix, falling short reveals a share, falling 8 short reveals nothing. The item may be tried again, and what is revealed stays. The state is on the item record, so it lasts through saves, and records from before read as known.
+

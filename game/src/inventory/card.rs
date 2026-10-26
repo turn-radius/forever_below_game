@@ -72,6 +72,8 @@ pub struct CardText {
     /// What a container holds.
     pub contents: Option<String>,
     pub affixes: Vec<AffixLine>,
+    /// How many affixes are still hidden, while the item is unknown or partly known.
+    pub hidden: usize,
     /// Stats the meta line leaves out that differ from an ordinary thing's.
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
@@ -196,19 +198,21 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         }
     });
     CardText {
-        title: item.title().to_string(),
+        title: item.shown_title(),
         rarity: item.rarity,
-        subtitle: item.legend.as_ref().map(|l| l.subtitle.clone()),
+        subtitle: item.legend.as_ref().filter(|_| item.is_known()).map(|l| l.subtitle.clone()),
         price,
         meta: meta.join(" \u{b7} "),
         contents,
-        affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
-        stats: stat_lines(s),
+        affixes: item.shown_affixes().iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
+        hidden: item.hidden_affixes(),
+        // The totals count every affix, so they would give the hidden ones away.
+        stats: if item.is_known() { stat_lines(s) } else { Vec::new() },
         light: light_line(&item.shape),
         consume: consume_line(item),
         words: item.words.clone(),
         actions: Vec::new(),
-        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
+        history: item.legend.as_ref().filter(|_| item.is_known()).map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
     }
 }
 
@@ -622,6 +626,10 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
                     UiFonts::style(&fonts.mono, 12.0, MUTED),
                 ));
             }
+            if text.hidden > 0 {
+                let line = format!("{} hidden {}", text.hidden, if text.hidden == 1 { "property" } else { "properties" });
+                info.spawn((Text::new(line), UiFonts::style(&fonts.body_italic, 14.0, MUTED)));
+            }
             // The totals, with every affix counted, on one line under them.
             if !text.stats.is_empty() {
                 numbers_line(info, fonts, &text.stats.join(" \u{b7} "), 12.0);
@@ -754,6 +762,11 @@ pub fn show_card(
             {
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
+            }
+            if !item.is_known()
+                && let Some(key) = keymap.inputs(Action::Identify).first()
+            {
+                text.actions.push((key.label(), "Identify"));
             }
             if inventory.is_carried(id)
                 && let Some(key) = keymap.inputs(Action::Drop).first()
