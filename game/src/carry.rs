@@ -1159,12 +1159,11 @@ fn equip_player_camera(
 pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
     let left = hand == fb_items::Slot::Offhand;
     let flame = if left { HELD_FLAME * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_FLAME };
-    let lean = match item {
-        Item::Lantern(_) => 0.0,
-        _ => 0.22,
-    };
+    // A lantern, candle or chamberstick stands on its base: flame straight up.
+    let upright = matches!(item, Item::Lantern(_) | Item::Sundry(_));
+    let lean = if upright { 0.0 } else { 0.22 };
     let lean = if left { -lean } else { lean };
-    let tip = if matches!(item, Item::Lantern(_)) { 0.0 } else { -0.32 };
+    let tip = if upright { 0.0 } else { -0.32 };
     (flame, Quat::from_euler(EulerRot::XYZ, tip, 0.0, lean))
 }
 

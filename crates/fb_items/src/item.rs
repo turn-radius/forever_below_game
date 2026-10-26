@@ -231,6 +231,10 @@ impl Item {
         if self.shape.family() == armory::Family::Torch {
             return vec![made_for, Slot::Mainhand];
         }
+        // A candle or chamberstick is held in either hand, never on the hip: that is the lantern's.
+        if matches!(&self.shape, armory::Item::Sundry(s) if s.article.kind == armory::families::sundry::SundryKind::Candle) {
+            return vec![made_for, Slot::Mainhand];
+        }
         match made_for {
             Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
             // A robe is worn over body armour, in the cloak's place, as well as as a shirt.
@@ -628,6 +632,18 @@ mod tests {
         assert_eq!(roll_item("Ring", 1).unwrap().slots(), vec![Slot::Ring1, Slot::Ring2]);
         assert!(roll_item("Bread", 1).unwrap().slots().is_empty());
         assert_eq!(roll_item("Lantern", 1).unwrap().slots(), vec![Slot::Offhand, Slot::Mainhand, Slot::Hip]);
+        for seed in 1..40 {
+            let mut candle = roll_item("Candle", seed).unwrap();
+            for holder in [false, true] {
+                if let armory::Item::Sundry(s) = &mut candle.shape {
+                    s.article.holder = holder;
+                }
+                assert_eq!(candle.slots(), vec![Slot::Offhand, Slot::Mainhand], "{seed} holder {holder}");
+                assert!(candle.fits(Slot::Offhand) && candle.fits(Slot::Mainhand));
+                assert!(!candle.fits(Slot::Hip), "the hip stays the lantern's: {seed} holder {holder}");
+            }
+        }
+        assert!(roll_item("Rope", 1).unwrap().slots().is_empty());
         assert!(!roll_item("Torch", 1).unwrap().fits(Slot::Hip));
         assert_eq!(roll_item("Quiver", 1).unwrap().slots(), vec![Slot::Quiver]);
         assert_eq!(roll_item("Bolt case", 1).unwrap().slots(), vec![Slot::Quiver]);

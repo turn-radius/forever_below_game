@@ -364,7 +364,7 @@ pub fn reveal_icons(mut commands: Commands, cache: Res<IconCache>, awaiting: Que
 pub fn stands_upright(item: &Item) -> bool {
     // A thing built to stand on a base (a pitched tent, a set fire, a candle) is drawn standing
     // as built too: end-on it is a beige box.
-    fb_items::profile::stands_upright(item.shape.family()) || fb_items::profile::stands_on_base(&item.shape)
+    fb_items::profile::shape_stands_upright(&item.shape)
 }
 
 /// How an item is posed for its icon: turned so its longest side runs up the image and its
