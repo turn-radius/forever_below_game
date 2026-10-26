@@ -554,6 +554,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("inventory::doll::DollAssets", "icons and figures drawn"),
         ("inventory::doll::DollStage", "the paper doll's figure"),
         ("fitting::FitCache", "fits made again as needed"),
+        ("sparkle::StarMesh", "the star mesh, made at startup"),
         ("barter::Barter", "no barter while lying down; the shelves are in the record"),
         ("barter::BarterRequest", "a request"),
         ("carry::Aimed", "what is under the crosshair"),
