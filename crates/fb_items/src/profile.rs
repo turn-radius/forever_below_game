@@ -83,8 +83,7 @@ fn extents_of(bounds: Option<([f32; 3], [f32; 3])>) -> (f32, f32) {
 pub fn stands_upright(family: Family) -> bool {
     matches!(
         family,
-        Family::Lantern
-            | Family::Helm
+        Family::Helm
             | Family::Hood
             | Family::Hat
             | Family::Garment
@@ -197,7 +196,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     if !folds(family) {
         p.footprint = Footprint { cols: cells(wide), rows: cells(long) };
     }
-    if shape_stands_upright(shape) {
+    if stands_upright(family) {
         p.footprint = upright_footprint_of(p.footprint, bounds);
     }
     if matches!(family, Family::Arrow | Family::Bolt) {
@@ -520,7 +519,7 @@ mod tests {
                 assert!(!(wide > tall && fp.cols < fp.rows) && !(tall > wide && fp.rows < fp.cols), "{base} {seed}: {fp:?} for {wide} by {tall}");
             }
         }
-        assert!(stands_upright(Family::Hood) && stands_upright(Family::Chests) && stands_upright(Family::Lantern));
+        assert!(stands_upright(Family::Hood) && stands_upright(Family::Chests));
         assert!(!stands_upright(Family::Sword) && !stands_upright(Family::Shield) && !stands_upright(Family::Torch));
     }
 
@@ -543,16 +542,41 @@ mod tests {
             s.article.holder = holder;
             let shape = Item::Sundry(s);
             assert!(shape_stands_upright(&shape), "candle holder {holder}");
-            let (lo, hi) = shape.build().bounds().unwrap();
-            let fp = profile("Candle", &shape).footprint;
-            let (wide, tall) = (hi[0] - lo[0], hi[1] - lo[1]);
-            assert!(!(tall > wide && fp.rows < fp.cols) && !(wide > tall && fp.cols < fp.rows), "{fp:?} for {wide} by {tall}");
+            // The icon stands it; the cells it takes stay what they were.
+            let (long, wide) = extents_of(shape.build().bounds());
+            assert_eq!(profile("Candle", &shape).footprint, Footprint { cols: cells(wide), rows: cells(long) });
         }
         for base in ["Lantern", "Wine", "Pack", "Boots"] {
             assert!(shape_stands_upright(&rolled(base, 3).0), "{base}");
         }
         for base in ["Sword", "Torch", "Rope", "Crossbow", "Shield"] {
             assert!(!shape_stands_upright(&rolled(base, 3).0), "{base}");
+        }
+    }
+
+    /// Footprints as they were before the icon pose and the footprint were told apart: the
+    /// row's cells for what folds, else the shape's own cells, turned only for `stands_upright(family)`.
+    #[test]
+    fn existing_goods_keep_their_footprints() {
+        for base in ["Bread", "Cheese", "Waterskin", "Blind cavefish", "Lantern", "Wine", "Tankard", "Candle"] {
+            for seed in 1..40 {
+                let (shape, p) = rolled(base, seed);
+                let bounds = shape.build().bounds();
+                let (long, wide) = extents_of(bounds);
+                let family = shape.family();
+                let row = bases().get(base).map(|r| r.footprint).or_else(|| goods().get(base).map(|r| r.footprint));
+                let mut expected = row.unwrap_or(Footprint { cols: 1, rows: 1 });
+                if !folds(family) {
+                    expected = Footprint { cols: cells(wide), rows: cells(long) };
+                }
+                if stands_upright(family) {
+                    expected = upright_footprint_of(expected, bounds);
+                }
+                assert_eq!(p.footprint, expected, "{base} {seed}");
+            }
+        }
+        for family in [Family::Food, Family::Lantern, Family::Sundry] {
+            assert!(!stands_upright(family), "{family:?}: its footprints were never turned");
         }
     }
 
