@@ -101,6 +101,8 @@ pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams
     let (creatures, webs) = crate::wild::place_wild(&mut level);
     level.creatures.extend(creatures);
     level.webs = webs;
+    // The crystals last of all, after the stairs and everything else they keep clear of.
+    level.crystals = crate::crystals::place_crystals(&level, &mut Mulberry32::new(layout_seed ^ crate::crystals::CRYSTAL_SALT));
     level
 }
 
@@ -185,6 +187,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         roles: Vec::new(),
         props: Vec::new(),
         banners: Vec::new(),
+        crystals: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),

@@ -33,7 +33,7 @@ use bevy::{
 };
 use fb_items::footprint::Footprint;
 use armory::families::banner::BannerState;
-use fb_level::{BannerSite, BannerSpot, CELL, Level, Prop, PropSpot, chest_state};
+use fb_level::{BannerSite, BannerSpot, CELL, CrystalSpot, CrystalSurface, Level, Prop, PropSpot, chest_state, crystal_state};
 
 use crate::carry::{Aimed, appearance_of, item_points};
 use crate::inventory::{Inventory, ItemId, OpenContainer};
@@ -60,6 +60,7 @@ impl Plugin for PropsPlugin {
                 (
                     lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
                     lay_out_banners.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    lay_out_crystals.run_if(resource_exists_and_changed::<CurrentLevel>),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
                     prompt_aimed_container.after(crate::carry::aim),
@@ -235,6 +236,79 @@ fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<
         let (mesh, appearance) = (item.build(), appearance_of(&item));
         let name = format!("Banner of {}", level.0.faction(spot.faction).name);
         spawner.spawn(&mesh, &appearance).insert((LevelPiece, Name::new(name), banner_transform(spot, top), BannerPiece { index }));
+    }
+}
+
+/// A crystal growing in a crystal cavern: which of `CurrentLevel.crystals` it is. A floor
+/// crystal blocks the way with the floor its foot covers; wall and ceiling crystals and geodes
+/// stand over head height or flush with the wall and block nothing.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct CrystalPiece {
+    pub index: usize,
+}
+
+/// How far a single crystal's base is sunk into the rock it grows from, in world units.
+const CRYSTAL_ROOT: f32 = 0.8;
+/// How far a geode's rim stands proud of the wall it is set in.
+const GEODE_PROUD: f32 = 0.25;
+
+/// How far up a crystal's item axis its mesh meets the surface it grows from, in item units:
+/// the middle of a cluster's rock (half of it sunk in), a geode's rim (the rind stands in the
+/// wall), or a single's base, sunk a little.
+pub fn crystal_mount(mesh: &armory::ItemMesh) -> f32 {
+    let part = |name: &str| mesh.parts.iter().find(|p| p.name == name);
+    let ys = |p: &armory::Part| p.positions.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v[1]), hi.max(v[1])));
+    if let Some(rind) = part("rind") {
+        ys(rind).1 - GEODE_PROUD
+    } else if let Some(matrix) = part("matrix") {
+        let (lo, hi) = ys(matrix);
+        (lo + hi) * 0.5
+    } else {
+        CRYSTAL_ROOT
+    }
+}
+
+/// Where the crystal at `spot` stands: a floor crystal rests on the drawn floor at its lowest
+/// point under its foot, a wall or ceiling crystal has its root `mount` into the surface it
+/// grows from, its axis along [`CrystalSpot::axis`] and turned about it by its seed.
+pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemMesh, low: f32) -> Transform {
+    let [x, _, z] = Level::world(spot.x, spot.y);
+    let axis = Vec3::from_array(spot.axis());
+    let twist = Quat::from_rotation_y((spot.seed % 6283) as f32 * 0.001);
+    let rotation = Quat::from_rotation_arc(Vec3::Y, axis) * twist;
+    match spot.surface {
+        CrystalSurface::Floor => {
+            let relief = Relief::new(level);
+            let reach = spot.radius.max(1.0);
+            let floor = std::iter::once(Vec2::ZERO)
+                .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
+                .map(|offset| relief.floor_height(x + offset.x, z + offset.y))
+                .fold(f32::INFINITY, f32::min);
+            Transform::from_translation(Vec3::new(x, floor - low - SINK, z)).with_rotation(rotation)
+        }
+        CrystalSurface::Wall => Transform::from_translation(Vec3::new(x, spot.up, z) - axis * crystal_mount(mesh)).with_rotation(rotation),
+        CrystalSurface::Ceiling => {
+            let top = crate::level::geometry::stone::ceiling_at(level, x, z);
+            Transform::from_translation(Vec3::new(x, top, z) - axis * crystal_mount(mesh)).with_rotation(rotation)
+        }
+    }
+}
+
+/// Spawns (or respawns, when the level changes) the level's crystals.
+fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<CrystalPiece>>, mut spawner: ItemSpawner) {
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+    for (index, spot) in level.0.crystals.iter().enumerate() {
+        let item = Item::Crystal(crystal_state(spot));
+        let (mesh, appearance) = (item.build(), appearance_of(&item));
+        let low = item_points(&mesh).iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let name = item.noun();
+        let mut root = spawner.spawn(&mesh, &appearance);
+        root.insert((LevelPiece, Name::new(name), crystal_transform(&level.0, spot, &mesh, low), CrystalPiece { index }));
+        if spot.surface == CrystalSurface::Floor {
+            root.insert(BlocksTheWay(fb_level::FloorShape::Round(spot.radius)));
+        }
     }
 }
 

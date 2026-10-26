@@ -6,7 +6,7 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
@@ -1021,6 +1021,21 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let dir = if dir == Vec3::ZERO { if run.along_x { Vec3::X } else { Vec3::Z } } else { dir };
             let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
             Transform::from_translation(at).looking_to(dir, Vec3::Y)
+        }
+        "crystal" => {
+            // `FB_DEBUG_CRYSTAL=<n>` (default: the tallest crystal on a floor): from five cells
+            // off, in the chamber's open, looking at its middle.
+            let wanted = std::env::var("FB_DEBUG_CRYSTAL").ok().and_then(|n| n.parse::<usize>().ok());
+            let spot = wanted.and_then(|n| level.crystals.get(n)).or_else(|| level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Floor).max_by(|a, b| a.size.total_cmp(&b.size)));
+            let Some(spot) = spot else { return };
+            let at = v3(fb_level::Level::world(spot.x, spot.y));
+            let from = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]
+                .into_iter()
+                .map(|(dx, dz)| Vec3::new(dx, 0.0, dz))
+                .max_by_key(|dir| (1..=6).take_while(|&k| level.is_open(((at.x + dir.x * k as f32 * CELL * 0.5) / CELL) as i32, ((at.z + dir.z * k as f32 * CELL * 0.5) / CELL) as i32)).count())
+                .unwrap_or(Vec3::X);
+            let eye_at = at + from * spot.size.max(20.0).min(60.0) + eye;
+            Transform::from_translation(eye_at).looking_at(at + Vec3::Y * spot.size.min(30.0) * 0.5, Vec3::Y)
         }
         "wide" => {
             // The longest straight stretch of corridor at least two cells wide, from its end

@@ -203,6 +203,9 @@ pub struct Level {
     /// Faction banners hung on the walls of claimed rooms and beside their doors ([`banners`]).
     #[serde(default)]
     pub banners: Vec<BannerSpot>,
+    /// Crystals growing in a crystal cavern ([`crystals`]); none on any other level.
+    #[serde(default)]
+    pub crystals: Vec<CrystalSpot>,
     /// Rats and snakes ([`creatures`]).
     pub creatures: Vec<CreatureSpot>,
     /// The ways to the levels above and below ([`stairs`]).
@@ -341,6 +344,7 @@ impl Level {
 }
 
 pub mod banners;
+pub mod crystals;
 pub mod claims;
 pub mod doorkind;
 pub mod creatures;
@@ -362,6 +366,7 @@ pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use banners::{BannerSite, BannerSpot};
+pub use crystals::{CrystalSpot, CrystalSurface, crystal_state};
 pub use claims::{Claim, settle_claims};
 pub use folk::{DenizenBody, DenizenKind, Faction, FactionSpec, FolkSpot, Trade};
 pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};

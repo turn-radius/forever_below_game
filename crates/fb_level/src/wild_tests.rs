@@ -50,7 +50,7 @@ fn nothing_that_was_there_before_moves() {
             assert!(kept.iter().all(|k| rest.any(|o| o == k)), "seed {seed} depth {depth}: creatures moved");
             let trolls = |l: &[CreatureSpot]| l.iter().filter(|c| c.species == Species::Troll).count();
             assert_eq!(trolls(&kept), trolls(&old.creatures), "seed {seed} depth {depth}: a troll made way");
-            assert_eq!(Level { creatures: Vec::new(), webs: Vec::new(), ..new }, Level { creatures: Vec::new(), ..old }, "seed {seed} depth {depth}: the level moved");
+            assert_eq!(Level { creatures: Vec::new(), webs: Vec::new(), crystals: Vec::new(), ..new }, Level { creatures: Vec::new(), crystals: Vec::new(), ..old }, "seed {seed} depth {depth}: the level moved");
         }
     }
 }
