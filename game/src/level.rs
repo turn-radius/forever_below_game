@@ -6,7 +6,7 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|gem|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
@@ -1049,6 +1049,12 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let dir = if dir == Vec3::ZERO { if run.along_x { Vec3::X } else { Vec3::Z } } else { dir };
             let at = v3(geometry::cell_centre(from.0, from.1)) - dir * CELL * 0.5 + eye;
             Transform::from_translation(at).looking_to(dir, Vec3::Y)
+        }
+        "gem" => {
+            // The first rough gem lying on the floor, from a step away and above, looking down at it.
+            let Some(gem) = level.items.iter().find(|i| i.family == armory::Family::Crystal) else { return };
+            let at = v3(fb_level::Level::world(gem.x, gem.y));
+            Transform::from_translation(at + Vec3::new(1.0, 0.0, 0.7).normalize() * 14.0 + Vec3::Y * 10.0).looking_at(at, Vec3::Y)
         }
         "crystal" => {
             // `FB_DEBUG_CRYSTAL=<n>` (default: the tallest crystal on a floor): from five cells

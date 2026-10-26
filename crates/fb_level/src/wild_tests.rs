@@ -54,6 +54,7 @@ fn nothing_that_was_there_before_moves() {
             let bare = |mut l: Level| {
                 l.creatures.clear();
                 l.crystals.clear();
+                l.items.retain(|i| i.family != armory::Family::Crystal);
                 l.lights.retain(|light| light.kind != crate::LightKind::Crystal);
                 l
             };
@@ -94,6 +95,7 @@ fn the_newcomers_keep_to_their_rules() {
             let mut level = generate(seed, depth);
             // The crystals' lights come after the creatures and stand at the crystals, which keep clear of them.
             level.lights.retain(|l| l.kind != crate::LightKind::Crystal);
+            level.items.retain(|i| i.family != armory::Family::Crystal);
             let start_room = level.start_room();
             for (i, c) in level.creatures.iter().enumerate().filter(|(_, c)| newcomer(c.species)) {
                 let (x, y) = (c.x.floor() as i32, c.y.floor() as i32);

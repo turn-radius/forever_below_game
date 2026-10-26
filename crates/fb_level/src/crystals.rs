@@ -26,7 +26,7 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 use crate::generate::item_seed;
-use crate::{CELL, Cell, Facing, Level, LevelStyle, LightKind, LightSpot, Room};
+use crate::{CELL, Cell, Facing, ItemSpot, Level, LevelStyle, LightKind, LightSpot, Room};
 
 /// Salt for the stream that grows crystals.
 pub(crate) const CRYSTAL_SALT: u32 = 0xC4A5_7A15;
@@ -224,6 +224,94 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
     }
     spots
 }
+
+/// Salt for the stream that lays rough gems.
+pub(crate) const GEM_SALT: u32 = 0x6E4D_5A11;
+
+/// The rough gems lying in a crystal cavern ([`armory::Family::Crystal`], each the stone of the
+/// chamber or geode it lies by): a few at the foot of some floor crystals, a few spilled at the
+/// foot of each geode, and one or two on the bare floor of each chamber. They keep clear of
+/// everything a floor crystal keeps clear of, of the crystals' own feet and of each other, and
+/// out of the rooms factions hold (what a faction keeps is in its containers), and are placed
+/// after everything else so none moves. Each is rolled from a seed whose base is the stone's
+/// ([`fb_items::armory_base::rough_base`]), so a rough emerald is `Gemstone::Emerald`.
+pub(crate) fn place_rough_gems(level: &Level, rng: &mut Mulberry32) -> Vec<ItemSpot> {
+    if level.style != LevelStyle::CrystalCavern || level.crystals.is_empty() {
+        return Vec::new();
+    }
+    let keep = keep_clear(level);
+    let feet: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Floor).collect();
+    let mut gems: Vec<ItemSpot> = Vec::new();
+    let mut lay = |x: f32, y: f32, stone: Gemstone, gems: &mut Vec<ItemSpot>, rng: &mut Mulberry32| {
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        if level.cell(cx, cy) != Cell::Floor || level.room_at(cx, cy).is_some_and(|r| level.is_claimed(r)) {
+            return;
+        }
+        // Over the floor of a cell, a wall's width off the rock, clear of the level's things, of
+        // every crystal's foot and of the gems already lying.
+        let (wx, wy) = (x * CELL, y * CELL);
+        let spot = |a: f32, b: f32| ((wx - a).powi(2) + (wy - b).powi(2)).sqrt();
+        let off_wall = Facing::ALL.iter().all(|f| {
+            let (dx, dy) = f.step();
+            level.cell(cx + dx, cy + dy).is_open() || {
+                let to_wall = if dx != 0 { ((cx as f32 + 0.5 + dx as f32 * 0.5) * CELL - wx).abs() } else { ((cy as f32 + 0.5 + dy as f32 * 0.5) * CELL - wy).abs() };
+                to_wall >= GEM_OFF_WALL
+            }
+        });
+        if !off_wall
+            || keep.iter().any(|k| spot(k.x, k.y) < k.radius + 1.0)
+            || feet.iter().any(|c| spot(c.x * CELL, c.y * CELL) < c.radius + 1.5)
+            || gems.iter().any(|g| spot(g.x * CELL, g.y * CELL) < GEM_APART)
+        {
+            return;
+        }
+        let Some(base) = fb_items::armory_base::rough_base(stone) else { return };
+        // A seed whose base is the stone's: about one in seven draws.
+        let Some(seed) = (0..60).map(|_| crate::generate::item_seed(rng)).find(|&seed| fb_items::armory_base::base_for(armory::Family::Crystal, seed) == Some(base)) else { return };
+        gems.push(ItemSpot { x, y, yaw: rng.range_f32(0.0, std::f32::consts::TAU), family: armory::Family::Crystal, seed });
+    };
+
+    // At the foot of some floor crystals.
+    for c in &feet {
+        if !rng.chance(0.5) {
+            continue;
+        }
+        for _ in 0..rng.int(1, 2) {
+            let a = rng.range_f32(0.0, std::f32::consts::TAU);
+            let reach = c.radius + rng.range_f32(2.5, 5.0);
+            lay(c.x + a.cos() * reach / CELL, c.y + a.sin() * reach / CELL, c.stone, &mut gems, rng);
+        }
+    }
+    // Spilled at the foot of each geode.
+    for c in level.crystals.iter().filter(|c| c.growth == Growth::Geode) {
+        let (sx, sy) = (c.yaw.sin(), c.yaw.cos());
+        for _ in 0..rng.int(1, 3) {
+            let out = rng.range_f32(0.3, 0.55);
+            let along = rng.range_f32(-0.3, 0.3);
+            lay(c.x + sx * out - sy * along, c.y + sy * out + sx * along, c.stone, &mut gems, rng);
+        }
+    }
+    // On the bare floor of each chamber.
+    for room in &level.rooms {
+        let stone = level.crystals.iter().find(|c| room.contains(c.x as i32, c.y as i32)).map_or(level.crystals[0].stone, |c| c.stone);
+        let mut cells = interior(level, room);
+        crate::generate::shuffle(&mut cells, rng);
+        let mut laid = 0;
+        for (cx, cy) in cells {
+            if laid >= 2 {
+                break;
+            }
+            let before = gems.len();
+            lay(cx as f32 + rng.range_f32(0.2, 0.8), cy as f32 + rng.range_f32(0.2, 0.8), stone, &mut gems, rng);
+            laid += gems.len() - before;
+        }
+    }
+    gems
+}
+
+/// Least gap, in world units, between a rough gem and a wall, and between two gems.
+const GEM_OFF_WALL: f32 = 5.0;
+const GEM_APART: f32 = 4.0;
 
 /// A floor crystal at `(x, y)`: a tall single or a cluster of the chamber's habit, shrunk until
 /// it covers no more than [`MOST_FLOOR_RADIUS`], or `None` if it will not fit clear of everything
@@ -460,7 +548,7 @@ mod tests {
                     for p in &level.props {
                         assert!(gap(p.x, p.y) >= p.prop.floor_shape().radius(), "{what}: a crystal in a prop");
                     }
-                    for i in &level.items {
+                    for i in level.items.iter().filter(|i| i.family != armory::Family::Crystal) {
                         assert!(gap(i.x, i.y) >= 3.0, "{what}: a crystal on an item");
                     }
                     for l in level.lights.iter().filter(|l| l.kind != LightKind::Crystal) {
@@ -561,6 +649,42 @@ mod tests {
         // Nothing else is lit by crystal, and a plain light has no crystal.
         let halls = generate_in(3, 2, &LevelParams::for_style(LevelStyle::StoneHalls));
         assert!(halls.lights.iter().all(|l| l.kind != LightKind::Crystal && halls.crystal_lit_by(l).is_none()));
+    }
+
+    #[test]
+    fn rough_gems_lie_in_caverns_by_their_crystals_and_geodes_in_their_stone() {
+        let mut by_geodes = 0;
+        let mut total = 0;
+        for seed in 1..=8 {
+            for depth in [5, 9] {
+                let level = cavern(seed, depth);
+                let what = format!("seed {seed} depth {depth}");
+                let gems: Vec<&ItemSpot> = level.items.iter().filter(|i| i.family == armory::Family::Crystal).collect();
+                total += gems.len();
+                let stones: std::collections::HashSet<_> = level.crystals.iter().map(|c| c.stone).collect();
+                for g in &gems {
+                    let base = fb_items::armory_base::base_for(armory::Family::Crystal, g.seed).unwrap();
+                    let stone = fb_items::armory_base::rough_stone(base).unwrap();
+                    assert!(stones.contains(&stone), "{what}: a {base} in a cavern of {stones:?}");
+                    assert!(level.cell(g.x as i32, g.y as i32) == Cell::Floor, "{what}: a gem off the floor");
+                    assert!(level.room_at(g.x as i32, g.y as i32).is_none_or(|r| !level.is_claimed(r)), "{what}: a gem in a claimed room");
+                    for c in level.crystals.iter().filter(|c| c.surface == CrystalSurface::Floor) {
+                        assert!(((g.x - c.x) * CELL).hypot((g.y - c.y) * CELL) >= c.radius, "{what}: a gem under a crystal");
+                    }
+                    for p in &level.props {
+                        assert!(((g.x - p.x) * CELL).hypot((g.y - p.y) * CELL) >= p.prop.floor_shape().radius(), "{what}: a gem in a prop");
+                    }
+                    if level.crystals.iter().any(|c| c.growth == Growth::Geode && (g.x - c.x).hypot(g.y - c.y) < 1.2) {
+                        by_geodes += 1;
+                    }
+                }
+            }
+        }
+        assert!(total >= 12, "{total} rough gems in sixteen caverns");
+        assert!(by_geodes > 0, "no gem lies at a geode's foot");
+        // No other level lays rough gems.
+        let halls = generate_in(3, 2, &LevelParams::for_style(LevelStyle::StoneHalls));
+        assert!(halls.items.iter().all(|i| i.family != armory::Family::Crystal));
     }
 
     #[test]

@@ -61,10 +61,32 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
                 ("Bolt case", 1),
                 ("Arrow", 2),
                 ("Bolt", 1),
+                // Rough gems: the common stones now and then, the dear ones rarely.
+                ("Rough garnet", 1),
+                ("Rough amethyst", 1),
+                ("Rough citrine", 1),
+                ("Rough sapphire", 1),
+                ("Rough emerald", 1),
             ],
             (2, 5),
         ),
-        ChestStyle::Strongbox | ChestStyle::Coffer => (&[("Purse", 6), ("Ring", 3), ("Amulet", 2), ("Charm", 2), ("Lockpicks", 1)], (1, 3)),
+        ChestStyle::Strongbox | ChestStyle::Coffer => (
+            &[
+                ("Purse", 6),
+                ("Ring", 3),
+                ("Amulet", 2),
+                ("Charm", 2),
+                ("Lockpicks", 1),
+                ("Rough garnet", 1),
+                ("Rough amethyst", 1),
+                ("Rough citrine", 1),
+                ("Rough sapphire", 1),
+                ("Rough emerald", 1),
+                ("Rough ruby", 1),
+                ("Rough diamond", 1),
+            ],
+            (1, 3),
+        ),
         ChestStyle::Barrel => (
             &[("Bread", 4), ("Cheese", 3), ("Apple", 4), ("Smoked fish", 3), ("Sausages", 3), ("Tankard", 2), ("Wine", 2), ("Waterskin", 2)],
             (2, 5),
@@ -202,5 +224,15 @@ mod tests {
             assert!(!item.profile.packable && item.rarity == Rarity::Common);
             assert_eq!(item.shape, armory::Item::Chests(Chests::roll_as(9, style)));
         }
+    }
+
+    #[test]
+    fn chests_and_strongboxes_now_and_then_hold_a_rough_gem() {
+        for style in [ChestStyle::Chest, ChestStyle::Strongbox] {
+            let found = (1..300).filter(|&loot| roll_contents(style, loot, crate::Odds::default()).iter().any(|i| crate::armory_base::rough_stone(&i.base).is_some())).count();
+            assert!((10..150).contains(&found), "{style:?}: a rough gem in {found} of 299");
+        }
+        // Barrels hold food and no stone.
+        assert!((1..200).all(|loot| roll_contents(ChestStyle::Barrel, loot, crate::Odds::default()).iter().all(|i| crate::armory_base::rough_stone(&i.base).is_none())));
     }
 }

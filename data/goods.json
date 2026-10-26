@@ -208,5 +208,61 @@
   ],
   "wt": 12,
   "desc": "Kindling, a rig and a pot · set it down to make a fire"
+ },
+ "Rough garnet": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut garnet, still in the rock's skin"
+ },
+ "Rough amethyst": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut amethyst, still in the rock's skin"
+ },
+ "Rough citrine": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut citrine, still in the rock's skin"
+ },
+ "Rough sapphire": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut sapphire, still in the rock's skin"
+ },
+ "Rough emerald": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut emerald, still in the rock's skin"
+ },
+ "Rough ruby": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut ruby, still in the rock's skin"
+ },
+ "Rough diamond": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.1,
+  "desc": "Uncut diamond, still in the rock's skin"
  }
 }
