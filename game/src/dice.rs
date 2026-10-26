@@ -265,7 +265,12 @@ fn run_dice(
         active.drawn = Some(state);
         let fallback = Keymap::default();
         let skip = keymap.as_deref().unwrap_or(&fallback).label(Action::SkipRoll);
-        spawn_panel(&mut commands, &fonts, camera, &stage, &active.request.roll, state, &skip);
+        let clear = match active.request.purpose {
+            // The talk panel stands on the right: the roll sits in the room left of it.
+            RollPurpose::Persuade(_) => crate::talk::PANEL_WIDTH + crate::talk::PANEL_MARGIN + 24.0,
+            _ => 0.0,
+        };
+        spawn_panel(&mut commands, &fonts, camera, &stage, &active.request.roll, state, &skip, clear);
     }
 }
 
@@ -286,7 +291,7 @@ fn rule(col: &mut ChildSpawnerCommands) {
     col.spawn((Node { height: px(1), margin: UiRect::vertical(px(4)), ..default() }, BackgroundColor(FAINT)));
 }
 
-fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: &DiceStage, roll: &CheckRoll, (phase, shown): (Stage, usize), skip: &str) {
+fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: &DiceStage, roll: &CheckRoll, (phase, shown): (Stage, usize), skip: &str, clear_right: f32) {
     let landed = phase != Stage::Tumbling;
     let running: i32 = roll.natural + roll.modifiers.iter().take(shown).map(|m| m.amount).sum::<i32>();
     let verdict = phase == Stage::Verdict;
@@ -298,7 +303,7 @@ fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: 
             DespawnOnExit(AppState::Delving),
             UiTargetCamera(camera),
             GlobalZIndex(40),
-            Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+            Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, padding: UiRect::right(px(clear_right)), ..default() },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
         ))
         .with_children(|screen| {
@@ -339,7 +344,7 @@ fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: 
                             col.spawn((Text::new("Rolling..."), UiFonts::style(&fonts.body_italic, 22.0, MUTED)));
                         }
                         for m in roll.modifiers.iter().take(shown) {
-                            row(col, m.name.clone(), signed(m.amount), if m.name == source_label(m.source) { "" } else { source_label(m.source) }, if m.amount < 0 { BAD } else { ACCENT });
+                            row(col, m.name.clone(), signed(m.amount), if m.name.eq_ignore_ascii_case(source_label(m.source)) { "" } else { source_label(m.source) }, if m.amount < 0 { BAD } else { ACCENT });
                         }
                         if landed {
                             rule(col);
