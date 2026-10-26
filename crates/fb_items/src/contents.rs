@@ -113,13 +113,29 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
     }
 }
 
+/// The depth from which containers hold rough gems, and from which the dear stones (ruby, diamond,
+/// sapphire, emerald) are among them: a depth-1 coffer never holds a 250 gp ruby. Our own.
+pub const GEMS_FROM_DEPTH: u32 = 5;
+pub const DEAR_GEMS_FROM_DEPTH: u32 = 9;
+
+/// Whether a container at `depth` may hold `base`: anything but a rough gem always, a rough gem
+/// from [`GEMS_FROM_DEPTH`], a dear one from [`DEAR_GEMS_FROM_DEPTH`].
+fn gem_in_reach(base: &str, depth: u32) -> bool {
+    use armory::gem::Gemstone::{Diamond, Emerald, Ruby, Sapphire};
+    match crate::armory_base::rough_stone(base) {
+        None => true,
+        Some(Ruby | Diamond | Sapphire | Emerald) => depth >= DEAR_GEMS_FROM_DEPTH,
+        Some(_) => depth >= GEMS_FROM_DEPTH,
+    }
+}
+
 /// What a container of `style` holds, rolled from `loot`: a few picks from its kind's table,
 /// each rolled from its own seed off the loot stream against `odds`, and ammunition by the
 /// sheaf. Pure in its arguments.
 pub fn roll_contents(style: ChestStyle, loot: u32, odds: crate::Odds) -> Vec<Item> {
     let mut rng = Mulberry32::new(loot ^ 0xC07E_5755);
     let (table, count) = stock(style);
-    let table: Vec<(&str, u32)> = table.iter().copied().filter(|(base, _)| !held_back(base)).collect();
+    let table: Vec<(&str, u32)> = table.iter().copied().filter(|(base, _)| !held_back(base) && gem_in_reach(base, odds.depth)).collect();
     let mut contents = Vec::new();
     for _ in 0..rng.int(count.0, count.1) {
         let base = *rng.weighted(&table);
@@ -229,8 +245,19 @@ mod tests {
     #[test]
     fn chests_and_strongboxes_now_and_then_hold_a_rough_gem() {
         for style in [ChestStyle::Chest, ChestStyle::Strongbox] {
-            let found = (1..300).filter(|&loot| roll_contents(style, loot, crate::Odds::default()).iter().any(|i| crate::armory_base::rough_stone(&i.base).is_some())).count();
+            let found = (1..300).filter(|&loot| roll_contents(style, loot, crate::Odds::loot(9)).iter().any(|i| crate::armory_base::rough_stone(&i.base).is_some())).count();
             assert!((10..150).contains(&found), "{style:?}: a rough gem in {found} of 299");
+        }
+        // Shallow containers never hold them, and the dear stones wait for depth 9.
+        for depth in 1..GEMS_FROM_DEPTH {
+            for style in ChestStyle::ALL {
+                assert!((0..300).all(|loot| roll_contents(style, loot, crate::Odds::loot(depth)).iter().all(|i| crate::armory_base::rough_stone(&i.base).is_none())), "{style:?} at depth {depth}");
+            }
+        }
+        for depth in GEMS_FROM_DEPTH..DEAR_GEMS_FROM_DEPTH {
+            let dear = (0..400).any(|loot| [ChestStyle::Chest, ChestStyle::Strongbox].iter().any(|&st| roll_contents(st, loot, crate::Odds::loot(depth)).iter().any(|i| matches!(i.base.as_str(), "Rough ruby" | "Rough diamond" | "Rough sapphire" | "Rough emerald"))));
+            assert!(!dear, "a dear stone at depth {depth}");
+            assert!((0..400).any(|loot| roll_contents(ChestStyle::Chest, loot, crate::Odds::loot(depth)).iter().any(|i| crate::armory_base::rough_stone(&i.base).is_some())), "no gem at depth {depth}");
         }
         // Barrels hold food and no stone.
         assert!((1..200).all(|loot| roll_contents(ChestStyle::Barrel, loot, crate::Odds::default()).iter().all(|i| crate::armory_base::rough_stone(&i.base).is_none())));
