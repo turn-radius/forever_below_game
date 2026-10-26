@@ -79,6 +79,10 @@ pub struct WorldRecord {
     /// persuading wait for the next one.
     #[serde(default)]
     pub rests: u32,
+    /// Potions of insight the delver has drunk. Like a rest, one lets items that fell short be
+    /// identified again; unlike a rest it does not lift a folk's refusal to be persuaded.
+    #[serde(default)]
+    pub insights: u32,
     /// The folk who refused to be persuaded, by (depth, seed), with the rests then: they refuse
     /// again until the delver has rested.
     #[serde(default)]
@@ -94,6 +98,12 @@ impl WorldRecord {
     /// How many times the folk `who` (depth, seed) has been persuaded at.
     pub fn persuasion_tries(&self, who: (u32, u32)) -> u32 {
         self.persuasions.get(&who).copied().unwrap_or(0)
+    }
+
+    /// What identify tries are counted against: rests and potions of insight together. An item
+    /// that fell short waits for this to pass the count it was tried at.
+    pub fn identify_epoch(&self) -> u32 {
+        self.rests + self.insights
     }
 
     /// Whether `who` still refuses to be persuaded: they refused and the delver has not rested since.
@@ -273,13 +283,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuaded: Default::default(), persuasions: Default::default(), rests: 0, refused: Default::default() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuaded: Default::default(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuaded: Default::default(), persuasions: Default::default(), rests: 0, refused: Default::default() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuaded: Default::default(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default() }
     }
 
     /// The record of the level at `depth`, if it has been visited.

@@ -99,8 +99,8 @@ fn start_identifying(
         toasts.say("There is nothing more to learn of it");
         return;
     }
-    if !item.can_identify(record.as_deref().map_or(0, |r| r.rests)) {
-        toasts.say("Try again after resting");
+    if !item.can_identify(record.as_deref().map_or(0, |r| r.identify_epoch())) {
+        toasts.say("Try again after resting or a potion of insight");
         return;
     }
     let (intelligence, class) = character.as_deref().map_or((10, ClassKind::Fighter), |c| (c.scores().intelligence, c.class.faction_class()));
@@ -120,7 +120,7 @@ fn finish_identifying(mut done: MessageReader<RollDone>, mut identifying: ResMut
         identifying.0 = None;
         let Some(mut item) = inventory.item(id).cloned() else { continue };
         let hidden = item.hidden_affixes();
-        item.reveal_at(finished.roll.total, record.as_deref().map_or(0, |r| r.rests));
+        item.reveal_at(finished.roll.total, record.as_deref().map_or(0, |r| r.identify_epoch()));
         let learned = hidden - item.hidden_affixes();
         let line = if item.is_known() {
             format!("You identify the {}", item.title().to_lowercase())
@@ -218,7 +218,7 @@ mod tests {
         let dc = app.world().resource::<Inventory>().item(id).unwrap().identify_dc();
         close(&mut app, id, dc - 3);
         let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
-        assert!(!item.is_known() && !item.can_identify(app.world().resource::<WorldRecord>().rests));
+        assert!(!item.is_known() && !item.can_identify(app.world().resource::<WorldRecord>().identify_epoch()));
         // Sleeping and waking is one rest.
         app.world_mut().resource_mut::<Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: Entity::PLACEHOLDER, hit_points: 1, since: 0.0, began: 0.0 });
         app.update();
@@ -228,6 +228,27 @@ mod tests {
         let rests = app.world().resource::<WorldRecord>().rests;
         assert_eq!(rests, 1);
         assert!(item.can_identify(rests));
+    }
+
+    #[test]
+    fn a_potion_of_insight_lets_a_failed_identify_try_again_but_not_a_refused_persuasion() {
+        let (mut app, id) = app_with(unknown_ring());
+        app.insert_resource(WorldRecord::default());
+        let dc = app.world().resource::<Inventory>().item(id).unwrap().identify_dc();
+        close(&mut app, id, dc - 3);
+        let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
+        let who = (3, 77);
+        {
+            let mut record = app.world_mut().resource_mut::<WorldRecord>();
+            let rests = record.rests;
+            record.refused.insert(who, rests);
+            assert!(!item.can_identify(record.identify_epoch()) && record.refuses(who));
+            record.insights += 1;
+            assert!(item.can_identify(record.identify_epoch()), "insight allows another try");
+            assert!(record.refuses(who), "but the folk still refuses until a rest");
+            record.rests += 1;
+            assert!(!record.refuses(who));
+        }
     }
 
     #[test]

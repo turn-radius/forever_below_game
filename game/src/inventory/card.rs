@@ -781,13 +781,13 @@ pub fn show_card(
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
             }
-            let rests = record.as_deref().map_or(0, |r| r.rests);
+            let rests = record.as_deref().map_or(0, |r| r.identify_epoch());
             if item.can_identify(rests)
                 && let Some(key) = keymap.inputs(Action::Identify).first()
             {
                 text.actions.push((key.label(), "Identify"));
             } else if !item.is_known() {
-                text.note = Some("Try again after resting".to_string());
+                text.note = Some("Try again after resting or a potion of insight".to_string());
             }
             if inventory.is_carried(id)
                 && let Some(key) = keymap.inputs(Action::Drop).first()

@@ -187,6 +187,13 @@ impl Eating<'_, '_> {
                 self.commands.spawn((Name::new("heal"), AudioPlayer::new(sound.0.clone()), crate::audio::sound_effect(&game, &self.tuning), DespawnOnExit(crate::launch::AppState::Delving)));
             }
         }
+        // A clear head: what fell short of identifying can be tried again, as after a rest.
+        if done.brew == Some(Brew::Insight)
+            && let Some(record) = self.record.as_mut()
+        {
+            record.insights += 1;
+            line = format!("{line}: your head clears");
+        }
         if done.brew == Some(Brew::Antidote)
             && let Ok((player, Some(mut effects))) = self.effects.single_mut()
             && effects.0.get(CURED_BY_ANTIDOTE, None).is_some()
@@ -929,6 +936,19 @@ mod tests {
         hover(&mut app, id);
         press_u(&mut app);
         assert!(app.world().get::<DelverEffects>(player).is_none());
+    }
+
+    #[test]
+    fn a_potion_of_insight_counts_for_identifying_and_not_for_a_rest() {
+        let (mut app, _) = app();
+        app.init_resource::<crate::record::WorldRecord>();
+        let potion = (0..400).map(item_seeded("Potion")).find(|p| p.brew() == Some(Brew::Insight)).expect("an insight potion");
+        let id = stow(&mut app, potion);
+        hover(&mut app, id);
+        press_u(&mut app);
+        let record = app.world().resource::<crate::record::WorldRecord>();
+        assert_eq!((record.insights, record.rests, record.identify_epoch()), (1, 0, 1));
+        assert!(app.world().resource::<Toast>().text.contains("your head clears"));
     }
 
     #[test]
