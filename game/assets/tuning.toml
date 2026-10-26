@@ -119,6 +119,10 @@ brazier_reach = 150.0
 glowcap_peak = 0.5
 # How far glowcaps' light reaches, in world units.
 glowcap_reach = 30.0
+# A lit crystal's strength close up (1 = full).
+crystal_peak = 1.0
+# How far a lit crystal's light reaches, in world units, for a crystal 3 m tall.
+crystal_reach = 130.0
 # How deeply flames flicker (0 = steady, 1 = usual).
 flicker_depth = 1.0
 # The abyss's own light where no flame reaches, in lux.

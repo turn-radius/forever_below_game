@@ -26,7 +26,7 @@ use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
 use crate::generate::item_seed;
-use crate::{CELL, Cell, Facing, Level, LevelStyle, Room};
+use crate::{CELL, Cell, Facing, Level, LevelStyle, LightKind, LightSpot, Room};
 
 /// Salt for the stream that grows crystals.
 pub(crate) const CRYSTAL_SALT: u32 = 0xC4A5_7A15;
@@ -74,14 +74,47 @@ pub struct CrystalSpot {
     pub radius: f32,
 }
 
-/// The Armory state of the crystal at `spot`.
+/// How strongly a cavern crystal's surface glows in its stone's colour (the Armory's `glow`, 0
+/// to 1): every crystal glows, so a cavern the delver's own light has not reached still shows
+/// its crystals as shapes of colour.
+pub const CRYSTAL_GLOW: f32 = 0.85;
+
+/// The Armory state of the crystal at `spot`: its shape from the seed, its stone and size from
+/// the spot, glowing.
 pub fn crystal_state(spot: &CrystalSpot) -> CrystalState {
     let mut state = Crystals::roll_as(spot.seed, spot.habit, spot.growth);
     state.crystal.stone = spot.stone;
     state.crystal.size = spot.size;
+    state.crystal.glow = CRYSTAL_GLOW;
     state.fit(&crystal::LIMITS);
     state
 }
+
+/// The crystals that also light the cavern with a light of their colour, as [`LightKind::Crystal`]
+/// lights, appended to the level's lights: at most [`MOST_LIT`], the largest at least
+/// [`LIT_FROM_SIZE`] units, none within [`LIT_APART`] cells of another, geodes never (their glow
+/// is a cavity's). Only a few, so a cavern stays within the game's light budget: the lights cast
+/// no shadows and so take no shadow slot, and the rest of the crystals only glow on their
+/// surfaces.
+pub(crate) fn lit_crystals(crystals: &[CrystalSpot]) -> Vec<LightSpot> {
+    let mut order: Vec<&CrystalSpot> = crystals.iter().filter(|c| c.growth != Growth::Geode && c.size >= LIT_FROM_SIZE).collect();
+    order.sort_by(|a, b| b.size.total_cmp(&a.size));
+    let mut lit: Vec<&CrystalSpot> = Vec::new();
+    for c in order {
+        if lit.len() >= MOST_LIT {
+            break;
+        }
+        if lit.iter().all(|l| (l.x - c.x).hypot(l.y - c.y) >= LIT_APART) {
+            lit.push(c);
+        }
+    }
+    lit.into_iter().map(|c| LightSpot { x: c.x, y: c.y, kind: LightKind::Crystal }).collect()
+}
+
+/// Most crystals that light a cavern, the smallest of them and how far apart, in cells.
+pub const MOST_LIT: usize = 8;
+pub const LIT_FROM_SIZE: f32 = 22.0;
+pub const LIT_APART: f32 = 5.0;
 
 impl CrystalSpot {
     /// The way its axis points, a unit vector in world axes (x east, y up, z south).
@@ -430,7 +463,7 @@ mod tests {
                     for i in &level.items {
                         assert!(gap(i.x, i.y) >= 3.0, "{what}: a crystal on an item");
                     }
-                    for l in &level.lights {
+                    for l in level.lights.iter().filter(|l| l.kind != LightKind::Crystal) {
                         assert!(gap(l.x, l.y) >= 4.0, "{what}: a crystal in a light");
                     }
                     for f in &level.folk {
@@ -499,6 +532,35 @@ mod tests {
                 assert!(level.ceiling - (hi[1] - lo[1]) > 25.0, "seed {seed}: a ceiling crystal hangs to {}", level.ceiling - (hi[1] - lo[1]));
             }
         }
+    }
+
+    #[test]
+    fn only_the_largest_crystals_light_the_cavern_and_only_a_few() {
+        let mut lit_any = false;
+        for seed in 1..=8 {
+            for depth in [5, 9] {
+                let level = cavern(seed, depth);
+                let what = format!("seed {seed} depth {depth}");
+                let lights: Vec<_> = level.lights.iter().filter(|l| l.kind == LightKind::Crystal).collect();
+                assert!(lights.len() <= MOST_LIT, "{what}: {} crystal lights", lights.len());
+                lit_any |= !lights.is_empty();
+                for (i, light) in lights.iter().enumerate() {
+                    let crystal = level.crystal_lit_by(light).unwrap_or_else(|| panic!("{what}: a light with no crystal"));
+                    assert!(crystal.size >= LIT_FROM_SIZE && crystal.growth != Growth::Geode, "{what}");
+                    for other in &lights[i + 1..] {
+                        assert!((light.x - other.x).hypot(light.y - other.y) >= LIT_APART, "{what}: lit crystals close together");
+                    }
+                }
+                // Every crystal glows on its surface; only the lit few cast light, so fewer lights
+                // than crystals.
+                assert!(level.crystals.iter().all(|c| (crystal_state(c).crystal.glow - CRYSTAL_GLOW).abs() < 0.01), "{what}");
+                assert!(lights.len() < level.crystals.len(), "{what}");
+            }
+        }
+        assert!(lit_any, "no cavern has a lit crystal");
+        // Nothing else is lit by crystal, and a plain light has no crystal.
+        let halls = generate_in(3, 2, &LevelParams::for_style(LevelStyle::StoneHalls));
+        assert!(halls.lights.iter().all(|l| l.kind != LightKind::Crystal && halls.crystal_lit_by(l).is_none()));
     }
 
     #[test]

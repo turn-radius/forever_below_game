@@ -309,6 +309,11 @@ pub struct LightTuning {
     /// Glowcaps: a faint cold pool of about three metres. Reach in world units.
     pub glowcap_peak: f32,
     pub glowcap_reach: f32,
+    /// A crystal that lights its cavern, in its own colour: strength close up, and the reach of a
+    /// crystal 3 m tall (a taller or shorter one reaches a little further or less). They cast no
+    /// shadows, so they take none of the shadow budget (`shadowed_lights`).
+    pub crystal_peak: f32,
+    pub crystal_reach: f32,
     /// How deeply flames flicker, as a multiple of each flame's own (0 holds them steady, 1 the
     /// prototype's curve, `crate::light::Torch::flicker`).
     pub flicker_depth: f32,
@@ -336,6 +341,8 @@ impl Default for LightTuning {
             brazier_reach: 150.0,
             glowcap_peak: 0.5,
             glowcap_reach: 30.0,
+            crystal_peak: 1.0,
+            crystal_reach: 130.0,
             flicker_depth: 1.0,
             ambient_lux: 4.0,
             fog_start: 40.0,

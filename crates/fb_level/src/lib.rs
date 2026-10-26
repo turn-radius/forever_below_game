@@ -122,6 +122,9 @@ pub enum LightKind {
     /// A hearth's campfire, built from the Armory campfire family ([`crate::Prop::Campfire`]
     /// stands at the same spot): warm, flickering, lit.
     Campfire,
+    /// One of a crystal cavern's largest crystals, glowing in its own colour: the light sits at
+    /// the crystal's own spot ([`Level::crystal_lit_by`] finds it), so the kind needs no colour.
+    Crystal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -232,6 +235,14 @@ impl Level {
     /// The names of the factions on this level, as the world's items name them in their legends.
     pub fn faction_names(&self) -> Vec<String> {
         self.factions.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// The crystal a [`LightKind::Crystal`] light shines from: the one growing at its spot.
+    pub fn crystal_lit_by(&self, light: &LightSpot) -> Option<&CrystalSpot> {
+        if light.kind != LightKind::Crystal {
+            return None;
+        }
+        self.crystals.iter().find(|c| c.x == light.x && c.y == light.y)
     }
 
     /// The cell at `(x, y)`, or rock outside the grid.

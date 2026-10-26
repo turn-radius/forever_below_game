@@ -815,6 +815,12 @@ fn spawn_fixtures(
                 let flame = armory::families::campfire::Campfire::light(&state).map_or(Vec3::Y * 2.0, |anchor| v3(anchor.position));
                 commands.spawn((StonePiece, Name::new("campfire light"), FixedLight::Campfire, FixedLight::Campfire.light(&tuning.light), Transform::from_translation(at + flame)));
             }
+            // The crystal's own spot: its light, hung in the air just off its surface.
+            LightKind::Crystal => {
+                if let Some(crystal) = level.crystal_lit_by(spot) {
+                    commands.spawn((StonePiece, Name::new("crystal light"), crystal_light(crystal, &tuning.light), Transform::from_translation(crystal_light_at(crystal))));
+                }
+            }
             LightKind::Brazier => {
                 let (mesh, flame) = brazier.expect("a brazier has a shape");
                 spawner.spawn(&mesh, &fixture_appearance(seed, ConditionState::BattleWorn)).insert((StonePiece, Transform::from_translation(at)));
@@ -865,6 +871,28 @@ fn spawn_glowcaps(commands: &mut Commands, spawner: &mut crate::render::ItemSpaw
 /// stays in the cells it can see; the caps themselves cast none (`unshadow_flames`).
 pub fn glowcap_light(tuning: &LightTuning) -> PointLight {
     cast_shadows(point_light(GLOWCAP_LIGHT, tuning.glowcap_peak, tuning.glowcap_reach, &EXPOSURE))
+}
+
+/// The most a lit crystal's light hangs off its surface, in world units: half a tall crystal
+/// out along its axis, so it shines from the crystal's body, not from inside the rock.
+const CRYSTAL_LIGHT_OFF: f32 = 14.0;
+
+/// The light of a crystal that lights its cavern: the colour of its stone, brightened to full
+/// (the hue is the gem's, a dark stone like amethyst glows as brightly as a pale one), steady,
+/// reaching further for a taller crystal, and casting no shadow, so it takes no slot of the
+/// shadow budget (`crate::light::ShadowBudgetPlugin` judges only lights that cast).
+pub fn crystal_light(crystal: &fb_level::CrystalSpot, tuning: &LightTuning) -> PointLight {
+    let rgb = crystal.stone.rgb();
+    let top = rgb.0.max(rgb.1).max(rgb.2).max(0.05);
+    let color = Color::srgb(rgb.0 / top, rgb.1 / top, rgb.2 / top);
+    point_light(color, tuning.crystal_peak, tuning.crystal_reach * (crystal.size / 30.0).clamp(0.7, 1.5), &EXPOSURE)
+}
+
+/// Where a crystal's light hangs: off its surface along its axis, half its length up to
+/// [`CRYSTAL_LIGHT_OFF`].
+pub fn crystal_light_at(crystal: &fb_level::CrystalSpot) -> Vec3 {
+    let [x, _, z] = fb_level::Level::world(crystal.x, crystal.y);
+    Vec3::new(x, crystal.up, z) + Vec3::from_array(crystal.axis()) * (crystal.size * 0.5).min(CRYSTAL_LIGHT_OFF)
 }
 
 /// Flames and embers on the level's fixtures give the light, so they must not shadow it.
@@ -1539,5 +1567,34 @@ mod tests {
             }
         }
         assert!(arched[0] > 0 && arched[1] > 0, "arched doorways at depth 5 and 4: {arched:?}");
+    }
+
+    #[test]
+    fn crystal_lights_take_the_crystals_colour_and_no_shadow_slot() {
+        let tuning = LightTuning::default();
+        let mut lit = 0;
+        for seed in 1..=6 {
+            let level = fb_level::generate_in(seed, 5, &fb_level::LevelParams::for_style(fb_level::LevelStyle::CrystalCavern));
+            let lights: Vec<_> = level.lights.iter().filter(|l| l.kind == LightKind::Crystal).collect();
+            // A cavern lit by crystals stays within the light budget: a few lights, none of which
+            // casts a shadow, so the four shadow slots stay the nearest lights' own.
+            assert!(lights.len() <= fb_level::crystals::MOST_LIT);
+            lit += lights.len();
+            for spot in lights {
+                let crystal = level.crystal_lit_by(spot).expect("a crystal under every crystal light");
+                let light = crystal_light(crystal, &tuning);
+                assert!(!crate::light::is_shadowable(&light) && !light.shadow_maps_enabled);
+                // Its hue is the stone's: the same ratios between the channels.
+                let rgb = crystal.stone.rgb();
+                let top = rgb.0.max(rgb.1).max(rgb.2);
+                let c = light.color.to_srgba();
+                assert!((c.red - rgb.0 / top).abs() < 1e-4 && (c.green - rgb.1 / top).abs() < 1e-4 && (c.blue - rgb.2 / top).abs() < 1e-4);
+                assert!(light.range > 0.0 && light.intensity > 0.0);
+                // It hangs in the open, off the crystal's surface, and over the floor.
+                let at = crystal_light_at(crystal);
+                assert!(at.y > 0.0 && at.y < level.ceiling + 1.0, "{at}");
+            }
+        }
+        assert!(lit > 0);
     }
 }

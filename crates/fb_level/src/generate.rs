@@ -103,6 +103,8 @@ pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams
     level.webs = webs;
     // The crystals last of all, after the stairs and everything else they keep clear of.
     level.crystals = crate::crystals::place_crystals(&level, &mut Mulberry32::new(layout_seed ^ crate::crystals::CRYSTAL_SALT));
+    let lit = crate::crystals::lit_crystals(&level.crystals);
+    level.lights.extend(lit);
     level
 }
 
