@@ -424,6 +424,31 @@ mod tests {
         }
 
         #[test]
+        fn a_held_candle_lights_burns_down_and_goes_out_with_l() {
+            use fb_items::Slot;
+            let mut inventory = Inventory::default();
+            let mut candle = (1..200).filter_map(|s| fb_items::roll_item("Chamberstick", s).or_else(|| fb_items::roll_item("Candle", s))).find(|i| matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder)).unwrap();
+            if let armory::Item::Sundry(s) = &mut candle.shape {
+                s.article.lit = true;
+                s.article.burnt = 0.0;
+            }
+            let id = inventory.add(candle);
+            for hand in [Slot::Offhand, Slot::Mainhand] {
+                assert!(inventory.item(id).unwrap().fits(hand));
+                inventory.equip(id, hand).unwrap();
+                assert_eq!(crate::carry::carried_lights(&inventory), vec![(hand, id)], "held lit, it lights");
+            }
+            let full = inventory.item(id).unwrap().fuel_left().unwrap();
+            assert!(inventory.burn_lights(600.0));
+            assert!(inventory.item(id).unwrap().fuel_left().unwrap() < full, "burns down while held");
+            assert_eq!(inventory.toggle_light(id), Ok(false));
+            assert!(crate::carry::carried_lights(&inventory).is_empty(), "out, it gives no light");
+            let left = inventory.item(id).unwrap().fuel_left();
+            inventory.burn_lights(600.0);
+            assert_eq!(inventory.item(id).unwrap().fuel_left(), left);
+        }
+
+        #[test]
         fn an_open_screen_burns_nothing() {
             let mut app = app();
             let id = light(&mut app, fresh_torch(1.0), true);

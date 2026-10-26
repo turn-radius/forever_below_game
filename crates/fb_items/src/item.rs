@@ -231,6 +231,10 @@ impl Item {
         if self.shape.family() == armory::Family::Torch {
             return vec![made_for, Slot::Mainhand];
         }
+        // A candle or chamberstick is held in either hand, never on the hip: that is the lantern's.
+        if matches!(&self.shape, armory::Item::Sundry(_)) && self.shape.lit().is_some() {
+            return vec![made_for, Slot::Mainhand];
+        }
         match made_for {
             Slot::Ring1 | Slot::Ring2 => vec![Slot::Ring1, Slot::Ring2],
             // A robe is worn over body armour, in the cloak's place, as well as as a shirt.

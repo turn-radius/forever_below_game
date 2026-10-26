@@ -92,11 +92,12 @@ fn fuel_minute(item: &Item) -> Option<u32> {
     item.fuel_left().map(|seconds| (seconds.max(0.0) / 60.0).round() as u32)
 }
 
-/// How burnt a torch looks, in twentieths of its char, so a held torch is refitted about every
+/// How burnt a torch or candle looks, in twentieths of its char or burnt wax, so a held one is refitted about every
 /// 0.05 char; 0 for anything else.
 pub fn char_bucket(shape: &armory::Item) -> u8 {
     match shape {
         armory::Item::Torch(s) => (s.burn.char * 20.0) as u8,
+        armory::Item::Sundry(s) if s.article.kind == armory::families::sundry::SundryKind::Candle => (s.article.burnt * 20.0) as u8,
         _ => 0,
     }
 }

@@ -10,16 +10,25 @@ use crate::item::Item;
 pub const TORCH_SECONDS: f32 = 3_600.0;
 /// How long a full lantern burns, in game seconds: six hours of oil (SRD p. 68).
 pub const LANTERN_SECONDS: f32 = 21_600.0;
+/// How long a whole candle burns, in game seconds: two hours (data/goods.json). A candle's `burnt` runs from 0 to
+/// [`CANDLE_BURNT_OUT`] over it.
+pub const CANDLE_SECONDS: f32 = 7_200.0;
+/// The `burnt` of a candle with nothing left to burn (the sundry's limit).
+pub const CANDLE_BURNT_OUT: f32 = 0.8;
 
 /// Why a light would not light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unlit {
-    /// A torch burnt down to a stub.
+    /// A torch or candle burnt down to a stub.
     Spent,
     /// Not a torch or a lantern.
     NotALight,
     /// A lantern with no fuel left, until it is refuelled.
     Empty,
+}
+
+fn is_candle(s: &crate::families::sundry::SundryState) -> bool {
+    s.article.kind == crate::families::sundry::SundryKind::Candle
 }
 
 impl Item {
@@ -29,6 +38,7 @@ impl Item {
         match self {
             Item::Torch(s) => Some(s.burn.state == BurnState::Burning),
             Item::Lantern(s) => Some(s.flame.lit),
+            Item::Sundry(s) if is_candle(s) => Some(s.article.lit),
             _ => None,
         }
     }
@@ -40,6 +50,7 @@ impl Item {
         match self {
             Item::Torch(s) => Some(s.burn.fuel_left),
             Item::Lantern(s) => Some(s.flame.fuel_left),
+            Item::Sundry(s) if is_candle(s) => Some((CANDLE_BURNT_OUT - s.article.burnt).max(0.0) / CANDLE_BURNT_OUT * CANDLE_SECONDS),
             _ => None,
         }
     }
@@ -49,6 +60,7 @@ impl Item {
         match self {
             Item::Torch(_) => Some(TORCH_SECONDS),
             Item::Lantern(_) => Some(LANTERN_SECONDS),
+            Item::Sundry(s) if is_candle(s) => Some(CANDLE_SECONDS),
             _ => None,
         }
     }
@@ -58,6 +70,7 @@ impl Item {
         match self {
             Item::Torch(s) => s.burn.fuel_left *= by,
             Item::Lantern(s) => s.flame.fuel_left *= by,
+            Item::Sundry(s) if is_candle(s) => s.article.burnt = CANDLE_BURNT_OUT - (CANDLE_BURNT_OUT - s.article.burnt).max(0.0) * by,
             _ => {}
         }
     }
@@ -87,6 +100,13 @@ impl Item {
                 f.level = (f.fuel_left / capacity).clamp(0.1, 1.0);
                 if f.fuel_left <= 0.0 {
                     f.lit = false;
+                }
+            }
+            Item::Sundry(s) => {
+                let a = &mut s.article;
+                a.burnt = (a.burnt + seconds / capacity.max(1.0) * CANDLE_BURNT_OUT).min(CANDLE_BURNT_OUT);
+                if a.burnt >= CANDLE_BURNT_OUT {
+                    a.lit = false;
                 }
             }
             _ => {}
@@ -129,6 +149,13 @@ impl Item {
                 s.flame.lit = lit;
                 Ok(())
             }
+            Item::Sundry(s) if is_candle(s) => {
+                if lit && s.article.burnt >= CANDLE_BURNT_OUT {
+                    return Err(Unlit::Spent);
+                }
+                s.article.lit = lit;
+                Ok(())
+            }
             _ => Err(Unlit::NotALight),
         }
     }
@@ -144,6 +171,27 @@ impl Item {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_candle_lights_burns_down_and_goes_out_spent() {
+        use crate::families::sundry::{Sundry, SundryKind};
+        let mut s = Sundry::roll_as(4, SundryKind::Candle);
+        s.article.lit = false;
+        s.article.burnt = 0.0;
+        let mut c = Item::Sundry(s);
+        assert_eq!((c.lit(), c.fuel_left(), c.fuel_capacity()), (Some(false), Some(CANDLE_SECONDS), Some(CANDLE_SECONDS)));
+        c.burn(600.0, CANDLE_SECONDS);
+        assert_eq!(c.fuel_left(), Some(CANDLE_SECONDS), "out, it burns nothing");
+        assert_eq!(c.toggle_lit(), Ok(true));
+        c.burn(3_600.0, CANDLE_SECONDS);
+        assert!((c.fuel_left().unwrap() - (CANDLE_SECONDS - 3_600.0)).abs() < 1.0);
+        c.burn(1.0e9, CANDLE_SECONDS);
+        assert_eq!((c.lit(), c.fuel_left()), (Some(false), Some(0.0)));
+        assert_eq!(c.toggle_lit(), Err(Unlit::Spent));
+        let rope = Item::Sundry(Sundry::roll_as(4, SundryKind::Rope));
+        assert_eq!((rope.lit(), rope.fuel_capacity()), (None, None));
+    }
+
     use crate::families::Generator;
     use crate::families::lantern::Lantern;
     use crate::families::torch::{Torch, TorchStyle};
