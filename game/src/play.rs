@@ -317,7 +317,7 @@ pub fn switch_screens(
         inventory: input.just_pressed(Action::Inventory),
         character: input.just_pressed(Action::Character),
         map: input.just_pressed(Action::Map),
-        // Not while a roll shows: Space skips it, and its outcome lands in the screen it was made in.
+        // Not while a roll shows: Esc skips it (crate::dice), and its outcome lands in the screen it was made in.
         back: input.just_pressed(Action::Back) && !dice.is_some_and(|d| d.busy()),
         // Not while bartering: the trader's shelf stays up.
         step: if input.just_pressed(Action::NextTab) && !barter.is_some_and(|b| b.active()) {

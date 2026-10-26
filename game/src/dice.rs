@@ -4,8 +4,8 @@
 //! Anything that rolls a [`fb_character::check::Check`] sends a [`RollRequest`] with the
 //! [`CheckRoll`] and what it is for ([`RollPurpose`]); the roll is already made, so the screen
 //! only shows it. When the panel closes, a [`RollDone`] carries the roll and purpose back and the
-//! requester applies the outcome. The Skip key ([`Action::SkipRoll`], Space) jumps to the verdict,
-//! and again closes the panel; left alone it closes itself a couple of seconds after the verdict.
+//! requester applies the outcome. Esc ([`Action::Back`]) jumps to the verdict,
+//! and again closes the panel (the screen under it cannot be left meanwhile, [`crate::play::switch_screens`]); left alone it closes itself a couple of seconds after the verdict.
 //! Requests queue, so two rolls show one after the other. The panel pauses nothing: it sits over
 //! the talk or the inventory, which are already screens.
 //!
@@ -244,7 +244,7 @@ fn run_dice(
         Some(hold) => active.t = hold,
         None => active.t += delta,
     }
-    if active.hold.is_none() && input.just_pressed(Action::SkipRoll) {
+    if active.hold.is_none() && input.just_pressed(Action::Back) {
         let verdict = active.verdict_at();
         active.t = if active.t < verdict { verdict } else { verdict + LINGER_SECONDS };
     }
@@ -266,7 +266,7 @@ fn run_dice(
         }
         active.drawn = Some(state);
         let fallback = Keymap::default();
-        let skip = keymap.as_deref().unwrap_or(&fallback).label(Action::SkipRoll);
+        let skip = keymap.as_deref().unwrap_or(&fallback).label(Action::Back);
         let clear = match active.request.purpose {
             // The talk panel stands on the right: the roll sits in the room left of it.
             RollPurpose::Persuade(_) => crate::talk::PANEL_WIDTH + crate::talk::PANEL_MARGIN + 24.0,
