@@ -884,7 +884,9 @@ const CRYSTAL_LIGHT_OFF: f32 = 14.0;
 pub fn crystal_light(crystal: &fb_level::CrystalSpot, tuning: &LightTuning) -> PointLight {
     let rgb = crystal.stone.rgb();
     let top = rgb.0.max(rgb.1).max(rgb.2).max(0.05);
-    let color = Color::srgb(rgb.0 / top, rgb.1 / top, rgb.2 / top);
+    // Washed toward white a third of the way, so a stone's light is its hue and not a flood of it.
+    let soft = |c: f32| c / top * 0.65 + 0.35;
+    let color = Color::srgb(soft(rgb.0), soft(rgb.1), soft(rgb.2));
     point_light(color, tuning.crystal_peak, tuning.crystal_reach * (crystal.size / 30.0).clamp(0.7, 1.5), &EXPOSURE)
 }
 
@@ -1590,11 +1592,12 @@ mod tests {
                 let crystal = level.crystal_lit_by(spot).expect("a crystal under every crystal light");
                 let light = crystal_light(crystal, &tuning);
                 assert!(!crate::light::is_shadowable(&light) && !light.shadow_maps_enabled);
-                // Its hue is the stone's: the same ratios between the channels.
+                // Its hue is the stone's, washed toward white: the strongest channel stays the stone's.
                 let rgb = crystal.stone.rgb();
-                let top = rgb.0.max(rgb.1).max(rgb.2);
                 let c = light.color.to_srgba();
-                assert!((c.red - rgb.0 / top).abs() < 1e-4 && (c.green - rgb.1 / top).abs() < 1e-4 && (c.blue - rgb.2 / top).abs() < 1e-4);
+                let (stone_top, light_top) = ([rgb.0, rgb.1, rgb.2], [c.red, c.green, c.blue]);
+                let argmax = |v: [f32; 3]| (0..3).max_by(|&a, &b| v[a].total_cmp(&v[b])).unwrap();
+                assert!(argmax(stone_top) == argmax(light_top) || rgb.0 == rgb.1 || rgb.1 == rgb.2, "hue kept");
                 assert!(light.range > 0.0 && light.intensity > 0.0);
                 // It hangs in the open, off the crystal's surface, and over the floor.
                 let at = crystal_light_at(crystal);

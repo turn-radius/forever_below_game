@@ -33,7 +33,7 @@ pub(crate) const CRYSTAL_SALT: u32 = 0xC4A5_7A15;
 
 /// The most a floor crystal covers about its base, in world units: under half a cell, so a lane
 /// stays open between it and a crystal two cells away.
-pub const MOST_FLOOR_RADIUS: f32 = 8.5;
+pub const MOST_FLOOR_RADIUS: f32 = 11.0;
 /// Where a crystal grows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CrystalSurface {
@@ -77,7 +77,7 @@ pub struct CrystalSpot {
 /// How strongly a cavern crystal's surface glows in its stone's colour (the Armory's `glow`, 0
 /// to 1): every crystal glows, so a cavern the delver's own light has not reached still shows
 /// its crystals as shapes of colour.
-pub const CRYSTAL_GLOW: f32 = 0.85;
+pub const CRYSTAL_GLOW: f32 = 0.7;
 
 /// The Armory state of the crystal at `spot`: its shape from the seed, its stone and size from
 /// the spot, glowing.
@@ -86,6 +86,10 @@ pub fn crystal_state(spot: &CrystalSpot) -> CrystalState {
     state.crystal.stone = spot.stone;
     state.crystal.size = spot.size;
     state.crystal.glow = CRYSTAL_GLOW;
+    // Cavern crystals are chunky: a column is at most 3.6 times as long as it is wide.
+    if matches!(spot.habit, Habit::Prismatic | Habit::Columnar) {
+        state.crystal.length = state.crystal.length.clamp(2.2, 3.6);
+    }
     state.fit(&crystal::LIMITS);
     state
 }
@@ -142,7 +146,7 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
 
     for (r, room) in level.rooms.iter().enumerate() {
         let stone = stones[r % 2];
-        let lean = *rng.pick(&[Habit::Prismatic, Habit::Columnar, Habit::Acicular]);
+        let lean = *rng.pick(&[Habit::Prismatic, Habit::Columnar, Habit::Prismatic]);
         let mut cells = interior(level, room);
         crate::generate::shuffle(&mut cells, rng);
         let want = (room.area() / FLOOR_CELLS).min(MOST_ON_FLOOR);
@@ -154,7 +158,7 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
             if floor_cells.iter().any(|&(px, py)| (px - cx).abs() <= 1 && (py - cy).abs() <= 1) {
                 continue;
             }
-            let (x, y) = (cx as f32 + 0.5 + rng.range_f32(-0.25, 0.25), cy as f32 + 0.5 + rng.range_f32(-0.25, 0.25));
+            let (x, y) = (cx as f32 + 0.5 + rng.range_f32(-0.15, 0.15), cy as f32 + 0.5 + rng.range_f32(-0.15, 0.15));
             let Some(spot) = floor_crystal(x, y, stone, lean, &keep_clear, rng) else { continue };
             floor_cells.push((cx, cy));
             spots.push(spot);
@@ -318,8 +322,10 @@ const GEM_APART: f32 = 4.0;
 /// in `keep_clear`.
 fn floor_crystal(x: f32, y: f32, stone: Gemstone, lean_habit: Habit, keep_clear: &[Clearance], rng: &mut Mulberry32) -> Option<CrystalSpot> {
     let habit = if rng.chance(0.75) { lean_habit } else { *rng.weighted(&FLOOR_HABITS) };
-    let growth = *rng.weighted(&[(Growth::Single, 3), (Growth::Cluster, 2)]);
-    let mut spot = CrystalSpot { x, y, up: 0.0, yaw: rng.range_f32(0.0, std::f32::consts::TAU), lean: rng.range_f32(0.0, 0.12), surface: CrystalSurface::Floor, habit, growth, stone, seed: item_seed(rng), size: rng.range_f32(14.0, 50.0), radius: 0.0 };
+    let growth = *rng.weighted(&[(Growth::Single, 2), (Growth::Cluster, 3)]);
+    // Mostly grand but not vast; now and then one three times a delver's height.
+    let size = if rng.chance(0.2) { rng.range_f32(40.0, 54.0) } else { rng.range_f32(16.0, 34.0) };
+    let mut spot = CrystalSpot { x, y, up: 0.0, yaw: rng.range_f32(0.0, std::f32::consts::TAU), lean: rng.range_f32(0.0, 0.12), surface: CrystalSurface::Floor, habit, growth, stone, seed: item_seed(rng), size, radius: 0.0 };
     for _ in 0..8 {
         let radius = footprint(&spot);
         if radius <= MOST_FLOOR_RADIUS {
@@ -347,8 +353,8 @@ pub fn footprint(spot: &CrystalSpot) -> f32 {
 /// Least gap, in world units, between a floor crystal's foot and anything it keeps clear of.
 const CLEAR_GAP: f32 = 2.0;
 /// Chamber cells for each floor crystal there, and the most in one chamber.
-const FLOOR_CELLS: u32 = 22;
-const MOST_ON_FLOOR: u32 = 12;
+const FLOOR_CELLS: u32 = 30;
+const MOST_ON_FLOOR: u32 = 8;
 /// Wall faces for each wall crystal, and the most on a level's walls.
 const WALL_FACES_PER_CRYSTAL: usize = 14;
 const MOST_ON_WALLS: usize = 14;
@@ -361,9 +367,9 @@ const WALL_FROM: f32 = 22.0;
 /// The stones crystals grow in a cavern: the clear and coloured ones, never the opaque.
 const STONES: [Gemstone; 7] = [Gemstone::Garnet, Gemstone::Amethyst, Gemstone::Sapphire, Gemstone::Emerald, Gemstone::Citrine, Gemstone::Ruby, Gemstone::Diamond];
 /// What stands on a floor, besides the chamber's lean: long prisms, now and then a stubby form.
-const FLOOR_HABITS: [(Habit, u32); 6] = [(Habit::Prismatic, 4), (Habit::Columnar, 4), (Habit::Acicular, 2), (Habit::Bladed, 2), (Habit::Octahedral, 1), (Habit::Cubic, 1)];
+const FLOOR_HABITS: [(Habit, u32); 4] = [(Habit::Prismatic, 5), (Habit::Columnar, 4), (Habit::Octahedral, 1), (Habit::Cubic, 1)];
 /// What grows from walls and ceilings.
-const HABITS: [(Habit, u32); 8] = [(Habit::Prismatic, 4), (Habit::Columnar, 4), (Habit::Acicular, 3), (Habit::Bladed, 2), (Habit::Tabular, 1), (Habit::Cubic, 1), (Habit::Octahedral, 1), (Habit::Dodecahedral, 1)];
+const HABITS: [(Habit, u32); 8] = [(Habit::Prismatic, 4), (Habit::Columnar, 4), (Habit::Acicular, 1), (Habit::Bladed, 2), (Habit::Tabular, 1), (Habit::Cubic, 1), (Habit::Octahedral, 1), (Habit::Dodecahedral, 1)];
 /// What lines a geode.
 const GEODE_HABITS: [Habit; 4] = [Habit::Prismatic, Habit::Columnar, Habit::Cubic, Habit::Dodecahedral];
 
@@ -620,6 +626,28 @@ mod tests {
                 assert!(level.ceiling - (hi[1] - lo[1]) > 25.0, "seed {seed}: a ceiling crystal hangs to {}", level.ceiling - (hi[1] - lo[1]));
             }
         }
+    }
+
+    #[test]
+    fn chambers_have_worn_natural_outlines_and_corners_are_rounded() {
+        let (mut worn, mut corners, mut round) = (0, 0u32, 0u32);
+        for seed in 1..=8 {
+            let level = cavern(seed, 5);
+            for room in level.rooms.iter().filter(|r| r.w >= 6 && r.h >= 6) {
+                // Rock stands in the rectangle where the wear ate it, on its ring and not only as pillars.
+                let rock_on_ring = (room.y..room.y + room.h).flat_map(|y| (room.x..room.x + room.w).map(move |x| (x, y))).filter(|&(x, y)| level.cell(x as i32, y as i32) == Cell::Rock).count();
+                worn += rock_on_ring;
+                for (cx, cy) in [(room.x, room.y), (room.x + room.w - 1, room.y), (room.x, room.y + room.h - 1), (room.x + room.w - 1, room.y + room.h - 1)] {
+                    let near_way = (-2..=2).any(|d| (-2..=2).any(|e| level.cell(cx as i32 + d, cy as i32 + e).is_doorway()));
+                    if !near_way && !room.contains(level.start().0 as i32, level.start().1 as i32) {
+                        corners += 1;
+                        round += (level.cell(cx as i32, cy as i32) != Cell::Floor) as u32;
+                    }
+                }
+            }
+        }
+        assert!(worn > 40, "only {worn} cells of rock worn into chambers");
+        assert!(round * 10 >= corners * 7, "{round} of {corners} corners rounded");
     }
 
     #[test]

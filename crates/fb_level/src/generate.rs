@@ -28,6 +28,8 @@ const FURNISH_SALT: u32 = 0x5EED_17E5;
 /// Salt for the stream that draws a level's main corridor width, so the layout stream is the
 /// same whatever width is drawn.
 const WIDTH_SALT: u32 = 0x31D7_4A11;
+/// Salt for the stream that wears a crystal cavern's chambers into natural shapes.
+const ERODE_SALT: u32 = 0x3A07_E70D;
 /// Salt for the stream that stands rock pillars in a crystal cavern's chambers.
 const PILLAR_SALT: u32 = 0x9111_a475;
 
@@ -210,6 +212,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         }
     }
     if style == LevelStyle::CrystalCavern {
+        erode_chambers(&mut level, &mut Mulberry32::new(layout_seed ^ ERODE_SALT));
         rock_pillars(&mut level, &mut Mulberry32::new(layout_seed ^ PILLAR_SALT));
     }
     let (sx, sy, _) = level.start();
@@ -805,6 +808,61 @@ fn colonnade_halls(level: &mut Level) -> usize {
         halls.insert(level.room_at(x as i32, y as i32));
     }
     halls.len()
+}
+
+/// A crystal cavern's chambers are worn out of their rectangles: the corners round off and the
+/// edge is eaten into bays and inlets, deeper where it has already been eaten, so each chamber
+/// has a blobby, natural outline. Nothing near a doorway or the way in is touched, so every way
+/// into a chamber stays open, and any floor the wear cuts off is filled in. Room rectangles are
+/// unchanged (the eroded cells are rock inside them, as a pillar's is).
+fn erode_chambers(level: &mut Level, rng: &mut Mulberry32) {
+    let near_way = |level: &Level, x: i32, y: i32| {
+        (-2..=2).any(|dy| (-2..=2).any(|dx| level.cell(x + dx, y + dy).is_doorway() || (level.is_open(x + dx, y + dy) && level.room_at(x + dx, y + dy).is_none())))
+    };
+    let (sx, sy, _) = level.start();
+    for room in level.rooms.clone() {
+        if room.w < 6 || room.h < 6 {
+            continue;
+        }
+        let (rx, ry, rw, rh) = (room.x as i32, room.y as i32, room.w as i32, room.h as i32);
+        let depth = |x: i32, y: i32| (x - rx).min(rx + rw - 1 - x).min(y - ry).min(ry + rh - 1 - y);
+        let mut cells: Vec<(i32, i32)> = (ry..ry + rh).flat_map(|y| (rx..rx + rw).map(move |x| (x, y))).filter(|&(x, y)| depth(x, y) <= 2).collect();
+        cells.sort_by_key(|&(x, y)| (depth(x, y), y, x));
+        let mut gone: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+        for (x, y) in cells {
+            if level.cell(x, y) != Cell::Floor || near_way(level, x, y) || (x - sx as i32).abs() <= 3 && (y - sy as i32).abs() <= 3 {
+                continue;
+            }
+            let d = depth(x, y);
+            let corner = d == 0 && (x == rx || x == rx + rw - 1) && (y == ry || y == ry + rh - 1);
+            let eaten = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().filter(|&&(dx, dy)| gone.contains(&(x + dx, y + dy))).count();
+            let chance = match (d, eaten) {
+                (0, 0) => 0.3,
+                (0, _) => 0.55,
+                (1, 0) => 0.03,
+                (1, _) => 0.38,
+                (_, 0) => 0.0,
+                (_, _) => 0.22,
+            };
+            // The corner cell and the one diagonally in from it always go, rounding the corner.
+            let round = corner || (d == 1 && [(1, 1), (-1, 1), (1, -1), (-1, -1)].iter().any(|&(dx, dy)| gone.contains(&(x + dx, y + dy)) && depth(x + dx, y + dy) == 0 && (x + dx == rx || x + dx == rx + rw - 1) && (y + dy == ry || y + dy == ry + rh - 1)));
+            if round || rng.chance(chance) {
+                gone.insert((x, y));
+            }
+        }
+        // Each cell goes only if every other open cell can still be walked to without it.
+        let mut gone: Vec<(i32, i32)> = gone.into_iter().collect();
+        gone.sort_by_key(|&(x, y)| (depth(x, y), y, x));
+        for (x, y) in gone {
+            let i = (y as u32 * level.width + x as u32) as usize;
+            let open = level.cells.iter().filter(|c| c.is_open()).count();
+            level.cells[i] = Cell::Rock;
+            let reached = reachable_from(level, sx as i32, sy as i32).iter().filter(|&&b| b).count();
+            if reached != open - 1 {
+                level.cells[i] = Cell::Floor;
+            }
+        }
+    }
 }
 
 /// Chambers of a crystal cavern are too big to read as rooms, so rock stands up in them: single

@@ -115,6 +115,8 @@ impl ItemAppearance {
         };
         // Cut stones always shine a little (`gemMat`); `glow` adds to it.
         let glow = match part.material {
+            // A crystal's own glow is the shader's inner light (`toon.wesl`, from 2 up), modest.
+            Some(MaterialKind::Gem) if part.name == "crystal" => 2.0 + part.glow * 0.5,
             Some(MaterialKind::Gem) => 0.25 + part.glow * 0.45,
             _ => part.glow * 0.45,
         };

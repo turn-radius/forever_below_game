@@ -469,7 +469,20 @@ fn fragment(
     let light = toon_direct_light(toon, pbr_input) * openness + ambient * view_bindings::view.exposure;
     let lit = srgb_to_linear(tone * light);
     // Glow fades as the stone clouds over (`gemMat`).
-    let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
+    // A crystal's glow (`toon.glow` of 2 and over, the strength above 2) is light inside the stone:
+    // it gathers toward the rim, where the stone is thickest to the eye, in three steps so it
+    // bands like the rest, and is added after the fog so a far crystal still shows in the dark,
+    // fading out only as it nears the edge of what is drawn.
+    let is_crystal = toon.glow >= 1.5;
+    var crystal_glow = vec3<f32>(0.0);
+    if is_crystal {
+        let to_eye_c = view_bindings::view.world_position - pbr_input.world_position.xyz;
+        let rim = 1.0 - abs(dot(pbr_input.N, normalize(to_eye_c)));
+        let steps = floor(clamp(rim, 0.0, 0.999) * 3.0) / 2.0;
+        let far = 1.0 - smoothstep(180.0, 290.0, length(to_eye_c));
+        crystal_glow = srgb_to_linear(tone) * (toon.glow - 2.0) * (0.45 + 0.9 * steps) * far;
+    }
+    let glow = select(srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0)), vec3<f32>(0.0), is_crystal);
 
     var out: FragmentOutput;
     // See-through glass (alpha below 1) stops more light where it is seen edge on, as a
@@ -499,5 +512,6 @@ fn fragment(
         out.color = vec4<f32>(out.color.rgb * alpha, alpha);
     }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    out.color = vec4<f32>(out.color.rgb + crystal_glow, out.color.a);
     return out;
 }

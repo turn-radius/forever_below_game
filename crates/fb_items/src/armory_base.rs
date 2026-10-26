@@ -347,7 +347,8 @@ fn rough_gem(item: &mut Item, r: &mut Mulberry32, stone: Gemstone) {
         c.stone = stone;
         c.growth = Growth::Single;
         c.size = r.range_f32(0.7, 1.5);
-        c.glow = 0.0;
+        // A little inner light, so a stone on the floor catches the eye under a torch.
+        c.glow = 0.6;
         c.scepter = false;
         c.double_ended = false;
         c.cloud = c.cloud.max(r.range_f32(0.1, 0.5));
@@ -760,7 +761,7 @@ mod tests {
                 // The stone is the one the Armory sets into items.
                 assert_eq!(state.crystal.stone, stone, "{base}");
                 assert_eq!(state.crystal.growth, Growth::Single);
-                assert_eq!(state.crystal.glow, 0.0);
+                assert!(state.crystal.glow > 0.0 && state.crystal.glow < 1.0);
                 // Pocketable: a good, one cell, under 20 cm, light.
                 assert_eq!(gem.profile.kind, Kind::Good);
                 assert!(gem.profile.packable && gem.profile.footprint.cols == 1 && gem.profile.footprint.rows == 1, "{base}");

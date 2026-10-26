@@ -776,13 +776,13 @@ fn add_crystals(parts: &mut Parts, c: &Crystal, solids: &[Solid], rng: &mut Mulb
     }
     let colour = mix(c.stone.rgb(), MILK, c.cloud * 0.6);
     parts.add_look("crystal", body, Look::stone(c.stone, c.glow).tinted(colour));
-    parts.add_look("cracks", cracks, Look::of(Gem).tinted(mix(c.stone.rgb(), MILK, 0.85)).without_outline());
-    parts.add_look("inclusions", flecks, Look::of(Gem).tinted(mix(c.stone.rgb(), Rgb(0.05, 0.04, 0.05), 0.6)).without_outline());
+    parts.add_look("cracks", cracks, Look::of(Gem).tinted(mix(colour, MILK, 0.3)).without_outline());
+    parts.add_look("inclusions", flecks, Look::of(Gem).tinted(mix(colour, Rgb(0.05, 0.04, 0.05), 0.35)).without_outline());
 }
 
 /// Fractures: a jagged pale line across some faces, laid a hair proud of them.
 fn add_cracks(out: &mut MeshBuilder, solid: &Solid, amount: f32, extent: f32, rng: &mut Mulberry32) {
-    let (lift, width) = (0.004 * extent, 0.012 * extent);
+    let (lift, width) = (0.003 * extent, 0.007 * extent);
     for face in &solid.faces {
         let facing = vec3::normalize_or(newell(face), vec3::Y);
         // Short, tiny faces are left clean.
