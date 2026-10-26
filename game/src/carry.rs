@@ -64,6 +64,7 @@ use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::record::{WorldRecord, restore_item};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
+use crate::sparkle::Sparkles;
 use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
 use crate::view_model::{HipInView, held_in_view, hip_in_view, hip_swing, side_of};
@@ -155,7 +156,7 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
-                    (widen_view_models, rescale_floor_items, reshimmer_floor_items).run_if(resource_changed::<Tuning>),
+                    (widen_view_models, rescale_floor_items, reshimmer_floor_items, resparkle_floor_items).run_if(resource_changed::<Tuning>),
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
@@ -879,6 +880,9 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
     let mut root = spawner.spawn(&mesh, &appearance);
     root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
+    if let Some(sparkles) = floor_sparkles(item, min, max, tuning) {
+        root.insert(sparkles);
+    }
     // A bedroll or tent set down covers the floor it was checked against (`crate::camp`), and a
     // tent blocks the way as a prop does, from a child at the middle of what it covers.
     if let Some(camp) = item.camp().filter(|_| item.is_set_camp()) {
@@ -918,6 +922,24 @@ pub fn floor_shimmer(item: &fb_items::Item, tuning: &Tuning) -> Shimmer {
         Shimmer::new(rarity_color(fb_items::Rarity::Legendary), tuning.view.legendary_shimmer.max(0.0))
     } else {
         Shimmer::default()
+    }
+}
+
+/// The stars that drift up off an item lying on the floor, from its box `min` to `max`: a
+/// legendary's in the legendary colour, the tuning's `legendary_sparkles` of them, over its
+/// shimmer, the user's call ("little 4 pointed stars drifting up from them"); none for anything
+/// else. Like the shimmer they stop once it is picked up.
+pub fn floor_sparkles(item: &fb_items::Item, min: Vec3, max: Vec3, tuning: &Tuning) -> Option<Sparkles> {
+    (item.rarity == fb_items::Rarity::Legendary).then(|| Sparkles { color: rarity_color(fb_items::Rarity::Legendary), count: tuning.view.legendary_sparkles, min, max })
+}
+
+/// Gives every floor item the stars the tuning asks for ([`floor_sparkles`]).
+fn resparkle_floor_items(mut commands: Commands, tuning: Res<Tuning>, inventory: Res<Inventory>, items: Query<(Entity, &FloorItem, Option<&Sparkles>)>) {
+    for (entity, floor, had) in &items {
+        let Some(item) = inventory.item(floor.id) else { continue };
+        if let Some(sparkles) = floor_sparkles(item, floor.min, floor.max, &tuning).filter(|s| had != Some(s)) {
+            commands.entity(entity).insert(sparkles);
+        }
     }
 }
 
@@ -2377,7 +2399,7 @@ mod tests {
     }
 
     #[test]
-    fn legendary_floor_items_shimmer_and_others_do_not() {
+    fn legendary_floor_items_shimmer_and_sparkle_and_others_do_not() {
         let drops = crate::inventory::underfoot::drops_for_capture("Sword:legendary,Sword:common");
         let [legendary, common] = [&drops[0], &drops[1]];
         assert_eq!((legendary.rarity, common.rarity), (Rarity::Legendary, Rarity::Common));
@@ -2413,6 +2435,13 @@ mod tests {
         app.world_mut().resource_mut::<Tuning>().view.legendary_shimmer = 0.5;
         app.update();
         assert!(shimmers(&mut app, spawned[0]).iter().all(|s| s.strength == 0.5));
+        // Stars drift up off the legendary alone, as many as the tuning asks for.
+        let count = |app: &App, entity: Entity| app.world().get::<Sparkles>(entity).map(|s| s.count);
+        assert_eq!((count(&app, spawned[0]), count(&app, spawned[1])), (Some(Tuning::default().view.legendary_sparkles), None));
+        app.add_systems(Update, resparkle_floor_items);
+        app.world_mut().resource_mut::<Tuning>().view.legendary_sparkles = 0;
+        app.update();
+        assert_eq!((count(&app, spawned[0]), count(&app, spawned[1])), (Some(0), None));
     }
 
     #[test]
