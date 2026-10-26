@@ -130,6 +130,21 @@ Where it departs from the shield and the garments:
 - The hem is a thicker band between the outline and the same outline drawn in, with the sheet filling the inside. It falls away if the inset would fold over itself.
 - Nouns: Banner (square, on a rod), Forked Banner, Swallowtail Banner, Pointed Banner, Standard (square, on a pole), Gonfalon (any tailed or pointed end on a pole), and Pennant for any point cut up 55% of the length or more. `--forge --family banner` rolls every end and both hangings.
 
+### Crystals
+
+`armory::families::crystal` makes every crystal in the game: a cavern's towering columns and the rough gems a delver pockets come from the one generator. It is new; no prototype draws one. It is scenery until #660 adds rough gems as loot (`Item::Crystal` has no etching and the `fb_items` base tests skip it). One state, `crystal`, plus the usual `cond`:
+
+- `habit`: prismatic, columnar, bladed, acicular, tabular, cubic, octahedral or dodecahedral (rhombic), after real crystal habit. The five prisms differ in `sides` (3 to 8), `length` (length against width), `flat` (flattened to a blade), `taper` and `point` (the height of the termination against the prism's width); the isometric forms take `length` as a stretch and `truncation` shaves their corners into the combinations fluorite and garnet show. `double_ended` points both ends instead of rooting one; `twinned` grows a second crystal through the first (a V twin for a prism, a penetration twin for an isometric form); `scepter` grows a wide head over a slender shaft.
+- `growth`: a single crystal, a cluster (`count` crystals about a lump of rock, `spread` fanning them out from upright; stubby habits scatter over the rock instead of leaning) or a geode (a split nodule opening toward +Y, lined with `count` small crystals pointing in).
+- `stone`: a `Gemstone`, which fixes the colour (turquoise and moonstone are opaque and never roll). `cloud` washes it milky, `cracks` lay pale fractures on faces, `inclusions` sink dark flecks into them, `glow` lights the surface in the stone's colour.
+- `size` is the crystal's height (a plate's width, a geode's width) in units of 10 cm.
+
+Where it departs from the other families:
+
+- Every crystal is a convex solid cut from planes: each face starts as a huge square on its plane and is clipped by every other plane, so facets are exactly flat, carry their own true normal and meet at real edges. Face distances are jittered a few percent so no two faces are the same size, and termination faces alternate large and small as quartz's do.
+- Item space: a single stands on y = 0 pointing +Y (the octahedron and dodecahedron are set on a face), a cluster rises from its rock and a geode opens upward, so the game can place any of them with +Y as the surface normal.
+- Nouns: "Amethyst Crystal", "Garnet Column", "Bladed Emerald", "Diamond Needle", "Citrine Plate", "Cubic Ruby", "Sapphire Octahedron", "Diamond Dodecahedron", "Emerald Cluster", "Garnet Geode". `--forge --family crystal` offers the habit, growth and stone as choices.
+
 ### Tents and campfire kits
 
 `armory::families::tent` and `armory::families::campfire` make the camp goods that [camps](https://github.com/turn-radius/forever_below_game/issues/315) are built from. Neither is in the prototypes, so every slider is this port's own. Each has two forms in one state, picked by a `form` choice in the Forge: the form it is carried in, and the form it takes when put down.

@@ -555,8 +555,8 @@ mod tests {
 
     #[test]
     fn every_ported_family_has_a_base() {
-        // A banner is scenery: the Armory draws it, but no loot base names it.
-        for &family in Item::PORTED.iter().filter(|f| **f != Family::Banner) {
+        // A banner is scenery: the Armory draws it, but no loot base names it. Crystals are scenery too until rough gems.
+        for &family in Item::PORTED.iter().filter(|f| !matches!(**f, Family::Banner | Family::Crystal)) {
             let Some(base) = base_for(family, 1207) else {
                 assert!(bases_of(family).next().is_some() && bases_of(family).all(held_back), "{family:?} has no base");
                 continue;

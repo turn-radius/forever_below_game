@@ -15,6 +15,7 @@ pub mod charm;
 pub mod chests;
 pub mod club;
 pub mod crossbow;
+pub mod crystal;
 pub mod dagger;
 pub mod feet;
 pub mod food;

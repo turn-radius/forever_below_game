@@ -256,7 +256,9 @@ pub struct Orbit {
 
 impl Default for Orbit {
     fn default() -> Self {
-        Orbit { yaw: 0.0, pitch: 0.0, zoom: 1.0 }
+        // `FB_ORBIT_PITCH=<degrees>` opens a close-up looking down, for captures.
+        let pitch = std::env::var("FB_ORBIT_PITCH").ok().and_then(|v| v.parse::<f32>().ok()).map_or(0.0, |d| d.to_radians().clamp(-Self::MAX_PITCH, Self::MAX_PITCH));
+        Orbit { yaw: 0.0, pitch, zoom: 1.0 }
     }
 }
 
@@ -363,6 +365,10 @@ impl GridPose {
 /// How far an item of bounds `size` tips toward the grid camera: [`FLAT_TILT`] if it lies
 /// flat, otherwise none.
 pub fn grid_tilt(size: Vec3) -> f32 {
+    // `FB_GRID_TILT=<degrees>` tips every item toward the camera, for captures.
+    if let Some(d) = std::env::var("FB_GRID_TILT").ok().and_then(|v| v.parse::<f32>().ok()) {
+        return d.to_radians();
+    }
     if size.y < FLAT_SHARE * size.x.hypot(size.z) { FLAT_TILT } else { 0.0 }
 }
 
