@@ -588,6 +588,23 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
     }
 }
 
+/// How proud a pinning stone stands, less than any rubble stone (`RUBBLE_PROUD`) does, and a little
+/// more with each course. A wedge that reaches into a neighbour's course so sits behind its face,
+/// and level with no other wedge, which a course up or down would otherwise match.
+const PIN_PROUD: f32 = 0.12;
+const PIN_PROUD_PER_COURSE: f32 = 0.003;
+
+/// How far a stone of the course over a through-stone stands back from its face.
+const THROUGH_SETBACK: f32 = 0.04;
+
+/// A rubble stone two courses tall: the course its upper half reaches, the span along the wall and
+/// how proud its face stands.
+struct Through {
+    course: usize,
+    span: [f32; 2],
+    proud: f32,
+}
+
 /// The courses of rubble along a run, `(bottom, height)` from the floor to `top`: 1.6 to 4.4
 /// units each, wandering. Drawn from the run's seed, not the level's, so each run's courses
 /// meet its neighbours' only by chance, as rubble does.
@@ -635,6 +652,7 @@ fn lay_blocks(
         list.get(k).copied().filter(|&(y0, _)| y0 + 1.4 < tallest)
     };
     let count = courses.len().max(rubble_courses.len());
+    let mut through: Vec<Through> = Vec::new();
     for k in 0..count {
         if course(false, k).is_none() && course(true, k).is_none() {
             break;
@@ -672,9 +690,7 @@ fn lay_blocks(
             }
             let (a, b) = (s, s + l);
             s = b;
-            if !owns((a + b) * 0.5) {
-                continue;
-            }
+            let owned = owns((a + b) * 0.5);
             let Some((y0, h)) = course(rubble, k) else { continue };
             let (joint, proud) = if rubble { (RUBBLE_JOINT, r_proud) } else { (JOINT, proud) };
             let lo = a + if a < 1e-3 { run.margin[0] } else { joint * 0.5 };
@@ -691,8 +707,19 @@ fn lay_blocks(
             let tall = rubble && k > 0 && r_tall < RUBBLE_TALL;
             let reach = if tall { course(true, k + 1).map_or(0.0, |(_, h2)| h2) } else { 0.0 };
             let proud = if reach > 0.0 { proud + 0.15 } else { proud };
+            // A stone of the course above a through-stone's lower half stands behind its face
+            // wherever they overlap, never level with it, which would fight over the pixels.
+            let proud = through.iter().filter(|t| t.course == k && t.span[0] < hi && t.span[1] > lo).fold(proud, |p, t| p.min(t.proud - THROUGH_SETBACK));
             let (bottom, top) = (y0 + joint * 0.5, (y0 + h + reach - joint * 0.5 - drop).min(lowest - UNDER_SOFFIT));
             if hi - lo < 2.0 || top - bottom < 1.4 {
+                continue;
+            }
+            // Every stretch notes the through-stones, owned or not, so a stone cut by a stretch's
+            // edge sits back from the through-stone of the next as it would laid whole.
+            if reach > 0.0 {
+                through.push(Through { course: k + 1, span: [lo, hi], proud });
+            }
+            if !owned {
                 continue;
             }
             // Only rubble has uneven chamfers and corners drawn in, and not so far as to leave
@@ -722,7 +749,7 @@ fn lay_blocks(
             if let Some(wedge) = pin {
                 let height = ((top - bottom) * 0.5).min((wedge[1] - wedge[0]) * 1.4 + 0.4);
                 let at = bottom + (top - bottom - height) * r_pin_y;
-                dress(out, wedge, [at, at + height], proud * 0.7);
+                dress(out, wedge, [at, at + height], PIN_PROUD + PIN_PROUD_PER_COURSE * k as f32);
             }
             // Now and then a rubble stone is two, one on the other.
             if rubble && r_split < RUBBLE_SPLIT && top - bottom > 2.6 {
@@ -1110,6 +1137,119 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The wall stone of stone halls levels in chunks, for the seeds (of the delve that Abyss
+    /// makes) at depths 2 and 4.
+    fn wall_chunks(seeds: std::ops::RangeInclusive<u32>) -> impl Iterator<Item = (u32, u32, Level, Vec<LevelMesh>)> {
+        seeds.flat_map(|seed| [2u32, 4].map(|depth| (seed, depth))).filter_map(|(seed, depth)| {
+            let level = crate::travel::Abyss::new(seed).level_at(depth);
+            if level.style != LevelStyle::StoneHalls {
+                return None;
+            }
+            let view = CellView::new(&level);
+            let meshes = super::super::chunks(&view, 8).into_iter().map(|range| level_mesh(&view, range)).collect();
+            Some((seed, depth, level, meshes))
+        })
+    }
+
+    /// No wall face stands out in the rock, beyond the stones' proud reach, and none lies on
+    /// another face's plane (within 2 mm) over half a square unit of it, which z-fights (#575).
+    fn check_wall_faces(seeds: std::ops::RangeInclusive<u32>) {
+        for (seed, depth, level, meshes) in wall_chunks(seeds) {
+            let view = CellView::new(&level);
+            let in_reach = |q: &[f32; 3]| {
+                let (cx, cz) = ((q[0] / CELL).floor() as i32, (q[2] / CELL).floor() as i32);
+                (-1..=1).any(|dy| {
+                    (-1..=1).any(|dx| {
+                        let (x, y) = (cx + dx, cz + dy);
+                        let (x0, z0) = (x as f32 * CELL, y as f32 * CELL);
+                        let (ddx, ddz) = ((x0 - q[0]).max(q[0] - (x0 + CELL)).max(0.0), (z0 - q[2]).max(q[2] - (z0 + CELL)).max(0.0));
+                        view.cell(x, y) != Cell::Rock && ddx.hypot(ddz) < 1.2
+                    })
+                })
+            };
+            for mesh in &meshes {
+                for p in mesh.surfaces.parts.iter().filter(|p| p.name == "walls" || p.name == "damp") {
+                    let far = p.positions.iter().find(|q| !in_reach(q));
+                    assert!(far.is_none(), "seed {seed} depth {depth}: a wall vertex stands out in the rock at {far:?}");
+                }
+                let overlaps = coplanar_overlaps(mesh, &["walls", "damp"]);
+                assert!(overlaps.is_empty(), "seed {seed} depth {depth}: {} overlapping wall faces, e.g. {}", overlaps.len(), overlaps[0]);
+            }
+        }
+    }
+
+    #[test]
+    fn wall_faces_stay_in_the_walls_smoke() {
+        check_wall_faces(1..=3);
+    }
+
+    #[test]
+    #[ignore = "a sweep over 24 seeds"]
+    fn wall_faces_stay_in_the_walls() {
+        check_wall_faces(1..=24);
+    }
+
+    /// Pairs of coplanar triangles with the same facing that overlap, in the `names` parts.
+    fn coplanar_overlaps(mesh: &LevelMesh, names: &[&str]) -> Vec<String> {
+        let mut tris: Vec<(usize, i32, i64, [[f32; 2]; 3], f32)> = Vec::new();
+        for p in mesh.surfaces.parts.iter().filter(|p| names.contains(&p.name)) {
+            for tri in p.indices.as_chunks::<3>().0 {
+                let ps = [tri[0], tri[1], tri[2]].map(|i| p.positions[i as usize]);
+                let n = vec3::normalize_or(vec3::cross(vec3::sub(ps[1], ps[0]), vec3::sub(ps[2], ps[0])), [0.0; 3]);
+                let Some(axis) = [0, 2].into_iter().find(|&a| n[a].abs() > 0.9999) else { continue };
+                let plane = (ps[0][axis] * 20.0).round() as i64;
+                let flat = ps.map(|q| match axis {
+                    0 => [q[1], q[2]],
+                    1 => [q[0], q[2]],
+                    _ => [q[0], q[1]],
+                });
+                tris.push((axis, if n[axis] > 0.0 { 1 } else { -1 }, plane, flat, ps[0][axis]));
+            }
+        }
+        tris.sort_by_key(|t| (t.0, t.1, t.2));
+        let mut out = Vec::new();
+        for (i, a) in tris.iter().enumerate() {
+            for b in tris[i + 1..].iter().take_while(|b| (b.0, b.1) == (a.0, a.1) && b.2 - a.2 <= 1) {
+                if (a.4 - b.4).abs() < 0.002 && overlap_area(&a.3, &b.3) > 0.5 {
+                    out.push(format!("axis {} facing {} near {:.2}: {:?} over {:?}", a.0, a.1, a.2 as f32 / 20.0, a.3, b.3));
+                }
+            }
+        }
+        out
+    }
+
+    /// The area two triangles share, by clipping one against the other.
+    fn overlap_area(a: &[[f32; 2]; 3], b: &[[f32; 2]; 3]) -> f32 {
+        fn wound(t: &[[f32; 2]; 3]) -> [[f32; 2]; 3] {
+            let area = (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0]);
+            if area < 0.0 { [t[0], t[2], t[1]] } else { *t }
+        }
+        let (a, b) = (wound(a), wound(b));
+        let mut poly: Vec<[f32; 2]> = a.to_vec();
+        for k in 0..3 {
+            let (p, q) = (b[k], b[(k + 1) % 3]);
+            let side = |r: [f32; 2]| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+            let mut next = Vec::new();
+            for j in 0..poly.len() {
+                let (c, d) = (poly[j], poly[(j + 1) % poly.len()]);
+                let (sc, sd) = (side(c), side(d));
+                if sc >= 0.0 {
+                    next.push(c);
+                }
+                if (sc >= 0.0) != (sd >= 0.0) {
+                    let t = sc / (sc - sd);
+                    next.push([c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t]);
+                }
+            }
+            poly = next;
+            if poly.is_empty() {
+                return 0.0;
+            }
+        }
+        let area: f32 = (0..poly.len()).map(|j| poly[j][0] * poly[(j + 1) % poly.len()][1] - poly[(j + 1) % poly.len()][0] * poly[j][1]).sum();
+        area.abs() * 0.5
     }
 
     #[test]

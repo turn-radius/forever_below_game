@@ -745,7 +745,33 @@ impl DebugPose {
             }
             _ => (sx as f32 + 0.5, sy as f32 + 0.5, facing.yaw(), 0.0),
         };
+        let (x, y) = Self::standable(level, x, y);
         DebugPose { at: Vec3::new(x * CELL, 0.0, y * CELL), yaw, pitch }
+    }
+
+    /// The grid point `(x, y)` if the delver could stand there, else the middle of the nearest cell
+    /// they could. An eye in rock sees the level from behind its walls, which are one-sided: the
+    /// near wall is culled and the far ones show through it, as long bars and slabs (#575).
+    pub fn standable(level: &Level, x: f32, y: f32) -> (f32, f32) {
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        if level.is_open(cx, cy) {
+            return (x, y);
+        }
+        let range = 12;
+        let nearest = (-range..=range)
+            .flat_map(|dy| (-range..=range).map(move |dx| (cx + dx, cy + dy)))
+            .filter(|&(nx, ny)| level.is_open(nx, ny))
+            .min_by(|a, b| {
+                let d = |c: &(i32, i32)| (c.0 as f32 + 0.5 - x).powi(2) + (c.1 as f32 + 0.5 - y).powi(2);
+                d(a).total_cmp(&d(b))
+            });
+        match nearest {
+            Some((nx, ny)) => {
+                warn!("FB_DEBUG_POSE {x},{y} is in rock; standing in the middle of the nearest open cell, {nx},{ny}");
+                (nx as f32 + 0.5, ny as f32 + 0.5)
+            }
+            None => (x, y),
+        }
     }
 
     /// The eye's world transform in this pose.
@@ -2057,10 +2083,24 @@ mod tests {
         let start = DebugPose::parse(&level, "1");
         assert_eq!(start.at, Vec3::new((x as f32 + 0.5) * CELL, 0.0, (y as f32 + 0.5) * CELL));
         assert_eq!(start.yaw, facing.yaw());
-        let there = DebugPose::parse(&level, "4.5, 6.2, 0, -30");
-        assert_eq!(there.at, Vec3::new(90.0, 0.0, 124.0));
+        let spot = (x as f32 + 0.25, y as f32 + 0.75);
+        let there = DebugPose::parse(&level, &format!("{}, {}, 0, -30", spot.0, spot.1));
+        assert_eq!(there.at, Vec3::new(spot.0 * CELL, 0.0, spot.1 * CELL));
         assert_eq!(there.eye().translation.y, EYE_HEIGHT);
         assert!(there.eye().forward().y < -0.4);
+    }
+
+    #[test]
+    fn a_debug_pose_in_rock_moves_to_open_floor() {
+        // Seed 4's stone halls at depth 2: the way into rock east of the claim door at 28,15.
+        let level = crate::travel::Abyss::new(4).level_at(2);
+        assert!(!level.is_open(30, 15));
+        let pose = DebugPose::parse(&level, "30.5,15.5,90,0");
+        let (x, z) = ((pose.at.x / CELL).floor() as i32, (pose.at.z / CELL).floor() as i32);
+        assert!(level.is_open(x, z), "stands at {x},{z}");
+        assert_eq!((pose.yaw, pose.pitch), (90f32.to_radians(), 0.0));
+        // Open floor is left where it is.
+        assert_eq!(DebugPose::parse(&level, "29.25,15.5").at, Vec3::new(29.25 * CELL, 0.0, 15.5 * CELL));
     }
 
     #[test]
