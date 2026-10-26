@@ -11,6 +11,7 @@ pub mod capture;
 pub mod carry;
 pub mod character;
 pub mod dazzle;
+pub mod dice;
 pub mod door_view;
 pub mod doors;
 pub mod combat;
