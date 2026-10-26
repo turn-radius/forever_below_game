@@ -255,7 +255,10 @@ const GEODE_PROUD: f32 = 0.25;
 /// How far up a crystal's item axis its mesh meets the surface it grows from, in item units:
 /// the middle of a cluster's rock (half of it sunk in), a geode's rim (the rind stands in the
 /// wall), or a single's base, sunk a little.
-pub fn crystal_mount(mesh: &armory::ItemMesh) -> f32 {
+pub fn crystal_mount(mesh: &armory::ItemMesh, spot: &CrystalSpot) -> f32 {
+    if spot.growth == armory::families::crystal::Growth::Mass {
+        return armory::families::crystal::mass_embed(spot.size);
+    }
     let part = |name: &str| mesh.parts.iter().find(|p| p.name == name);
     let ys = |p: &armory::Part| p.positions.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v[1]), hi.max(v[1])));
     if let Some(rind) = part("rind") {
@@ -284,12 +287,13 @@ pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemM
                 .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
                 .map(|offset| relief.floor_height(x + offset.x, z + offset.y))
                 .fold(f32::INFINITY, f32::min);
+            let low = if spot.growth == armory::families::crystal::Growth::Mass { crystal_mount(mesh, spot) } else { low };
             Transform::from_translation(Vec3::new(x, floor - low - SINK, z)).with_rotation(rotation)
         }
-        CrystalSurface::Wall => Transform::from_translation(Vec3::new(x, spot.up, z) - axis * crystal_mount(mesh)).with_rotation(rotation),
+        CrystalSurface::Wall => Transform::from_translation(Vec3::new(x, spot.up, z) - axis * crystal_mount(mesh, spot)).with_rotation(rotation),
         CrystalSurface::Ceiling => {
             let top = crate::level::geometry::stone::ceiling_at(level, x, z);
-            Transform::from_translation(Vec3::new(x, top, z) - axis * crystal_mount(mesh)).with_rotation(rotation)
+            Transform::from_translation(Vec3::new(x, top, z) - axis * crystal_mount(mesh, spot)).with_rotation(rotation)
         }
     }
 }

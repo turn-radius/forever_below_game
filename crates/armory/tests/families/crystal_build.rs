@@ -207,3 +207,27 @@ fn most_prisms_end_in_a_faceted_point() {
         assert!(facets.len() >= 3, "seed {seed}: the top meets {} facets", facets.len());
     }
 }
+
+#[test]
+fn a_mass_is_thick_prisms_packed_on_one_root_with_no_lump() {
+    use armory::families::crystal::mass_embed;
+    for habit in [Habit::Prismatic, Habit::Columnar] {
+        for seed in 1..=10 {
+            let mut s = Crystals::roll_as(seed, habit, Growth::Mass);
+            s.crystal.size = 18.0;
+            let mesh = Crystals::build(&s);
+            assert_eq!(mesh.parts.iter().map(|p| p.name).filter(|n| *n != "cracks" && *n != "inclusions").collect::<Vec<_>>(), ["crystal"], "no rock lump, no matrix");
+            let body = mesh.parts.iter().find(|p| p.name == "crystal").unwrap();
+            // They share a root: every base sits on one plane, the lowest point at the root.
+            let low = body.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+            assert!(low < 0.5 && mesh.bounds().unwrap().0[1].abs() < 1e-3);
+            let (lo, hi) = mesh.bounds().unwrap();
+            let (width, height) = ((hi[0] - lo[0]).max(hi[2] - lo[2]), hi[1] - lo[1]);
+            // Chunky: a low dome as wide as it is tall or wider, its width near the size asked for.
+            assert!(width > 0.7 * 18.0 && width < 1.4 * 18.0, "{width}");
+            assert!(height > mass_embed(18.0) + 3.0 && height < 1.6 * width, "{height} against {width}");
+            // Packed: many prisms, not a few needles.
+            assert!(body.indices.len() / 3 > 6 * 7 * 3, "only {} triangles", body.indices.len() / 3);
+        }
+    }
+}

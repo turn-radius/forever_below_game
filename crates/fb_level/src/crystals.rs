@@ -88,10 +88,11 @@ pub fn crystal_state(spot: &CrystalSpot) -> CrystalState {
     state.crystal.glow = CRYSTAL_GLOW;
     // A cluster set in a wall or ceiling grows from it: next to no lump of rock, its points in a
     // cone out from the surface, as many as its size has room for.
-    if spot.surface != CrystalSurface::Floor && spot.growth == Growth::Cluster {
-        state.crystal.rock = 0.22;
-        state.crystal.spread = 0.3;
-        state.crystal.count = ((spot.size / 1.8) as u32).clamp(4, 14);
+    if spot.growth == Growth::Mass {
+        // Chunky: thick prisms, not needles, in a low dome.
+        state.crystal.length = state.crystal.length.clamp(1.6, 2.6);
+        state.crystal.point = state.crystal.point.clamp(1.0, 1.7);
+        state.crystal.spread = 0.6;
     }
     // Cavern crystals are chunky: a column is at most 3.6 times as long as it is wide.
     if matches!(spot.habit, Habit::Prismatic | Habit::Columnar) {
@@ -260,13 +261,13 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
                 }
                 *used.entry(key).or_insert(0) += 1;
                 let big = k == 0 && slot == 0;
-                let size = if big { rng.range_f32(20.0, 32.0) } else { (rng.range_f32(4.0, 14.0) * fade).max(4.0) };
+                let size = if big { rng.range_f32(18.0, 30.0) } else { (rng.range_f32(8.0, 16.0) * fade).max(8.0) };
                 let (x, y) = face.point(rng.range_f32(-0.45, 0.45));
                 // Clear of a head however far a point of it leans down.
-                let low = WALL_FROM.max(20.0 + 0.6 * size);
+                let low = WALL_FROM;
                 let up = (height + rise * k as f32 + rng.range_f32(-5.0, 5.0)).clamp(low, (level.ceiling - 8.0).max(low));
                 let habit = if rng.chance(0.8) { habit_lean } else { *rng.weighted(&HABITS) };
-                spots.push(CrystalSpot { x, y, up, yaw: face.out_yaw(), lean: rng.range_f32(0.2, 0.75), surface: CrystalSurface::Wall, habit, growth: Growth::Cluster, stone: stone_at(face.cell), seed: item_seed(rng), size: size.max(4.0), radius: 0.0 });
+                spots.push(CrystalSpot { x, y, up, yaw: face.out_yaw(), lean: rng.range_f32(0.2, 0.75), surface: CrystalSurface::Wall, habit, growth: Growth::Mass, stone: stone_at(face.cell), seed: item_seed(rng), size: size.max(8.0), radius: 0.0 });
             }
         }
     }
@@ -284,7 +285,7 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
             continue;
         }
         let stone = level.room_at(cx, cy).map_or(stones[0], |r| stones[r % 2]);
-        let growth = *rng.weighted(&[(Growth::Single, 3), (Growth::Cluster, 2)]);
+        let growth = *rng.weighted(&[(Growth::Single, 1), (Growth::Mass, 3)]);
         hung.push((cx, cy));
         spots.push(CrystalSpot {
             x: cx as f32 + 0.5 + rng.range_f32(-0.3, 0.3),
@@ -297,7 +298,7 @@ pub(crate) fn place_crystals(level: &Level, rng: &mut Mulberry32) -> Vec<Crystal
             growth,
             stone,
             seed: item_seed(rng),
-            size: rng.range_f32(12.0, 28.0),
+            size: if growth == Growth::Mass { rng.range_f32(10.0, 22.0) } else { rng.range_f32(12.0, 28.0) },
             radius: 0.0,
         });
     }
@@ -397,9 +398,9 @@ const GEM_APART: f32 = 4.0;
 /// in `keep_clear`.
 fn floor_crystal(x: f32, y: f32, stone: Gemstone, lean_habit: Habit, keep_clear: &[Clearance], rng: &mut Mulberry32) -> Option<CrystalSpot> {
     let habit = if rng.chance(0.75) { lean_habit } else { *rng.weighted(&FLOOR_HABITS) };
-    let growth = *rng.weighted(&[(Growth::Single, 2), (Growth::Cluster, 3)]);
+    let growth = *rng.weighted(&[(Growth::Single, 1), (Growth::Mass, 3)]);
     // Mostly grand but not vast; now and then one three times a delver's height.
-    let size = if rng.chance(0.2) { rng.range_f32(40.0, 54.0) } else { rng.range_f32(16.0, 34.0) };
+    let size = if growth == Growth::Mass { rng.range_f32(14.0, 22.0) } else if rng.chance(0.25) { rng.range_f32(40.0, 54.0) } else { rng.range_f32(16.0, 34.0) };
     let mut spot = CrystalSpot { x, y, up: 0.0, yaw: rng.range_f32(0.0, std::f32::consts::TAU), lean: rng.range_f32(0.0, 0.12), surface: CrystalSurface::Floor, habit, growth, stone, seed: item_seed(rng), size, radius: 0.0 };
     for _ in 0..8 {
         let radius = footprint(&spot);
@@ -437,7 +438,7 @@ const MOST_DRIFTS: usize = 34;
 const CEILING_CELLS: usize = 16;
 const MOST_ON_CEILING: usize = 30;
 /// The lowest a wall crystal's base is set, in world units: over a delver's head.
-const WALL_FROM: f32 = 22.0;
+const WALL_FROM: f32 = 12.0;
 
 /// The stones crystals grow in a cavern: the clear and coloured ones, never the opaque.
 const STONES: [Gemstone; 11] = [Gemstone::Amethyst, Gemstone::Amethyst, Gemstone::Sapphire, Gemstone::Sapphire, Gemstone::Emerald, Gemstone::Emerald, Gemstone::Diamond, Gemstone::Diamond, Gemstone::Citrine, Gemstone::Garnet, Gemstone::Ruby];
@@ -682,7 +683,7 @@ mod tests {
                 if c.growth == Growth::Geode {
                     assert!(c.up < 20.0, "geodes sit at hand height");
                 } else {
-                    assert!(c.up >= WALL_FROM, "wall crystals grow over a delver's head");
+                    assert!(c.up >= WALL_FROM, "wall crystals grow from over a delver's hand");
                 }
             }
         }
@@ -810,12 +811,11 @@ mod tests {
             for depth in [5, 9] {
                 let level = cavern(seed, depth);
                 stones.insert(level.cavern_stone().unwrap());
-                let walls: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Wall && c.growth == Growth::Cluster).collect();
+                let walls: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| c.surface == CrystalSurface::Wall && c.growth == Growth::Mass).collect();
                 wall += walls.len();
-                other += level.crystals.iter().filter(|c| !(c.surface == CrystalSurface::Wall && c.growth == Growth::Cluster)).count();
+                other += level.crystals.iter().filter(|c| !(c.surface == CrystalSurface::Wall && c.growth == Growth::Mass)).count();
                 for c in &walls {
-                    assert!(c.up >= WALL_FROM.max(20.0 + 0.6 * c.size) - 0.01 || c.up >= level.ceiling - 8.1, "a cluster hangs too low");
-                    assert!(c.up >= WALL_FROM && c.lean >= 0.2, "clusters point out and up from over head height");
+                    assert!(c.up >= WALL_FROM && c.lean >= 0.2, "masses point out and up");
                     clustered += 1;
                     near += walls.iter().any(|o| !std::ptr::eq(*o, *c) && ((o.x - c.x).hypot(o.y - c.y)) < 1.2) as u32;
                 }

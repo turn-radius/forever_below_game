@@ -83,6 +83,18 @@ pub enum Growth {
     Cluster,
     /// A split nodule of rock lined with small crystals.
     Geode,
+    /// A mass of thick crystals packed side by side on a hexagonal lattice, rooted together in one
+    /// solid base (the lower tenth of its size is the root, sunk into the rock it grows from),
+    /// tallest at the middle and fanning a little toward the edge, every one ending in a faceted
+    /// point: crystal druse, the way a wall or floor of crystal breaks through rock.
+    Mass,
+}
+
+/// How far the root of a [`Growth::Mass`] of `size` reaches below the surface it grows from, in
+/// units: the game sinks the mass this far into the rock, so the points rise from it with no
+/// gap and no lump.
+pub fn mass_embed(size: f32) -> f32 {
+    size * 0.1
 }
 
 /// The crystal itself.
@@ -227,6 +239,7 @@ impl Generator for Crystals {
         match c.growth {
             Growth::Cluster => format!("{stone} Cluster"),
             Growth::Geode => format!("{stone} Geode"),
+            Growth::Mass => format!("{stone} Druse"),
             Growth::Single => match c.habit {
                 Habit::Prismatic => format!("{stone} Crystal"),
                 Habit::Columnar => format!("{stone} Column"),
@@ -252,6 +265,10 @@ impl Generator for Crystals {
             Growth::Cluster => {
                 let (solids, matrix) = cluster(c, &mut rng);
                 add_rock(&mut parts, "matrix", matrix, s);
+                add_crystals(&mut parts, c, &solids, &mut rng);
+            }
+            Growth::Mass => {
+                let solids = mass(c, &mut rng);
                 add_crystals(&mut parts, c, &solids, &mut rng);
             }
             Growth::Geode => {
@@ -325,6 +342,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, habit: Habit, growth: Growth) -> Cry
         Growth::Single => (5.0, 13.0),
         Growth::Cluster => (6.0, 15.0),
         Growth::Geode => (6.0, 11.0),
+        Growth::Mass => (10.0, 24.0),
     };
     // A broken stump, now and then: a prism with its point gone, ending nearly flat.
     if matches!(habit, Habit::Prismatic | Habit::Columnar) && rng.chance(0.06) {
@@ -336,6 +354,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, habit: Habit, growth: Growth) -> Cry
         Growth::Cluster if habit == Habit::Acicular => rng.int(10, 24),
         Growth::Cluster => rng.int(4, 12),
         Growth::Geode => rng.int(24, 60),
+        Growth::Mass => 1,
     };
     c.spread = rng.range_f32(0.35, 0.85);
     c.double_ended = growth == Growth::Single && habit.is_prism() && rng.chance(0.2);
@@ -700,6 +719,42 @@ fn cluster(c: &Crystal, rng: &mut Mulberry32) -> (Vec<Solid>, MeshBuilder) {
         *p = vec3::mul(vec3::scale(*p, mr * k * c.rock), [1.0, 0.55, 1.0]);
     }
     (solids, if c.rock < 0.05 { MeshBuilder::new() } else { lump.flat_shaded() })
+}
+
+/// Thick crystals packed on a hexagonal lattice and grown together from one root: each is a
+/// hexagonal prism standing on the plane y = 0 (the lower tenth of the mass's size is root, to be
+/// sunk into the rock), tallest at the centre and shorter toward the edge, leaning outward a little
+/// more the further out it stands, so the whole is a low dome of points, packed side by side with
+/// no gap at the base.
+fn mass(c: &Crystal, rng: &mut Mulberry32) -> Vec<Solid> {
+    let rings = ((c.size / 9.0).round() as i32).clamp(1, 3);
+    let pitch = 1.76;
+    let a = (c.size * 0.5) / (pitch * rings as f32 + 1.0);
+    let spacing = a * pitch;
+    let reach = spacing * rings as f32 + a;
+    let top = a * c.length.clamp(1.6, 3.2) * 2.0;
+    let embed = mass_embed(c.size);
+    let mut out = Vec::new();
+    for q in -rings..=rings {
+        for r in (-rings).max(-q - rings)..=rings.min(-q + rings) {
+            let (x, z) = (spacing * (q as f32 + r as f32 * 0.5), spacing * r as f32 * 0.866_025_4);
+            let dist = (x.hypot(z) / reach).min(1.0);
+            let visible = top * (1.0 - 0.6 * dist.powf(1.3)) * rng.range_f32(0.8, 1.2);
+            let height = visible.max(a * 0.9) + embed;
+            let sp = Spec { habit: Habit::Prismatic, sides: 6, height, aspect: height / (2.0 * a), flat: 0.0, taper: c.taper.min(0.08), point: c.point.max(0.9), truncation: 0.0, double_ended: false, twinned: false, scepter: false };
+            let mut group = crystal_solids(&sp, rng);
+            let az = z.atan2(x);
+            let lean = (c.spread * 0.55 * dist + rng.range_f32(0.0, 0.1)).min(0.6);
+            let dir = [lean.sin() * az.cos(), lean.cos(), lean.sin() * az.sin()];
+            let tilt = Mat3::from_rotation_arc(vec3::Y, dir);
+            let twist = Mat3::from_axis_angle(vec3::Y, rng.range_f32(0.0, TAU));
+            for s in &mut group {
+                s.rotate(&twist).rotate(&tilt).translate([x, 0.0, z]);
+            }
+            out.extend(group);
+        }
+    }
+    out
 }
 
 /// A nodule split open, its cavity facing +Y: a rind of rock, a pale lining, and crystals

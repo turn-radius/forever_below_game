@@ -177,7 +177,7 @@ const DECAY_LIMESTONE: u32 = 18;
 /// How much brighter a crystal cavern's own fill is than the abyss's: pale stone that takes the
 /// crystals' light wants a little more to be seen by, so the cavern reads as wonder after the
 /// dark below. Still a few lux; darkness stays between the lights.
-const CAVERN_AMBIENT: f32 = 3.6;
+const CAVERN_AMBIENT: f32 = 8.0;
 /// The cavern's fill is a cool, pale blue, so pale stone reads pale and not the torch's orange.
 const CAVERN_AMBIENT_COLOR: Color = Color::srgb(0.6, 0.72, 0.95);
 const STONE_PATTERN_SCALE: f32 = 0.06;
@@ -1119,7 +1119,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
         }
         "wall" => {
             // The biggest cluster growing from a wall, from three cells out looking at it.
-            let Some(spot) = level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Wall && c.growth == armory::families::crystal::Growth::Cluster).max_by(|a, b| a.size.total_cmp(&b.size)) else { return };
+            let Some(spot) = level.crystals.iter().filter(|c| c.surface == fb_level::CrystalSurface::Wall && c.growth == armory::families::crystal::Growth::Mass).max_by(|a, b| a.size.total_cmp(&b.size)) else { return };
             let at = v3(fb_level::Level::world(spot.x, spot.y)) + Vec3::Y * spot.up;
             let out = Vec3::new(spot.yaw.sin(), 0.0, spot.yaw.cos());
             // `FB_DEBUG_WALL_DIST=far` backs off as far as the floor stays open in front of it, up to
