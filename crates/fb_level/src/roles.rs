@@ -94,7 +94,7 @@ impl Level {
     /// between two rooms of the same claim is no claim door.
     pub fn claim_doors(&self) -> Vec<ClaimDoor> {
         let (sx, sy, _) = self.start();
-        let mut doors = self.edge_doors(&self.claims);
+        let mut doors = self.edge_doors_in(&RoomGraph::new(self), &self.claims);
         for door in &mut doors {
             if let Some(spec) = self.factions.iter().find(|f| f.id == door.faction) {
                 let mut rng = crate::doorkind::door_stream(self.seed, door.x, door.y);
@@ -115,7 +115,7 @@ impl Level {
 
     /// The doors on the edge of `claims` (not yet marked main), whether or not they are the
     /// level's own claims, so growth can ask what a claim would shut.
-    pub(crate) fn edge_doors(&self, claims: &[Claim]) -> Vec<ClaimDoor> {
+    pub(crate) fn edge_doors_in(&self, graph: &RoomGraph, claims: &[Claim]) -> Vec<ClaimDoor> {
         let entrance = (self.entrance.x as i32, self.entrance.y as i32);
         let claim_of = |r: usize| claims.iter().find(|c| c.rooms.contains(&r));
         let mut doors = Vec::new();
@@ -127,9 +127,10 @@ impl Level {
                 // A door stands in the wall beside its room, or on the room's own edge.
                 let near: Vec<(i32, i32)> = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().map(|(dx, dy)| (x + dx, y + dy)).filter(|&(nx, ny)| self.is_open(nx, ny)).collect();
                 let Some((room, claim)) = near.iter().filter_map(|&(nx, ny)| self.room_at(nx, ny)).find_map(|r| Some((r, claim_of(r)?))) else { continue };
-                let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && self.room_at(nx, ny).is_none_or(|r| !claim.rooms.contains(&r)));
+                // The corridors a claim holds between its own rooms are its ground too.
+                let held = |nx: i32, ny: i32| crate::claims::in_ground(self, graph, &claim.rooms, nx, ny);
+                let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && !held(nx, ny));
                 if leads_out {
-                    let held = |nx: i32, ny: i32| self.is_open(nx, ny) && self.room_at(nx, ny).is_some_and(|r| claim.rooms.contains(&r));
                     let outside = |nx: i32, ny: i32| self.is_open(nx, ny) && !held(nx, ny);
                     let inward = [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().find(|&(dx, dy)| held(x + dx, y + dy) && outside(x - dx, y - dy)).unwrap_or((0, 0));
                     let shared = inward == (0, 0) || self.room_at(x - inward.0, y - inward.1).is_some_and(|r| self.claim_of(r).is_some());
