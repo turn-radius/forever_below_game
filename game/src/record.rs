@@ -69,12 +69,28 @@ pub struct WorldRecord {
     /// readable; a new delve starts with none.
     #[serde(default)]
     pub lexicon: fb_denizens::tongue::Lexicon,
+    /// The folk the delver has talked round, by (depth, seed): each gives once.
+    #[serde(default)]
+    pub persuaded: std::collections::BTreeSet<(u32, u32)>,
+    /// How many times each folk, by (depth, seed), has been persuaded at, so each try rolls afresh.
+    #[serde(default)]
+    pub persuasions: BTreeMap<(u32, u32), u32>,
 }
 
 impl WorldRecord {
     /// The denizen words the delver has learned.
     pub fn lexicon(&self) -> &fb_denizens::tongue::Lexicon {
         &self.lexicon
+    }
+
+    /// How many times the folk `who` (depth, seed) has been persuaded at.
+    pub fn persuasion_tries(&self, who: (u32, u32)) -> u32 {
+        self.persuasions.get(&who).copied().unwrap_or(0)
+    }
+
+    /// Notes one more try at persuading `who`.
+    pub fn note_persuasion(&mut self, who: (u32, u32)) {
+        *self.persuasions.entry(who).or_default() += 1;
     }
 
     /// Whether `faction` is already noted as met on level `depth`.
@@ -237,13 +253,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuaded: Default::default(), persuasions: Default::default() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuaded: Default::default(), persuasions: Default::default() }
     }
 
     /// The record of the level at `depth`, if it has been visited.

@@ -15,7 +15,8 @@
 //! laid out for the 1920 by 1080 reference and scaled with the window like every screen ([`crate::ui`]).
 //!
 //! `FB_DEBUG_CHECK=<face>[,<seconds>]` rolls a sample persuasion check once the delve is under
-//! way, for captures: `FB_DEBUG_CHECK=14,0.7` shows the roll frozen 0.7 seconds in.
+//! way, for captures: `FB_DEBUG_CHECK=14,0.7` shows the roll frozen 0.7 seconds in. `FB_DEBUG_ROLL_AT=4.5`
+//! freezes any roll at that time, such as a persuasion chosen with `FB_TALK_TOPIC=persuade`.
 
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
@@ -227,7 +228,7 @@ fn run_dice(
 ) {
     if dice.active.is_none() {
         let Some(next) = dice.queue.pop_front() else { return };
-        let hold = std::env::var("FB_DEBUG_CHECK").ok().and_then(|v| v.split(',').nth(1).and_then(|s| s.trim().parse::<f32>().ok()));
+        let hold = std::env::var("FB_DEBUG_ROLL_AT").ok().and_then(|v| v.trim().parse::<f32>().ok()).or_else(|| std::env::var("FB_DEBUG_CHECK").ok().and_then(|v| v.split(',').nth(1).and_then(|s| s.trim().parse::<f32>().ok())));
         dice.active = Some(Active { request: next, t: 0.0, hold, drawn: None, scene: Vec::new() });
     }
     let (Some(fonts), Some(camera)) = (fonts, cameras.iter().next()) else { return };

@@ -70,6 +70,8 @@ pub enum Topic {
     Faction(u8),
     /// A folk near the top who has heard a rumour of the denizens.
     Strange,
+    /// Talk a folk into letting the delver pass, or giving something, on a roll.
+    Persuade,
 }
 
 impl Topic {
@@ -89,6 +91,7 @@ impl Topic {
             Topic::Quest => "Work",
             Topic::Faction(_) => "The denizens",
             Topic::Strange => "Strange tales",
+            Topic::Persuade => "Persuade",
         }
     }
 
@@ -124,6 +127,7 @@ impl Topic {
             Topic::Quest => 13,
             Topic::Faction(i) => 20 + i as u32,
             Topic::Strange => 40,
+            Topic::Persuade => 50,
         }
     }
 }
@@ -195,6 +199,7 @@ pub fn topics(speaker: &Speaker) -> Vec<Topic> {
     } else if strange_tale(speaker).is_some() {
         list.push(Topic::Strange);
     }
+    list.push(Topic::Persuade);
     list.push(Topic::WayOut);
     list
 }
@@ -282,6 +287,8 @@ pub fn answer(speaker: &Speaker, topic: Topic, rumour: Option<&MasterRumour>) ->
         Topic::Faction(i) => faction_line(speaker, i),
         Topic::Strange => strange_tale(speaker).unwrap_or_else(|| say(speaker, "not_yet", 0x05, &[])),
         Topic::Threats | Topic::Quest => say(speaker, "not_yet", 0x05, &[]),
+        // Persuasion is answered by its roll ([`super::persuade`]); this is for a bare ask.
+        Topic::Persuade => say(speaker, "persuade_nothing", 0x06, &[]),
     }
 }
 
@@ -474,7 +481,7 @@ fn base(speaker: &Speaker) -> Vec<(&'static str, String)> {
 
 /// A line from the grammar's `symbol`, drawn from the speaker's seed and `salt` (one per kind of
 /// line, so a folk's lines don't all pick alike), with `extra` symbols defined for it.
-fn say(speaker: &Speaker, symbol: &str, salt: u32, extra: &[(&'static str, String)]) -> String {
+pub fn say(speaker: &Speaker, symbol: &str, salt: u32, extra: &[(&'static str, String)]) -> String {
     let mut symbols = base(speaker);
     symbols.extend(extra.iter().cloned());
     let overlay = Grammar { symbols: symbols.into_iter().map(|(k, v)| (k.to_string(), vec![v])).collect() };
@@ -611,11 +618,11 @@ mod tests {
     #[test]
     fn trades_add_their_topics() {
         let labels = |t| topics(&speaker(t, Band::Neutral)).into_iter().map(Topic::label).collect::<Vec<_>>();
-        assert_eq!(labels(None), ["Who are you?", "This level", "The way out"]);
-        assert_eq!(labels(Some(smith())), ["Who are you?", "Your trade", "Barter", "Commission", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None })), ["Who are you?", "Your trade", "Enchant", "Scrap", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade { profession: Profession::GeneralGoods, tier: Tier::Novice, style: None })), ["Who are you?", "Your trade", "Barter", "This level", "The way out"]);
-        assert_eq!(labels(Some(Trade::guard())), ["Who are you?", "Your trade", "This level", "The way out"]);
+        assert_eq!(labels(None), ["Who are you?", "This level", "Persuade", "The way out"]);
+        assert_eq!(labels(Some(smith())), ["Who are you?", "Your trade", "Barter", "Commission", "This level", "Persuade", "The way out"]);
+        assert_eq!(labels(Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None })), ["Who are you?", "Your trade", "Enchant", "Scrap", "This level", "Persuade", "The way out"]);
+        assert_eq!(labels(Some(Trade { profession: Profession::GeneralGoods, tier: Tier::Novice, style: None })), ["Who are you?", "Your trade", "Barter", "This level", "Persuade", "The way out"]);
+        assert_eq!(labels(Some(Trade::guard())), ["Who are you?", "Your trade", "This level", "Persuade", "The way out"]);
     }
 
     #[test]
