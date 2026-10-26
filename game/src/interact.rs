@@ -15,6 +15,7 @@
 //! | Bedroll or tent in the pack | Lay out, or Pitch | Equip, if it can be | | |
 //! | Bedroll or tent set down | Sleep | Pack up | | |
 //! | Stair | Go down or Go up | | | |
+//! | Troll lying down, with a lit torch in either hand | Burn | | | |
 //!
 //! Hang at hip sends something that can hang from the belt (a lantern) straight to the hip,
 //! where Equip would put it in a hand. It is on Special because Tertiary's key turns a dragged
@@ -112,6 +113,8 @@ pub enum Verb {
     Steal,
     GoDown,
     GoUp,
+    /// Put a lit torch to a troll lying down, so it does not rise (`crate::creatures::trolls`).
+    Burn,
 }
 
 impl Verb {
@@ -144,6 +147,7 @@ impl Verb {
             Verb::Steal => "Steal",
             Verb::GoDown => "Go down",
             Verb::GoUp => "Go up",
+            Verb::Burn => "Burn",
         }
     }
 }
@@ -247,6 +251,9 @@ pub enum Target {
     },
     /// A bedroll or tent set down in the level (`crate::camp`).
     Camp,
+    /// A troll lying down that is not yet dead for good, and whether the delver holds a lit
+    /// torch to burn it with.
+    FallenTroll { torch: bool },
 }
 
 /// What the lookup needs of the delver. Keys, lockpicks and hiding are not in the game yet, so
@@ -279,6 +286,7 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
         Target::Folk => Verbs { primary: Some(Verb::Talk), secondary: Some(Verb::Barter), tertiary: delver.hidden.then_some(Verb::Steal), ..Verbs::default() },
         Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
         Target::Camp => Verbs { primary: Some(Verb::Sleep), secondary: Some(Verb::PackUp), ..Verbs::default() },
+        Target::FallenTroll { torch } => Verbs { primary: torch.then_some(Verb::Burn), ..Verbs::default() },
     }
 }
 
@@ -358,7 +366,7 @@ pub struct CrosshairPrompt(pub Option<String>);
 
 /// The node that shows the [`CrosshairPrompt`].
 #[derive(Component, Debug)]
-struct PromptNode;
+pub(crate) struct PromptNode;
 
 pub struct InteractPlugin;
 
@@ -399,7 +407,7 @@ fn spawn_prompt(mut commands: Commands, nodes: Query<(), With<PromptNode>>, came
 /// Shows the prompt just above the crosshair (the item card hangs below it) while the level has
 /// focus. A prompt whose text changed waits a frame to be measured.
 #[allow(clippy::type_complexity)]
-fn show_prompt(
+pub(crate) fn show_prompt(
     mut commands: Commands,
     prompt: Res<CrosshairPrompt>,
     open: Option<Res<ScreenOpen>>,
@@ -604,6 +612,13 @@ mod tests {
         let hidden = verbs_for(&Target::Folk, &Delver { hidden: true, ..Delver::default() });
         assert_eq!(row(hidden), (Some(Verb::Talk), Some(Verb::Barter), Some(Verb::Steal), None));
         assert!(!hidden.compare);
+    }
+
+    #[test]
+    fn a_fallen_troll_is_burned_only_with_a_lit_torch() {
+        assert_eq!(row(verbs_for(&Target::FallenTroll { torch: true }, &Delver::default())), (Some(Verb::Burn), None, None, None));
+        assert_eq!(row(verbs_for(&Target::FallenTroll { torch: false }, &Delver::default())), (None, None, None, None));
+        assert_eq!(key_line(&Keymap::default(), &verbs_for(&Target::FallenTroll { torch: true }, &Delver::default())), "F Burn");
     }
 
     #[test]
