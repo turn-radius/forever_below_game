@@ -114,6 +114,12 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
         ),
         armory::Item::Lantern(s) if s.flame.fuel_left <= 0.0 => return Some("Empty".into()),
         armory::Item::Lantern(s) => (if s.flame.lit { "Lit" } else { "Unlit" }, s.flame.lit),
+        armory::Item::Sundry(s) if item.lit().is_some() => {
+            if s.article.burnt >= armory::kindle::CANDLE_BURNT_OUT {
+                return Some("Spent".into());
+            }
+            (if s.article.lit { "Burning" } else { "Unlit" }, s.article.lit)
+        }
         _ => return None,
     };
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
