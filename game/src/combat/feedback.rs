@@ -15,6 +15,9 @@
 //!   ([`Corpse`]): it no longer moves, bites or keeps others
 //!   off, and it blocks nobody.
 //!
+//! A body that wears its own colours differently (a burned troll's char) keeps them in step
+//! with the flash: the flash comes back to them, not to the colours it was spawned in.
+//!
 //! The flash's length, hold, colour and strength, the knockback distances and the collapse are
 //! our own.
 
@@ -103,8 +106,9 @@ pub struct Flinch {
     pub left: f32,
     /// The rest of the knockback, world units on the floor.
     pub push: Vec2,
-    /// Each lit part's material and its own colour and glow, to come back to.
-    materials: Vec<(Handle<ToonMaterial>, Color, f32)>,
+    /// Each lit part's material and its own colour and glow, to come back to. A body whose own
+    /// colours change (a troll charring, `crate::creatures::scorch`) updates them while it flashes.
+    pub(crate) materials: Vec<(Handle<ToonMaterial>, Color, f32)>,
 }
 
 /// What a [`Flinch`] needs to light a struck thing up: its descendants' toon materials, and the
@@ -332,7 +336,7 @@ fn knock_back(
 
 /// Lights a struck creature up, held then fading ([`flash_strength`]). The first frame shows it
 /// at full: the time is taken off after.
-fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creatures: Query<(Entity, &mut Flinch)>, toon: Option<ResMut<Assets<ToonMaterial>>>) {
+pub(crate) fn flash(mut commands: Commands, time: Res<Time>, tuning: Res<Tuning>, mut creatures: Query<(Entity, &mut Flinch)>, toon: Option<ResMut<Assets<ToonMaterial>>>) {
     let mut toon = toon;
     for (entity, mut flinch) in &mut creatures {
         let strength = flash_strength(flinch.left, &tuning.combat);
