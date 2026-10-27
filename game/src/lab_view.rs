@@ -61,7 +61,7 @@ const RULES_PAGE: Color = Color::srgb(0.086, 0.075, 0.059);
 /// The page behind a tile or a card, and behind the tab that is open.
 const OPEN_TAB: Color = Color::srgb(0.14, 0.12, 0.085);
 /// The slots the lab dresses. The hip is left out, since a lantern hangs there from a belt.
-pub const SLOTS: [Slot; 15] = [
+pub const SLOTS: [Slot; 16] = [
     Slot::Head,
     Slot::Neck,
     Slot::Shirt,
@@ -74,6 +74,7 @@ pub const SLOTS: [Slot; 15] = [
     Slot::Legs,
     Slot::Feet,
     Slot::Back,
+    Slot::Satchel,
     Slot::Ring1,
     Slot::Ring2,
     Slot::Charm,

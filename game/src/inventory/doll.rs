@@ -677,6 +677,7 @@ mod tests {
             fb_items::Slot::Ring2,
             fb_items::Slot::Charm,
             fb_items::Slot::Hip,
+            fb_items::Slot::Satchel,
         ] {
             let place = places.iter().find(|p| p.slot == slot).unwrap_or_else(|| panic!("{slot:?}"));
             let size = if place.size == SlotSize::Big { BIG_SLOT } else { SMALL_SLOT };

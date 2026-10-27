@@ -378,7 +378,7 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
             let (cols, rows, label, slot, wt, fp) = match b.style {
                 BagStyle::Purse | BagStyle::Pouch => return good(&[Container], 0.4, [1, 1], "Coins"),
                 BagStyle::Backpack => (8, 5, "Pack", Slot::Back, 4.0, [2, 3]),
-                BagStyle::Satchel => (6, 3, "Satchel", Slot::Back, 2.0, [2, 2]),
+                BagStyle::Satchel => (6, 3, "Satchel", Slot::Satchel, 2.0, [2, 2]),
                 BagStyle::Sack => (4, 4, "Sack", Slot::Back, 0.5, [2, 2]),
                 BagStyle::BeltPouch => (4, 2, "Belt pouch", Slot::Belt, 1.0, [2, 2]),
             };

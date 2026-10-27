@@ -85,7 +85,7 @@ impl From<Misfit> for Refusal {
 /// Worn slots that carry a container whose grid shows on the inventory screen, in the order
 /// they show: the pack or sack on the back, then the belt's pouch (the plate's
 /// `containersOf`), then the quiver or bolt case.
-pub const CARRYING_SLOTS: [Slot; 4] = [Slot::Back, Slot::Belt, Slot::Hip, Slot::Quiver];
+pub const CARRYING_SLOTS: [Slot; 5] = [Slot::Back, Slot::Satchel, Slot::Belt, Slot::Hip, Slot::Quiver];
 
 /// The minute of fuel a light's card shows ("Fuel 0:42"), rounded as the card rounds it.
 fn fuel_minute(item: &Item) -> Option<u32> {
@@ -889,5 +889,22 @@ mod tests {
         inventory.take_out(belt);
         inventory.unhang();
         assert_eq!(inventory.worn(Slot::Quiver), Some(quiver));
+    }
+
+    #[test]
+    fn a_satchel_is_worn_beside_a_pack_but_a_second_pack_has_no_room() {
+        let mut inventory = Inventory::default();
+        let (pack, satchel, sack) = (inventory.add(rolled("Pack", 1)), inventory.add(rolled("Satchel", 1)), inventory.add(rolled("Sack", 1)));
+        assert_eq!((inventory.target_slot(pack), inventory.target_slot(satchel), inventory.target_slot(sack)), (Some(Slot::Back), Some(Slot::Satchel), Some(Slot::Back)));
+        assert_eq!(inventory.check_wear(satchel, Slot::Back), Err(Refusal::WrongSlot));
+        assert_eq!(inventory.check_wear(pack, Slot::Satchel), Err(Refusal::WrongSlot));
+        inventory.pick_up(pack).unwrap();
+        inventory.pick_up(satchel).unwrap();
+        assert_eq!((inventory.worn(Slot::Back), inventory.worn(Slot::Satchel)), (Some(pack), Some(satchel)));
+        assert_eq!(inventory.carried_containers(), vec![pack, satchel]);
+        // The back is taken: a sack is stowed, not worn, and wearing it would take the pack's place.
+        inventory.pick_up(sack).unwrap();
+        assert_eq!((inventory.worn(Slot::Back), inventory.worn(Slot::Satchel)), (Some(pack), Some(satchel)));
+        assert!(!matches!(inventory.location(sack), Some(Location::Worn(_))));
     }
 }

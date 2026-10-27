@@ -514,6 +514,14 @@ pub fn begin_resume(commands: &mut Commands, next: &mut NextState<AppState>, sav
 #[derive(Resource, Clone, Copy, Debug)]
 struct SettleHitPoints(Health);
 
+/// The slot a saved item is worn in now: a save from before the satchel had a slot of its own
+/// holds it in the back slot, so a worn item that does not fit where it was saved but fits the
+/// satchel slot moves there. A pack or sack stays on the back.
+fn current_slot(inventory: &Inventory, id: ItemId, saved: fb_items::Slot) -> fb_items::Slot {
+    let moves = saved == fb_items::Slot::Back && inventory.item(id).is_some_and(|i| !i.fits(fb_items::Slot::Back) && i.fits(fb_items::Slot::Satchel));
+    if moves { fb_items::Slot::Satchel } else { saved }
+}
+
 /// Puts back everything a [`SavedDelve`] holds that [`begin_resume`] did not, on the first frame
 /// of the delve and before any system that plays runs ([`ResumeSet`]).
 pub fn restore_delve(world: &mut World) {
@@ -545,6 +553,8 @@ pub fn restore_delve(world: &mut World) {
             walked.extend(std::iter::repeat_n(None, count_nodes(record)));
             continue;
         };
+        // A save from before the satchel had a slot of its own holds it in the back slot.
+        let slot = &current_slot(&inventory, id, *slot);
         if inventory.wear(id, *slot).is_err() {
             warn!("save: {} would not go back on at {slot:?}; it is dropped", record.name);
             inventory.forget(id);
@@ -720,6 +730,19 @@ mod tests {
         assert_eq!(read(&path).unwrap().depth, 4);
         let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, vec![std::ffi::OsString::from(FILE_NAME)]);
+    }
+
+    #[test]
+    fn a_satchel_saved_in_the_old_back_slot_moves_to_the_satchel_slot_and_a_pack_stays() {
+        let mut inventory = Inventory::default();
+        let (pack, sack, satchel, belt) = (inventory.add(fb_items::roll_item("Pack", 1).unwrap()), inventory.add(fb_items::roll_item("Sack", 1).unwrap()), inventory.add(fb_items::roll_item("Satchel", 1).unwrap()), inventory.add(fb_items::roll_item("Belt", 1).unwrap()));
+        use fb_items::Slot;
+        assert_eq!((current_slot(&inventory, pack, Slot::Back), current_slot(&inventory, sack, Slot::Back)), (Slot::Back, Slot::Back));
+        assert_eq!(current_slot(&inventory, satchel, Slot::Back), Slot::Satchel);
+        assert_eq!((current_slot(&inventory, satchel, Slot::Satchel), current_slot(&inventory, belt, Slot::Belt)), (Slot::Satchel, Slot::Belt));
+        // The slot names on disk: the pack's stays "back", the new one is "satchel".
+        assert_eq!(serde_json::to_string(&[Slot::Back, Slot::Satchel]).unwrap(), r#"["back","satchel"]"#);
+        assert_eq!(serde_json::from_str::<Slot>("\"back\"").unwrap(), Slot::Back);
     }
 
     #[test]

@@ -379,7 +379,7 @@ fn act(
         .filter(|&id| match inventory.location(id) {
             Some(Location::In { .. }) => inventory.is_carried(id),
             // Worn things too, but not the pack everything rides in.
-            Some(Location::Worn(slot)) => slot != fb_items::Slot::Back,
+            Some(Location::Worn(slot)) => !matches!(slot, fb_items::Slot::Back | fb_items::Slot::Satchel),
             _ => false,
         })
         .collect();

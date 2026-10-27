@@ -69,7 +69,7 @@ use crate::place::Placement;
 
 /// The order slots are dressed in, innermost first. Slots not listed (held gear, rings and
 /// charms) are not worn on the body's surface and are skipped.
-pub const LAYER_ORDER: [Slot; 10] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::Body, Slot::Hands, Slot::Belt, Slot::Neck, Slot::Head, Slot::Cloak, Slot::Back];
+pub const LAYER_ORDER: [Slot; 11] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::Body, Slot::Hands, Slot::Belt, Slot::Neck, Slot::Head, Slot::Cloak, Slot::Back, Slot::Satchel];
 
 /// Clearance kept between a layer and the one under it, over the outer layer's own ease.
 const GAP: f32 = 0.04;
@@ -211,7 +211,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                 (Slot::Head, Item::Helm(s)) => helm(body, s, fit.head),
                 (Slot::Head, Item::Hood(s)) => hood(body, &env, s, fit.head),
                 (Slot::Head, Item::Hat(s)) => hat(body, s, fit.head),
-                (Slot::Back, Item::Bags(s)) => bag(body, &env, s),
+                (Slot::Back | Slot::Satchel, Item::Bags(s)) => bag(body, &env, s),
                 _ => continue,
             };
             if slot == Slot::Head {
@@ -1507,6 +1507,9 @@ fn bag(body: &Body, env: &Envelope, state: &BagState) -> ItemMesh {
     mesh.parts.retain(|p| p.name != "carry");
     // Its back against the wearer's.
     mesh.transform(&Mat3::from_axis_angle(vec3::Y, PI), [0.0; 3]);
+    if style == BagStyle::Satchel {
+        return satchel(body, env, mesh, tint);
+    }
     let Some((lo, hi)) = mesh.bounds() else { return mesh };
     let sw = body.shoulder_half_width;
     let width = match style {
@@ -1585,6 +1588,55 @@ fn bag(body: &Body, env: &Envelope, state: &BagState) -> ItemMesh {
     mesh
 }
 
+/// A satchel slung at the wearer's hip (+x), its back against the side, hung from a strap over
+/// the other shoulder and across the chest. It has a slot of its own beside a pack on the back,
+/// so it hangs out at the side, clear of the pack, which stays within the shoulders' width.
+/// `mesh` has had its back turned to +z already, as a pack's has.
+fn satchel(body: &Body, env: &Envelope, mut mesh: ItemMesh, tint: Option<armory::Rgb>) -> ItemMesh {
+    let (sw, s, t, w) = (body.shoulder_half_width, body.scale, body.trunk_length, body.waist_y);
+    // Its back (+z so far) to the body's side (-x), its width along the side.
+    mesh.transform(&Mat3::from_axis_angle(vec3::Y, -PI / 2.0), [0.0; 3]);
+    let Some((lo, hi)) = mesh.bounds() else { return mesh };
+    let k = (sw * 0.8 / (hi[2] - lo[2]).max(1e-3)).clamp(0.3, 3.0);
+    scale_mesh(&mut mesh, k);
+    let (lo, hi) = (vec3::scale(lo, k), vec3::scale(hi, k));
+    let height = hi[1] - lo[1];
+    let top = body.hip_y + 0.45 * t;
+    // Out from the side far enough to clear the body, the belt and a cloak's skirt over the
+    // bag's height, with a little air between.
+    let side = (0..=4).map(|i| env.worn_reach(0.0, top - height * i as f32 / 4.0 - w)).fold(0.0f32, f32::max) + 0.05;
+    let (cz, front) = (-0.05 * s, body.chest.half_depth * 0.5);
+    mesh.transform(&Mat3::IDENTITY, [side - lo[0], top - hi[1], cz - (lo[2] + hi[2]) * 0.5]);
+    let half = (hi[2] - lo[2]) * 0.4;
+    let mid = top - height * 0.2;
+    let (width, thickness) = (0.24 * s.sqrt(), 0.05 * s.sqrt());
+    let ty = body.shoulder_y + 0.08 * t;
+    let path: Vec<V3> = CatmullRom::centripetal(vec![
+        [side, mid, cz - half],
+        [sw * 0.55, body.chest_y - 0.1 * t, -body.waist.half_depth * 0.9],
+        [sw * 0.3, ty, -0.12 * s],
+        [-sw * 0.46, ty, -0.08 * s],
+        [-sw * 0.3, body.chest_y, front],
+        [sw * 0.55, w, front],
+        [side, mid, cz + half],
+    ])
+    .sample_evenly(64)
+    .into_iter()
+    .map(|p| {
+        let q = env.lay_on([p[0], p[1] - w, p[2]], 0.01);
+        [q[0], q[1] + w, q[2]]
+    })
+    .collect();
+    let faces: Vec<V3> = path.iter().map(|p| env.reach.normal(p[2].atan2(p[0]), p[1] - w)).collect();
+    let mut straps = armory::geom::MeshBuilder::new();
+    straps.append(&strap(&path, &faces, width, thickness, false));
+    let look = tint.map_or(Look::of(MaterialKind::Leather), |c| Look::of(MaterialKind::Leather).tinted(c));
+    let mut parts = Parts::new();
+    parts.add_look("carry", straps, look);
+    mesh.parts.extend(parts.finish().parts);
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1617,6 +1669,28 @@ mod tests {
             (Slot::Neck, roll(Family::Amulet, seed)),
             (Slot::Head, roll(Family::Hood, seed)),
         ]
+    }
+
+    /// A satchel and a pack are worn at once, and the satchel hangs out at the hip beside the
+    /// pack, not through it.
+    #[test]
+    fn a_satchel_hangs_at_the_hip_beside_a_pack() {
+        for body in bodies().step_by(4) {
+            for seed in [1u32] {
+                let mut kit = outfit(seed);
+                kit.push((Slot::Satchel, Item::Bags(Bags::roll_as(seed, BagStyle::Satchel))));
+                let fit = fit_worn(&body, &kit);
+                let bounds = |slot| {
+                    let layer = fit.layers.iter().find(|l| l.slot == slot).expect("worn");
+                    let parts: Vec<&Part> = layer.mesh.parts.iter().filter(|p| p.name != "carry").collect();
+                    let xs = parts.iter().flat_map(|p| p.positions.iter().map(|q| q[0]));
+                    (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max))
+                };
+                let (pack, satchel) = (bounds(Slot::Back), bounds(Slot::Satchel));
+                assert!(satchel.0 > pack.1, "satchel x {satchel:?} clear of pack {pack:?}");
+                assert!(satchel.0 > body.waist.half_width * 0.9, "satchel off the body: {satchel:?}");
+            }
+        }
     }
 
     fn bodies() -> impl Iterator<Item = Body> {
@@ -2368,7 +2442,7 @@ mod tests {
             let held = |slot: Slot| kit.iter().find(|(s, _)| *s == slot).map(|(_, i)| &i.shape);
             // Posed for what it holds, as in the game: a grip turns a hand off the forearm.
             let body = crate::held::fit_hands(&spec, held(Slot::Mainhand), held(Slot::Offhand)).body;
-            let mut worn: Vec<(Slot, Item)> = kit.iter().filter(|(s, _)| LAYER_ORDER.contains(s) && !matches!(s, Slot::Body | Slot::Head | Slot::Back)).map(|(s, i)| (*s, i.shape.clone())).collect();
+            let mut worn: Vec<(Slot, Item)> = kit.iter().filter(|(s, _)| LAYER_ORDER.contains(s) && !matches!(s, Slot::Body | Slot::Head | Slot::Back | Slot::Satchel)).map(|(s, i)| (*s, i.shape.clone())).collect();
             // A cuirass with pauldrons under a ventailed mail coif, as on a lizardfolk of the
             // Scale Court whose cape spread out like wings.
             let mut cuirass = Garment::roll_as(seed, GarmentStyle::Cuirass);

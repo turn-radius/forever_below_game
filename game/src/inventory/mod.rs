@@ -304,6 +304,13 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let pack = inventory.add(pack);
         let _ = inventory.wear(pack, Slot::Back);
     }
+    // A satchel beside the pack, to try wearing both.
+    if inventory.worn(Slot::Satchel).is_none()
+        && let Some(satchel) = fb_items::roll_item("Satchel", seed(2))
+    {
+        let satchel = inventory.add(satchel);
+        let _ = inventory.wear(satchel, Slot::Satchel);
+    }
     let legendary = (1..4_000).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|i| i.rarity == Rarity::Legendary);
     let things = ["Sword", "Healing draught", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
     for item in legendary.into_iter().chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {

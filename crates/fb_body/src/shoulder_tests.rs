@@ -256,7 +256,7 @@ fn measure(body: &Body, worn: &[(Slot, Item)]) -> Shoulder {
     let mut under: Vec<&Part> = vec![];
     let skin = body.skin_mesh();
     under.extend(skin.parts.iter());
-    for l in fit.layers.iter().filter(|l| !matches!(l.slot, Slot::Head | Slot::Back | Slot::Legs | Slot::Feet | Slot::Hands | Slot::Belt)) {
+    for l in fit.layers.iter().filter(|l| !matches!(l.slot, Slot::Head | Slot::Back | Slot::Satchel | Slot::Legs | Slot::Feet | Slot::Hands | Slot::Belt)) {
         under.extend(l.mesh.parts.iter().filter(|p| p.name != "collar"));
     }
     let (mut poke, mut at) = (0.0f32, [0.0; 3]);

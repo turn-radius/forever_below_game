@@ -61,10 +61,13 @@ pub enum Rarity { Common, Magic, Rare, Legendary }
 pub enum Kind { Gear, Good }
 
 /// Equipment slots on the doll, as in the prototype, the hip a lantern hangs at from the belt,
-/// and the quiver slot a quiver or bolt case is slung in (both our own; the plate had neither).
+/// the quiver slot a quiver or bolt case is slung in, and the satchel slot a satchel is slung in
+/// at the hip, beside a pack or sack on the back (all our own; the plate had none). `Satchel` is
+/// last so the slots keep their order in saves; a save from before it holds a satchel in `Back`
+/// (the game moves it on load).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver }
+pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver, Satchel }
 
 /// What an item is made of and how it is used. Affixes roll only on items with their tag
 /// (`docs/items.md`, "Rarity and affixes").

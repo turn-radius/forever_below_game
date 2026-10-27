@@ -355,7 +355,7 @@ fn under<'a>(posed: &'a Posed, cape: &[Slot], under_skip: &[Slot]) -> impl Itera
         .iter()
         .filter(|(name, _, _)| !matches!(*name, "head" | "skull" | "ears" | "eyes" | "face"))
         .map(|(_, pts, idx)| (pts, *idx))
-        .chain(posed.layers.iter().filter(move |(slot, name, _, _)| !cape.contains(slot) && !skip.contains(slot) && *slot != Slot::Back && *name != "collar").map(|(_, _, pts, idx)| (pts, *idx)))
+        .chain(posed.layers.iter().filter(move |(slot, name, _, _)| !cape.contains(slot) && !skip.contains(slot) && !matches!(slot, Slot::Back | Slot::Satchel) && *name != "collar").map(|(_, _, pts, idx)| (pts, *idx)))
         // The hair and beard a hood's cape lies on.
         .chain(std::iter::once((posed.hair, posed.hair_tris)))
 }

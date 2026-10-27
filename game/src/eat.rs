@@ -269,7 +269,7 @@ pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::
     if let Some(id) = slots.and_then(|s| s.0.iter().flatten().copied().find(|&id| is_draught(id))) {
         return Some(id);
     }
-    let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Quiver];
+    let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Satchel, Slot::Quiver];
     let mut level: Vec<ItemId> = order.iter().filter_map(|&slot| inventory.worn(slot)).collect();
     while !level.is_empty() {
         let mut inside = Vec::new();
