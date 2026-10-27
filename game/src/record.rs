@@ -423,21 +423,26 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
     item
 }
 
-/// Puts `contents` back into `container`'s grid, each where it lay.
+/// Puts `contents` back into `container`'s grid, each where it lay and turned as it was. One
+/// that cannot go there (an old quiver's twenty loose arrows, its grid since shrunk to a row of
+/// stack places) folds into a stack of its kind or takes a free place; one that still has no
+/// room is never forgotten: it stays loose in `inventory`, listed in [`Inventory::spill`] for the
+/// game to set down underfoot, and is logged once.
 pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: &[Stowed]) {
+    let mut spilled = 0;
     for stowed in contents {
         let Some(id) = restore_item(inventory, &stowed.item) else { continue };
-        // An older save laid a quiver's arrows out cell by cell: stackable pieces fold into the
-        // container's stacks now, and what the stacks cannot hold is carried on, else lost.
-        let stackable = inventory.item(id).is_some_and(|i| i.stack_limit() > 1);
-        if stackable {
-            let _ = inventory.stow_in(id, container);
-            if inventory.item(id).is_some() && inventory.location(id) == Some(crate::inventory::items::Location::Loose) && (inventory.stow(id).is_err() || inventory.is_partial(id)) {
-                inventory.forget(id);
-            }
-        } else if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_err() {
-            inventory.forget(id);
+        if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_ok() {
+            continue;
         }
+        let _ = inventory.stow_in(id, container);
+        if inventory.item(id).is_some() && inventory.location(id) == Some(crate::inventory::items::Location::Loose) {
+            inventory.spill.push(id);
+            spilled += 1;
+        }
+    }
+    if spilled > 0 {
+        warn!("{spilled} saved items found no room in their container and are set down underfoot");
     }
 }
 
@@ -724,17 +729,85 @@ mod tests {
         assert_eq!(fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds), Some(arrow));
     }
 
+    fn stowed(inventory: &Inventory, id: ItemId, x: u8, y: u8, turned: bool) -> Stowed {
+        Stowed { x, y, turned, item: record_item(inventory, id).unwrap() }
+    }
+
     #[test]
-    fn loose_arrows_from_an_old_save_fold_into_the_quivers_stacks() {
+    fn an_old_quiver_of_twenty_kinds_of_arrow_loses_nothing() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
+        let mut loose = Inventory::default();
+        // The old 5 by 4 grid: twenty arrows, each its own seed, most beyond today's row.
+        let contents: Vec<Stowed> = (0..20u8)
+            .map(|i| {
+                let arrow = loose.add(fb_items::roll_item("Arrow", 100 + u32::from(i)).unwrap());
+                stowed(&loose, arrow, i % 5, i / 5, false)
+            })
+            .collect();
+        restore_contents(&mut inventory, quiver, &contents);
+        let spilled: u32 = inventory.spill.iter().filter_map(|&id| inventory.item(id)).map(|i| i.quantity).sum();
+        assert_eq!(inventory.pieces_in(quiver) as u32 + spilled, 20);
+        assert!(spilled > 0 && inventory.spill.iter().all(|&id| inventory.location(id) == Some(crate::inventory::items::Location::Loose)));
+    }
+
+    #[test]
+    fn identical_old_arrows_fold_into_the_quivers_stacks() {
         let mut inventory = Inventory::default();
         let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
         let mut loose = Inventory::default();
         let arrow = loose.add(fb_items::roll_item("Arrow", 3).unwrap());
-        let record = record_item(&loose, arrow).unwrap();
-        // The old 5 by 4 grid: twenty loose arrows, most of them beyond today's row.
-        let contents: Vec<Stowed> = (0..20u8).map(|i| Stowed { x: i % 5, y: i / 5, turned: false, item: record.clone() }).collect();
+        let contents: Vec<Stowed> = (0..20u8).map(|i| stowed(&loose, arrow, i % 5, i / 5, false)).collect();
         restore_contents(&mut inventory, quiver, &contents);
-        assert_eq!((inventory.contents_count(quiver), inventory.pieces_in(quiver)), (2, 20));
+        assert_eq!((inventory.pieces_in(quiver), inventory.spill.len()), (20, 0));
+    }
+
+    #[test]
+    fn a_pack_and_a_chest_restore_their_stacks_where_and_as_they_were_saved() {
+        let mut source = Inventory::default();
+        let pack = source.add(fb_items::roll_item("Pack", 1).unwrap());
+        let stack = source.add(fb_items::roll_item("Arrow", 9).unwrap().with_quantity(7));
+        source.put(stack, pack, Placement::new(3, 2, false)).unwrap();
+        let sword = source.add(fb_items::roll_item("Sword", 2).unwrap());
+        source.put(sword, pack, Placement::new(0, 1, true)).unwrap();
+        let record = record_item(&source, pack).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &record).unwrap();
+        let at: Vec<(String, u32, u8, u8, bool)> = other
+            .grid(again)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|e| {
+                let i = other.item(e.id).unwrap();
+                (i.base.clone(), i.quantity, e.at.x, e.at.y, e.at.turned)
+            })
+            .collect();
+        assert!(at.contains(&("Arrow".into(), 7, 3, 2, false)), "{at:?}");
+        assert!(at.contains(&("Sword".into(), 1, 0, 1, true)), "{at:?}");
+        assert!(other.spill.is_empty());
+        // A chest restores the same way.
+        let chest = other.add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 4, false)));
+        restore_contents(&mut other, chest, &[stowed(&source, stack, 2, 1, false)]);
+        let there = other.grid(chest).unwrap().entries()[0];
+        assert_eq!((there.at.x, there.at.y), (2, 1));
+    }
+
+    #[test]
+    fn a_container_too_full_spills_rather_than_forgets() {
+        let mut inventory = Inventory::default();
+        let case = inventory.add(fb_items::roll_item("Bolt case", 1).unwrap());
+        let places = inventory.item(case).unwrap().profile.holds.as_ref().unwrap().cols;
+        let mut loose = Inventory::default();
+        let contents: Vec<Stowed> = (0..u32::from(places) + 2)
+            .map(|k| {
+                let bolt = loose.add(fb_items::roll_item("Bolt", 40 + k).unwrap());
+                stowed(&loose, bolt, 0, 0, false)
+            })
+            .collect();
+        restore_contents(&mut inventory, case, &contents);
+        assert_eq!((inventory.contents_count(case), inventory.spill.len()), (usize::from(places), 2));
+        assert!(inventory.spill.iter().all(|&id| inventory.item(id).is_some()));
     }
 
     #[test]

@@ -665,21 +665,23 @@ mod tests {
 
     #[test]
     fn holders_hold_three_to_five_stacks_by_their_size() {
-        let mut seen = std::collections::BTreeSet::new();
-        for seed in 1..200 {
-            for base in ["Quiver", "Bolt case"] {
-                let (shape, p) = rolled(base, seed);
-                let (cols, size) = (p.holds.unwrap().cols, match &shape {
-                    Item::Quiver(s) | Item::BoltCase(s) => s.holder.length * s.holder.width,
-                    _ => unreachable!(),
-                });
-                assert!((3..=5).contains(&cols), "{base} {seed}");
-                seen.insert((base, cols));
-                let _ = size;
-            }
-        }
         for base in ["Quiver", "Bolt case"] {
-            assert!(seen.iter().filter(|(b, _)| *b == base).count() >= 2, "{base} varies: {seen:?}");
+            // (size, stacks) over many seeds: size is the volume `stacks` is read from.
+            let mut rolls: Vec<(f32, u8)> = (1..300)
+                .map(|seed| {
+                    let (shape, p) = rolled(base, seed);
+                    let size = match &shape {
+                        Item::Quiver(s) => s.holder.width * s.holder.width * s.holder.length,
+                        Item::BoltCase(s) => s.holder.width * s.holder.depth * s.holder.length,
+                        _ => unreachable!(),
+                    };
+                    (size, p.holds.unwrap().cols)
+                })
+                .collect();
+            assert!(rolls.iter().all(|r| (3..=5).contains(&r.1)), "{base}");
+            rolls.sort_by(|a, b| a.0.total_cmp(&b.0));
+            assert!(rolls.windows(2).all(|w| w[0].1 <= w[1].1), "{base}: a bigger holder never holds fewer");
+            assert!(rolls.first().unwrap().1 < rolls.last().unwrap().1, "{base}: the smallest holds fewer than the largest");
         }
     }
 

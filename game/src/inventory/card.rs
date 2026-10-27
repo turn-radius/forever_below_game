@@ -207,7 +207,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         // A quiver or bolt case is a row of stacks: its card counts shots against its capacity.
         if let Some(family) = holds.accepts.first().filter(|f| matches!(f, armory::Family::Arrow | armory::Family::Bolt)) {
             let shots = if *family == armory::Family::Arrow { "arrows" } else { "bolts" };
-            let room = holds.cols as u32 * u32::from(fb_items::profile::AMMUNITION_STACK);
+            let room = holds.cols as u32 * held.and_then(|(inventory, id)| inventory.grid(id)?.entries().first().and_then(|e| inventory.item(e.id)).map(Item::stack_limit)).unwrap_or_else(|| fb_items::roll_item(if *family == armory::Family::Arrow { "Arrow" } else { "Bolt" }, 1).map_or(10, |i| i.stack_limit()));
             let stacks = format!("{} stacks", holds.cols);
             return match held {
                 Some((inventory, id)) => {

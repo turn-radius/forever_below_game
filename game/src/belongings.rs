@@ -30,7 +30,7 @@ pub struct BelongingsPlugin;
 
 impl Plugin for BelongingsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Tuning>().init_resource::<FloorChanges>().add_systems(
+        app.init_resource::<Tuning>().init_resource::<FloorChanges>().add_systems(Update, set_down_spill.before(apply_floor_changes).in_set(DelveSystems)).add_systems(
             Update,
             // After every system that lays a body down (a critter's fall, a folk's blow, a troll's
             // last regeneration) and before a folk is laid back, so the items fall where it fell.
@@ -43,6 +43,26 @@ impl Plugin for BelongingsPlugin {
                 .before(apply_floor_changes)
                 .in_set(DelveSystems),
         );
+    }
+}
+
+/// Sets down at the delver's feet what a load found no room for in its container
+/// ([`Inventory::spill`]): an old quiver's twenty kinds of arrow in a few stack places. Each lies
+/// round them through [`FloorChange::SetDownAt`], so nothing a save held is lost.
+pub fn set_down_spill(mut inventory: ResMut<Inventory>, mut changes: ResMut<FloorChanges>, eye: Query<&Transform, With<crate::play::PlayerCamera>>) {
+    if inventory.spill.is_empty() {
+        return;
+    }
+    let Ok(eye) = eye.single() else { return };
+    let spilled = std::mem::take(&mut inventory.spill);
+    let count = spilled.len().max(1) as f32;
+    for (i, id) in spilled.into_iter().enumerate() {
+        if inventory.item(id).is_none() {
+            continue;
+        }
+        let angle = i as f32 / count * std::f32::consts::TAU;
+        let spot = eye.translation.xz() + Vec2::from_angle(angle) * 3.0;
+        changes.0.push(crate::inventory::underfoot::FloorChange::SetDownAt(id, spot / fb_level::CELL, angle));
     }
 }
 

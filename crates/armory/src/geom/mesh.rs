@@ -145,8 +145,12 @@ impl ItemMesh {
                     let r = turn([p[0] - mid[0], (p[1] - mid[1]) * thicken, (p[2] - mid[2]) * thicken]);
                     *p = [r[0] + mid[0], r[1] + mid[1], r[2] + mid[2] + back];
                 }
+                // The scale is not uniform, so a normal takes its inverse transpose (the scale's
+                // inverse on y and z), then the turn, and is made unit again.
                 for n in part.normals.iter_mut().chain(part.outline_normals.iter_mut()) {
-                    *n = turn(*n);
+                    let r = turn([n[0], n[1] / thicken, n[2] / thicken]);
+                    let len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().max(1e-6);
+                    *n = [r[0] / len, r[1] / len, r[2] / len];
                 }
                 out.parts.push(part);
             }

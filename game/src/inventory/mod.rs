@@ -1611,14 +1611,13 @@ fn debug_hover(
 ) {
     let spec = std::env::var("FB_DEBUG_HOVER").unwrap_or_default();
     // `q` is the worn quiver's own slot on the doll.
-    if spec == "q" {
-        if let Some(id) = inventory.worn(Slot::Quiver)
-            && let Some((_, node, transform)) = slots.iter().find(|(v, ..)| v.0 == Slot::Quiver)
-        {
-            let rect = node_rect(node, transform);
-            if rect.width() > 0.0 {
-                hovered.set_if_neq(Hovered(Some((id, rect))));
-            }
+    if spec == "q"
+        && let Some(id) = inventory.worn(Slot::Quiver)
+        && let Some((_, node, transform)) = slots.iter().find(|(v, ..)| v.0 == Slot::Quiver)
+    {
+        let rect = node_rect(node, transform);
+        if rect.width() > 0.0 {
+            hovered.set_if_neq(Hovered(Some((id, rect))));
         }
         return;
     }

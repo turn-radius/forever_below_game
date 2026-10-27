@@ -135,6 +135,10 @@ pub struct Inventory {
     worn: HashMap<Slot, ItemId>,
     /// The delver's own coin purse: what they are paid, and what the purses they open hold.
     coins: Coins,
+    /// Items a load could find no place for in their container (an old quiver's twenty kinds of
+    /// arrow in a few stack places): still loose and kept, set down underfoot by
+    /// [`crate::belongings::set_down_spill`].
+    pub spill: Vec<ItemId>,
 }
 
 impl Inventory {

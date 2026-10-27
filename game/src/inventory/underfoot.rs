@@ -47,6 +47,10 @@ pub fn set_down_around<'a>(
         .into_iter()
         .filter(|&id| {
             for &holder in &holders {
+                // Once in one holder, or folded away, it is not moved to the next.
+                if inventory.item(id).is_none() || inventory.location(id) != Some(super::items::Location::Loose) {
+                    break;
+                }
                 if holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) {
                     // Arrows fold into the holder's stacks; what its places cannot take lies about.
                     let _ = inventory.stow_in(id, holder);
@@ -326,6 +330,18 @@ mod tests {
 
     fn near(id: u32, cols: u8, rows: u8, distance: f32, bag: bool) -> Nearby {
         Nearby { id: ItemId(id), footprint: Footprint { cols, rows }, distance, bag }
+    }
+
+    #[test]
+    fn a_shed_arrow_stays_in_the_first_quiver_that_took_it() {
+        let mut inventory = Inventory::default();
+        let quivers = [fb_items::roll_item("Quiver", 1).unwrap(), fb_items::roll_item("Quiver", 2).unwrap()];
+        let arrow = fb_items::roll_item("Arrow", 3).unwrap();
+        let mut changes = FloorChanges::default();
+        let items = [quivers[0].clone(), quivers[1].clone(), arrow];
+        set_down_around(Vec2::ZERO, items.iter(), 7, &mut inventory, &mut changes, |_, _| false, &[], 1.0);
+        let held: Vec<usize> = (0..2u32).map(|q| inventory.contents_count(ItemId(q))).collect();
+        assert_eq!(held, vec![1, 0], "the second quiver stays empty");
     }
 
     #[test]

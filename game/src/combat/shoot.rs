@@ -486,7 +486,7 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
             .collect();
         // The model shows how full the holder is: its drawn arrows are the fraction of its
         // stacks in use, so a quiver of 32 shots out of 40 is four fifths full whatever its size.
-        let most = inventory.item(container).and_then(|i| i.profile.holds.as_ref()).map_or(1, |g| g.cols as usize * fb_items::profile::AMMUNITION_STACK as usize);
+        let most = inventory.item(container).and_then(|i| i.profile.holds.as_ref()).map_or(1, |g| g.cols as usize * ammunition_in(&inventory, container).first().and_then(|&a| inventory.item(a)).map_or(fb_items::profile::AMMUNITION_STACK as usize, |a| a.stack_limit() as usize));
         let shown = if contents.is_empty() { 0 } else { (capacity * contents.len()).div_ceil(most).clamp(1, capacity) };
         let contents: Vec<_> = contents.into_iter().take(shown).collect();
         if contents != state.contents {
