@@ -24,12 +24,12 @@ pub struct FittingGrid {
 
 /// The grid of `accessory`; none for a belt's sack, which is a row more of the belt's own grid.
 /// Sizes follow what each holds: a tent is the largest bundle (2 by 6), a spear or staff the
-/// longest strapped thing (up to 9 long, 2 wide), a sword the longest in a frog (2 by 5), and
+/// longest strapped thing (up to 9 long, 5 wide, for a crossbow), a sword the longest in a frog (2 by 5), and
 /// the pouch is a row of places for vials and small potions.
 pub fn fitting_grid(accessory: Accessory) -> Option<FittingGrid> {
     let (label, cols, rows, holds) = match accessory {
         Accessory::Lashing => ("Lashing", 2, 6, 1),
-        Accessory::WeaponStrap => ("Strap", 2, 9, 1),
+        Accessory::WeaponStrap => ("Strap", 5, 9, 1),
         Accessory::LeftFrog => ("Left frog", 2, 5, 1),
         Accessory::RightFrog => ("Right frog", 2, 5, 1),
         Accessory::PotionPouch => ("Potion pouch", 3, 2, 3),
@@ -93,9 +93,12 @@ mod tests {
                 assert!(fits(grid, item), "{accessory:?}: {} {:?}", item.base, item.profile.footprint);
             }
         }
-        // The strap takes long weapons up to nine cells and two wide.
+        // The strap takes every long weapon the rule allows, wide bows and crossbows included.
         let strap = fitting_grid(Accessory::WeaponStrap).unwrap();
-        let strapped: Vec<Item> = all(&["Spear", "Staff", "Sword", "Mace"]).into_iter().filter(|i| i.strappable()).collect();
+        let strapped: Vec<Item> = all(&["Spear", "Staff", "Sword", "Mace", "Bow", "Crossbow", "Axe", "Hand axe"]).into_iter().filter(|i| i.strappable()).collect();
+        for base in ["Bow", "Crossbow", "Spear"] {
+            assert!(strapped.iter().any(|i| i.base == base), "some {base} is strappable");
+        }
         assert!(!strapped.is_empty() && strapped.iter().all(|i| fits(strap, i)));
     }
 }

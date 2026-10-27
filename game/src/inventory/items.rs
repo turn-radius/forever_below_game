@@ -574,7 +574,8 @@ impl Inventory {
     /// they have room. True when none is left and `id` has been forgotten.
     pub fn fold_into_stacks(&mut self, id: ItemId) -> bool {
         let Some(Location::In { container, .. }) = self.location(id) else { return false };
-        if self.item(id).is_none_or(|i| i.stack_limit() <= 1) {
+        // A place of a potion pouch holds one piece, so nothing folds into it.
+        if self.item(id).is_none_or(|i| i.stack_limit() <= 1) || self.fitting_host(container).is_some() {
             return false;
         }
         self.top_up(id, container) == TopUp::Done

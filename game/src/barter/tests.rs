@@ -738,3 +738,24 @@ fn cancelling_a_deal_that_moved_an_emptied_pack_puts_it_back_with_its_fittings()
     let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
     assert_eq!(inventory.lash(tent), Ok(()));
 }
+
+#[test]
+fn a_shelf_stack_cannot_be_split_into_the_pouch_mid_deal() {
+    use fb_items::Accessory::{LeftFrog, PotionPouch};
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(5000));
+    let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(LeftFrog) && b.has_accessory(PotionPouch)).unwrap();
+    let belt = inventory.add(belt);
+    let _ = inventory.equip(belt, Slot::Belt);
+    let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+    let mut vials = fb_items::roll_item("Vial", 3).unwrap();
+    vials.quantity = 3;
+    let shelf = shelf_of(vec![vials], 6000);
+    let session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    let stack = *session.stock.iter().next().unwrap();
+    let drag = drag_of(&inventory, stack);
+    let barter = Barter { session: Some(session), ..Default::default() };
+    let into = Target::Cell { view: GridView::Container(pouch), cell: IVec2::ZERO };
+    assert_eq!(barter.check(&inventory, &drag, into), Some(Err(Refusal::NoRoom)), "a free piece is refused");
+    assert_eq!(inventory.item(stack).unwrap().quantity, 3);
+}

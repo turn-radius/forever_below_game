@@ -293,6 +293,10 @@ impl Session {
                         .map(Move::Shelve)
                     })
                 } else if inventory.is_carried(container) {
+                    // A piece split off a shelf stack into a pouch would be neither bought nor sold: take the whole stack first.
+                    if self.on_shelf(inventory, id) && inventory.fitting_host(container).is_some() && inventory.item(id).is_some_and(|i| i.quantity > 1) {
+                        return Some(Err(Refusal::NoRoom));
+                    }
                     crate::inventory::landing(inventory, drag, container, cell).map(|at| Move::Put(container, at))
                 } else {
                     Err(Refusal::Bartering)

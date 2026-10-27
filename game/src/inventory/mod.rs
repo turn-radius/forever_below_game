@@ -3384,11 +3384,16 @@ mod tests {
     /// and a belt with both frogs and the pouch, worn.
     fn hung_kit(inventory: &mut Inventory) -> (ItemId, ItemId) {
         use fb_items::Accessory::{LeftFrog, Lashing, PotionPouch, RightFrog, WeaponStrap};
-        let pack = (1..4000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap();
-        let pack = inventory.add(pack);
+        // The seeds are found once, not for every test.
+        static SEEDS: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+        let (pack_seed, belt_seed) = *SEEDS.get_or_init(|| {
+            let pack = (1..4000).find(|&s| fb_items::roll_item("Pack", s).is_some_and(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap))).unwrap();
+            let belt = (1..4000).find(|&s| fb_items::roll_item("Belt", s).is_some_and(|b| b.has_accessory(LeftFrog) && b.has_accessory(RightFrog) && b.has_accessory(PotionPouch))).unwrap();
+            (pack, belt)
+        });
+        let pack = inventory.add(fb_items::roll_item("Pack", pack_seed).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
-        let belt = (1..4000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(LeftFrog) && b.has_accessory(RightFrog) && b.has_accessory(PotionPouch)).unwrap();
-        let belt = inventory.add(belt);
+        let belt = inventory.add(fb_items::roll_item("Belt", belt_seed).unwrap());
         inventory.wear(belt, Slot::Belt).unwrap();
         (pack, belt)
     }
@@ -3508,5 +3513,35 @@ mod tests {
         inventory.put(vial, pouch, Placement::new(0, 0, false)).unwrap();
         assert_eq!(crate::quickslots::check_bind(&inventory, vial), Ok(()), "it is carried and a quickslot can use it");
         assert_eq!(crate::eat::nearest_healing(&inventory, None), Some(vial), "and H drinks it");
+    }
+
+    #[test]
+    fn a_stack_lying_on_the_floor_dropped_on_the_pouch_gives_one_piece_and_stays_lying() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let mut vials = fb_items::roll_item("Vial", 3).unwrap();
+        vials.quantity = 3;
+        let stack = inventory.add(vials);
+        let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+        let drag = Drag { id: stack, grab: IVec2::ZERO, size: inventory.footprint(stack).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        let changes = drop_at(&mut inventory, &drag, Target::Cell { view: GridView::Container(pouch), cell: IVec2::ZERO }, 4).unwrap();
+        assert!(changes.is_empty(), "the stack is still lying there: {changes:?}");
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.location(stack)), (2, Some(Location::Loose)));
+        assert_eq!(inventory.hung_on(belt).len(), 1);
+        assert_eq!(inventory.item(inventory.hung_on(belt)[0].1).unwrap().quantity, 1);
+    }
+
+    #[test]
+    fn nothing_folds_into_a_place_of_the_pouch() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+        let (a, b) = (inventory.add(fb_items::roll_item("Vial", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
+        inventory.put(a, pouch, Placement::new(0, 0, false)).unwrap();
+        inventory.put(b, pouch, Placement::new(1, 0, false)).unwrap();
+        assert!(!inventory.fold_into_stacks(b));
+        assert_eq!((inventory.item(a).unwrap().quantity, inventory.item(b).unwrap().quantity), (1, 1), "one piece to a place");
     }
 }
