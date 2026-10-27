@@ -162,7 +162,8 @@ pub fn restore_body(inventory: &mut Inventory, record: &BodyRecord, seed: u32, l
         let at = Placement::new(body.stowed.x, body.stowed.y, body.stowed.turned);
         let placed = inventory.put(id, container, at).is_ok() || inventory.footprint(id).and_then(|f| inventory.grid(container)?.first_free(f)).is_some_and(|free| inventory.put(id, container, free).is_ok());
         if !placed {
-            inventory.forget(id);
+            // Never lost: the game sets it down at the delver's feet ([`crate::belongings::set_down_spill`]).
+            inventory.spill.push(id);
         } else if let Some(slot) = body.slot {
             kit.push((slot, id));
         }
@@ -184,9 +185,9 @@ pub fn drawn_kit(inventory: &Inventory, kit: &[(Slot, ItemId)]) -> Vec<(Slot, It
         .collect()
 }
 
-/// Every `(family, seed)` of what lies in `container` at any depth: what is still among a body's
-/// things.
-/// A fitting that no longer hangs from anything (in `kit` but not `drawn`) is left out.
+/// Pushes the `(family, seed)` of everything that lies in `container` at any depth onto `keys`
+/// (one for each thing, so two of one kind count twice): what is still among a body's things. A
+/// fitting that no longer hangs from anything (in `kit` but not `drawn`) is left out.
 fn keys_in(inventory: &Inventory, container: ItemId, drawn: &[(Slot, ItemId)], kit: &[(Slot, ItemId)], keys: &mut Vec<(armory::Family, u32)>) {
     let Some(grid) = inventory.grid(container) else { return };
     for entry in grid.entries() {
@@ -200,8 +201,32 @@ fn keys_in(inventory: &Inventory, container: ItemId, drawn: &[(Slot, ItemId)], k
     }
 }
 
-/// Which bodies are within reach of the delver, nearest first.
-pub fn track_near_bodies(players: Query<&Transform, With<Player>>, bodies: Query<(&Corpse, &BodyStock)>, mut near: ResMut<NearBodies>) {
+/// The gear pieces (entity, family, seed, which of its kind) that no longer have a thing among
+/// `keys` to be a piece of. A thing may be drawn in several pieces, all of one `nth`; two things
+/// of one kind keep two, and taking one takes the last, with all of its pieces.
+fn stale_pieces(keys: Vec<(armory::Family, u32)>, pieces: &[(Entity, armory::Family, u32, usize)]) -> Vec<Entity> {
+    pieces.iter().filter(|&&(_, family, seed, nth)| nth >= keys.iter().filter(|&&(f, s)| f == family && s == seed).count()).map(|&(piece, ..)| piece).collect()
+}
+
+/// A cheap mark of what lies on a body, so [`keep_bodies_dressed`] does its work only when that
+/// changes: every id in its grid and in the grids of what it holds, folded together.
+fn signature(inventory: &Inventory, container: ItemId) -> u64 {
+    let mut mark = 0xcbf2_9ce4_8422_2325_u64;
+    if let Some(grid) = inventory.grid(container) {
+        for entry in grid.entries() {
+            mark = (mark ^ u64::from(entry.id.0)).wrapping_mul(0x0100_0000_01b3) ^ signature(inventory, entry.id);
+        }
+    }
+    mark
+}
+
+/// The mark of what a body was last drawn in ([`keep_bodies_dressed`]).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dressed(u64);
+
+/// Which bodies with something on them are within reach of the delver, nearest first. A body
+/// looted bare is never near, so its window closes and it cannot be searched.
+pub fn track_near_bodies(players: Query<&Transform, With<Player>>, bodies: Query<(&Corpse, &BodyStock), Without<Looted>>, mut near: ResMut<NearBodies>) {
     let Some(player) = players.iter().next() else {
         if !near.0.is_empty() {
             near.0.clear();
@@ -224,17 +249,28 @@ pub fn track_near_bodies(players: Query<&Transform, With<Player>>, bodies: Query
 pub fn keep_bodies_dressed(
     mut commands: Commands,
     inventory: Res<Inventory>,
-    mut bodies: Query<(Entity, &mut BodyStock, Option<&mut Denizen>, Option<&Bones>, Option<&Children>), (With<Corpse>, Without<Looted>)>,
+    mut bodies: Query<(Entity, &mut BodyStock, Option<&mut Dressed>, Option<&mut Denizen>, Option<&Bones>, Option<&Children>), (With<Corpse>, Without<Looted>)>,
     pieces: Query<(Entity, &ChildOf, &WornItem), With<WornGear>>,
     stances: Query<(), With<Stance>>,
     bindposes: Option<ResMut<Assets<SkinnedMeshInverseBindposes>>>,
+    mut windows: Option<ResMut<BagWindows>>,
     mut spawner: ItemSpawner,
 ) {
     if bodies.is_empty() {
         return;
     }
     let mut bindposes = bindposes;
-    for (entity, mut stock, denizen, bones, children) in &mut bodies {
+    for (entity, mut stock, dressed, denizen, bones, children) in &mut bodies {
+        // Only when what lies on the body has changed since it was last drawn (the first time
+        // too, after it falls or is brought back).
+        let mark = signature(&inventory, stock.container);
+        match dressed {
+            Some(mut seen) if *seen == Dressed(mark) => continue,
+            Some(mut seen) => *seen = Dressed(mark),
+            None => {
+                commands.entity(entity).try_insert(Dressed(mark));
+            }
+        }
         let here = |id: ItemId| matches!(inventory.location(id), Some(Location::In { container, .. }) if container == stock.container);
         if stock.kit.iter().any(|&(_, id)| !here(id)) {
             let kit: Vec<(Slot, ItemId)> = stock.kit.iter().copied().filter(|&(_, id)| here(id)).collect();
@@ -255,36 +291,67 @@ pub fn keep_bodies_dressed(
         } else if let Some(bones) = bones {
             let mut keys = Vec::new();
             keys_in(&inventory, stock.container, &drawn, &stock.kit, &mut keys);
-            for (piece, parent, worn) in &pieces {
-                if bones.0.contains(&parent.parent()) && !keys.iter().any(|(family, seed)| *family == worn.family && *seed == worn.seed) {
-                    commands.entity(piece).despawn();
-                }
+            let on_bones: Vec<(Entity, armory::Family, u32, usize)> = pieces.iter().filter(|(_, parent, _)| bones.0.contains(&parent.parent())).map(|(piece, _, worn)| (piece, worn.family, worn.seed, worn.nth)).collect();
+            for piece in stale_pieces(keys, &on_bones) {
+                commands.entity(piece).despawn();
             }
         }
         if inventory.grid(stock.container).is_none_or(Grid::is_empty) {
             commands.entity(entity).try_insert(Looted);
+            // Nothing left to search: its window closes, and with it the body is not near.
+            if let Some(windows) = windows.as_deref_mut() {
+                windows.close(stock.container);
+            }
         }
     }
 }
 
-/// The nearest fallen body in reach that has something on it, and whether the screen is shut.
+/// The nearest fallen body in reach that has something on it.
 fn searchable(near: &NearBodies, inventory: &Inventory) -> Option<ItemId> {
     near.0.iter().copied().find(|&id| inventory.grid(id).is_some_and(|g| !g.is_empty()))
 }
 
+/// What else the Primary key would do if pressed now: an item or container under the crosshair,
+/// folk to talk to, a door or lever aimed at, a stair in reach. Searching a body is the
+/// fallback and only ever claims a press nothing else does ([`crate::interact::Target::Body`]
+/// comes last), so it never races another action or its prompt.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Elsewhere<'w, 's> {
+    aimed: Option<Res<'w, crate::carry::Aimed>>,
+    folk: Option<Res<'w, crate::folk::AimedFolk>>,
+    door: Option<Res<'w, crate::doors::AimedDoor>>,
+    switch: Option<Res<'w, crate::doors::AimedSwitch>>,
+    level: Option<Res<'w, crate::play::CurrentLevel>>,
+    players: Query<'w, 's, &'static Transform, With<Player>>,
+    cameras: Query<'w, 's, &'static GlobalTransform, With<crate::play::PlayerCamera>>,
+}
+
+impl Elsewhere<'_, '_> {
+    /// Whether something other than a body would take the Primary key.
+    pub fn claimed(&self) -> bool {
+        if self.aimed.as_ref().is_some_and(|a| a.0.is_some()) || self.folk.as_ref().is_some_and(|f| f.0.is_some()) || self.door.as_ref().is_some_and(|d| d.0.is_some()) || self.switch.as_ref().is_some_and(|s| s.0.is_some()) {
+            return true;
+        }
+        match (&self.level, self.players.iter().next(), self.cameras.iter().next()) {
+            (Some(level), Some(feet), Some(eye)) => crate::travel::stair_in_reach(&level.0, feet.translation.xz(), eye.forward().as_vec3().xz()).is_some(),
+            _ => false,
+        }
+    }
+}
+
 /// Primary near a fallen body that still has something on it opens its inventory as a window
-/// beside the pack, unless an item or container is under the crosshair.
+/// beside the pack, when nothing else takes the press ([`Elsewhere`]).
 #[allow(clippy::too_many_arguments)]
 pub fn search_aimed(
     input: ActionInput,
-    aimed: Option<Res<crate::carry::Aimed>>,
+    elsewhere: Elsewhere,
     near: Res<NearBodies>,
     inventory: Res<Inventory>,
     mut open: ResMut<ScreenOpen>,
     mut windows: ResMut<BagWindows>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
-    if !input.just_pressed(Action::Primary) || open.0.is_some() || aimed.is_some_and(|a| a.0.is_some()) {
+    if !input.just_pressed(Action::Primary) || open.0.is_some() || elsewhere.claimed() {
         return;
     }
     let Some(body) = searchable(&near, &inventory) else { return };
@@ -301,9 +368,11 @@ pub fn open_body(open: &mut ScreenOpen, windows: &mut BagWindows, body: ItemId, 
     }
 }
 
-/// Says Search over the crosshair while [`search_aimed`] would. Clears only its own line.
+/// Says Search over the crosshair while [`search_aimed`] would, and says nothing else's line
+/// over: it runs after the other prompts and does nothing while [`Elsewhere`] has the press.
+/// Clears only its own line.
 pub fn prompt_search(
-    aimed: Option<Res<crate::carry::Aimed>>,
+    elsewhere: Elsewhere,
     near: Res<NearBodies>,
     inventory: Res<Inventory>,
     open: Res<ScreenOpen>,
@@ -312,7 +381,7 @@ pub fn prompt_search(
     mut said: Local<Option<String>>,
 ) {
     let line = (|| {
-        if open.0.is_some() || aimed.is_some_and(|a| a.0.is_some()) {
+        if open.0.is_some() || elsewhere.claimed() {
             return None;
         }
         searchable(&near, &inventory)?;
@@ -399,9 +468,8 @@ fn slay_near_for_capture(
             windows.order.push(bag);
         }
     }
+    // The body's window goes in front of its bag's, which was queued first.
     open_body(&mut open, &mut windows, stock.container, cursor.as_deref_mut().map(|c| &mut **c));
-    // The body's window goes behind its bag's, which was queued first.
-    state.1 = true;
 }
 
 #[cfg(test)]
@@ -564,5 +632,102 @@ mod tests {
         assert_eq!(windows.order, vec![ItemId(3), ItemId(7)]);
         open_body(&mut open, &mut windows, ItemId(9), None);
         assert_eq!(windows.order.last(), Some(&ItemId(9)));
+    }
+
+    #[test]
+    fn two_things_of_one_kind_keep_two_pieces_and_taking_one_takes_one() {
+        use armory::Family::{Shield, Sword};
+        let mut world = World::new();
+        let (a, b, c, d) = (world.spawn_empty().id(), world.spawn_empty().id(), world.spawn_empty().id(), world.spawn_empty().id());
+        // Two swords (the second drawn in two pieces) and a shield.
+        let pieces = [(a, Sword, 5, 0), (b, Sword, 5, 1), (d, Sword, 5, 1), (c, Shield, 2, 0)];
+        assert!(stale_pieces(vec![(Sword, 5), (Sword, 5), (Shield, 2)], &pieces).is_empty());
+        assert_eq!(stale_pieces(vec![(Sword, 5), (Shield, 2)], &pieces), vec![b, d], "the second sword is gone with both its pieces");
+        assert_eq!(stale_pieces(vec![(Shield, 2)], &pieces), vec![a, b, d]);
+    }
+
+    #[test]
+    fn a_body_that_no_longer_fits_its_grid_spills_what_does_not_instead_of_forgetting_it() {
+        let mut inventory = Inventory::default();
+        let stock = goblin(&mut inventory);
+        let mut record = record_body(&inventory, &stock).unwrap();
+        let once = record.contents.clone();
+        for _ in 0..8 {
+            record.contents.extend(once.clone());
+        }
+        let mut other = Inventory::default();
+        let back = restore_body(&mut other, &record, 9, "Grub");
+        assert!(!other.spill.is_empty(), "some found no room");
+        let on_body = other.grid(back.container).unwrap().entries().len();
+        assert_eq!(on_body + other.spill.len(), record.contents.len(), "every one is on the body or set down, none lost");
+        for &id in &other.spill {
+            assert!(other.item(id).is_some());
+        }
+    }
+
+    #[test]
+    fn a_body_looted_bare_is_not_near_and_cannot_be_searched() {
+        let mut app = App::new();
+        app.init_resource::<NearBodies>().add_systems(Update, track_near_bodies);
+        let mut inventory = Inventory::default();
+        let stock = goblin(&mut inventory);
+        app.insert_resource(inventory);
+        app.world_mut().spawn((Player, Transform::from_xyz(0.0, 0.0, 0.0)));
+        let at = Transform::from_xyz(5.0, 0.0, 0.0);
+        let body = app.world_mut().spawn((Corpse { since: 30.0, fell: at }, at, stock.clone())).id();
+        app.update();
+        assert_eq!(app.world().resource::<NearBodies>().0, vec![stock.container]);
+        app.world_mut().entity_mut(body).insert(Looted);
+        app.update();
+        assert!(app.world().resource::<NearBodies>().0.is_empty(), "looted: its window closes and nothing can be put back on it");
+    }
+
+    /// An app that runs only the prompt, with a body in reach.
+    fn prompt_app() -> App {
+        let mut app = App::new();
+        let mut inventory = Inventory::default();
+        let stock = goblin(&mut inventory);
+        app.insert_resource(inventory)
+            .insert_resource(NearBodies(vec![stock.container]))
+            .init_resource::<ScreenOpen>()
+            .init_resource::<CrosshairPrompt>()
+            .init_resource::<crate::folk::AimedFolk>()
+            .init_resource::<crate::doors::AimedDoor>()
+            .init_resource::<crate::doors::AimedSwitch>()
+            .init_resource::<crate::carry::Aimed>()
+            .add_systems(Update, prompt_search);
+        app
+    }
+
+    #[test]
+    fn search_is_only_the_fallback_for_the_primary_key() {
+        use bevy::ecs::system::RunSystemOnce;
+        let prompt = |app: &App| app.world().resource::<CrosshairPrompt>().0.clone();
+        let mut app = prompt_app();
+        let other = app.world_mut().spawn_empty().id();
+        app.update();
+        assert_eq!(prompt(&app).as_deref(), Some("F Search"), "only the body in reach: search");
+        // Folk to talk to: F talks, and the body's line goes.
+        app.world_mut().resource_mut::<crate::folk::AimedFolk>().0 = Some(other);
+        app.update();
+        assert_eq!(prompt(&app), None);
+        assert!(app.world_mut().run_system_once(|e: Elsewhere| e.claimed()).unwrap());
+        app.world_mut().resource_mut::<crate::folk::AimedFolk>().0 = None;
+        // A door aimed at: its prompt stands and is not overwritten.
+        app.world_mut().resource_mut::<crate::doors::AimedDoor>().0 = Some((3, 4));
+        app.world_mut().resource_mut::<CrosshairPrompt>().0 = Some("F Open".into());
+        app.update();
+        assert_eq!(prompt(&app).as_deref(), Some("F Open"));
+        assert!(app.world_mut().run_system_once(|e: Elsewhere| e.claimed()).unwrap());
+        // A lever, or an item or container under the crosshair, too.
+        app.world_mut().resource_mut::<crate::doors::AimedDoor>().0 = None;
+        app.world_mut().resource_mut::<crate::doors::AimedSwitch>().0 = Some(other);
+        assert!(app.world_mut().run_system_once(|e: Elsewhere| e.claimed()).unwrap());
+        app.world_mut().resource_mut::<crate::doors::AimedSwitch>().0 = None;
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(other);
+        assert!(app.world_mut().run_system_once(|e: Elsewhere| e.claimed()).unwrap());
+        // Nothing else aimed at: the body is searched.
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = None;
+        assert!(!app.world_mut().run_system_once(|e: Elsewhere| e.claimed()).unwrap());
     }
 }

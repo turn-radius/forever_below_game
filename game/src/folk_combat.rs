@@ -1217,4 +1217,41 @@ pub(crate) mod tests {
         assert!(now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
         assert!(on_the_floor(&mut again).is_empty(), "nothing lies beside it");
     }
+
+    #[test]
+    fn an_idle_body_is_not_drawn_again_and_a_looted_ones_window_closes() {
+        use crate::combat::feedback::Looted;
+        use crate::inventory::bags::BagWindows;
+        use crate::remains::BodyStock;
+        let (mut app, _, folk) = folk_fight(30.0);
+        app.init_resource::<BagWindows>();
+        keep_dressed(&mut app);
+        strike_down(&mut app, folk);
+        for _ in 0..5 {
+            app.update();
+        }
+        // Nothing has changed on the body, so a frame does no work on it: a marker left in what
+        // is drawn is still there, where a redraw would have put the gear back.
+        let stock = app.world().get::<BodyStock>(folk).unwrap().clone();
+        let worn = app.world().get::<Denizen>(folk).unwrap().person.gear.len();
+        app.world_mut().get_mut::<Denizen>(folk).unwrap().person.gear.clear();
+        for _ in 0..10 {
+            app.update();
+        }
+        assert!(app.world().get::<Denizen>(folk).unwrap().person.gear.is_empty(), "an idle frame does not draw the body again");
+        // Something taken changes it, and it is drawn again in what is left.
+        let (_, first) = stock.kit[0];
+        app.world_mut().resource_mut::<Inventory>().take_out(first);
+        app.update();
+        assert_eq!(app.world().get::<Denizen>(folk).unwrap().person.gear.len(), worn - 1);
+        // Everything taken: the window closes with the body looted.
+        app.world_mut().resource_mut::<BagWindows>().order.push(stock.container);
+        let holds: Vec<crate::inventory::ItemId> = app.world().resource::<Inventory>().grid(stock.container).unwrap().entries().iter().map(|e| e.id).collect();
+        for id in holds {
+            app.world_mut().resource_mut::<Inventory>().take_out(id);
+        }
+        app.update();
+        assert!(app.world().get::<Looted>(folk).is_some());
+        assert!(!app.world().resource::<BagWindows>().is_open(stock.container), "the empty body's window closes");
+    }
 }

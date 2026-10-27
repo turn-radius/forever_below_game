@@ -177,7 +177,7 @@ pub fn drop_belongings(
                 Some(stock) => commands.entity(entity).insert(stock),
                 None => commands.entity(entity).try_insert(Looted),
             };
-            info!("A body keeps {} things", belongings.items.len());
+            debug!("A body keeps {} things", belongings.items.len());
             continue;
         }
         commands.entity(entity).insert(Looted);

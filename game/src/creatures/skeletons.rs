@@ -200,6 +200,8 @@ pub struct WornGear;
 pub struct WornItem {
     pub family: armory::Family,
     pub seed: u32,
+    /// Which of the things of this kind it is a piece of, from 0: two of one kind are two things.
+    pub nth: usize,
 }
 
 pub use crate::combat::feedback::Looted;
