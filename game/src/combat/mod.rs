@@ -1125,8 +1125,9 @@ mod tests {
             inventory.wear(weapon, fb_items::Slot::Mainhand).unwrap();
             let holder = inventory.add(fb_items::roll_item(holder, 3).unwrap());
             inventory.wear(holder, fb_items::Slot::Quiver).unwrap();
-            for seed in 0..count {
-                let piece = inventory.add(fb_items::roll_item(ammo, 100 + seed as u32).unwrap());
+            // One kind, so the pieces stack in the holder's few places as a delver's own do.
+            for _ in 0..count {
+                let piece = inventory.add(fb_items::roll_item(ammo, 100).unwrap());
                 inventory.stow(piece).unwrap();
             }
             holder
@@ -1148,7 +1149,8 @@ mod tests {
     }
 
     fn held(app: &App, holder: crate::inventory::ItemId) -> usize {
-        app.world().resource::<Inventory>().contents_count(holder)
+        // Pieces, not places: the arrows lie in stacks.
+        app.world().resource::<Inventory>().pieces_in(holder)
     }
 
     #[test]
