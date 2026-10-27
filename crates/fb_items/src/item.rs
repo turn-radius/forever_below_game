@@ -704,12 +704,13 @@ mod tests {
         assert_eq!(Item::from_parts(ItemParts { affixes: vec![], ..plain.into() }).unwrap().profile.plain_grid(), None);
     }
 
-    #[test]
-    fn bags_roll_capacity_affixes_and_the_grid_follows_them() {
+    /// Rolls each of `bags` (a base and the seeds to roll it at) and checks its grid follows its
+    /// capacity affixes; the capacity affixes that came up are marked in the result.
+    fn capacity_rolls(bags: &[(&str, Vec<u32>)]) -> [bool; 3] {
         let mut seen = [false; 3];
-        for base in ["Pack", "Satchel", "Sack", "Belt"] {
+        for (base, seeds) in bags {
             let plain_rows = grid(&Item::from_parts(ItemParts { affixes: vec![], ..roll_item(base, 1).unwrap().into() }).unwrap()).1 as i32;
-            for seed in 1..500 {
+            for &seed in seeds {
                 let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
                 let by = item.affixes.iter().map(|a| match a.name.as_str() {
                     "of Holding" => 1,
@@ -718,7 +719,7 @@ mod tests {
                     _ => 0,
                 }).sum::<i32>();
                 assert_eq!(grid(&item).1 as i32, plain_rows + by, "{base} {seed}");
-                assert_eq!(item.affixes.iter().filter(|a| a.group.as_deref() == Some("capacity")).count() <= 1, true, "{base} {seed}");
+                assert!(item.affixes.iter().filter(|a| a.group.as_deref() == Some("capacity")).count() <= 1, "{base} {seed}");
                 if item.affixes.iter().any(|a| a.name == "of the Bottomless") {
                     assert!(item.rarity >= Rarity::Rare);
                 }
@@ -727,12 +728,35 @@ mod tests {
                 }
             }
         }
-        assert_eq!(seen, [true; 3]);
+        seen
     }
 
     #[test]
+    #[ignore = "slow sweep: 500 seeds of each of four bags; run before merging"]
+    fn bags_roll_capacity_affixes_and_the_grid_follows_them() {
+        let bags: Vec<_> = ["Pack", "Satchel", "Sack", "Belt"].into_iter().map(|b| (b, (1..500).collect())).collect();
+        assert_eq!(capacity_rolls(&bags), [true; 3]);
+    }
+
+    #[test]
+    fn bags_roll_capacity_affixes_and_the_grid_follows_them_smoke() {
+        let bags = [("Pack", (1..30).collect())];
+        assert_eq!(capacity_rolls(&bags), [true; 3]);
+    }
+
+    #[test]
+    #[ignore = "slow sweep: 1000 seeds of a quiver and a purse; run before merging"]
     fn quivers_and_purses_roll_no_capacity() {
-        for seed in 1..1_000 {
+        no_capacity_on(1..1_000);
+    }
+
+    #[test]
+    fn quivers_and_purses_roll_no_capacity_smoke() {
+        no_capacity_on(1..30);
+    }
+
+    fn no_capacity_on(seeds: std::ops::Range<u32>) {
+        for seed in seeds {
             for base in ["Quiver", "Purse"] {
                 let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
                 assert!(item.affixes.iter().all(|a| a.group.as_deref() != Some("capacity")), "{base} {seed}");

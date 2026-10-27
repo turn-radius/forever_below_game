@@ -104,7 +104,7 @@ pub struct Stats {
     #[serde(default = "one")]
     pub stamina_cost: f32,
     /// Rows a worn bag's grid gains (or loses, when negative) against a plain bag of its size
-    /// ([`crate::profile::with_capacity`]).
+    /// ([`crate::profile::Profile::fit_capacity`], which rounds it to whole rows).
     #[serde(default)]
     pub grid_rows: f32,
 }

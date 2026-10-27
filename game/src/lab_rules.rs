@@ -222,17 +222,27 @@ pub fn step_of(x: f64) -> f64 {
     }
 }
 
+/// Whether the number at `path` is a count of whole rows a bag's grid gains
+/// ([`fb_items::stats::Stat::GridRows`]), which `fit_capacity` rounds, so the lab moves it by whole rows.
+fn is_grid_rows(path: &str) -> bool {
+    let keys: Vec<&str> = path.split('/').collect();
+    let ["affixes", name, i] = keys[..] else { return false };
+    let Some(affix) = affixes().iter().find(|a| a.name == name) else { return false };
+    let nth = i.parse::<usize>().ok().and_then(|i| affix.fx.iter().filter(|m| strength_of(m).is_some()).nth(i));
+    matches!(nth, Some(Modifier::Add { stat: fb_items::stats::Stat::GridRows, .. }))
+}
+
 /// Moves the number at `path` one step up (`dir` 1) or down (`dir` -1); a switch flips.
 pub fn step(set: &mut RuleSet, path: &str, dir: i32) {
     let round = |x: f64| (x * 10_000.0).round() / 10_000.0;
     let Some(now) = leaf(set, path) else { return };
     // How an effect changes by itself may be a fall (below 0) as well as a rise.
-    let least = if path.starts_with("effects/") && path.ends_with("/per_hour") { f64::MIN } else { 0.0 };
+    let least = if (path.starts_with("effects/") && path.ends_with("/per_hour")) || is_grid_rows(path) { f64::MIN } else { 0.0 };
     let to = match now {
         Leaf::Int(n) => Leaf::Int(n + dir as i64),
         Leaf::Float(x) => {
             // Stepping toward 0 takes the smaller step at a boundary (1 down to 0.95, not 0.5).
-            let size = step_of(if x != 0.0 && (dir < 0) == (x > 0.0) { x - 1e-9 * x.signum() } else { x });
+            let size = if is_grid_rows(path) { 1.0 } else { step_of(if x != 0.0 && (dir < 0) == (x > 0.0) { x - 1e-9 * x.signum() } else { x }) };
             Leaf::Float(round(x + dir as f64 * size).max(least))
         }
         Leaf::Bool(b) => Leaf::Bool(!b),
@@ -768,6 +778,30 @@ mod tests {
         let parsed: Vec<fb_items::tables::Affix> = serde_json::from_str(&written).unwrap();
         assert_eq!(strength_of(&parsed[0].fx[0]), Some(2.5));
         assert_eq!(parsed[1..], affixes()[1..]);
+    }
+
+    #[test]
+    fn a_shun_chance_and_a_later_strength_both_save() {
+        let file = text("afx.json");
+        let shun = affixes().iter().find(|a| a.fx.iter().any(|m| matches!(m, Modifier::Shun { .. }))).unwrap().name.clone();
+        let later = affixes().iter().find(|a| a.name == "of Holding").unwrap().name.clone();
+        let mut set = RuleSet::default();
+        step(&mut set, &format!("affixes/{shun}/0"), 1);
+        step(&mut set, &format!("affixes/{later}/0"), 1);
+        let parsed: Vec<fb_items::tables::Affix> = serde_json::from_str(&write_afx_json(&file, &set.strengths)).unwrap();
+        let by = |name: &str| strength_of(&parsed.iter().find(|a| a.name == name).unwrap().fx[0]).unwrap();
+        assert_eq!(by(&shun), set.strengths[&shun][0]);
+        assert_ne!(by(&shun), default_strengths()[&shun][0]);
+        assert_eq!(by(&later), 2.0, "a whole row a press");
+    }
+
+    #[test]
+    fn a_capacity_strength_moves_by_whole_rows_and_the_flaw_goes_below_zero() {
+        let mut set = RuleSet::default();
+        step(&mut set, "affixes/Cramped/0", -1);
+        assert_eq!(set.strengths["Cramped"][0], -2.0);
+        step(&mut set, "affixes/of the Bottomless/0", -1);
+        assert_eq!(set.strengths["of the Bottomless"][0], 1.0);
     }
 
     fn copy_of_data() -> std::path::PathBuf {
