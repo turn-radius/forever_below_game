@@ -435,15 +435,24 @@ mod tests {
     }
 
     #[test]
+    fn a_ranger_can_roll_a_satchel_beside_a_pack() {
+        let ranger = outfit("ranger").unwrap();
+        let sets: Vec<_> = (0..60).map(|s| ranger.roll(s, "human")).collect();
+        assert!(sets.iter().any(|set| set.item(Slot::Satchel).is_some_and(|i| i.base == "Satchel")));
+        assert!(sets.iter().any(|set| set.item(Slot::Back).is_some() && set.item(Slot::Satchel).is_some()));
+    }
+
+    #[test]
     fn rolled_outfits_are_whole_items_from_their_candidates() {
         for outfit in outfits() {
             for seed in [1, 7, 1207] {
                 let set = outfit.roll(seed, "human");
                 assert_eq!(set, outfit.roll(seed, "human"), "{} {seed}", outfit.key);
                 for (slot, item) in &set.worn {
+                    assert!(item.fits(*slot), "{}: {} does not fit {slot:?}", outfit.key, item.base);
                     match outfit.slots.iter().find(|(s, _)| s == slot) {
                         Some((_, choice)) => assert!(choice.bases.contains(&item.base), "{}: {} in {slot:?}", outfit.key, item.base),
-                        None => assert!(matches!(slot, Slot::Ring1 | Slot::Neck | Slot::Charm | Slot::Head | Slot::Quiver), "{slot:?}"),
+                        None => assert!(matches!(slot, Slot::Ring1 | Slot::Neck | Slot::Charm | Slot::Head | Slot::Quiver | Slot::Satchel), "{slot:?}"),
                     }
                 }
                 let shoots = set.item(Slot::Mainhand).is_some_and(|i| i.profile.ranged.is_some());

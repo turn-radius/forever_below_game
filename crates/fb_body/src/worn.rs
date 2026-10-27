@@ -1601,12 +1601,17 @@ fn satchel(body: &Body, env: &Envelope, mut mesh: ItemMesh, tint: Option<armory:
     scale_mesh(&mut mesh, k);
     let (lo, hi) = (vec3::scale(lo, k), vec3::scale(hi, k));
     let height = hi[1] - lo[1];
-    let top = body.hip_y + 0.45 * t;
+    let top = body.hip_y + 0.2 * t;
     // Out from the side far enough to clear the body, the belt and a cloak's skirt over the
     // bag's height, with a little air between.
     let side = (0..=4).map(|i| env.worn_reach(0.0, top - height * i as f32 / 4.0 - w)).fold(0.0f32, f32::max) + 0.05;
     let (cz, front) = (-0.05 * s, body.chest.half_depth * 0.5);
     mesh.transform(&Mat3::IDENTITY, [side - lo[0], top - hi[1], cz - (lo[2] + hi[2]) * 0.5]);
+    // Further out if an arm hangs where it lies.
+    let nearest = mesh.parts.iter().flat_map(|p| p.positions.iter()).map(|&p| env.nearest_arm(p).2).fold(f32::MAX, f32::min);
+    let push = (0.02 * s - nearest).max(0.0);
+    mesh.transform(&Mat3::IDENTITY, [push, 0.0, 0.0]);
+    let side = side + push;
     let half = (hi[2] - lo[2]) * 0.4;
     let mid = top - height * 0.2;
     let (width, thickness) = (0.24 * s.sqrt(), 0.05 * s.sqrt());
@@ -1614,9 +1619,11 @@ fn satchel(body: &Body, env: &Envelope, mut mesh: ItemMesh, tint: Option<armory:
     let path: Vec<V3> = CatmullRom::centripetal(vec![
         [side, mid, cz - half],
         [sw * 0.55, body.chest_y - 0.1 * t, -body.waist.half_depth * 0.9],
-        [sw * 0.3, ty, -0.12 * s],
-        [-sw * 0.46, ty, -0.08 * s],
-        [-sw * 0.3, body.chest_y, front],
+        [sw * 0.15, ty, -0.12 * s],
+        // Over the shoulder nearer the neck than a pack's strap (at 0.46 of the shoulder's
+        // half width), so the two lie side by side.
+        [-sw * 0.22, ty, -0.08 * s],
+        [-sw * 0.15, body.chest_y, front],
         [sw * 0.55, w, front],
         [side, mid, cz + half],
     ])
@@ -1690,6 +1697,50 @@ mod tests {
                 assert!(satchel.0 > pack.1, "satchel x {satchel:?} clear of pack {pack:?}");
                 assert!(satchel.0 > body.waist.half_width * 0.9, "satchel off the body: {satchel:?}");
             }
+        }
+    }
+
+    fn folk_body(folk: Folk) -> Body {
+        Body::new(&BodySpec::roll(folk, 3))
+    }
+
+    /// A satchel alone, under a cloak, and on a gnome and a goblin sits at the hip (its middle
+    /// below the waist and above the knee), clear of the arm's skin and out from the body.
+    #[test]
+    fn a_satchel_sits_at_the_hip_clear_of_the_arm_and_the_cloak() {
+        for folk in [Folk::Human, Folk::Gnome, Folk::Goblin] {
+            let body = folk_body(folk);
+            let env = Envelope::new(&body);
+            let cloak = (Slot::Cloak, Item::Garment(Garment::roll_as(2, GarmentStyle::Cloak)));
+            let satchel = (Slot::Satchel, Item::Bags(Bags::roll_as(5, BagStyle::Satchel)));
+            for kit in [vec![satchel.clone()], vec![cloak, satchel]] {
+                let fit = fit_worn(&body, &kit);
+                let layer = fit.layers.iter().find(|l| l.slot == Slot::Satchel).expect("worn");
+                let pts: Vec<V3> = layer.mesh.parts.iter().filter(|p| p.name != "carry").flat_map(|p| p.positions.iter().copied()).collect();
+                let mid = pts.iter().map(|p| p[1]).sum::<f32>() / pts.len() as f32;
+                assert!(mid < body.waist_y && mid > body.hip_y - body.trunk_length, "{folk:?} satchel at {mid}, waist {}, hip {}", body.waist_y, body.hip_y);
+                let worst = pts.iter().map(|&p| env.nearest_arm(p).2).fold(f32::MAX, f32::min);
+                assert!(worst > -0.02 * body.scale, "{folk:?} satchel in the arm by {worst}");
+                assert!(pts.iter().all(|p| p[0] > 0.0), "{folk:?} satchel on the wrong side of the body");
+            }
+        }
+    }
+
+    /// A satchel's strap and a pack's lie apart where they meet on the shoulder (a strap laid
+    /// over the other stands off it by its thickness, not through it).
+    #[test]
+    fn a_satchels_strap_clears_a_packs() {
+        for folk in [Folk::Human, Folk::Gnome] {
+            let body = folk_body(folk);
+            let kit = vec![
+                (Slot::Back, Item::Bags(Bags::roll_as(1, BagStyle::Backpack))),
+                (Slot::Satchel, Item::Bags(Bags::roll_as(1, BagStyle::Satchel))),
+            ];
+            let fit = fit_worn(&body, &kit);
+            let strap = |slot| -> Vec<V3> { fit.layers.iter().find(|l| l.slot == slot).unwrap().mesh.parts.iter().filter(|p| p.name == "carry").flat_map(|p| p.positions.iter().copied()).collect() };
+            let (pack, satchel) = (strap(Slot::Back), strap(Slot::Satchel));
+            let nearest = satchel.iter().map(|&a| pack.iter().map(|&b| vec3::distance(a, b)).fold(f32::MAX, f32::min)).fold(f32::MAX, f32::min);
+            assert!(nearest > 0.012 * body.scale, "{folk:?} straps {nearest} apart");
         }
     }
 
