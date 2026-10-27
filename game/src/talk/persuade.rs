@@ -8,11 +8,12 @@
 //! ([`dc`]): a faction that already likes the delver is harder to move further. A success raises
 //! standing by [`gain`], [`MIN_GAIN`] and up to [`MAX_GAIN`] by how far the roll beat the
 //! difficulty, so a few successes can carry a faction over a band; a failure costs
-//! [`FAIL_COST`]. A folk gets one try per rest. A Hostile faction cannot be persuaded: no roll is
-//! made ([`check`] is `None`).
+//! [`FAIL_COST`]. A folk gets one try per rest. Any folk can be persuaded, a Hostile faction's
+//! included: the worse the faction stands, the harder the roll, through the standing modifier
+//! ([`standing_bonus`], -4 at the worst).
 
 use fb_character::check::{Check, CheckRoll};
-use fb_faction::{Band, ClassKind};
+use fb_faction::ClassKind;
 
 /// The roll that wins over a faction standing at neutral.
 pub const BASE_DC: i32 = 12;
@@ -57,15 +58,13 @@ pub fn class_bonus(class: ClassKind) -> (&'static str, i32) {
     }
 }
 
-/// The check to win over a faction that stands `standing` (-100 to 100) in `band` with the
+/// The check to win over a faction that stands `standing` (-100 to 100) with the
 /// delver. `wisdom` is the delver's Wisdom modifier and `charm` the points of charisma their
-/// worn gear gives. `None` when the faction is Hostile: it cannot be persuaded.
-pub fn check(name: &str, band: Band, standing: i32, wisdom: i32, class: ClassKind, charm: i32) -> Option<Check> {
-    if band == Band::Hostile {
-        return None;
-    }
+/// worn gear gives. A faction that stands badly (Wary, Hostile) is harder to move through the
+/// negative standing modifier.
+pub fn check(name: &str, standing: i32, wisdom: i32, class: ClassKind, charm: i32) -> Check {
     let (class_name, class) = class_bonus(class);
-    Some(Check::d20(name, dc(standing)).stat("WIS", wisdom).class(class_name, class).affix("Charm", charm).standing(standing_bonus(standing)))
+    Check::d20(name, dc(standing)).stat("WIS", wisdom).class(class_name, class).affix("Charm", charm).standing(standing_bonus(standing))
 }
 
 #[cfg(test)]
@@ -74,14 +73,20 @@ mod tests {
     use fb_character::check::Source;
 
     #[test]
-    fn a_hostile_faction_cannot_be_persuaded() {
-        assert!(check("Win over", Band::Hostile, -80, 3, ClassKind::Cleric, 2).is_none());
-        assert!(check("Win over", Band::Wary, -30, 0, ClassKind::Fighter, 0).is_some());
+    fn a_hostile_faction_can_be_persuaded_at_the_standing_it_costs() {
+        let of = |roll: &CheckRoll, s: Source| roll.modifiers.iter().filter(|m| m.source == s).map(|m| m.amount).sum::<i32>();
+        let hostile = check("Win over", -80, 0, ClassKind::Fighter, 0).with_natural(12);
+        assert_eq!((hostile.target, of(&hostile, Source::Standing), hostile.total, hostile.succeeded), (BASE_DC, -3, 9, false));
+        // The same roll lands on a neutral faction, and a good roll still wins a hostile one.
+        assert!(check("Win over", 0, 0, ClassKind::Fighter, 0).with_natural(12).succeeded);
+        assert!(check("Win over", -80, 0, ClassKind::Fighter, 0).with_natural(15).succeeded);
+        let wary = check("Win over", -30, 0, ClassKind::Fighter, 0).with_natural(12);
+        assert_eq!(of(&wary, Source::Standing), -1);
     }
 
     #[test]
     fn standing_class_wisdom_and_charm_are_modifiers() {
-        let roll = check("Win over", Band::Friendly, 60, 2, ClassKind::Cleric, 1).unwrap().with_natural(10);
+        let roll = check("Win over", 60, 2, ClassKind::Cleric, 1).with_natural(10);
         let of = |s: Source| roll.modifiers.iter().filter(|m| m.source == s).map(|m| m.amount).sum::<i32>();
         assert_eq!((of(Source::Stat), of(Source::Class), of(Source::Affix), of(Source::Standing)), (2, 2, 1, 2));
         assert_eq!(roll.total, 17);
@@ -95,11 +100,11 @@ mod tests {
 
     #[test]
     fn the_gain_scales_with_the_margin_and_a_failure_gains_nothing() {
-        let at = |face: i32| check("p", Band::Neutral, 0, 0, ClassKind::Fighter, 0).unwrap().with_natural(face);
+        let at = |face: i32| check("p", 0, 0, ClassKind::Fighter, 0).with_natural(face);
         assert_eq!(gain(&at(11)), 0);
         assert_eq!((gain(&at(12)), gain(&at(13)), gain(&at(14)), gain(&at(18))), (3, 3, 4, 6));
         assert_eq!(gain(&at(20)), 7);
-        let strong = check("p", Band::Neutral, 0, 5, ClassKind::Cleric, 4).unwrap().with_natural(20);
+        let strong = check("p", 0, 5, ClassKind::Cleric, 4).with_natural(20);
         assert_eq!(gain(&strong), MAX_GAIN);
     }
 }
