@@ -33,7 +33,7 @@ use fb_items::{
 use std::sync::Arc;
 
 use super::icon::Icons;
-use super::items::Inventory;
+use super::items::{Inventory, ItemId};
 use super::seal::{Canvas, Glyph, Seal, SealInks, TURN_SECONDS};
 use crate::launch::AppState;
 use crate::carry::item_light;
@@ -607,45 +607,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                     BorderColor::all(if worn.is_some() { BRIGHT } else { LINE }),
                 ))
                 .with_children(|slot| {
-                    if let Some(item) = worn {
-                        let shape = super::icon::icon_size(item, false).as_vec2();
-                        // A thin long item (a staff, a spear) is a dot in a small slot upright, so it
-                        // lies on the slot's diagonal, its length fitted to it.
-                        let thin = shape.max_element() >= 3.0 * shape.min_element();
-                        let fit = (size - 11.0) / shape.max_element() * if thin { std::f32::consts::SQRT_2 * 0.92 } else { 1.0 };
-                        slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
-                            .with_children(|centre| {
-                                let mut icon = icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
-                                if thin {
-                                    icon.insert(UiTransform { rotation: Rot2::degrees(45.0), ..default() });
-                                }
-                            });
-                        // A quiver or bolt case counts the shots in it, as a stack's cell does.
-                        if let Some(id) = inventory.worn(place.slot).filter(|_| item.profile.holds.as_ref().is_some_and(|h| !h.accepts.is_empty())) {
-                            let shots = inventory.pieces_in(id);
-                            if shots > 0 {
-                                slot.spawn((
-                                    super::CountBadge,
-                                    Node {
-                                        position_type: PositionType::Absolute,
-                                        right: px(3),
-                                        bottom: px(2),
-                                        padding: UiRect::new(px(4), px(4), px(0), px(1)),
-                                        border_radius: BorderRadius::all(px(4)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(BG.with_alpha(0.88)),
-                                ))
-                                .with_child((Text::new(shots.to_string()), UiFonts::style(&fonts.mono_bold, 12.0, Color::WHITE)));
-                            }
-                        }
-                        if item.profile.kind == Kind::Gear {
-                            slot.spawn((
-                                Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
-                                BackgroundColor(rarity_color(item.shown_rarity())),
-                            ));
-                        }
-                    }
+                    slot_contents(slot, icons, fonts, inventory, inventory.worn(place.slot), size);
                     let font = if place.size == SlotSize::Big { 14.0 } else { 12.0 };
                     let (label_left, label_right) = match place.side {
                         SlotSide::Left => (px(0), Val::Auto),
@@ -660,6 +622,55 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                 });
         }
     });
+}
+
+/// What a framed item slot shows of `id`: its icon fitted inside a slot `size` across (a thin
+/// long item lying on the diagonal), the shots in a quiver and the rarity dot of gear. The doll's
+/// slots and the fitting slots in a pack's or belt's window draw alike.
+pub(super) fn slot_contents(slot: &mut ChildSpawnerCommands, icons: &mut Icons, fonts: &UiFonts, inventory: &Inventory, id: Option<ItemId>, size: f32) {
+    let Some((id, item)) = id.and_then(|id| Some((id, inventory.item(id)?))) else { return };
+    let shape = super::icon::icon_size(item, false).as_vec2();
+    // A thin long item (a staff, a spear) is a dot in a small slot upright, so it
+    // lies on the slot's diagonal, its length fitted to it.
+    let thin = shape.max_element() >= 3.0 * shape.min_element();
+    let fit = (size - 11.0) / shape.max_element() * if thin { std::f32::consts::SQRT_2 * 0.92 } else { 1.0 };
+    slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
+        .with_children(|centre| {
+            let mut icon = icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
+            if thin {
+                icon.insert(UiTransform { rotation: Rot2::degrees(45.0), ..default() });
+            }
+        });
+    // A quiver or bolt case counts the shots in it, as a stack's cell does.
+    if item.profile.holds.as_ref().is_some_and(|h| !h.accepts.is_empty()) {
+        let shots = inventory.pieces_in(id);
+        if shots > 0 {
+            slot.spawn((
+                super::CountBadge,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(3),
+                    bottom: px(2),
+                    padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                    border_radius: BorderRadius::all(px(4)),
+                    ..default()
+                },
+                BackgroundColor(BG.with_alpha(0.88)),
+            ))
+            .with_child((Text::new(shots.to_string()), UiFonts::style(&fonts.mono_bold, 12.0, Color::WHITE)));
+        }
+    }
+    if item.profile.kind == Kind::Gear {
+        slot.spawn((
+            Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
+            BackgroundColor(rarity_color(item.shown_rarity())),
+        ));
+    }
+}
+
+/// The node of a framed item slot `size` across, as the doll draws its places.
+pub(super) fn slot_node(size: f32) -> Node {
+    Node { width: px(size), height: px(size), padding: UiRect::all(px(4)), border: UiRect::all(px(1.5)), border_radius: BorderRadius::all(px(8)), flex_shrink: 0.0, ..default() }
 }
 
 /// One rune of a band, centred on its place in a layer `side` across, turned to its circle.

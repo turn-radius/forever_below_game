@@ -95,31 +95,58 @@ pub struct BagTitle(pub ItemId);
 #[derive(Component, Debug)]
 pub struct BagClose(pub ItemId);
 
-/// Height of the label over a fitting's small grid ("Lashing", "Potion pouch").
-pub(super) const FITTING_LABEL_PX: f32 = 22.0;
-/// Space between the main grid and the fittings beside it, and between one fitting and the next.
-pub(super) const FITTING_GAP_PX: f32 = 12.0;
-/// The narrowest a fitting's column is, so its label shows over a small grid.
-const FITTING_MIN_PX: f32 = 90.0;
+/// Height of the label under a fitting's slots ("Lashing", "Potion pouch").
+pub(super) const FITTING_LABEL_PX: f32 = 18.0;
+/// Space between the main grid and the fitting slots beside or under it, and between one fitting and the next.
+pub(super) const FITTING_GAP_PX: f32 = 10.0;
+/// Space between the slots of one fitting (the pouch's three).
+pub(super) const SLOT_GAP_PX: f32 = 6.0;
 
-/// How big the row of the small grids that belong to `host` (a pack's lashing and strap, a belt's frogs
-/// and potion pouch) is, each under its label, logical pixels; zero for a container with none.
-pub fn fittings_size(inventory: &Inventory, host: ItemId, cell: f32) -> Vec2 {
-    let sizes: Vec<Vec2> = inventory.fittings_of(host).iter().filter_map(|&(_, fitting)| inventory.grid(fitting)).map(|g| grid_size(g, cell)).collect();
-    if sizes.is_empty() {
-        return Vec2::ZERO;
-    }
-    let width: f32 = sizes.iter().map(|s| s.x.max(FITTING_MIN_PX)).sum::<f32>() + FITTING_GAP_PX * (sizes.len() - 1) as f32;
-    let height = sizes.iter().map(|s| s.y).fold(0.0, f32::max) + FITTING_LABEL_PX;
-    Vec2::new(width, height)
+/// A fitting's slots, drawn like the doll's: big for a lashing, strap or frog, small for the pouch's three.
+pub(super) fn fitting_slot_px(small: bool) -> f32 {
+    if small { super::doll::SMALL_SLOT } else { super::doll::BIG_SLOT }
 }
 
-/// How big a window is for the container `id`, logical pixels: its main grid with the fittings of a
-/// pack or belt beside it. `None` for something that holds nothing.
+/// Where the fitting slots of a pack or belt go and how much room they take.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FittingsLayout {
+    /// The slots and their labels together, logical pixels.
+    pub size: Vec2,
+    /// In a column beside the main grid; else in a row under it.
+    pub beside: bool,
+}
+
+/// How the slots of `host`'s fittings (a pack's lashing and strap, a belt's frogs and potion pouch)
+/// sit against its main grid, which is `main` pixels: in a column beside it if that is no taller than
+/// the grid, else in a row under it. `None` for a container with none.
+pub fn fittings_layout(inventory: &Inventory, host: ItemId, main: Vec2) -> Option<FittingsLayout> {
+    let groups: Vec<Vec2> = inventory
+        .fittings_of(host)
+        .iter()
+        .filter_map(|&(accessory, _)| fb_items::fitting_grid(accessory))
+        .map(|f| {
+            let slot = fitting_slot_px(f.small);
+            Vec2::new(f.holds as f32 * slot + (f.holds as f32 - 1.0) * SLOT_GAP_PX, slot + FITTING_LABEL_PX)
+        })
+        .collect();
+    if groups.is_empty() {
+        return None;
+    }
+    let gaps = FITTING_GAP_PX * (groups.len() - 1) as f32;
+    let column = Vec2::new(groups.iter().map(|g| g.x).fold(0.0, f32::max), groups.iter().map(|g| g.y).sum::<f32>() + gaps);
+    let row = Vec2::new(groups.iter().map(|g| g.x).sum::<f32>() + gaps, groups.iter().map(|g| g.y).fold(0.0, f32::max));
+    Some(if column.y <= main.y { FittingsLayout { size: column, beside: true } } else { FittingsLayout { size: row, beside: false } })
+}
+
+/// How big a window is for the container `id`, logical pixels: its main grid with the slots of a
+/// pack's or belt's fittings beside or under it. `None` for something that holds nothing.
 pub fn window_size(inventory: &Inventory, id: ItemId, cell: f32) -> Option<Vec2> {
     let main = grid_size(inventory.grid(id)?, cell);
-    let fittings = fittings_size(inventory, id, cell);
-    let (width, height) = if fittings.x > 0.0 { (main.x + FITTING_GAP_PX + fittings.x, main.y.max(fittings.y)) } else { (main.x, main.y) };
+    let (width, height) = match fittings_layout(inventory, id, main) {
+        Some(FittingsLayout { size, beside: true }) => (main.x + FITTING_GAP_PX + size.x, main.y),
+        Some(FittingsLayout { size, beside: false }) => (main.x.max(size.x), main.y + FITTING_GAP_PX + size.y),
+        None => (main.x, main.y),
+    };
     let edge = 2.0 * (PAD_PX + BORDER_PX);
     Some(Vec2::new(width.max(MIN_CONTENT_PX) + edge, height + TITLE_PX + GAP_PX + edge))
 }

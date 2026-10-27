@@ -257,6 +257,7 @@ enum Move {
     Nothing,
     Shelve(Placement),
     Put(ItemId, Placement),
+    Fit(ItemId, u8),
     Wear(Slot),
 }
 
@@ -302,6 +303,20 @@ impl Session {
                     Err(Refusal::Bartering)
                 }
             }
+            Target::Fitting { container, index } => {
+                if !inventory.is_carried(container) {
+                    return Some(Err(Refusal::Bartering));
+                }
+                // A piece split off a shelf stack into a pouch would be neither bought nor sold: take the whole stack first.
+                if self.on_shelf(inventory, id) && inventory.item(id).is_some_and(|i| i.quantity > 1) {
+                    return Some(Err(Refusal::NoRoom));
+                }
+                // A full slot would swap its item onto the floor or out of the deal: only a free slot takes it.
+                if inventory.fitting_slots(container).get(index as usize).copied().flatten().is_some_and(|other| other != id) {
+                    return Some(Err(Refusal::NoRoom));
+                }
+                inventory.check_fit(id, container).map(|()| Move::Fit(container, index))
+            }
             Target::Slot(slot) => self.wear_check(inventory, id, slot).map(|()| Move::Wear(slot)),
             Target::Doll => {
                 let slot = inventory.target_slot(id).ok_or(Refusal::NotWearable);
@@ -338,6 +353,7 @@ impl Session {
             Move::Nothing => Ok(()),
             Move::Shelve(at) => inventory.shelve_at(id, self.shelf, at),
             Move::Put(container, at) => inventory.put(id, container, at),
+            Move::Fit(container, index) => inventory.fit(id, container, index as usize).map(|_| ()),
             Move::Wear(slot) => inventory.wear(id, slot),
         }
     }

@@ -502,22 +502,28 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
     // that takes it (the lashing, strap, frogs and potion pouch), after the kit.
     let hang = std::env::var("FB_HANG").unwrap_or_default();
     for (i, base) in bases_in(&hang).enumerate() {
-        let Some(item) = roll(base, 0x40 + i as u32) else {
-            warn!("FB_HANG: no base called {base:?}");
-            continue;
-        };
-        let id = inventory.add(item);
+        // The first roll of the base that a free fitting takes (a sword may be too long for a frog).
         let hosts: Vec<ItemId> = [Slot::Back, Slot::Belt].into_iter().filter_map(|slot| inventory.worn(slot)).collect();
-        let place = hosts.iter().flat_map(|&host| inventory.fittings_of(host).iter().map(|&(_, fitting)| fitting).collect::<Vec<_>>()).find_map(|fitting| {
-            let at = inventory.grid(fitting)?.first_free(inventory.footprint(id)?)?;
-            inventory.check_put(id, fitting, at).ok().map(|()| (fitting, at))
-        });
-        match place {
-            Some((fitting, at)) if inventory.put(id, fitting, at).is_ok() => {}
-            _ => {
-                warn!("FB_HANG: nothing worn takes {base:?}");
-                inventory.forget(id);
+        let free: Vec<(fb_items::Accessory, ItemId)> = hosts.iter().flat_map(|&host| inventory.fittings_of(host).iter().copied().collect::<Vec<_>>()).filter(|&(_, fitting)| inventory.fitting_slots(fitting).contains(&None)).collect();
+        let mut hung = false;
+        for k in 0..60 {
+            let Some(item) = roll(base, 0x40 + i as u32 + 0x100 * k) else {
+                warn!("FB_HANG: no base called {base:?}");
+                break;
+            };
+            if let Some(&(_, fitting)) = free.iter().find(|&&(accessory, fitting)| item.fits_accessory(accessory) && inventory.fitting_slots(fitting).contains(&None)) {
+                let id = inventory.add(item);
+                if let Some(index) = inventory.fitting_slots(fitting).iter().position(Option::is_none) {
+                    hung = inventory.fit(id, fitting, index).is_ok();
+                }
+                if !hung {
+                    inventory.forget(id);
+                }
+                break;
             }
+        }
+        if !hung {
+            warn!("FB_HANG: nothing worn takes {base:?}");
         }
     }
     let stow = std::env::var("FB_STOW").unwrap_or_default();
@@ -655,6 +661,8 @@ pub enum Target {
     Doll,
     /// A quickslot on the strip: the item is bound to it, not moved ([`crate::quickslots`]).
     Quickslot(usize),
+    /// An item slot of a pack's or belt's fitting ([`FittingSlot`]): the item goes in whole, of any size.
+    Fitting { container: ItemId, index: u8 },
 }
 
 /// An item being dragged, or pressed and about to be.
@@ -786,8 +794,24 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
         Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
         Target::Quickslot(_) => crate::quickslots::check_bind(inventory, drag.id),
+        Target::Fitting { container, .. } => inventory.check_fit(drag.id, container),
         Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
     }
+}
+
+/// Puts `id` in the fitting slot `index` of `fitting` ([`Inventory::fit`]) and says what that changes in
+/// the level: the item lifted if it lay there (or a piece of it, if the stack was left lying), and whatever
+/// it displaced set down if it found no room.
+pub fn fit_in(inventory: &mut Inventory, id: ItemId, fitting: ItemId, index: usize) -> Result<Vec<FloorChange>, Refusal> {
+    let lying = inventory.location(id) == Some(Location::Loose);
+    let displaced = inventory.fit(id, fitting, index)?;
+    // A stack of potions left on the floor with a piece in the pouch is still lying there.
+    let lifted = lying && inventory.location(id) != Some(Location::Loose);
+    let mut changes: Vec<FloorChange> = lifted.then_some(FloorChange::Lifted(id)).into_iter().collect();
+    if let Some((old, Displaced::Underfoot)) = displaced {
+        changes.push(FloorChange::SetDown(old, 0.0));
+    }
+    Ok(changes)
 }
 
 /// Equips `id` in `slot` ([`Inventory::equip`]) and says what that changes in the level: the
@@ -953,6 +977,7 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
         Target::Doll => equip(inventory, drag.id, inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?),
         Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
         Target::Level => Ok(set_down(inventory, 0.0)),
+        Target::Fitting { container, index } => fit_in(inventory, drag.id, container, index as usize),
         Target::Page | Target::Quickslot(_) => Ok(vec![]),
     }
 }
@@ -1285,27 +1310,38 @@ impl ScreenLayout<'_> {
             });
     }
 
-    /// A container's main grid with, beside it, the small grids of the fittings a pack or belt came with
-    /// (a lashing, a weapon strap, frogs, a potion pouch), each under its label. Just the grid for a
-    /// container with none.
+    /// A container's main grid with, beside it or under it, the item slots of the fittings a pack or belt
+    /// came with (a lashing, a weapon strap, frogs, a potion pouch's three), each group under its label,
+    /// framed and drawn as the doll's slots are. Just the grid for a container with none.
     fn grid_with_fittings(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, grid: &Grid<ItemId>) {
-        let fittings: Vec<(ItemId, &Grid<ItemId>)> = self.inventory.fittings_of(id).iter().filter_map(|&(_, fitting)| Some((fitting, self.inventory.grid(fitting)?))).collect();
-        if fittings.is_empty() {
+        let Some(layout) = bags::fittings_layout(self.inventory, id, grid_size(grid, self.cell)) else {
             self.grid(parent, icons, GridView::Container(id), grid, false);
             return;
-        }
-        parent.spawn(Node { align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), flex_shrink: 0.0, ..default() }).with_children(|row| {
-            self.grid(row, icons, GridView::Container(id), grid, false);
-            row.spawn(Node { align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), ..default() }).with_children(|fittings_row| {
-                for (fitting, small) in fittings {
-                    let label = self.inventory.item(fitting).and_then(|i| i.profile.holds.as_ref()).map_or("", |h| h.label.as_str()).to_string();
-                    fittings_row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
-                        column
-                            .spawn(Node { height: px(bags::FITTING_LABEL_PX - 4.0), min_width: px(grid_size(small, self.cell).x.max(90.0)), ..default() })
-                            .with_children(|head| {
-                                head.spawn((FittingLabel(fitting), Text::new(label), UiFonts::style(&self.fonts.body, 13.0, MUTED)));
-                            });
-                        self.grid(column, icons, GridView::Container(fitting), small, false);
+        };
+        let direction = if layout.beside { FlexDirection::Row } else { FlexDirection::Column };
+        parent.spawn(Node { flex_direction: direction, align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), row_gap: px(bags::FITTING_GAP_PX), flex_shrink: 0.0, ..default() }).with_children(|outer| {
+            self.grid(outer, icons, GridView::Container(id), grid, false);
+            let along = if layout.beside { FlexDirection::Column } else { FlexDirection::Row };
+            outer.spawn(Node { flex_direction: along, align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), row_gap: px(bags::FITTING_GAP_PX), ..default() }).with_children(|slots| {
+                for &(accessory, fitting) in self.inventory.fittings_of(id) {
+                    let Some(kind) = fb_items::fitting_grid(accessory) else { continue };
+                    let size = bags::fitting_slot_px(kind.small);
+                    let held = self.inventory.fitting_slots(fitting);
+                    slots.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|group| {
+                        group.spawn(Node { column_gap: px(bags::SLOT_GAP_PX), ..default() }).with_children(|row| {
+                            for (index, &item) in held.iter().enumerate() {
+                                row.spawn((
+                                    FittingSlot { container: fitting, index: index as u8 },
+                                    doll::slot_node(size),
+                                    BackgroundColor(BG.with_alpha(0.8)),
+                                    BorderColor::all(if item.is_some() { BRIGHT } else { LINE }),
+                                ))
+                                .with_children(|slot| doll::slot_contents(slot, icons, self.fonts, self.inventory, item, size));
+                            }
+                        });
+                        group.spawn(Node { height: px(bags::FITTING_LABEL_PX - 2.0), ..default() }).with_children(|head| {
+                            head.spawn((FittingLabel(fitting), Text::new(kind.label), UiFonts::style(&self.fonts.display, 13.0, INK), TextLayout::no_wrap()));
+                        });
                     });
                 }
             });
@@ -1425,9 +1461,17 @@ impl ScreenLayout<'_> {
     }
 }
 
-/// The label over a fitting's small grid in its pack's or belt's window.
+/// The label under a fitting's slots in its pack's or belt's window.
 #[derive(Component)]
 pub struct FittingLabel(pub ItemId);
+
+/// One framed item slot of a pack's or belt's fitting (`container` is the fitting's hidden container,
+/// `index` the slot among its one or three): a drop target, and where the item in it is hovered and dragged from.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FittingSlot {
+    pub container: ItemId,
+    pub index: u8,
+}
 
 /// The number on a stack's cell: how many arrows or bolts lie there.
 #[derive(Component)]
@@ -1445,6 +1489,7 @@ fn target_under(
     drops: &Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
     grids: &Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
     slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+    fslots: &Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
     doll: Option<Rect>,
     ledger: Option<Rect>,
     column: Option<Rect>,
@@ -1461,6 +1506,12 @@ fn target_under(
                 return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
             }
         }
+        for (slot, node, transform) in fslots {
+            let rect = node_rect(node, transform);
+            if rect.contains(point) && window.contains(rect.center()) {
+                return Target::Fitting { container: slot.container, index: slot.index };
+            }
+        }
         return Target::Page;
     }
     if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
@@ -1468,6 +1519,11 @@ fn target_under(
     }
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Slot(slot.0);
+    }
+    if column.is_none_or(|c| c.contains(point))
+        && let Some((slot, ..)) = fslots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    {
+        return Target::Fitting { container: slot.container, index: slot.index };
     }
     // The grids' rectangles follow the scroll (`UiGlobalTransform` includes it), but a grid
     // scrolled out of the column is clipped, so only the visible part of the column counts.
@@ -1625,8 +1681,9 @@ fn drag_items(
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     (time, tuning, ui_scale, mut barter, mut bag_windows): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>, ResMut<bags::BagWindows>),
-    (drops, mut quickslots, columns, shelf_areas, window_frames): (
+    (drops, fslots, mut quickslots, columns, shelf_areas, window_frames): (
         Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+        Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
         ResMut<Quickslots>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
@@ -1648,7 +1705,7 @@ fn drag_items(
     let shelf = barter.session.as_ref().zip(shelf_areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
     // The open windows' rectangles, front first.
     let window_rects: Vec<Rect> = bag_windows.order.iter().rev().filter_map(|id| window_frames.iter().find(|(w, ..)| w.0 == *id)).map(|(_, n, t)| node_rect(n, t)).collect();
-    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, shelf, &window_rects, cell_px);
+    let target = target_under(point, &drops, &grids, &slots, &fslots, doll, ledger, column, shelf, &window_rects, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -1662,6 +1719,11 @@ fn drag_items(
         }),
         Target::Slot(slot) => inventory.worn(slot).and_then(|id| {
             let (_, node, transform) = slots.iter().find(|(s, ..)| s.0 == slot)?;
+            let size = inventory.footprint(id)?;
+            Some((node_rect(node, transform), Drag { id, grab: IVec2::ZERO, size, turned: false, press: point, active: false, target: None }))
+        }),
+        Target::Fitting { container, index } => inventory.fitting_slots(container).get(index as usize).copied().flatten().and_then(|id| {
+            let (_, node, transform) = fslots.iter().find(|(s, ..)| s.container == container && s.index == index)?;
             let size = inventory.footprint(id)?;
             Some((node_rect(node, transform), Drag { id, grab: IVec2::ZERO, size, turned: false, press: point, active: false, target: None }))
         }),
@@ -1794,7 +1856,8 @@ fn show_drag(
     mut hints: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor, &mut Visibility), (With<DropHint>, Without<DragGhost>)>,
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
-    mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
+    mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>, Without<FittingSlot>)>,
+    mut fitting_borders: Query<(&FittingSlot, &mut BorderColor), (Without<DropHint>, Without<ItemView>, Without<SlotView>)>,
     (tuning, ui_scale): (Res<Tuning>, Option<Res<UiScale>>),
     mut icons: Icons,
 ) {
@@ -1845,6 +1908,17 @@ fn show_drag(
             _ => None,
         });
         let colour = hint.unwrap_or(if inventory.worn(slot.0).is_some() { BRIGHT } else { LINE });
+        if border.top != colour {
+            *border = BorderColor::all(colour);
+        }
+    }
+    for (slot, mut border) in &mut fitting_borders {
+        let hint = drag.and_then(|d| d.target).and_then(|(target, fits)| match target {
+            Target::Fitting { container, index } if container == slot.container && index == slot.index => Some(if fits.is_ok() { OK } else { BAD }),
+            _ => None,
+        });
+        let filled = inventory.fitting_slots(slot.container).get(slot.index as usize).is_some_and(|held| held.is_some());
+        let colour = hint.unwrap_or(if filled { BRIGHT } else { LINE });
         if border.top != colour {
             *border = BorderColor::all(colour);
         }
@@ -3257,10 +3331,11 @@ mod tests {
             Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
             Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
             Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
         )>::new(&mut world);
-        let (drops, grids, slots) = state.get(&world).unwrap();
+        let (drops, grids, slots, fslots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
-        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, None, &[], 72.0);
+        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, &fslots, None, page, column, None, &[], 72.0);
         assert!(matches!(at(None), Target::Cell { .. }));
         assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
         // The column starts below this point: the grid is under the header, clipped away.
@@ -3279,11 +3354,12 @@ mod tests {
             Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
             Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
             Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
         )>::new(&mut world);
-        let (drops, grids, slots) = state.get(&world).unwrap();
+        let (drops, grids, slots, fslots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 600.0, 600.0));
         let window = [Rect::new(200.0, 250.0, 400.0, 400.0)];
-        let at = |point: Vec2, windows: &[Rect]| target_under(point, &drops, &grids, &slots, None, page, None, None, windows, 72.0);
+        let at = |point: Vec2, windows: &[Rect]| target_under(point, &drops, &grids, &slots, &fslots, None, page, None, None, windows, 72.0);
         assert!(matches!(at(Vec2::new(300.0, 300.0), &[]), Target::Quickslot(1)), "bare, the strip takes it");
         assert!(matches!(at(Vec2::new(300.0, 300.0), &window), Target::Cell { view: GridView::Underfoot, .. }), "the window's grid takes it");
         assert_eq!(at(Vec2::new(210.0, 260.0), &window), Target::Page, "its title bar is the page, not the level");
@@ -3399,7 +3475,7 @@ mod tests {
     }
 
     #[test]
-    fn a_packs_window_shows_its_lashing_and_strap_grids_beside_the_main_grid() {
+    fn a_packs_window_shows_its_lashing_and_strap_as_slots_beside_the_main_grid() {
         use fb_items::Accessory::{Lashing, WeaponStrap};
         let mut app = screen_app();
         let (pack, tent, spear) = {
@@ -3420,9 +3496,15 @@ mod tests {
         let (lashing, strap) = (inventory.fitting(pack, Lashing).unwrap(), inventory.fitting(pack, WeaponStrap).unwrap());
         let mut views = app.world_mut().query::<&GridView>();
         let shown: Vec<GridView> = views.iter(app.world()).copied().collect();
-        for container in [pack, lashing, strap] {
-            assert!(shown.contains(&GridView::Container(container)), "{container:?} is a grid on the screen");
+        assert!(shown.contains(&GridView::Container(pack)), "the main grid is on the screen");
+        for container in [lashing, strap] {
+            assert!(!shown.contains(&GridView::Container(container)), "{container:?} is a slot, not a grid");
         }
+        let mut slots = app.world_mut().query::<&FittingSlot>();
+        let mut drawn: Vec<(ItemId, u8)> = slots.iter(app.world()).map(|s| (s.container, s.index)).collect();
+        drawn.sort();
+        drawn.retain(|(container, _)| [lashing, strap].contains(container));
+        assert_eq!(drawn, vec![(lashing, 0), (strap, 0)]);
         let mut labels = app.world_mut().query::<(&FittingLabel, &Text)>();
         let mut names: Vec<(ItemId, String)> = labels.iter(app.world()).map(|(l, t)| (l.0, t.0.clone())).collect();
         names.sort_by_key(|(id, _)| id.0);
@@ -3430,11 +3512,13 @@ mod tests {
         // A tent in the lashing grid and a spear in the strap grid are on the screen as their items.
         let inventory = app.world().resource::<Inventory>();
         assert_eq!((inventory.hung_on(pack).len(), inventory.location(tent).is_some(), inventory.location(spear).is_some()), (2, true, true));
-        // The window is as wide as the main grid and the fittings together.
+        // The window is barely bigger than the main grid: a column of slots beside it, no taller than it.
         let cell = app.world().resource::<Tuning>().interface.cell_size;
         let size = bags::window_size(inventory, pack, cell).unwrap();
         let main = grid_size(inventory.grid(pack).unwrap(), cell);
-        assert!(size.x > main.x + 2.0 * cell && size.y >= main.y, "{size} against the main grid {main}");
+        let edge = 2.0 * (bags::PAD_PX + bags::BORDER_PX);
+        assert!(size.x > main.x + edge && size.x < main.x + edge + 1.3 * cell, "{size} against the main grid {main}");
+        assert!((size.y - (main.y + bags::TITLE_PX + bags::GAP_PX + edge)).abs() < 0.5, "no taller than the grid: {size} against {main}");
     }
 
     #[test]
@@ -3463,7 +3547,7 @@ mod tests {
         let bedroll = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
         inventory.put(bedroll, pack, Placement::new(0, 0, false)).unwrap();
         let drag = |inventory: &Inventory, id| Drag { id, grab: IVec2::ZERO, size: inventory.footprint(id).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
-        let onto = |container| Target::Cell { view: GridView::Container(container), cell: IVec2::ZERO };
+        let onto = |container| Target::Fitting { container, index: 0 };
         assert_eq!(check_drop(&inventory, &drag(&inventory, bedroll), onto(lashing)), Ok(()));
         let tying = drag(&inventory, bedroll);
         drop_at(&mut inventory, &tying, onto(lashing), 4).unwrap();
@@ -3480,7 +3564,30 @@ mod tests {
         drop_at(&mut inventory, &hanging, onto(frog), 4).unwrap();
         assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, mace)]);
         let second = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
-        assert_eq!(check_drop(&inventory, &drag(&inventory, second), onto(frog)), Err(Refusal::NoRoom), "a frog holds one");
+        // A frog holds one: a second weapon swaps the first out, to wherever it came from, here the stowed dagger's cell.
+        inventory.put(second, pack, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(check_drop(&inventory, &drag(&inventory, second), onto(frog)), Ok(()));
+        let swapping = drag(&inventory, second);
+        drop_at(&mut inventory, &swapping, onto(frog), 4).unwrap();
+        assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, second)]);
+        assert_eq!(inventory.location(mace), Some(Location::In { container: pack, at: Placement::new(0, 0, false) }), "the mace went back where the dagger came from");
+    }
+
+    #[test]
+    fn a_spear_swapped_out_of_the_strap_that_the_pack_cannot_take_is_set_down() {
+        use fb_items::Accessory::WeaponStrap;
+        let mut inventory = Inventory::default();
+        let (pack, _) = hung_kit(&mut inventory);
+        let strap = inventory.fitting(pack, WeaponStrap).unwrap();
+        let long = |base: &str| (1..200).filter_map(|s| fb_items::roll_item(base, s)).find(|i| !i.profile.packable && i.strappable()).unwrap();
+        let (spear, staff) = (inventory.add(long("Spear")), inventory.add(long("Staff")));
+        let drag = |id| Drag { id, grab: IVec2::ZERO, size: inventory.footprint(id).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        let (spearing, staffing) = (drag(spear), drag(staff));
+        let onto = Target::Fitting { container: strap, index: 0 };
+        assert_eq!(drop_at(&mut inventory, &spearing, onto, 4), Ok(vec![FloorChange::Lifted(spear)]));
+        assert_eq!(inventory.hung_on(pack), vec![(WeaponStrap, spear)]);
+        assert_eq!(drop_at(&mut inventory, &staffing, onto, 4), Ok(vec![FloorChange::Lifted(staff), FloorChange::SetDown(spear, 0.0)]));
+        assert_eq!(inventory.hung_on(pack), vec![(WeaponStrap, staff)]);
     }
 
     #[test]
@@ -3525,7 +3632,7 @@ mod tests {
         let stack = inventory.add(vials);
         let pouch = inventory.fitting(belt, PotionPouch).unwrap();
         let drag = Drag { id: stack, grab: IVec2::ZERO, size: inventory.footprint(stack).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
-        let changes = drop_at(&mut inventory, &drag, Target::Cell { view: GridView::Container(pouch), cell: IVec2::ZERO }, 4).unwrap();
+        let changes = drop_at(&mut inventory, &drag, Target::Fitting { container: pouch, index: 0 }, 4).unwrap();
         assert!(changes.is_empty(), "the stack is still lying there: {changes:?}");
         assert_eq!((inventory.item(stack).unwrap().quantity, inventory.location(stack)), (2, Some(Location::Loose)));
         assert_eq!(inventory.hung_on(belt).len(), 1);

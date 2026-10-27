@@ -757,5 +757,7 @@ fn a_shelf_stack_cannot_be_split_into_the_pouch_mid_deal() {
     let barter = Barter { session: Some(session), ..Default::default() };
     let into = Target::Cell { view: GridView::Container(pouch), cell: IVec2::ZERO };
     assert_eq!(barter.check(&inventory, &drag, into), Some(Err(Refusal::NoRoom)), "a free piece is refused");
+    let onto_slot = Target::Fitting { container: pouch, index: 0 };
+    assert_eq!(barter.check(&inventory, &drag, onto_slot), Some(Err(Refusal::NoRoom)), "and so is a piece onto a pouch slot");
     assert_eq!(inventory.item(stack).unwrap().quantity, 3);
 }

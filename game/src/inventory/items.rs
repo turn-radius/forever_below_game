@@ -753,6 +753,101 @@ impl Inventory {
         self.fitted_on.get(&container).copied()
     }
 
+    /// What each slot of the fitting `fitting` holds, in order: one slot for a lashing, strap or frog,
+    /// three for the pouch, filled from the first. Empty for any other container.
+    pub fn fitting_slots(&self, fitting: ItemId) -> Vec<Option<ItemId>> {
+        let Some(&(_, accessory)) = self.fitted_on.get(&fitting) else { return vec![] };
+        let holds = fb_items::fitting_grid(accessory).map_or(0, |g| g.holds as usize);
+        let mut held: Vec<_> = self.grids.get(&fitting).map(|g| g.entries().iter().map(|e| (e.at.y, e.at.x, e.id)).collect()).unwrap_or_default();
+        held.sort();
+        let mut slots: Vec<Option<ItemId>> = held.into_iter().map(|(_, _, id)| Some(id)).collect();
+        slots.resize(holds.max(slots.len()), None);
+        slots
+    }
+
+    /// Whether `id` could go in a slot of `fitting`: it is the fitting's kind of thing
+    /// ([`Item::fits_accessory`]), of any size. A full slot is no bar: [`Inventory::fit`] swaps.
+    pub fn check_fit(&self, id: ItemId, fitting: ItemId) -> Result<(), Refusal> {
+        let &(_, accessory) = self.fitted_on.get(&fitting).ok_or(Refusal::NotAContainer)?;
+        let item = self.item(id).ok_or(Refusal::Unknown)?;
+        if self.holds(id, fitting) {
+            return Err(Refusal::IntoItself);
+        }
+        if !item.fits_accessory(accessory) {
+            return Err(Refusal::NotAccepted);
+        }
+        Ok(())
+    }
+
+    /// Puts `id` in the slot `index` of `fitting` ([`Inventory::fitting_slots`]), taking it from wherever it
+    /// was; a stack gives one piece and keeps the rest. Whatever the slot held goes back where `id` came from
+    /// if it fits there, else is stowed in a carried bag, else is left loose to be set down underfoot (as
+    /// [`Inventory::equip`] does for a doll slot). Returns what was displaced and where it went.
+    pub fn fit(&mut self, id: ItemId, fitting: ItemId, index: usize) -> Result<Option<(ItemId, Displaced)>, Refusal> {
+        self.check_fit(id, fitting)?;
+        let slots = self.fitting_slots(fitting);
+        if index >= slots.len() {
+            return Err(Refusal::NotAContainer);
+        }
+        if slots.contains(&Some(id)) {
+            return Ok(None);
+        }
+        let old = slots[index];
+        let from = self.location(id);
+        let footprint = self.item(id).ok_or(Refusal::Unknown)?.profile.footprint;
+        if let Some(old) = old {
+            self.take_out(old);
+        }
+        let piece = if self.item(id).is_some_and(|i| i.quantity > 1) {
+            self.take_one(id).ok_or(Refusal::Unknown)?
+        } else {
+            self.take_out(id);
+            id
+        };
+        let at = self.grids.get(&fitting).and_then(|g| g.first_free(footprint));
+        let placed = at.and_then(|at| self.grids.get_mut(&fitting)?.place(piece, footprint, at).ok().map(|_| at));
+        let Some(at) = placed else {
+            // Cannot happen with room behind a slot for anything it accepts; put things back as they were.
+            if piece != id {
+                self.merge_back(piece, id);
+            } else if let Some(Location::In { container, at }) = from {
+                let _ = self.put(id, container, at);
+            }
+            if let Some(old) = old {
+                let spot = self.grids.get(&fitting).and_then(|g| g.first_free(self.item(old)?.profile.footprint));
+                if let Some(spot) = spot {
+                    let _ = self.put(old, fitting, spot);
+                }
+            }
+            return Err(Refusal::NoRoom);
+        };
+        self.locations.insert(piece, Location::In { container: fitting, at });
+        let Some(old) = old else { return Ok(None) };
+        let back = match from {
+            Some(Location::Worn(was)) if piece == id && self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
+            Some(Location::In { container, at }) if piece == id || container != fitting => {
+                match [false, true].into_iter().map(|turned| Placement { turned, ..at }).find(|&placed| self.put(old, container, placed).is_ok()) {
+                    Some(at) => Displaced::In { container, at },
+                    None => self.stow_displaced(old),
+                }
+            }
+            _ => self.stow_displaced(old),
+        };
+        Ok(Some((old, back)))
+    }
+
+    /// Stows `id`, loose, in a carried bag with room: where it went, else [`Displaced::Underfoot`].
+    fn stow_displaced(&mut self, id: ItemId) -> Displaced {
+        match self.stow(id) {
+            Ok(container) => match self.location(id) {
+                Some(Location::In { at, .. }) => Displaced::In { container, at },
+                None => Displaced::Folded { container },
+                _ => Displaced::Underfoot,
+            },
+            Err(_) => Displaced::Underfoot,
+        }
+    }
+
     /// Everything sitting in a fitting of `host`, with the fitting that holds it, in the order of its
     /// fittings: the bedroll in the lashing, the spear on the strap, the weapons in the frogs, the potions.
     pub fn hung_on(&self, host: ItemId) -> Vec<(Accessory, ItemId)> {
@@ -1141,7 +1236,7 @@ mod tests {
         let pack = inventory.add(pack_lashed(true));
         inventory.wear(pack, Slot::Back).unwrap();
         let lashing = grid_of(&inventory, pack, Lashing);
-        assert_eq!(inventory.grid(lashing).map(|g| (g.cols, g.rows)), Some((2, 6)));
+        assert_eq!(inventory.fitting_slots(lashing), vec![None], "one slot");
         assert_eq!(inventory.put(sword, lashing, at(0, 0)), Err(Refusal::NotAccepted), "not a bundle");
         assert_eq!(inventory.put(bedroll, lashing, at(0, 0)), Ok(()));
         assert_eq!(inventory.lashed(), Some(bedroll));
@@ -1278,6 +1373,35 @@ mod tests {
         assert!(inventory.is_carried(potions[0]));
         inventory.use_one(potions[0]);
         assert_eq!(inventory.hung_on(belt).len(), 2);
+    }
+
+    #[test]
+    fn a_slot_takes_one_whole_item_of_any_size_and_swaps_a_full_one() {
+        use fb_items::Accessory::LeftFrog;
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(pack_lashed(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let strap_pack = inventory.add(belt_with(|b| b.has_accessory(LeftFrog)));
+        inventory.wear(strap_pack, Slot::Belt).unwrap();
+        let frog = grid_of(&inventory, strap_pack, LeftFrog);
+        let tent = inventory.add(rolled("Tent", 3));
+        let lashing = grid_of(&inventory, pack, fb_items::Accessory::Lashing);
+        // A tent fits whatever its footprint.
+        assert_eq!(inventory.fit(tent, lashing, 0), Ok(None));
+        assert_eq!(inventory.fitting_slots(lashing), vec![Some(tent)]);
+        // A mace taken into the frog, then the dagger swapped for it: the mace goes back to the pack's cell it came from.
+        let mace = inventory.add((1..99).filter_map(|s| fb_items::roll_item("Mace", s)).find(|m| m.frogable()).unwrap());
+        let dagger = inventory.add(rolled("Dagger", 3));
+        inventory.put(dagger, pack, at(0, 0)).unwrap();
+        assert_eq!(inventory.fit(mace, frog, 0), Ok(None));
+        let swapped = inventory.fit(dagger, frog, 0).unwrap().unwrap();
+        assert_eq!(swapped.0, mace);
+        assert!(matches!(swapped.1, Displaced::In { container, .. } | Displaced::Folded { container } if container == pack), "{swapped:?}");
+        assert_eq!(inventory.fitting_slots(frog), vec![Some(dagger)]);
+        // What does not go is refused and nothing moves.
+        let sword = inventory.add(rolled("Staff", 3));
+        assert_eq!(inventory.fit(sword, frog, 0), Err(Refusal::NotAccepted));
+        assert_eq!(inventory.location(sword), Some(Location::Loose));
     }
 
     #[test]

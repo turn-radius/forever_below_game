@@ -1,41 +1,46 @@
-//! The small grids a pack and a belt come with: a pack's lashing and weapon strap, a belt's two
+//! The item slots a pack and a belt come with: a pack's lashing and weapon strap, a belt's two
 //! frogs and its potion pouch (`docs/items.md`, "Pack and belt accessories").
 //!
 //! They are rolled with the pack or belt ([`Item::accessories`]) and never found loose. Each is
-//! a grid of its own beside the container's main grid, with its own label, that takes only what
-//! its fitting holds ([`Item::fits_accessory`]) and at most [`FittingGrid::holds`] things.
+//! a framed slot beside the container's main grid, with its own label, that takes one whole item
+//! of its fitting's kind ([`Item::fits_accessory`]) whatever its size, and the pouch three:
+//! [`FittingGrid::holds`] things at most. Behind the slots is a hidden container whose grid is
+//! only room enough for anything the slots accept; it is never drawn.
 
 use armory::families::bags::Accessory;
 
 use crate::footprint::Grid;
 use crate::item::Item;
 
-/// How big a fitting's grid is and how much it holds.
+/// What a fitting is: how its slots are labelled and drawn, and how much it holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FittingGrid {
     pub accessory: Accessory,
-    /// What the screen calls the grid.
+    /// What the screen calls the fitting.
     pub label: &'static str,
+    /// The hidden grid behind the slots, big enough for the largest thing the fitting accepts, so
+    /// a slot never refuses for room. Never drawn.
     pub cols: u8,
     pub rows: u8,
     /// The most things in it at once: one for a lashing, strap or frog, three for the pouch.
     pub holds: u8,
+    /// Whether its slots are drawn small, as the doll's small slots, rather than big.
+    pub small: bool,
 }
 
-/// The grid of `accessory`; none for a belt's sack, which is a row more of the belt's own grid.
-/// Sizes follow what each holds: a tent is the largest bundle (2 by 6), a spear or staff the
-/// longest strapped thing (up to 9 long, 5 wide, for a crossbow), a sword the longest in a frog (2 by 5), and
-/// the pouch is a row of places for vials and small potions.
+/// The fitting `accessory` makes; none for a belt's sack, which is a row more of the belt's own grid.
+/// Each slot holds one whole item: a tent is the largest bundle (2 by 6), a bow the widest strapped
+/// thing (5 by 9 at most), a sword the longest in a frog, and the pouch takes three vials or small potions.
 pub fn fitting_grid(accessory: Accessory) -> Option<FittingGrid> {
-    let (label, cols, rows, holds) = match accessory {
-        Accessory::Lashing => ("Lashing", 2, 6, 1),
-        Accessory::WeaponStrap => ("Strap", 4, 9, 1),
-        Accessory::LeftFrog => ("Left frog", 2, 5, 1),
-        Accessory::RightFrog => ("Right frog", 2, 5, 1),
-        Accessory::PotionPouch => ("Potion pouch", 3, 2, 3),
+    let (label, cols, rows, holds, small) = match accessory {
+        Accessory::Lashing => ("Lashing", 10, 10, 1, false),
+        Accessory::WeaponStrap => ("Strap", 10, 10, 1, false),
+        Accessory::LeftFrog => ("Left frog", 10, 10, 1, false),
+        Accessory::RightFrog => ("Right frog", 10, 10, 1, false),
+        Accessory::PotionPouch => ("Potion pouch", 6, 4, 3, true),
         Accessory::BeltSack => return None,
     };
-    Some(FittingGrid { accessory, label, cols, rows, holds })
+    Some(FittingGrid { accessory, label, cols, rows, holds, small })
 }
 
 /// The grids `item` has, in the order it was rolled with them: none for anything but a pack or belt.
@@ -77,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn each_grid_is_big_enough_for_the_largest_thing_it_takes() {
+    fn every_item_a_slot_accepts_fits_the_room_behind_it() {
         let fits = |grid: FittingGrid, item: &Item| {
             let f = item.profile.footprint;
             (f.cols <= grid.cols && f.rows <= grid.rows) || (f.rows <= grid.cols && f.cols <= grid.rows)
@@ -93,6 +98,10 @@ mod tests {
                 assert!(fits(grid, item), "{accessory:?}: {} {:?}", item.base, item.profile.footprint);
             }
         }
+        // Three of the largest pouch potion take no more than the pouch's room.
+        let pouch = fitting_grid(Accessory::PotionPouch).unwrap();
+        let widest = all(&["Vial", "Small potion", "Healing vial", "Small healing draught"]).iter().filter(|i| i.fits_accessory(Accessory::PotionPouch)).map(|i| i.profile.footprint.cols as u32 * i.profile.footprint.rows as u32).max().unwrap();
+        assert!(3 * widest <= pouch.cols as u32 * pouch.rows as u32);
         // The strap takes every long, thin weapon the rule allows, the widest bows included, and
         // never a crossbow.
         let strap = fitting_grid(Accessory::WeaponStrap).unwrap();
