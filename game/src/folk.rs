@@ -366,7 +366,8 @@ pub(crate) fn spawn_folk(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
-    old: Query<Entity, With<Denizen>>,
+    old: Query<(Entity, Option<&crate::remains::BodyStock>), With<Denizen>>,
+    mut inventory: Option<ResMut<crate::inventory::Inventory>>,
     mut record: Option<ResMut<crate::record::WorldRecord>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut spawner: ItemSpawner,
@@ -376,7 +377,10 @@ pub(crate) fn spawn_folk(
     if shown.as_deref() == Some(&level.0.folk[..]) && !old.is_empty() {
         return;
     }
-    for entity in &old {
+    for (entity, stock) in &old {
+        if let (Some(stock), Some(inventory)) = (stock, inventory.as_deref_mut()) {
+            inventory.forget(stock.container);
+        }
         commands.entity(entity).despawn();
     }
     // On a level that was left, each folk is as they were left (`crate::record`).
@@ -392,7 +396,16 @@ pub(crate) fn spawn_folk(
         };
         let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
         let health = crate::combat::Health { hp: left.hp, max: left.max };
-        if left.dead {
+        if let (true, Some(body), Some(inventory)) = (left.dead, left.body.as_ref(), inventory.as_deref_mut()) {
+            // A body that still has things on it lies dressed in them where it fell, long
+            // fallen ([`crate::remains`]).
+            let stock = crate::remains::restore_body(inventory, body, person.spot.seed, &person.name);
+            let worn = Person { gear: crate::remains::drawn_kit(inventory, &stock.kit).iter().filter_map(|&(slot, id)| Some((slot, inventory.item(id)?.clone()))).collect(), goods: Vec::new(), ..person.clone() };
+            let figure = Figure::dress(&worn.spec, &worn.gear, worn.dirt);
+            let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &worn, &figure);
+            let fallen = crate::combat::feedback::Corpse { since: LONG_FALLEN, fell: left.transform() };
+            commands.entity(root).insert((health, hostility, fallen, stock)).remove::<BlocksTheWay>();
+        } else if left.dead {
             // A body lies bare where it fell, long fallen: what it wore is on the floor.
             let bare = crate::folk_combat::bare(person);
             let figure = Figure::dress(&bare.spec, &bare.gear, bare.dirt);

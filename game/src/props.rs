@@ -49,7 +49,7 @@ pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(crate::interact::InteractPlugin)
+        app.add_plugins((crate::interact::InteractPlugin, crate::remains::RemainsPlugin))
             .init_resource::<Inventory>()
             .init_resource::<Aimed>()
             .init_resource::<Keymap>()

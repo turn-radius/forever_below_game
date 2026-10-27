@@ -18,12 +18,12 @@
 //!   [`Corpse`]: it stops its routine, no longer turns its head, blocks nobody and shows no card.
 //!   "Name is slain" shows low in the view.
 //!
-//! - **What they leave** ([`crate::belongings::drop_belongings`]): as they fall, every item they
-//!   wore and held is set down round where they fell as the item it is (its rarity, affixes and
-//!   wear), through the floor machinery, as a skeleton's is, and their body is drawn again bare
-//!   ([`bare_the_fallen`]). The body is marked [`Looted`] at once, and one brought back from
-//!   the record comes back bare and [`Looted`] (`crate::folk::spawn_folk`), so nothing is set down
-//!   twice.
+//! - **What they leave** ([`crate::belongings::drop_belongings`], [`crate::remains`]): as they fall they stay dressed in what they
+//!   wore and held, kept on the body for the delver to search and take; nothing is set on the
+//!   floor. The body is drawn in what is left ([`crate::remains::keep_bodies_dressed`]), and bare
+//!   ([`bare_the_fallen`]) once looted, when it is marked [`Looted`]. A body brought back from
+//!   the record comes back dressed in what was left (`crate::folk::spawn_folk`), or bare and
+//!   [`Looted`] if it was looted or recorded before bodies kept their things.
 //! - **Fighting back** ([`fight`]): a folk given cause turns hostile (`crate::hostility`, with the
 //!   kin who see it). A hostile folk leaves their routine and comes at the delver: straight at
 //!   them in sight, else along the shortest way through the grid (`fb_level::path::find_path`,
@@ -1038,134 +1038,183 @@ pub(crate) mod tests {
         assert!(app.world().get::<Corpse>(folk).is_some(), "it fell");
     }
 
+    /// `app` with fallen bodies kept dressed in what is left on them, as the game does.
+    fn keep_dressed(app: &mut App) {
+        app.add_systems(Update, crate::remains::keep_bodies_dressed.after(bare_the_fallen));
+    }
+
+    /// The names of what is drawn under `body`: its figure's parts.
+    fn drawn(app: &mut App, body: Entity) -> Vec<String> {
+        let mut names = app.world_mut().query::<&Name>();
+        let children = app.world().get::<Children>(body).map(|c| c.to_vec()).unwrap_or_default();
+        let mut found = Vec::new();
+        for child in children {
+            let mut stack = vec![child];
+            while let Some(e) = stack.pop() {
+                if let Ok(name) = names.get(app.world(), e) {
+                    found.push(name.to_string());
+                }
+                stack.extend(app.world().get::<Children>(e).map(|c| c.to_vec()).unwrap_or_default());
+            }
+        }
+        found
+    }
+
     #[test]
-    fn a_slain_folk_drops_everything_it_wore_and_held_once_where_it_fell() {
-        use crate::inventory::underfoot::{FloorChange, FloorChanges};
+    fn a_slain_folk_stays_dressed_and_nothing_is_set_on_the_floor() {
+        use crate::remains::BodyStock;
         let (mut app, _, folk) = folk_fight(30.0);
-        // What they wore and held, and carried: their faction's key too.
+        keep_dressed(&mut app);
         let person = app.world().get::<Denizen>(folk).unwrap().person.clone();
-        let mut gear = person.gear.clone();
-        // An archer's arrows fall inside its quiver, not loose.
-        gear.extend(person.goods.iter().filter(|i| !matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).cloned().map(|i| (fb_items::Slot::Mainhand, i)));
-        assert!(gear.len() >= 2, "a folk wears and holds something");
-        assert!(on_the_floor(&mut app).is_empty(), "nothing lies there while they stand");
+        assert!(person.gear.len() >= 2, "a folk wears and holds something");
         let lying_before = app.world().resource::<CurrentLevel>().0.items.len();
         strike_down(&mut app, folk);
-        // Every item they wore and held, as the same item, once.
-        let floor = on_the_floor(&mut app);
-        assert_eq!(floor.len(), gear.len(), "one for each piece of gear");
-        let inventory = app.world().resource::<Inventory>();
-        // An archer's arrows lie in the quiver that fell with it.
-        let arrows = person.goods.iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).count();
-        if arrows > 0 {
-            let quiver = floor.iter().find(|f| inventory.item(f.id).is_some_and(|i| i.base == "Quiver")).expect("the quiver lies there");
-            assert_eq!(inventory.contents_count(quiver.id), arrows, "every arrow is in the quiver");
-        }
-        let mut lying: Vec<(String, u32)> = floor.iter().map(|f| inventory.item(f.id).map(|i| (i.base.to_string(), i.seed)).unwrap()).collect();
-        let mut wore: Vec<(String, u32)> = gear.iter().map(|(_, i)| (i.base.to_string(), i.seed)).collect();
-        lying.sort();
-        wore.sort();
-        assert_eq!(lying, wore);
-        for f in &floor {
-            let item = inventory.item(f.id).unwrap();
-            let original = gear.iter().map(|(_, i)| i).find(|i| i.seed == item.seed && i.base == item.base).unwrap();
-            assert_eq!(item, original, "the same rarity, affixes and wear");
-        }
-        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), lying_before + gear.len(), "the level records them");
-        // Where they fell.
-        let at = app.world().get::<Corpse>(folk).unwrap().fell.translation.xz();
-        for f in &floor {
-            let world = fb_level::Level::world(f.spot.x, f.spot.y);
-            assert!(Vec2::new(world[0], world[2]).distance(at) < 16.0, "{} from where they fell", Vec2::new(world[0], world[2]).distance(at));
-        }
-        // The body is bare, and sheds nothing more however long it lies.
-        assert!(app.world().get::<Denizen>(folk).unwrap().person.gear.is_empty());
-        for _ in 0..300 {
+        for _ in 0..60 {
             app.update();
         }
-        assert_eq!(on_the_floor(&mut app).len(), gear.len(), "dropped once");
-        // Picked up, each is the delver's to wear or hold where the folk had it.
-        let ids: Vec<(crate::inventory::ItemId, Slot)> = floor
-            .iter()
-            .map(|f| {
-                let item = app.world().resource::<Inventory>().item(f.id).unwrap().clone();
-                (f.id, gear.iter().find(|(_, i)| *i == item).unwrap().0)
-            })
-            .collect();
-        for &(id, _) in &ids {
-            app.world_mut().resource_mut::<FloorChanges>().0.push(FloorChange::Lifted(id));
+        assert!(on_the_floor(&mut app).is_empty(), "nothing lies beside the body");
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), lying_before, "and the level records nothing set down");
+        assert!(app.world().get::<crate::combat::feedback::Looted>(folk).is_none(), "it is not looted");
+        assert_eq!(app.world().get::<Denizen>(folk).unwrap().person.gear.len(), person.gear.len(), "it still wears all of it");
+        // Each piece is on the body in its own slot, as the same item.
+        let stock = app.world().get::<BodyStock>(folk).expect("its things are kept on the body").clone();
+        let inventory = app.world().resource::<Inventory>();
+        for (slot, item) in &person.gear {
+            assert!(stock.kit.iter().any(|&(s, id)| s == *slot && inventory.item(id) == Some(item)), "{slot:?} is kept");
         }
-        app.update();
-        assert!(on_the_floor(&mut app).is_empty(), "all taken up");
-        let mut inventory = app.world_mut().resource_mut::<Inventory>();
-        for &(id, slot) in &ids {
-            // The faction's key is carried, not worn.
-            if inventory.item(id).is_some_and(|i| i.base == fb_items::armory_base::KEY) {
-                continue;
-            }
-            inventory.equip(id, slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
-            assert_eq!(inventory.worn(slot), Some(id), "{slot:?} is worn");
+        // An archer's arrows are in the quiver it wears.
+        let arrows = person.goods.iter().filter(|i| matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).count();
+        if arrows > 0 {
+            let quiver = stock.kit.iter().map(|&(_, id)| id).find(|&id| inventory.item(id).is_some_and(|i| i.base == "Quiver" || i.base == "Bolt case")).expect("the quiver is on the body");
+            assert_eq!(inventory.contents_count(quiver), arrows, "every arrow is in it");
         }
     }
 
     #[test]
-    fn a_body_brought_back_from_the_record_lies_bare_and_drops_nothing() {
+    fn what_is_taken_from_a_body_leaves_its_drawn_kit_at_once_and_a_bare_body_is_looted() {
+        use crate::combat::feedback::Looted;
+        use crate::remains::BodyStock;
+        let (mut app, _, folk) = folk_fight(30.0);
+        keep_dressed(&mut app);
+        strike_down(&mut app, folk);
+        let stock = app.world().get::<BodyStock>(folk).unwrap().clone();
+        let worn = stock.kit.len();
+        let (_, first) = stock.kit[0];
+        let taken = app.world().resource::<Inventory>().item(first).unwrap().clone();
+        // Dragged out of the body's window and into the pack, or anywhere else: it leaves the grid.
+        app.world_mut().resource_mut::<Inventory>().take_out(first);
+        app.update();
+        let denizen = app.world().get::<Denizen>(folk).unwrap();
+        assert_eq!(denizen.person.gear.len(), worn - 1);
+        assert!(!denizen.person.gear.iter().any(|(_, i)| *i == taken), "the taken item is no longer worn by the body");
+        assert_eq!(app.world().get::<BodyStock>(folk).unwrap().kit.len(), worn - 1);
+        let names = drawn(&mut app, folk);
+        assert!(!names.iter().any(|n| *n == taken.title()), "and no longer drawn: {names:?}");
+        assert!(app.world().get::<Looted>(folk).is_none());
+        // Everything taken: the body is bare, and looted.
+        let rest: Vec<_> = app.world().get::<BodyStock>(folk).unwrap().kit.clone();
+        let holds: Vec<crate::inventory::ItemId> = app.world().resource::<Inventory>().grid(stock.container).unwrap().entries().iter().map(|e| e.id).collect();
+        for id in holds {
+            app.world_mut().resource_mut::<Inventory>().take_out(id);
+        }
+        assert!(!rest.is_empty() || worn == 1);
+        app.update();
+        assert!(app.world().get::<Denizen>(folk).unwrap().person.gear.is_empty());
+        assert!(app.world().get::<Looted>(folk).is_some(), "nothing left to take");
+    }
+
+    #[test]
+    fn a_body_brought_back_from_the_record_still_wears_what_was_not_taken() {
+        use crate::combat::feedback::Looted;
+        use crate::remains::BodyStock;
         use bevy::ecs::system::RunSystemOnce;
         let (mut app, _, folk) = folk_fight(30.0);
+        keep_dressed(&mut app);
         strike_down(&mut app, folk);
+        let stock = app.world().get::<BodyStock>(folk).unwrap().clone();
+        let worn = stock.kit.len();
+        assert!(worn >= 2);
+        let (_, first) = stock.kit[0];
+        let taken = app.world().resource::<Inventory>().item(first).unwrap().clone();
+        app.world_mut().resource_mut::<Inventory>().take_out(first);
+        app.update();
         app.init_resource::<crate::record::WorldRecord>();
         app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
         let record = app.world().resource::<crate::record::WorldRecord>().clone();
         let left = &record.level(1).unwrap().folk[&plain_index(&app)];
-        assert!(left.dead && left.hp == 0);
-        // The level laid out again from the record: the folk come back as it has them.
+        assert!(left.dead);
+        let body = left.body.as_ref().expect("recorded with what is left on it");
+        assert_eq!(body.contents.iter().filter(|b| b.slot.is_some()).count(), worn - 1, "all but the taken one are worn");
+        // Through a save and back.
+        let record: crate::record::WorldRecord = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        // The level laid out again: the body is still dressed in what is left.
         let mut again = combat_app();
         again.insert_resource(record).init_resource::<crate::folk::FolkFigures>().add_systems(Update, crate::folk::spawn_folk);
+        keep_dressed(&mut again);
         for _ in 0..120 {
             again.update();
         }
-        let mut denizens = again.world_mut().query::<(Entity, &Denizen)>();
         let spot = again.world().resource::<CurrentLevel>().0.folk[plain_index(&again)];
+        let mut denizens = again.world_mut().query::<(Entity, &Denizen)>();
+        let (body, denizen) = denizens.iter(again.world()).find(|(_, d)| d.person.spot == spot).map(|(e, d)| (e, d.clone())).unwrap();
+        assert!(again.world().get::<Corpse>(body).is_some());
+        assert!(again.world().get::<Looted>(body).is_none(), "not looted");
+        assert!(again.world().get::<BodyStock>(body).is_some());
+        assert_eq!(denizen.person.gear.len(), worn - 1);
+        assert!(!denizen.person.gear.iter().any(|(_, i)| *i == taken));
+        assert!(on_the_floor(&mut again).is_empty(), "nothing lies on the floor");
+        let names = drawn(&mut again, body);
+        assert!(!names.iter().any(|n| *n == taken.title()), "the taken item is not drawn: {names:?}");
+        let kept = denizen.person.gear.iter().find(|(_, i)| i.title() != taken.title()).expect("something else is worn");
+        assert!(names.iter().any(|n| *n == kept.1.title()), "what was left is drawn: {names:?}");
+    }
+
+    #[test]
+    fn a_body_looted_bare_comes_back_bare_and_one_from_an_old_save_drops_nothing() {
+        use crate::combat::feedback::Looted;
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _, folk) = folk_fight(30.0);
+        keep_dressed(&mut app);
+        strike_down(&mut app, folk);
+        let stock = app.world().get::<crate::remains::BodyStock>(folk).unwrap().clone();
+        let holds: Vec<crate::inventory::ItemId> = app.world().resource::<Inventory>().grid(stock.container).unwrap().entries().iter().map(|e| e.id).collect();
+        for id in holds {
+            app.world_mut().resource_mut::<Inventory>().take_out(id);
+        }
+        app.update();
+        app.init_resource::<crate::record::WorldRecord>();
+        app.world_mut().run_system_once(crate::record::record_level_left).unwrap();
+        let mut record = app.world().resource::<crate::record::WorldRecord>().clone();
+        let index = plain_index(&app);
+        assert!(record.level(1).unwrap().folk[&index].dead);
+        assert!(record.level(1).unwrap().folk[&index].body.is_none(), "nothing left on it");
+        // A record from before bodies kept their gear has no body either.
+        for text in [serde_json::to_string(&record).unwrap()] {
+            assert!(!text.contains("\"body\""), "no body is written for a bare one");
+        }
+        record.levels.get_mut(&1).unwrap().folk.get_mut(&index).unwrap().body = None;
+        let mut again = combat_app();
+        again.insert_resource(record).init_resource::<crate::folk::FolkFigures>().add_systems(Update, crate::folk::spawn_folk);
+        keep_dressed(&mut again);
+        for _ in 0..120 {
+            again.update();
+        }
+        let spot = again.world().resource::<CurrentLevel>().0.folk[plain_index(&again)];
+        let mut denizens = again.world_mut().query::<(Entity, &Denizen)>();
         let (body, denizen) = denizens.iter(again.world()).find(|(_, d)| d.person.spot == spot).map(|(e, d)| (e, d.clone())).unwrap();
         assert!(denizen.person.gear.is_empty(), "bare");
-        assert!(again.world().get::<Corpse>(body).is_some() && again.world().get::<crate::combat::feedback::Looted>(body).is_some());
-        assert!(again.world().get::<Routine>(body).is_none(), "a body keeps no routine");
+        assert!(again.world().get::<Corpse>(body).is_some() && again.world().get::<Looted>(body).is_some());
         assert!(on_the_floor(&mut again).is_empty(), "nothing set down again");
-        let down = again.world().get::<Transform>(body).unwrap();
-        assert!((down.rotation * Vec3::Y).y.abs() < 0.2, "lying down");
-        // Another, drawn in what they wear, struck down here: their figure is drawn again with
-        // none of it on.
+        // Another, drawn in what they wear, struck down here: drawn in it still.
         let (other, person) = denizens.iter(again.world()).find(|(e, _)| *e != body).map(|(e, d)| (e, d.person.clone())).unwrap();
         let titles: Vec<String> = person.gear.iter().map(|(_, i)| i.title().to_string()).collect();
-        let drawn = |app: &mut App| -> Vec<String> {
-            let mut names = app.world_mut().query::<&Name>();
-            let children = app.world().get::<Children>(other).map(|c| c.to_vec()).unwrap_or_default();
-            let mut found = Vec::new();
-            for child in children {
-                let mut stack = vec![child];
-                while let Some(e) = stack.pop() {
-                    if let Ok(name) = names.get(app.world(), e) {
-                        found.push(name.to_string());
-                    }
-                    stack.extend(app.world().get::<Children>(e).map(|c| c.to_vec()).unwrap_or_default());
-                }
-            }
-            found
-        };
-        assert!(drawn(&mut again).iter().any(|n| titles.contains(n)), "drawn dressed");
+        assert!(drawn(&mut again, other).iter().any(|n| titles.contains(n)), "drawn dressed");
         strike_down(&mut again, other);
-        let now = drawn(&mut again);
-        assert!(now.iter().any(|n| n == "Body"), "the body is drawn");
-        assert!(!now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
-        // What they wore and carried, their faction's key among it.
-        let loose = person.goods.iter().filter(|i| !matches!(i.shape.family(), armory::Family::Arrow | armory::Family::Bolt)).count();
-        let floor = on_the_floor(&mut again);
-        assert_eq!(floor.len(), person.gear.len() + loose);
-        let arrows = person.goods.len() - loose;
-        if arrows > 0 {
-            let inventory = again.world().resource::<Inventory>();
-            let quiver = floor.iter().find(|f| inventory.item(f.id).is_some_and(|i| i.base == "Quiver")).expect("the quiver lies there");
-            assert_eq!(inventory.contents_count(quiver.id), arrows, "every arrow is in the quiver");
+        for _ in 0..30 {
+            again.update();
         }
+        let now = drawn(&mut again, other);
+        assert!(now.iter().any(|n| titles.contains(n)), "still drawn in its gear: {now:?}");
+        assert!(on_the_floor(&mut again).is_empty(), "nothing lies beside it");
     }
 }

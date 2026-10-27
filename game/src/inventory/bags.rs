@@ -199,7 +199,7 @@ pub fn place_windows(
     tuning: Res<Tuning>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
-    (underfoot, showing, barter): (Res<super::Underfoot>, Res<super::OpenContainer>, Res<crate::barter::Barter>),
+    (underfoot, showing, barter, bodies): (Res<super::Underfoot>, Res<super::OpenContainer>, Res<crate::barter::Barter>, Option<Res<crate::remains::NearBodies>>),
     leaf: Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
     column: Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
     dolls: Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
@@ -210,7 +210,10 @@ pub fn place_windows(
     let cell = tuning.interface.cell_size;
     // The trader's shelf is not the delver's to reach into.
     let opened = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c));
-    let gone: Vec<ItemId> = windows.order.iter().copied().filter(|&id| inventory.grid(id).is_none() || !reachable(&inventory, &underfoot.bags, opened, id)).collect();
+    // A fallen body's things are in reach while the delver stands near the body
+    // ([`crate::remains`]), like a bag set down underfoot.
+    let roots: Vec<ItemId> = underfoot.bags.iter().copied().chain(bodies.iter().flat_map(|b| b.0.iter().copied())).collect();
+    let gone: Vec<ItemId> = windows.order.iter().copied().filter(|&id| inventory.grid(id).is_none() || !reachable(&inventory, &roots, opened, id)).collect();
     for id in gone {
         windows.close(id);
     }

@@ -210,6 +210,10 @@ pub struct FolkRecord {
     /// the floor, or gone, as the record has it).
     #[serde(default)]
     pub dead: bool,
+    /// What is left on the body, still wearing it: none for a body from before bodies kept their
+    /// gear (its things lie on the floor as the record has them) or one looted bare.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRecord>,
 }
 
 impl FolkRecord {
@@ -280,6 +284,22 @@ pub struct Stowed {
     pub item: ItemRecord,
 }
 
+/// What is left on a fallen body: its things, each where it lay in the body's grid, and which
+/// were worn or held in what slot, so the body is drawn in them again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodyRecord {
+    /// How deep the body's grid is.
+    pub rows: u8,
+    pub contents: Vec<BodyStowed>,
+}
+
+/// One thing on a body: where it lay and, if it was worn or held, in what slot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodyStowed {
+    pub slot: Option<fb_items::Slot>,
+    pub stowed: Stowed,
+}
+
 /// A container prop as it was left.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContainerRecord {
@@ -299,6 +319,9 @@ pub struct CreatureRecord {
     pub scale: f32,
     /// Fallen: this is its body.
     pub dead: bool,
+    /// What is left on the body ([`FolkRecord::body`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRecord>,
 }
 
 impl CreatureRecord {
@@ -455,8 +478,8 @@ pub fn record_level_left(
     mut record: ResMut<WorldRecord>,
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
-    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
-    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>)>,
+    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::remains::BodyStock>)>,
+    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>, Option<&crate::remains::BodyStock>)>,
     doors: Option<Res<crate::doors::Doors>>,
 ) {
     let mut left = LevelRecord::default();
@@ -467,7 +490,7 @@ pub fn record_level_left(
     for (piece, container) in &containers {
         left.containers.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
     }
-    for (critter, transform, health, corpse) in &creatures {
+    for (critter, transform, health, corpse, body) in &creatures {
         let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
         let Some(health) = health else { continue };
@@ -480,10 +503,11 @@ pub fn record_level_left(
                 turn: stood.rotation.to_array(),
                 scale: stood.scale.x,
                 dead: corpse.is_some(),
+                body: body.and_then(|b| crate::remains::record_body(&inventory, b)),
             },
         );
     }
-    for (denizen, transform, health, hostility, corpse, shelf) in &folk {
+    for (denizen, transform, health, hostility, corpse, shelf, body) in &folk {
         let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
         if let Some(shelf) = shelf.filter(|_| corpse.is_none()) {
             left.shelves.insert(index, ShelfRecord { day: shelf.day, wares: shelf.wares.iter().map(item_record).collect(), sold: shelf.sold.iter().map(item_record).collect(), purse: Some(shelf.purse) });
@@ -499,6 +523,7 @@ pub fn record_level_left(
                 turn: stood.rotation.to_array(),
                 hostile: hostility.is_some_and(|h| h.is_hostile()),
                 dead: corpse.is_some(),
+                body: body.and_then(|b| crate::remains::record_body(&inventory, b)),
             },
         );
     }
@@ -920,8 +945,8 @@ mod tests {
             item: ItemRecord { coins: Some([1, 2, 3]), odds: fb_items::Odds::kit(4), ..record_of(&item) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
-        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });
-        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false });
+        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false, body: None });
+        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false, body: None });
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());
         let json = serde_json::to_string(&record).unwrap();

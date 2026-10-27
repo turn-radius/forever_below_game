@@ -136,6 +136,10 @@ enum TopUp {
     Done,
 }
 
+/// The base of the container that stands for a fallen body's gear ([`crate::remains`]): a grid
+/// that, unlike a pack, takes things too long to pack.
+pub const BODY_BASE: &str = "Body";
+
 /// Everything the delver has, and the items lying in the level.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct Inventory {
@@ -335,7 +339,8 @@ impl Inventory {
         if self.holds(id, container) {
             return Err(Refusal::IntoItself);
         }
-        if !item.profile.packable {
+        // A body's grid takes whatever it wore or held, a long spear included.
+        if !item.profile.packable && !self.is_body(container) {
             return Err(Refusal::Unpackable);
         }
         if !self.accepts(container, item) {
@@ -345,6 +350,12 @@ impl Inventory {
         let ignoring = matches!(self.location(id), Some(Location::In { container: c, .. }) if c == container).then_some(id);
         grid.check(size, at.x as i32, at.y as i32, ignoring)?;
         Ok(())
+    }
+
+    /// Whether `container` is a fallen body's grid ([`BODY_BASE`]), which takes things too long to
+    /// pack.
+    pub fn is_body(&self, container: ItemId) -> bool {
+        self.item(container).is_some_and(|i| i.base == BODY_BASE)
     }
 
     /// Whether `container` takes `item` by its filter ([`fb_items::footprint::Grid::takes`]).
