@@ -39,7 +39,8 @@
 //!   the delver's hit points as a creature's blow does, and a miss whooshes past. A friendly
 //!   folk never attacks, however near the delver comes. One who has not seen the delver for
 //!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home, unless their
-//!   faction is Hostile to the delver, which keeps its folk hostile (`crate::folk_regard`).
+//!   faction is Hostile to the delver, which keeps its folk hostile (`crate::folk_regard`). A folk the
+//!   delver is parleying with holds their blows ([`Parleying`]).
 //!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
 //! whole, not ragdolled. Our own simplification.
@@ -65,7 +66,7 @@ use crate::figure::Figure;
 use crate::folk::{Denizen, Person, Stance, Stride};
 use crate::folk_pose::{ArmSwing, spawn_rigged};
 use crate::folk_routine::{Routine, pace};
-use crate::hostility::{Hostility, HostilityPlugin, Provoked};
+use crate::hostility::{Hostility, HostilityPlugin, Parleying, Provoked};
 use crate::inventory::underfoot::FloorChanges;
 use crate::inventory::Toasts;
 use crate::level::geometry::Relief;
@@ -398,6 +399,7 @@ type Fighters = (
     &'static mut ArmSwing,
     &'static mut Transform,
     Option<&'static mut Routine>,
+    Has<Parleying>,
 );
 
 /// A living creature, not a folk.
@@ -439,8 +441,13 @@ pub fn fight(
     let mut around: Vec<Obstacle> = obstacles.0.clone();
     around.extend(creatures.iter().map(|(c, t)| Obstacle::Circle { centre: t.translation.xz(), radius: body_radius(c) }));
     around.push(Obstacle::Circle { centre: player, radius: player_radius });
-    for (entity, denizen, mut hostility, combatant, mut fight, mut stride, mut arm, mut transform, routine) in &mut folk {
+    for (entity, denizen, mut hostility, combatant, mut fight, mut stride, mut arm, mut transform, routine, parleying) in &mut folk {
         if !hostility.is_hostile() {
+            continue;
+        }
+        // Parleying with the delver, they hold their blows where they stand.
+        if parleying {
+            stride.speed = 0.0;
             continue;
         }
         let fight = &mut *fight;

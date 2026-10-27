@@ -53,6 +53,11 @@ impl Hostility {
     }
 }
 
+/// A folk the delver is parleying with ([`crate::talk`]): hostile or not, they hold their blows
+/// and do not turn on sight until the parley ends.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Parleying;
+
 /// The delver has given `folk` cause to fight: they, and the kin who see them, turn hostile.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Provoked {

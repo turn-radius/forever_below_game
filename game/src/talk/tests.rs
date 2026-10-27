@@ -114,39 +114,50 @@ fn closing_the_panel_lets_the_folk_go() {
 }
 
 #[test]
-fn a_hostile_folk_spits_and_no_panel_opens() {
+fn a_hostile_folk_opens_a_parley_with_persuade_as_the_one_topic() {
     let mut app = talk_app();
-    let folk = stand_in(&mut app, 0, None, None);
+    let folk = stand_in(&mut app, 0, smith(), None);
     standing(&mut app, folk, -100);
     talk_to(&mut app, folk);
-    let name = app.world().get::<Denizen>(folk).unwrap().person.name.clone();
-    assert_eq!(toast(&app), format!("{name} spits at your feet."));
-    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    let talk = app.world().resource::<Talk>();
+    assert!(talk.parley && talk.hostile);
+    assert_eq!(talk.topics, [Topic::Persuade]);
+    assert!(lines::grammar().symbols["parley_hostile"].contains(&talk.greeting), "{}", talk.greeting);
+    assert_eq!(phase(&app, folk), Phase::Held);
+    assert!(app.world().get::<Parleying>(folk).is_some());
+    // Leaving lets them go, and they hold their blows no longer.
+    press(&mut app, KeyCode::KeyF);
+    assert!(!app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    assert!(app.world().get::<Parleying>(folk).is_none());
     assert_ne!(phase(&app, folk), Phase::Held);
 }
 
 #[test]
-fn a_folk_who_has_turned_on_the_delver_spits_whatever_their_faction_thinks() {
+fn a_folk_who_has_turned_on_the_delver_parleys_and_the_parley_is_not_cut_short() {
     let mut app = talk_app();
     let folk = stand_in(&mut app, 0, None, None);
     app.world_mut().entity_mut(folk).insert(Hostility::Hostile);
     talk_to(&mut app, folk);
-    assert!(toast(&app).ends_with("spits at your feet."), "{}", toast(&app));
-    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    assert!(app.world().resource::<Talk>().hostile);
+    app.update();
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk), "already hostile, the parley stays open");
 }
 
 #[test]
-fn a_wary_folk_says_a_line_and_no_panel_opens() {
+fn a_wary_folk_opens_a_parley_with_a_curt_line() {
     let mut app = talk_app();
     let folk = stand_in(&mut app, 0, smith(), None);
     standing(&mut app, folk, -30);
     assert_eq!(app.world().resource::<WorldRecord>().standings.band(faction_of(&app, folk)), Band::Wary);
     talk_to(&mut app, folk);
-    let said = toast(&app);
-    assert!(said.starts_with('\u{201c}') && said.ends_with('\u{201d}') && said.len() > 6, "{said}");
-    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
-    assert_eq!(app.world().resource::<Talk>().folk, None);
-    assert_ne!(phase(&app, folk), Phase::Held);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    let talk = app.world().resource::<Talk>();
+    assert!(talk.parley && !talk.hostile);
+    assert_eq!(talk.topics, [Topic::Persuade]);
+    assert!(lines::grammar().symbols["wary"].contains(&talk.greeting), "{}", talk.greeting);
+    assert_eq!(phase(&app, folk), Phase::Held);
 }
 
 #[test]
@@ -408,16 +419,18 @@ fn words_learned_persist_across_a_record_save_and_load() {
 }
 
 #[test]
-fn a_hostile_or_wary_denizen_snorts_or_turns_away_without_a_panel() {
+fn a_hostile_or_wary_denizen_parleys_with_a_sound_of_its_own() {
     let (mut app, folk) = minotaur_app();
     standing(&mut app, folk, -30);
     talk_to(&mut app, folk);
-    assert!(toast(&app).contains("The minotaur"), "{}", toast(&app));
-    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    assert!(app.world().resource::<Talk>().greeting.starts_with("The minotaur"), "{}", app.world().resource::<Talk>().greeting);
+    press(&mut app, KeyCode::KeyF);
     standing(&mut app, folk, -100);
     talk_to(&mut app, folk);
-    assert!(toast(&app).contains("spits at your feet") && toast(&app).starts_with("The minotaur"), "{}", toast(&app));
-    assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+    let talk = app.world().resource::<Talk>();
+    assert!(talk.hostile && talk.greeting.contains("spits at your feet") && talk.greeting.starts_with("The minotaur"), "{}", talk.greeting);
+    assert_eq!(talk.topics, [Topic::Persuade]);
 }
 
 // Folk speak of the denizens.
@@ -536,19 +549,58 @@ fn a_failed_persuasion_costs_a_little_standing() {
     assert_eq!(before - after, persuade::FAIL_COST);
 }
 
-#[test]
-fn a_folk_whose_faction_is_hostile_cannot_be_persuaded() {
+/// Opens a parley with a smith whose faction stands at `standing`, and chooses Persuade.
+fn parley_app(standing: i32) -> (App, Entity) {
     let mut app = talk_app();
     app.init_resource::<crate::inventory::Inventory>();
     let folk = stand_in(&mut app, 0, smith(), None);
-    talk_to(&mut app, folk);
     let faction = faction_of(&app, folk);
-    app.world_mut().resource_mut::<WorldRecord>().standings.turn_hostile(faction);
-    let at = app.world().resource::<Talk>().topics.iter().position(|t| *t == Topic::Persuade).unwrap();
-    press(&mut app, DIGITS[at]);
-    assert!(!app.world().resource::<Talk>().waiting);
-    assert!(app.world().resource::<Persuading>().0.is_none());
+    let now = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    app.world_mut().resource_mut::<WorldRecord>().standings.shift(faction, standing - now);
+    talk_to(&mut app, folk);
+    press(&mut app, DIGITS[0]);
+    (app, folk)
+}
+
+#[test]
+fn a_hostile_folk_is_persuaded_on_a_harder_roll() {
+    let (mut app, folk) = parley_app(-80);
+    assert!(app.world().resource::<Talk>().waiting, "the dice roll");
+    let faction = faction_of(&app, folk);
+    let before = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    dice_close(&mut app, folk, 20);
+    let record = app.world().resource::<WorldRecord>();
+    assert!(record.standings.get(faction).value() > before);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk), "the parley goes on");
+}
+
+#[test]
+fn a_failed_roll_on_a_hostile_folk_ends_the_parley_and_they_attack() {
+    let (mut app, folk) = parley_app(-80);
+    let faction = faction_of(&app, folk);
+    let before = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    dice_close(&mut app, folk, 1);
+    assert!(!app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    assert!(app.world().get::<Parleying>(folk).is_none(), "released to the fight");
+    let record = app.world().resource::<WorldRecord>();
+    assert_eq!(before - record.standings.get(faction).value(), persuade::FAIL_COST);
+}
+
+#[test]
+fn a_failed_roll_on_a_wary_folk_keeps_the_parley_open() {
+    let (mut app, folk) = parley_app(-30);
+    dice_close(&mut app, folk, 1);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
     assert!(app.world().resource::<Talk>().answer.is_some());
+}
+
+#[test]
+fn a_win_on_a_wary_folk_can_carry_them_to_neutral() {
+    let (mut app, folk) = parley_app(-12);
+    let faction = faction_of(&app, folk);
+    dice_close(&mut app, folk, 20);
+    let record = app.world().resource::<WorldRecord>();
+    assert_eq!(record.standings.band(faction), Band::Neutral);
 }
 
 #[test]

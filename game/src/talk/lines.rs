@@ -12,32 +12,47 @@ use std::sync::OnceLock;
 /// What a folk will do when the delver speaks to them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reception {
-    /// They spit at the delver's feet and say nothing.
-    Spits,
-    /// They say one line and turn away.
-    Turns,
+    /// A curt line, and Persuade as the one thing to say: a Wary or Hostile folk, or one who has
+    /// turned on the delver.
+    Parley,
     /// They talk.
     Talks,
 }
 
-/// How a folk receives the delver: a Hostile faction, or a folk who has turned on them, spits;
-/// a Wary one turns away; the rest talk.
+/// How a folk receives the delver: a Hostile or Wary faction, or a folk who has turned on them,
+/// will only parley; the rest talk.
 pub fn reception(band: Band, turned_on_delver: bool) -> Reception {
     match band {
-        _ if turned_on_delver => Reception::Spits,
-        Band::Hostile => Reception::Spits,
-        Band::Wary => Reception::Turns,
+        _ if turned_on_delver => Reception::Parley,
+        Band::Hostile | Band::Wary => Reception::Parley,
         Band::Neutral | Band::Friendly | Band::Allied => Reception::Talks,
     }
 }
 
-/// The toast for a folk who will not speak: "Hilda Stonefoot spits at your feet." A denizen
-/// snorts, hisses or bellows first.
-pub fn spit_line(speaker: &Speaker) -> String {
-    if speaker.denizen.is_some() {
-        return say(speaker, "dn_spit", 0x21, &denizen_extras(speaker));
+/// The topics of a parley: persuasion is all a folk who will not talk will hear.
+pub fn parley_topics() -> Vec<Topic> {
+    vec![Topic::Persuade]
+}
+
+/// The curt line a folk opens a parley with: a hostile one threatens, a wary one waves the delver
+/// off. A denizen snorts, hisses or bellows first.
+pub fn parley_greeting(speaker: &Speaker, turned_on_delver: bool) -> String {
+    let hostile = turned_on_delver || speaker.band == Band::Hostile;
+    match (speaker.denizen.is_some(), hostile) {
+        (true, true) => say(speaker, "dn_spit", 0x21, &denizen_extras(speaker)),
+        (true, false) => say(speaker, "dn_wary", 0x12, &denizen_extras(speaker)),
+        (false, true) => say(speaker, "parley_hostile", 0x22, &[]),
+        (false, false) => say(speaker, "wary", 0x02, &[]),
     }
-    format!("{} spits at your feet.", speaker.name)
+}
+
+/// What a folk says at `stage` of a persuasion (`hear`, `pass`, `fail` or `not_now`). A denizen's
+/// lines are in its tongue ([`line_needs`] for `Topic::Persuade`) and it sounds as it speaks.
+pub fn persuade_line(speaker: &Speaker, stage: &str, salt: u32) -> String {
+    if speaker.denizen.is_some() {
+        return say(speaker, &format!("dn_persuade_{stage}"), salt, &denizen_extras(speaker));
+    }
+    say(speaker, &format!("persuade_{stage}"), salt, &[])
 }
 
 /// A service a trade offers beyond talk. Each has a screen of its own, which later work builds;
@@ -220,14 +235,6 @@ pub fn greeting(speaker: &Speaker) -> String {
         _ => "greet_neutral",
     };
     say(speaker, symbol, 0x01, &[])
-}
-
-/// The one line a Wary folk says; they keep walking, which reads as turning away.
-pub fn wary_line(speaker: &Speaker) -> String {
-    if speaker.denizen.is_some() {
-        return say(speaker, "dn_wary", 0x12, &denizen_extras(speaker));
-    }
-    say(speaker, "wary", 0x02, &[])
 }
 
 /// What a denizen does when the delver asks to barter in words they do not know well enough:
@@ -537,7 +544,7 @@ mod tests {
                 for band in [Band::Neutral, Band::Friendly, Band::Allied, Band::Wary] {
                     let s = Speaker { seed, ..speaker(trade, band) };
                     let rumour = MasterRumour { calling: "master alchemist".into(), faction: "the Scale Court".into(), levels: 8 };
-                    let mut lines = vec![greeting(&s), wary_line(&s), answer(&s, Topic::Who, None), answer(&s, Topic::Level, None), answer(&s, Topic::WayOut, None), answer(&s, Topic::WayOut, Some(&rumour))];
+                    let mut lines = vec![greeting(&s), parley_greeting(&s, false), parley_greeting(&s, true), persuade_line(&s, "hear", 1), persuade_line(&s, "pass", 2), persuade_line(&s, "fail", 3), persuade_line(&s, "not_now", 4), answer(&s, Topic::Who, None), answer(&s, Topic::Level, None), answer(&s, Topic::WayOut, None), answer(&s, Topic::WayOut, Some(&rumour))];
                     lines.extend(topics(&s).into_iter().map(|t| answer(&s, t, None)));
                     for line in lines {
                         assert!(!line.contains("...") && !line.contains('#') && !line.is_empty(), "seed {seed}: {line:?}");
@@ -554,7 +561,7 @@ mod tests {
             s.folk = "Minotaur".into();
             s.denizen = Some(DenizenKind::Minotaur);
             s.seed = seed;
-            for line in [spit_line(&s), wary_line(&s), barter_refusal(&s)] {
+            for line in [parley_greeting(&s, true), parley_greeting(&s, false), barter_refusal(&s)] {
                 assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
                 assert!(line.starts_with("The minotaur"), "{line}");
             }
@@ -566,7 +573,7 @@ mod tests {
                 allowed.push(format!("The minotaur {sound} and pushes your hand away; you can't make yourself understood well enough to trade."));
             }
             assert!(allowed.contains(&barter_refusal(&s)), "{}", barter_refusal(&s));
-            assert_eq!(spit_line(&s), spit_line(&s));
+            assert_eq!(parley_greeting(&s, true), parley_greeting(&s, true));
         }
     }
 
@@ -605,14 +612,19 @@ mod tests {
     }
 
     #[test]
-    fn the_bands_decide_who_talks() {
-        assert_eq!(reception(Band::Hostile, false), Reception::Spits);
-        assert_eq!(reception(Band::Wary, false), Reception::Turns);
+    fn the_bands_decide_who_talks_and_who_parleys() {
+        assert_eq!(reception(Band::Hostile, false), Reception::Parley);
+        assert_eq!(reception(Band::Wary, false), Reception::Parley);
         for band in [Band::Neutral, Band::Friendly, Band::Allied] {
             assert_eq!(reception(band, false), Reception::Talks);
-            assert_eq!(reception(band, true), Reception::Spits, "a folk who turned on the delver will not talk");
+            assert_eq!(reception(band, true), Reception::Parley, "a folk who turned on the delver will only parley");
         }
-        assert_eq!(spit_line(&speaker(None, Band::Hostile)), "Hilda Stonefoot spits at your feet.");
+        assert_eq!(parley_topics(), [Topic::Persuade]);
+        let hostile = parley_greeting(&speaker(None, Band::Hostile), false);
+        let wary = parley_greeting(&speaker(None, Band::Wary), false);
+        assert!(grammar().symbols["parley_hostile"].contains(&hostile), "{hostile}");
+        assert!(grammar().symbols["wary"].contains(&wary), "{wary}");
+        assert!(grammar().symbols["parley_hostile"].contains(&parley_greeting(&speaker(None, Band::Neutral), true)));
     }
 
     #[test]

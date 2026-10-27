@@ -37,7 +37,7 @@ use crate::folk::{Denizen, Stride};
 use crate::folk_combat::{COOLDOWN, Combatant, DASH, Fight, LANDS, TURN_RATE};
 use crate::folk_pose::ArmSwing;
 use crate::folk_routine::{Routine, pace};
-use crate::hostility::Hostility;
+use crate::hostility::{Hostility, Parleying};
 use crate::inventory::Toasts;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::slide_around;
@@ -157,7 +157,7 @@ fn hostile_on_sight(
     doors: Option<Res<crate::doors::Doors>>,
     record: Res<WorldRecord>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
-    mut folk: Query<(&Denizen, &Transform, &mut Hostility), Without<Corpse>>,
+    mut folk: Query<(&Denizen, &Transform, &mut Hostility), (Without<Corpse>, Without<Parleying>)>,
 ) {
     let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
     for (denizen, at, mut hostility) in &mut folk {

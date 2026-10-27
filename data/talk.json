@@ -31,6 +31,13 @@
   "Move along, stranger.",
   "Take your questions elsewhere."
  ],
+ "parley_hostile": [
+  "Stay back. One more step and I stop talking.",
+  "You have a nerve, delver. Say it quick.",
+  "I should cut you down where you stand. Speak, and mind your tongue.",
+  "There is blood between us. Make this short.",
+  "Not a step closer. What do you want?"
+ ],
  "who_way_out": [
   "I am #name#, a #folk# of #faction#. We hold the way out, or say we do, and few ask to see it.",
   "#name#, #folk#, of #faction#. We keep watch for the door that opens upward.",
@@ -171,10 +178,6 @@
   "You waste your breath, delver.",
   "Try that on someone who has not heard it before.",
   "Enough. Flattery is cheap down here."
- ],
- "persuade_refused": [
-  "Nothing you say moves me. Get away from me.",
-  "I will not be talked round by the likes of you."
  ],
  "persuade_not_now": [
   "I have heard you out already. Come back when you have slept on it.",
