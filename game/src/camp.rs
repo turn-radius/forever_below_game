@@ -544,6 +544,31 @@ fn go_to_sleep(
     commands.queue(crate::save::save_in_camp(Some(bed)));
 }
 
+/// What the pack's bedroll is laid on: the level ahead of the delver, checked as a bedroll set
+/// down there would be ([`check_site`]).
+#[derive(SystemParam)]
+struct Ground<'w, 's> {
+    level: Option<Res<'w, CurrentLevel>>,
+    blocked_cells: Option<Res<'w, BlockedCells>>,
+    obstacles: Option<Res<'w, Obstacles>>,
+    camps: Query<'w, 's, &'static SetCamp>,
+    eyes: Query<'w, 's, &'static GlobalTransform, With<PlayerCamera>>,
+}
+
+impl Ground<'_, '_> {
+    /// Why the delver may not lie down where they stand, if so: the bedroll's own footprint, as a
+    /// laid-out one has, ahead of the feet. Nothing is checked with no level (a test).
+    fn refuses(&self, feet: Vec2, pack: &fb_items::Item) -> Option<&'static str> {
+        let (level, blocked, obstacles) = (self.level.as_ref()?, self.blocked_cells.as_ref()?, self.obstacles.as_ref()?);
+        let bedroll = fb_items::roll_item("Bedroll", pack.seed).and_then(|b| fb_items::camp::set_up(&b))?;
+        let (half, _) = footprint(&bedroll)?;
+        let forward = self.eyes.iter().next().map_or(Vec2::NEG_Y, facing);
+        let site = site_ahead(feet, forward, half, gap_for(Camp::Bedroll));
+        let sites: Vec<Site> = self.camps.iter().map(|c| c.site).collect();
+        check_site(&site, &level.0, blocked, &obstacles.0, &sites).err().map(CampRefusal::reason)
+    }
+}
+
 /// F in the inventory on the worn pack rolled with a bedroll ("Sleep"): lies down on it where the
 /// delver stands, without setting anything down or carrying a bedroll of its own. The screen
 /// closes, lights are put out and the delve is saved as it is for any camp
@@ -561,6 +586,7 @@ fn sleep_on_pack(
     mut toast: ResMut<Toast>,
     mut players: Query<(&Transform, &DelverNeeds, &mut Locomotion, Option<&Health>), With<Player>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    ground: Ground,
     time: Option<Res<Time<Real>>>,
     mut commands: Commands,
 ) {
@@ -576,6 +602,11 @@ fn sleep_on_pack(
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
     if let Some(reason) = cannot_sleep(&rules, &needs.0, watched) {
+        toast.say(reason, now);
+        return;
+    }
+    // Not across a doorway, a stair, rock or a prop, as a laid-out bedroll would not be.
+    if let Some(reason) = inventory.item(id).and_then(|pack| ground.refuses(body.translation.xz(), pack)) {
         toast.say(reason, now);
         return;
     }
@@ -686,6 +717,7 @@ fn wake_up(
     clock: Res<GameClock>,
     watchers: Watchers,
     beds: Query<(), With<SetCamp>>,
+    inventory: Res<Inventory>,
     mut asleep: ResMut<Asleep>,
     mut toast: ResMut<Toast>,
     players: Query<(&Transform, &DelverNeeds, Option<&Health>), With<Player>>,
@@ -703,6 +735,10 @@ fn wake_up(
     let hit_points = health.map_or(sleep.hit_points, |h| h.hp);
     let reason = reason_to_wake(&rules, &needs.0, hit_points, sleep.hit_points, watched)
         .or_else(|| sleep.bed.filter(|&bed| !beds.contains(bed)).map(|_| "Your bed is gone, and you wake."))
+        .or_else(|| {
+            let on_pack = inventory.worn(fb_items::Slot::Back).and_then(|id| inventory.item(id)).is_some_and(|pack| pack.has_accessory(fb_items::Accessory::Bedroll));
+            (sleep.bed.is_none() && !on_pack).then_some("Your bedroll is gone, and you wake.")
+        })
         .or_else(|| keyed.then_some("You wake."));
     let Some(reason) = reason else {
         // Healed in their sleep: the next blow is measured from here.

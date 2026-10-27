@@ -14,6 +14,9 @@ use crate::{Kind, Rarity, Slot, Tag, game_rng};
 use fb_denizens::tongue::Teaching;
 use std::fmt;
 
+/// The fewest cells long (about 24 cm each) a weapon is to ride a pack's weapon strap.
+pub const STRAP_CELLS: u8 = 4;
+
 /// D&D coinage in a purse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Coins {
@@ -340,10 +343,12 @@ impl Item {
         self.accessories().contains(&accessory)
     }
 
-    /// Whether a weapon strap holds it: a long weapon (a staff, spear, bow, crossbow or sword).
+    /// Whether a weapon strap holds it: a weapon at least [`STRAP_CELLS`] cells long by its
+    /// footprint, so a staff, spear, bow or long sword, and a polearm (an axe or mace with a long
+    /// haft) as well, but not a dagger, a club or a short axe.
     pub fn strappable(&self) -> bool {
-        self.profile.tags.contains(&Tag::Weapon)
-            && matches!(self.shape.family(), armory::Family::Staff | armory::Family::Spear | armory::Family::Bow | armory::Family::Crossbow | armory::Family::Sword)
+        let fp = self.profile.footprint;
+        self.profile.tags.contains(&Tag::Weapon) && fp.cols.max(fp.rows) >= STRAP_CELLS
     }
 }
 
@@ -425,6 +430,7 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::armory_base::{ARMORY_BASES, held_back};
 
     #[test]
     fn packs_roll_with_their_accessories_and_nothing_else_does() {
@@ -440,12 +446,19 @@ mod tests {
     }
 
     #[test]
-    fn only_long_weapons_are_strapped() {
-        for (base, strapped) in [("Staff", true), ("Spear", true), ("Bow", true), ("Crossbow", true), ("Sword", true), ("Dagger", false), ("Mace", false), ("Shield", false), ("Torch", false)] {
-            assert_eq!(roll_item(base, 2).unwrap().strappable(), strapped, "{base}");
+    fn only_weapons_long_by_their_footprint_are_strapped() {
+        for base in ["Staff", "Spear", "Bow"] {
+            assert!((1..30).map(|s| roll_item(base, s).unwrap()).filter(|w| w.profile.footprint.rows.max(w.profile.footprint.cols) >= STRAP_CELLS).all(|w| w.strappable()), "{base}");
+            assert!((1..30).map(|s| roll_item(base, s).unwrap()).any(|w| w.strappable()), "some {base} is long enough");
+        }
+        for base in ["Dagger", "Shield", "Torch", "Mail", "Pack"] {
+            assert!((1..30).all(|s| !roll_item(base, s).unwrap().strappable()), "{base}");
+        }
+        // Whatever the family, it is the length that decides.
+        for base in ["Sword", "Axe", "Mace", "Club", "Crossbow"] {
+            assert!((1..30).filter_map(|s| roll_item(base, s)).all(|w| w.strappable() == (w.profile.footprint.rows.max(w.profile.footprint.cols) >= STRAP_CELLS)), "{base}");
         }
     }
-    use crate::armory_base::{ARMORY_BASES, held_back};
 
     #[test]
     fn arrows_and_bolts_stack_to_ten_and_only_with_their_own_kind() {

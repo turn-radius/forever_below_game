@@ -1562,13 +1562,23 @@ fn drag_items(
 /// With no belt worn, what hung at the hip comes off ([`Inventory::unhang`]): into a carried bag
 /// with room, or else set down underfoot. Every way of taking a belt off (a double-click, a drag
 /// to a grid or the floor, swapping in something that is not a belt) ends here.
-fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>) {
-    // Likewise a strapped weapon, once the pack with the strap is off ([`Inventory::unstrap`]).
+fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>, mut toast: ResMut<Toast>, barter: Option<Res<crate::barter::Barter>>, time: Option<Res<Time<Real>>>) {
+    // Likewise a strapped weapon, once the pack with the strap is off ([`Inventory::unstrap`]);
+    // not while a deal has the pack on the shelf, since cancelling puts it back.
     if inventory.worn(Slot::Strap).is_some()
         && !inventory.has_strap()
-        && let Some((id, Displaced::Underfoot)) = inventory.unstrap()
+        && !barter.is_some_and(|b| b.active())
+        && let Some((id, went)) = inventory.unstrap()
     {
-        floor_changes.0.push(FloorChange::SetDown(id, 0.0));
+        let now = time.map_or(0.0, |t| t.elapsed_secs());
+        let name = inventory.item(id).map_or_else(String::new, |i| i.title().to_string());
+        match went {
+            Displaced::Underfoot => {
+                floor_changes.0.push(FloorChange::SetDown(id, 0.0));
+                toast.say(format!("{name} falls to the floor."), now);
+            }
+            _ => toast.say(format!("{name} slips from the strap into your pack."), now),
+        }
     }
     if inventory.worn(Slot::Hip).is_none() || inventory.worn(Slot::Belt).is_some() {
         return;
@@ -2727,8 +2737,11 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
         let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
-        assert_eq!(found.len(), fb_items::tables::slot_places().len());
-        for place in fb_items::tables::slot_places() {
+        // The strap shows only while the worn pack has one.
+        let places: Vec<_> = fb_items::tables::slot_places().iter().filter(|p| p.slot != Slot::Strap).collect();
+        assert_eq!(found.len(), places.len());
+        assert!(found.iter().all(|(s, ..)| *s != Slot::Strap));
+        for place in places {
             let (_, node, children) = found.iter().find(|(s, ..)| *s == place.slot).unwrap();
             let x = px(doll::FRAME.x * place.x_percent / 100.0);
             match place.side {

@@ -172,7 +172,10 @@ impl DollChoice {
         worn.retain(|(slot, _)| Some(*slot) != self.without);
         for pair in self.wear.into_iter().flat_map(|w| w.split(',')) {
             let Some((slot, base)) = pair.split_once('=') else { continue };
-            let (Ok(slot), Some(item)) = (serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")), fb_items::roll_item(base, self.seed)) else { continue };
+            // A pack asked for beside a strapped weapon (`--wear back=Pack,strap=Spear`) is the first of the seed's on that has a strap to hold it.
+            let strapped = slot == "back" && self.wear.is_some_and(|w| w.contains("strap="));
+            let rolled = if strapped { (self.seed..self.seed + 2000).filter_map(|s| fb_items::roll_item(base, s)).find(|i| i.has_accessory(fb_items::Accessory::WeaponStrap)) } else { fb_items::roll_item(base, self.seed) };
+            let (Ok(slot), Some(item)) = (serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")), rolled) else { continue };
             worn.retain(|(s, _)| *s != slot);
             worn.push((slot, item));
         }

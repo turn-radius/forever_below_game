@@ -337,7 +337,9 @@ pub fn start_doll_fitting(
     }
     let spec = character.spec();
     let dirt = character.dirt;
-    let worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    let mut worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    // A weapon on the pack's strap rides the pack, drawn with it ([`Figure::dress`]).
+    worn.extend(inventory.strapped().and_then(|id| inventory.item(id)).map(|item| (Slot::Strap, item.clone())));
     let key = figure_key(&spec, &worn, dirt);
     if stage.dressed.as_ref() == Some(&key) {
         // Already dressed for this equipment; drop any in-flight fit
@@ -568,6 +570,10 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
             ImageNode::new(assets.doll.clone()),
         ));
         for place in slot_places() {
+            // The strap is the worn pack's own: it shows only while that pack has one.
+            if place.slot == fb_items::Slot::Strap && !inventory.has_strap() {
+                continue;
+            }
             let size = match place.size {
                 SlotSize::Big => BIG_SLOT,
                 SlotSize::Small => SMALL_SLOT,
@@ -600,10 +606,16 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                 .with_children(|slot| {
                     if let Some(item) = worn {
                         let shape = super::icon::icon_size(item, false).as_vec2();
-                        let fit = (size - 11.0) / shape.max_element();
+                        // A thin long item (a staff, a spear) is a dot in a small slot upright, so it
+                        // lies on the slot's diagonal, its length fitted to it.
+                        let thin = shape.max_element() >= 3.0 * shape.min_element();
+                        let fit = (size - 11.0) / shape.max_element() * if thin { std::f32::consts::SQRT_2 * 0.92 } else { 1.0 };
                         slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
                             .with_children(|centre| {
-                                icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
+                                let mut icon = icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
+                                if thin {
+                                    icon.insert(UiTransform { rotation: Rot2::degrees(45.0), ..default() });
+                                }
                             });
                         if item.profile.kind == Kind::Gear {
                             slot.spawn((

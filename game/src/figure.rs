@@ -151,6 +151,20 @@ impl Figure {
                 light = Some(HeldLight { at: Vec3::from_array(hip.to_body(anchor.position)), anchor, side: hip.side, joint: Joint::Pelvis });
             }
         }
+        // A long weapon lashed to the pack's weapon strap, riding the trunk with the pack.
+        if let (Some((_, item)), Some(pack)) = (worn.iter().find(|(s, _)| *s == Slot::Strap), fit.layer(Slot::Back))
+            && let Some(lashed) = fb_body::fit_strapped(&item.shape, &pack.mesh)
+        {
+            pieces.push(Piece {
+                name: item.title().to_string(),
+                appearance: appearance_of(&lashed.item),
+                on_head: false,
+                lit: false,
+                skin: weights(&lashed.mesh, &|_| SkinRegion::Trunk),
+                mesh: lashed.mesh,
+                attach: None,
+            });
+        }
         let neck = Vec3::from_array(body.neck_base().origin);
         let rig = Rig::of_lifted(&body, fit.wing_lift);
         let gait = Gait::new(&body, &rig);

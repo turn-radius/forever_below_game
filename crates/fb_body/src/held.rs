@@ -755,6 +755,72 @@ pub fn fit_hip(body: &Body, item: &Item, belt: &ItemMesh) -> Option<HipFit> {
     Some(HipFit { item: item.clone(), mesh: drawn, scale, placement, hook, side })
 }
 
+// ── Lashed to a pack's weapon strap ──
+
+/// How far the lashed weapon leans out from plumb, as a share of its length. Our own.
+const STRAP_LEAN: f32 = 0.1;
+/// How far below the strap's lower band the butt hangs, in body units. Our own.
+const STRAP_BUTT: f32 = 2.5;
+
+/// A long weapon lashed to a worn pack's weapon strap ([`fit_strapped`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StrapFit {
+    pub item: Item,
+    /// The weapon in body space.
+    pub mesh: ItemMesh,
+    pub placement: Placement,
+}
+
+/// Lashes `item` (a long weapon: head up, butt down) alongside `pack`, the worn pack's mesh in
+/// body space ([`crate::fit_worn`]): upright along the pack's side where its "weapon_strap" part
+/// runs, leaning a little outward, its butt a little below the lower band and its body just
+/// clear of the strap. `None` for a pack with no strap, or an item with no mesh. Our own fit.
+pub fn fit_strapped(item: &Item, pack: &ItemMesh) -> Option<StrapFit> {
+    let strap: Vec<V3> = pack.parts.iter().filter(|p| p.name == "weapon_strap").flat_map(|p| p.positions.iter().copied()).collect();
+    if strap.is_empty() {
+        return None;
+    }
+    let centre = strap.iter().fold([0.0; 3], |a, p| vec3::add(a, *p));
+    let centre = vec3::scale(centre, 1.0 / strap.len() as f32);
+    let sign = if centre[0] < 0.0 { -1.0 } else { 1.0 };
+    let outer = strap.iter().map(|p| p[0] * sign).fold(f32::MIN, f32::max);
+    let low = strap.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+
+    // Its long axis to item +Y, heavier end up.
+    let mut drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    let longest = if ext[0] > ext[1] && ext[0] >= ext[2] {
+        0
+    } else if ext[2] > ext[1] {
+        2
+    } else {
+        1
+    };
+    let upright = match longest {
+        0 => Placement::new([0.0; 3], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        2 => Placement::new([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+        _ => Placement::IDENTITY,
+    };
+    upright.apply_to_item(&mut drawn);
+    let (lo, hi) = drawn.bounds()?;
+    let all: Vec<V3> = drawn.parts.iter().flat_map(|p| p.positions.iter().copied()).collect();
+    let mean_y = all.iter().map(|p| p[1]).sum::<f32>() / all.len().max(1) as f32;
+    if mean_y < (lo[1] + hi[1]) * 0.5 {
+        Placement::new([0.0; 3], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]).apply_to_item(&mut drawn);
+    }
+    let (lo, hi) = drawn.bounds()?;
+    let radius = ((hi[0] - lo[0]).max(hi[2] - lo[2]) * 0.5).min(1.0);
+    let bottom = [(lo[0] + hi[0]) * 0.5, lo[1], (lo[2] + hi[2]) * 0.5];
+
+    let lean = vec3::normalize_or([sign * STRAP_LEAN, 1.0, 0.0], vec3::Y);
+    let rotation = frame_yz(lean, [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]);
+    let target = [sign * (outer + radius), low - STRAP_BUTT, centre[2]];
+    let placement = Placement { rotation, origin: vec3::sub(target, rotation.transform(bottom)) };
+    placement.apply_to_item(&mut drawn);
+    Some(StrapFit { item: item.clone(), mesh: drawn, placement })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,6 +841,42 @@ mod tests {
 
     fn fit(body: &Body, side: Side, item: &Item) -> HeldFit {
         fit_held(body, side, item).unwrap()
+    }
+
+    #[test]
+    fn a_long_weapon_rides_the_packs_weapon_strap_beside_it() {
+        use armory::families::bags::{BagStyle, Bags};
+        use fb_items::Slot;
+        let strapped = |seed: u32| {
+            let mut state = Bags::roll_as(seed, BagStyle::Backpack);
+            state.bag.weapon_strap = true;
+            Item::Bags(state)
+        };
+        let plain = {
+            let Item::Bags(mut state) = strapped(4) else { unreachable!() };
+            state.bag.weapon_strap = false;
+            Item::Bags(state)
+        };
+        for folk in Folk::fitted() {
+            let body = body(folk);
+            let worn = crate::fit_worn(&body, &[(Slot::Back, strapped(4))]);
+            let pack = &worn.layer(Slot::Back).unwrap().mesh;
+            let (plo, phi) = pack.bounds().unwrap();
+            for family in [Family::Spear, Family::Staff, Family::Bow] {
+                let weapon = roll(family, 5);
+                let lashed = fit_strapped(&weapon, pack).unwrap_or_else(|| panic!("{folk:?} {family:?}"));
+                let (lo, hi) = lashed.mesh.bounds().unwrap();
+                // Standing up beside the pack, on the strap's side, clear of the pack's width, its butt off the floor.
+                assert!(hi[1] - lo[1] > (phi[1] - plo[1]) * 0.8, "{folk:?} {family:?}: not upright {lo:?}..{hi:?}");
+                assert!(lo[1] > 0.0, "{folk:?} {family:?}: through the floor");
+                let side = if pack.parts.iter().filter(|p| p.name == "weapon_strap").flat_map(|p| &p.positions).map(|p| p[0]).sum::<f32>() < 0.0 { -1.0 } else { 1.0 };
+                let centre_x = (lo[0] + hi[0]) * 0.5 * side;
+                assert!(centre_x > (phi[0] * side).min(-plo[0] * side) * 0.5, "{folk:?} {family:?}: not on the strap's side");
+            }
+            // No strap, no place for it.
+            let bare = crate::fit_worn(&body, &[(Slot::Back, plain.clone())]);
+            assert!(fit_strapped(&roll(Family::Spear, 5), &bare.layer(Slot::Back).unwrap().mesh).is_none(), "{folk:?}");
+        }
     }
 
     #[test]

@@ -660,3 +660,24 @@ fn settling_folds_what_was_bought_into_the_stacks_carried() {
     settle(&mut inventory, &mut session, &mut shelf).unwrap();
     assert_eq!(arrow_pieces(&inventory, pack), vec![3, 10]);
 }
+
+#[test]
+fn cancelling_a_deal_that_moved_a_strapped_pack_puts_pack_and_weapon_back() {
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(0));
+    // The weapon has the lower id, so it is put back first unless the strap waits for its pack.
+    let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
+    let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap)).unwrap();
+    let pack = inventory.add(pack);
+    let _ = inventory.equip(pack, fb_items::Slot::Back);
+    inventory.wear(spear, fb_items::Slot::Strap).unwrap();
+    let shelf = shelf_of(vec![], 6000);
+    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    for id in [spear, pack] {
+        session.note(&inventory, id);
+        inventory.shelve(id, session.shelf).unwrap();
+    }
+    assert_eq!(inventory.worn(fb_items::Slot::Back), None);
+    end(&mut inventory, session);
+    assert_eq!((inventory.worn(fb_items::Slot::Back), inventory.worn(fb_items::Slot::Strap)), (Some(pack), Some(spear)));
+}

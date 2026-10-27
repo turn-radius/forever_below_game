@@ -735,6 +735,15 @@ impl Inventory {
         self.wear(id, slot)?;
         let back = match from {
             Some(Location::Worn(was)) if self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
+            // Drawn from the strap, the weapon it was swapped for (a mace, a torch) cannot go back on
+            // it: it is stowed if a bag has room.
+            Some(Location::Worn(Slot::Strap)) => match self.stow(old) {
+                Ok(container) => match self.location(old) {
+                    Some(Location::In { at, .. }) => Displaced::In { container, at },
+                    _ => Displaced::Underfoot,
+                },
+                Err(_) => Displaced::Underfoot,
+            },
             // Upright where it fits, else turned, else set down.
             Some(Location::In { container, at }) => [false, true]
                 .into_iter()
@@ -1015,6 +1024,21 @@ mod tests {
         // One only: another long weapon swaps it out.
         let spear = inventory.add(rolled("Spear", 3));
         assert_eq!(inventory.equip(spear, Slot::Strap).map(|d| d.map(|(old, _)| old)), Ok(Some(staff)));
+    }
+
+    #[test]
+    fn drawing_from_the_strap_stows_what_cannot_go_back_on_it() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(pack_strapped(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let spear = inventory.add(rolled("Spear", 3));
+        inventory.wear(spear, Slot::Strap).unwrap();
+        let mace = inventory.add(rolled("Dagger", 2));
+        inventory.wear(mace, Slot::Mainhand).unwrap();
+        // The spear is drawn into the main hand; the dagger cannot go on the strap, so it is packed.
+        let swapped = inventory.equip(spear, Slot::Mainhand).unwrap();
+        assert!(matches!(swapped, Some((old, Displaced::In { container, .. })) if old == mace && container == pack), "{swapped:?}");
+        assert_eq!((inventory.strapped(), inventory.worn(Slot::Mainhand)), (None, Some(spear)));
     }
 
     #[test]

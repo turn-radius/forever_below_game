@@ -515,7 +515,9 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
 /// go is kept out of the shelf's fate.
 pub fn end(inventory: &mut Inventory, session: Session) {
     let shelf = session.shelf;
-    let moved: Vec<(ItemId, Location)> = session.moved.into_iter().collect();
+    let mut moved: Vec<(ItemId, Location)> = session.moved.into_iter().collect();
+    // A strapped weapon goes back after the pack it hangs on.
+    moved.sort_by_key(|(_, was)| matches!(was, Location::Worn(fb_items::Slot::Strap)));
     for &(id, _) in &moved {
         inventory.take_out(id);
     }
