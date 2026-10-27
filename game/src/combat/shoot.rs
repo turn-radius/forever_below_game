@@ -173,7 +173,7 @@ pub fn ammunition_in(inventory: &Inventory, holder: ItemId) -> Vec<ItemId> {
 /// the one on the string or the deck.
 pub fn ammunition_left(inventory: &Inventory, marksman: &Marksman) -> Option<(armory::Family, usize)> {
     let (_, ranged) = ranged_in_hand(inventory)?;
-    let held = holder_of(inventory, ranged.ammunition).map_or(0, |h| ammunition_in(inventory, h).len());
+    let held = holder_of(inventory, ranged.ammunition).map_or(0, |h| inventory.pieces_in(h));
     Some((ranged.ammunition, held + usize::from(marksman.nocked.is_some())))
 }
 
@@ -252,15 +252,10 @@ fn feet_flown(origin: Vec3, at: Vec3) -> f32 {
 
 /// Takes the ammunition at `nock` back into its holder (or the first carried container with
 /// room), or loses it if there is no room.
-fn put_back(inventory: &mut Inventory, ammo: ItemId, family: armory::Family) {
-    let at = holder_of(inventory, family).and_then(|h| inventory.grid(h).and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 })).map(|at| (h, at)));
-    match at {
-        Some((holder, at)) if inventory.put(ammo, holder, at).is_ok() => {}
-        _ => {
-            if inventory.stow(ammo).is_err() {
-                inventory.forget(ammo);
-            }
-        }
+fn put_back(inventory: &mut Inventory, ammo: ItemId, _family: armory::Family) {
+    // The quiver is tried first, and a piece folds into the stack it came from.
+    if inventory.stow(ammo).is_err() {
+        inventory.forget(ammo);
     }
 }
 
@@ -356,8 +351,7 @@ pub fn shoot(
             if reload.t >= reload.total {
                 marksman.reload = None;
                 let ammo = holder_of(&inventory, ranged.ammunition).and_then(|h| ammunition_in(&inventory, h).first().copied());
-                if let Some(ammo) = ammo {
-                    inventory.take_out(ammo);
+                if let Some(ammo) = ammo.and_then(|a| inventory.take_one(a)) {
                     marksman.nocked = Some(Nocked { ammo, weapon: weapon_id });
                 }
             }
@@ -382,8 +376,7 @@ pub fn shoot(
     } else {
         if pressed && marksman.nocked.is_none() {
             let ammo = holder_of(&inventory, ranged.ammunition).and_then(|h| ammunition_in(&inventory, h).first().copied());
-            if let Some(ammo) = ammo {
-                inventory.take_out(ammo);
+            if let Some(ammo) = ammo.and_then(|a| inventory.take_one(a)) {
                 marksman.nocked = Some(Nocked { ammo, weapon: weapon_id });
                 marksman.draw = Some(0.0);
             }
@@ -487,7 +480,12 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
         } else {
             armory::families::quiver::BoltCases::capacity(state)
         };
-        let contents: Vec<_> = ammunition_in(&inventory, container).into_iter().filter_map(|id| ammo_state(&inventory, id)).take(capacity).collect();
+        let contents: Vec<_> = ammunition_in(&inventory, container)
+            .into_iter()
+            .filter_map(|id| ammo_state(&inventory, id).map(|state| (state, inventory.item(id).map_or(1, |i| i.quantity as usize))))
+            .flat_map(|(state, n)| std::iter::repeat_n(state, n))
+            .take(capacity)
+            .collect();
         if contents != state.contents {
             holders.push((container, contents));
         }

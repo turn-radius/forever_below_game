@@ -388,7 +388,9 @@ impl Outfit {
             let (holder, ammo) = if ranged.ammunition == armory::Family::Bolt { ("Bolt case", "Bolt") } else { ("Quiver", "Arrow") };
             if let Some(item) = draw(&mut rng, holder) {
                 worn.push((Slot::Quiver, item));
-                ammunition = (0..AMMUNITION_CARRIED).filter_map(|_| draw(&mut rng, ammo)).collect();
+                // One kind of arrow, one seed: the pieces stack when stowed.
+                let kind = (rng.next_f64() * 4_294_967_296.0) as u32;
+                ammunition = (0..AMMUNITION_CARRIED).filter_map(|_| roll_item_with(ammo, kind, odds)).collect();
             }
         }
         let mut goods: Vec<Item> = self.goods.iter().filter(|base| !held_back(base)).filter_map(|base| draw(&mut rng, base)).collect();

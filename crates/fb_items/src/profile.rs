@@ -52,6 +52,9 @@ pub struct Profile {
     pub description: String,
 }
 
+/// How many arrows or bolts share one cell.
+pub const AMMUNITION_STACK: u8 = 10;
+
 /// The ammunition a bow or crossbow takes and its range.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ranged {
@@ -201,6 +204,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     }
     if matches!(family, Family::Arrow | Family::Bolt) {
         p.footprint = Footprint { cols: 1, rows: 1 };
+        p.stack = AMMUNITION_STACK;
     }
     if matches!(family, Family::Staff | Family::Spear | Family::Bow) && long > PACK_LIMIT_UNITS {
         p.packable = false;

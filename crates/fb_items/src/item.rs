@@ -120,6 +120,9 @@ pub struct Item {
     /// The count of rests when an attempt to identify it last fell short: it cannot be tried
     /// again until the delver has rested since ([`Item::can_identify`]).
     pub rest_tried: Option<u32>,
+    /// How many of it this one item stands for: a stack of arrows is one item of ten, sharing one
+    /// seed and so one model ([`Item::stack_limit`], [`Item::can_stack_with`]). Always at least 1.
+    pub quantity: u32,
 }
 
 /// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
@@ -140,11 +143,12 @@ pub struct ItemParts {
     pub teaching: Option<Teaching>,
     pub known: Known,
     pub rest_tried: Option<u32>,
+    pub quantity: u32,
 }
 
 impl From<Item> for ItemParts {
     fn from(i: Item) -> Self {
-        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known, rest_tried: i.rest_tried }
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known, rest_tried: i.rest_tried, quantity: i.quantity }
     }
 }
 
@@ -155,7 +159,7 @@ impl Item {
     /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
-        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried } = parts;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried, quantity } = parts;
         let mut profile = profile(&base, &shape);
         if let Some(c) = coins {
             profile.description = c.to_string();
@@ -163,11 +167,45 @@ impl Item {
         for a in &affixes {
             a.apply_to_stats(&mut profile.stats);
         }
-        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried })
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried, quantity: quantity.max(1) })
     }
 }
 
 impl Item {
+    /// How many of it share one place in a grid: 10 arrows or bolts, 1 for everything else. The
+    /// goods table's `stack` column (bread 3...) is not read yet: only ammunition stacks until
+    /// the game can eat or drink one of a stack.
+    pub fn stack_limit(&self) -> u32 {
+        if self.profile.tags.contains(&Tag::Ammunition) { u32::from(self.profile.stack.max(1)) } else { 1 }
+    }
+
+    /// Whether `other` could join this one's stack: the same base and seed (one model, one
+    /// seed for the stack), the same shape (condition, fuel), nothing written or taught that
+    /// differs, and a stack that can hold more than one. Two arrow types never do.
+    pub fn can_stack_with(&self, other: &Item) -> bool {
+        self.stack_limit() > 1
+            && self.base == other.base
+            && self.seed == other.seed
+            && self.shape == other.shape
+            && self.rarity == other.rarity
+            && self.affixes == other.affixes
+            && self.name == other.name
+            && self.coins == other.coins
+            && self.words == other.words
+            && self.known == other.known
+    }
+
+    /// How many more it can take before it is full.
+    pub fn stack_room(&self) -> u32 {
+        self.stack_limit().saturating_sub(self.quantity)
+    }
+
+    /// This item as a stack of `n`.
+    pub fn with_quantity(mut self, n: u32) -> Item {
+        self.quantity = n.max(1);
+        self
+    }
+
     /// The name shown first: a legendary's title, otherwise its name.
     pub fn title(&self) -> &str {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
@@ -310,7 +348,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None, quantity: 1 });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -322,7 +360,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None, quantity: 1 })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
@@ -335,6 +373,27 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 mod tests {
     use super::*;
     use crate::armory_base::{ARMORY_BASES, held_back};
+
+    #[test]
+    fn arrows_and_bolts_stack_to_ten_and_only_with_their_own_kind() {
+        let arrow = roll_item("Arrow", 7).unwrap();
+        assert_eq!((arrow.quantity, arrow.stack_limit(), arrow.stack_room()), (1, 10, 9));
+        assert_eq!(roll_item("Bolt", 7).unwrap().stack_limit(), 10);
+        assert!(arrow.can_stack_with(&roll_item("Arrow", 7).unwrap()));
+        assert!(!arrow.can_stack_with(&roll_item("Arrow", 8).unwrap()), "another model is another stack");
+        assert!(!arrow.can_stack_with(&roll_item("Bolt", 7).unwrap()));
+        let full = roll_item("Arrow", 7).unwrap().with_quantity(10);
+        assert_eq!(full.stack_room(), 0);
+        assert_eq!(roll_item("Sword", 1).unwrap().stack_limit(), 1);
+        assert!(!roll_item("Bread", 1).unwrap().can_stack_with(&roll_item("Bread", 1).unwrap()));
+    }
+
+    #[test]
+    fn a_stack_keeps_its_count_through_parts() {
+        let stack = roll_item("Arrow", 3).unwrap().with_quantity(6);
+        assert_eq!(Item::from_parts(stack.clone().into()).unwrap().quantity, 6);
+        assert_eq!(Item::from_parts(ItemParts { quantity: 0, ..stack.into() }).unwrap().quantity, 1);
+    }
 
     #[test]
     fn tents_and_campfire_kits_roll_by_name_but_never_lie_loose() {

@@ -401,7 +401,9 @@ impl Inventory {
     }
 
     /// Puts `id` into the first carried container with room for it, at its first free spot.
-    /// Returns the container.
+    /// Returns the container. A stack (arrows, bolts) first tops up the stacks of its own kind
+    /// already carried, then fills places of its own, ten to a place: 14 arrows make a stack of
+    /// 10 and one of 4. Folded wholly into others, `id` is forgotten.
     pub fn stow(&mut self, id: ItemId) -> Result<ItemId, Refusal> {
         let item = self.item(id).ok_or(Refusal::Unknown)?;
         if !item.profile.packable {
@@ -411,7 +413,45 @@ impl Inventory {
         // A container that names what it takes (a quiver) is tried before one that takes anything.
         let mut containers = self.carried_containers();
         containers.sort_by_key(|c| self.item(*c).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.accepts.is_empty()));
-        for container in containers {
+        let mut first = None;
+        if item.stack_limit() > 1 {
+            for &container in &containers {
+                if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
+                    continue;
+                }
+                if self.top_up(id, container) {
+                    return Ok(container);
+                }
+            }
+            // What is left goes in places of its own, a full stack at a time.
+            while self.item(id).is_some_and(|i| i.quantity > i.stack_limit()) {
+                let limit = self.item(id).map_or(1, |i| i.stack_limit());
+                let mut chunk = self.item(id).ok_or(Refusal::Unknown)?.clone();
+                chunk.quantity = limit;
+                let chunk_id = self.add(chunk);
+                match self.stow_whole(chunk_id, footprint, &containers) {
+                    Ok(container) => {
+                        first.get_or_insert(container);
+                        if let Some(rest) = self.items.get_mut(&id) {
+                            rest.quantity -= limit;
+                        }
+                    }
+                    Err(refusal) => {
+                        self.forget(chunk_id);
+                        return first.ok_or(refusal);
+                    }
+                }
+            }
+        }
+        match self.stow_whole(id, footprint, &containers) {
+            Ok(container) => Ok(first.unwrap_or(container)),
+            Err(refusal) => first.ok_or(refusal),
+        }
+    }
+
+    /// Puts `id` as it is in the first of `containers` with room, at its first free spot.
+    fn stow_whole(&mut self, id: ItemId, footprint: Footprint, containers: &[ItemId]) -> Result<ItemId, Refusal> {
+        for &container in containers {
             if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
                 continue;
             }
@@ -421,6 +461,57 @@ impl Inventory {
             }
         }
         Err(Refusal::NoRoom)
+    }
+
+    /// Moves what `id` has into the unfilled stacks of its kind lying directly in `container`.
+    /// True when none is left and `id` has been forgotten.
+    fn top_up(&mut self, id: ItemId, container: ItemId) -> bool {
+        let Some(grid) = self.grids.get(&container) else { return false };
+        let targets: Vec<ItemId> = grid.entries().iter().map(|e| e.id).filter(|&t| t != id).collect();
+        for target in targets {
+            let (Some(from), Some(to)) = (self.items.get(&id), self.items.get(&target)) else { return false };
+            if !to.can_stack_with(from) {
+                continue;
+            }
+            let moved = to.stack_room().min(from.quantity);
+            if moved == 0 {
+                continue;
+            }
+            let left = from.quantity - moved;
+            if let Some(to) = self.items.get_mut(&target) {
+                to.quantity += moved;
+            }
+            if left == 0 {
+                self.forget(id);
+                return true;
+            }
+            if let Some(from) = self.items.get_mut(&id) {
+                from.quantity = left;
+            }
+        }
+        false
+    }
+
+    /// Takes one piece out of the stack `id`: the stack itself if it is one, else a loose piece
+    /// of the same kind split from it, the stack left one fewer. `None` for something kept no
+    /// longer.
+    pub fn take_one(&mut self, id: ItemId) -> Option<ItemId> {
+        let item = self.items.get(&id)?;
+        if item.quantity <= 1 {
+            self.take_out(id);
+            return Some(id);
+        }
+        let mut one = item.clone();
+        one.quantity = 1;
+        if let Some(stack) = self.items.get_mut(&id) {
+            stack.quantity -= 1;
+        }
+        Some(self.add(one))
+    }
+
+    /// How many pieces lie in `container`'s grid, counting each stack's quantity.
+    pub fn pieces_in(&self, container: ItemId) -> usize {
+        self.grids.get(&container).map_or(0, |g| g.entries().iter().map(|e| self.item(e.id).map_or(0, |i| i.quantity as usize)).sum())
     }
 
     /// Picks `id` up: a bag goes on, in its slot, if that slot is free; anything else is
@@ -564,7 +655,7 @@ impl Inventory {
     /// `contentsWeight`).
     pub fn contents_weight(&self, container: ItemId) -> f32 {
         self.grids.get(&container).map_or(0.0, |g| {
-            g.entries().iter().map(|e| self.item(e.id).map_or(0.0, |i| i.profile.stats.weight) + self.contents_weight(e.id)).sum()
+            g.entries().iter().map(|e| self.item(e.id).map_or(0.0, |i| i.profile.stats.weight * i.quantity as f32) + self.contents_weight(e.id)).sum()
         })
     }
 
@@ -867,6 +958,51 @@ mod tests {
             assert_eq!(inventory.stow(more), Ok(quiver));
         }
         assert_eq!(inventory.contents_count(quiver), 20);
+    }
+
+    #[test]
+    fn fourteen_arrows_make_a_stack_of_ten_and_one_of_four() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        for _ in 0..14 {
+            let arrow = inventory.add(rolled("Arrow", 5));
+            assert_eq!(inventory.stow(arrow), Ok(quiver));
+        }
+        let mut counts: Vec<u32> = inventory.grid(quiver).unwrap().entries().iter().map(|e| inventory.item(e.id).unwrap().quantity).collect();
+        counts.sort();
+        assert_eq!(counts, vec![4, 10]);
+        assert_eq!(inventory.pieces_in(quiver), 14);
+        // A bundle of fourteen lying together splits the same way.
+        let mut other = Inventory::default();
+        let quiver = other.add(rolled("Quiver", 1));
+        other.wear(quiver, Slot::Quiver).unwrap();
+        let bundle = other.add(rolled("Arrow", 5).with_quantity(14));
+        assert_eq!(other.stow(bundle), Ok(quiver));
+        assert_eq!((other.contents_count(quiver), other.pieces_in(quiver)), (2, 14));
+    }
+
+    #[test]
+    fn two_kinds_of_arrow_never_share_a_stack_and_one_comes_off_a_stack_at_a_time() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        for seed in [5, 6, 5, 6] {
+            let arrow = inventory.add(rolled("Arrow", seed));
+            inventory.stow(arrow).unwrap();
+        }
+        assert_eq!((inventory.contents_count(quiver), inventory.pieces_in(quiver)), (2, 4));
+        let stack = inventory.grid(quiver).unwrap().entries()[0].id;
+        let one = inventory.take_one(stack).unwrap();
+        assert_ne!(one, stack);
+        assert_eq!((inventory.item(one).unwrap().quantity, inventory.item(stack).unwrap().quantity), (1, 1));
+        // Put back, it folds into its stack.
+        inventory.stow(one).unwrap();
+        assert_eq!(inventory.item(stack).unwrap().quantity, 2);
+        assert!(inventory.item(one).is_none());
+        // The last of a stack comes off whole.
+        let last = inventory.take_one(inventory.grid(quiver).unwrap().entries()[1].id).unwrap();
+        assert_eq!(inventory.take_one(last), Some(last));
     }
 
     #[test]

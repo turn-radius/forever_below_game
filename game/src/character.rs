@@ -459,7 +459,7 @@ impl Character {
             for entry in inventory.grid(container).map(|g| g.entries()).unwrap_or_default() {
                 let Some(inside) = inventory.item(entry.id) else { continue };
                 // What a bag inside the bag holds counts with it.
-                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight + inventory.contents_weight(entry.id)));
+                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight * inside.quantity as f32 + inventory.contents_weight(entry.id)));
             }
         }
         let band = LoadBand::from_load_with(rules, carried.value(), capacity);

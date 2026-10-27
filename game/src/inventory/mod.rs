@@ -339,12 +339,13 @@ fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLe
             holder
         }
     };
-    let have = inventory.contents_count(holder);
-    for k in have..fb_items::outfit::AMMUNITION_CARRIED {
-        let Some(item) = fb_items::roll_item_with(ammo_base, kit_seed(level.as_deref(), 0xa770 + 1 + k as u32), starting_odds()) else { return };
+    // One kind of arrow for the lot, in stacks.
+    let have = inventory.pieces_in(holder);
+    let kind = kit_seed(level.as_deref(), 0xa771);
+    for _ in have..fb_items::outfit::AMMUNITION_CARRIED {
+        let Some(item) = fb_items::roll_item_with(ammo_base, kind, starting_odds()) else { return };
         let id = inventory.add(item);
-        let at = inventory.grid(holder).and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 }));
-        if at.is_none_or(|at| inventory.put(id, holder, at).is_err()) {
+        if inventory.stow(id).is_err() {
             inventory.forget(id);
             break;
         }
@@ -1220,6 +1221,21 @@ impl ScreenLayout<'_> {
                                     BackgroundColor(rarity_color(item.shown_rarity())),
                                 ));
                             }
+                            if item.quantity > 1 {
+                                slot.spawn((
+                                    CountBadge,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        right: px(3),
+                                        top: px(2),
+                                        padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                                        border_radius: BorderRadius::all(px(4)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(BG.with_alpha(0.88)),
+                                ))
+                                .with_child((Text::new(item.quantity.to_string()), UiFonts::style(&self.fonts.mono_bold, 12.0, Color::WHITE)));
+                            }
                             if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {
                                 slot.spawn((
                                     PriceTag,
@@ -1242,6 +1258,10 @@ impl ScreenLayout<'_> {
             });
     }
 }
+
+/// The number on a stack's cell: how many arrows or bolts lie there.
+#[derive(Component)]
+pub struct CountBadge;
 
 /// A grid's size on the page, in logical pixels, with cells `cell` pixels apart: its cells and
 /// the lines round them.

@@ -258,6 +258,17 @@ pub struct ItemRecord {
     /// The rests the delver had had when an attempt to identify it fell short.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rest_tried: Option<u32>,
+    /// How many it stands for, a stack of arrows. Absent in a record from before stacks: one.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub quantity: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
 }
 
 /// An item in a container's grid.
@@ -351,6 +362,7 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         teaching: item.teaching.clone(),
         known: item.known,
         rest_tried: item.rest_tried,
+        quantity: item.quantity,
     }
 }
 
@@ -403,6 +415,7 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         teaching: record.teaching.clone(),
         known: record.known,
         rest_tried: record.rest_tried,
+        quantity: record.quantity,
     });
     if item.is_none() {
         warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
@@ -702,6 +715,22 @@ mod tests {
         // A shot that came to rest is a level spot of its family and seed, which rolls the arrow again.
         let arrow = fb_items::roll_item("Arrow", 77).unwrap();
         assert_eq!(fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds), Some(arrow));
+    }
+
+    #[test]
+    fn a_stack_keeps_its_count_and_an_old_record_has_one() {
+        let mut inventory = Inventory::default();
+        let stack = inventory.add(fb_items::roll_item("Arrow", 9).unwrap().with_quantity(7));
+        let json = serde_json::to_string(&record_item(&inventory, stack).unwrap()).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(other.item(again).unwrap().quantity, 7);
+        let single = serde_json::to_string(&item_record(&fb_items::roll_item("Arrow", 9).unwrap())).unwrap();
+        assert!(!single.contains("quantity"), "a lone piece writes no count, so older saves read the same");
+        let mut old: serde_json::Value = serde_json::from_str(&json).unwrap();
+        old.as_object_mut().unwrap().remove("quantity");
+        let again = restore_item(&mut other, &serde_json::from_value(old).unwrap()).unwrap();
+        assert_eq!(other.item(again).unwrap().quantity, 1);
     }
 
     #[test]

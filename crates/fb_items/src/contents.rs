@@ -35,7 +35,7 @@ pub fn container_item(state: ChestState) -> Item {
     let seed = shape.seed();
     let profile = profile(CONTAINER_BASE, &shape);
     let name = shape.noun();
-    Item { base: CONTAINER_BASE.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name, legend: None, profile, coins: None, odds: crate::Odds::default(), history: vec![], words: None, teaching: None, known: crate::identify::Known::Full, rest_tried: None }
+    Item { base: CONTAINER_BASE.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name, legend: None, profile, coins: None, odds: crate::Odds::default(), history: vec![], words: None, teaching: None, known: crate::identify::Known::Full, rest_tried: None, quantity: 1 }
 }
 
 /// What each kind of container holds, by weight, and how many things, inclusive.
@@ -103,8 +103,14 @@ pub fn roll_contents(style: ChestStyle, loot: u32, odds: crate::Odds) -> Vec<Ite
         let base = *rng.weighted(&table);
         let seed = (rng.next_f64() * 4_294_967_296.0) as u32;
         if by_the_sheaf(base) {
-            let mut sheaf = Mulberry32::new(seed);
-            contents.extend((0..sheaf.int(SHEAF.0, SHEAF.1)).filter_map(|_| roll_item_with(base, (sheaf.next_f64() * 4_294_967_296.0) as u32, odds)));
+            // One kind of arrow, one seed, in stacks of the most that share a cell.
+            let mut count = Mulberry32::new(seed).int(SHEAF.0, SHEAF.1);
+            while count > 0 {
+                let Some(stack) = roll_item_with(base, seed, odds) else { break };
+                let n = count.min(stack.stack_limit());
+                contents.push(stack.with_quantity(n));
+                count -= n;
+            }
         } else {
             contents.extend(roll_item_with(base, seed, odds));
         }
@@ -140,7 +146,7 @@ mod tests {
             for loot in [1, 1207, 65_537, u32::MAX] {
                 let contents = roll_contents(style, loot, crate::Odds::default());
                 assert_eq!(contents, roll_contents(style, loot, crate::Odds::default()), "{style:?} {loot}");
-                assert!((count.0..=count.1 * SHEAF.1).contains(&(contents.len() as u32)), "{style:?} {loot}: {}", contents.len());
+                assert!((count.0..=count.1 * SHEAF.1).contains(&contents.iter().map(|i| i.quantity).sum::<u32>()), "{style:?} {loot}: {}", contents.len());
                 assert!(contents.iter().all(|i| table.iter().any(|(b, _)| *b == i.base) && i.profile.packable), "{style:?}");
             }
         }
@@ -187,7 +193,7 @@ mod tests {
     fn arrows_and_bolts_come_by_the_sheaf() {
         for loot in 1..200 {
             let contents = roll_contents(ChestStyle::Crate, loot, crate::Odds::default());
-            let arrows = contents.iter().filter(|i| i.base == "Arrow").count() as u32;
+            let arrows = contents.iter().filter(|i| i.base == "Arrow").map(|i| i.quantity).sum::<u32>();
             assert!(arrows == 0 || arrows >= SHEAF.0, "crate {loot}: {arrows} arrows");
         }
     }

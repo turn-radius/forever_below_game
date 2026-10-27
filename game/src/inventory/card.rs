@@ -198,7 +198,9 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     } else {
         // A purse's description is its coins, which the price line says.
         let description = (!p.description.is_empty() && item.coins.is_none()).then(|| p.description.clone());
-        [description, Some(weight), Some(cells)].into_iter().flatten().collect()
+        let count = (item.quantity > 1).then(|| format!("\u{d7}{}", item.quantity));
+        let weight = if item.quantity > 1 { format!("{} lb", number(s.weight * item.quantity as f32)) } else { weight };
+        [description, count, Some(weight), Some(cells)].into_iter().flatten().collect()
     };
     let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.value()) } else { Price::Unsure }, Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
