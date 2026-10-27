@@ -591,3 +591,18 @@ fn leaving_the_delve_forgets_the_trader_s_stage() {
     app.world_mut().run_system_once(leave_the_delve).unwrap();
     assert!(!app.world().resource::<portrait::TraderStage>().is_dressed(), "a later barter dresses the trader afresh");
 }
+
+#[test]
+fn an_unknown_or_partly_known_item_fetches_what_a_plain_one_does() {
+    let ring = (1..20_000).filter_map(|s| fb_items::roll_item_with("Ring", s, fb_items::Odds::loot(10))).find(|i| i.rarity >= fb_items::Rarity::Rare && i.affixes.len() >= 2).unwrap();
+    let plain = Item { rarity: fb_items::Rarity::Common, affixes: vec![], ..ring.clone() };
+    let trade = smith().unwrap();
+    let known = offer(&ring, trade, Band::Neutral).unwrap();
+    let mut unknown = ring.clone().unidentified();
+    assert_eq!(offer(&unknown, trade, Band::Neutral), offer(&plain, trade, Band::Neutral));
+    assert!(known > offer(&unknown, trade, Band::Neutral).unwrap());
+    unknown.reveal_at(unknown.identify_dc() - 3, 0);
+    assert!(!unknown.is_known());
+    assert_eq!(offer(&unknown, trade, Band::Neutral), offer(&plain, trade, Band::Neutral));
+    assert_eq!(price(&unknown, trade, Band::Neutral), price(&plain, trade, Band::Neutral));
+}

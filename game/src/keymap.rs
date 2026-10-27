@@ -72,6 +72,8 @@ pub enum Action {
     Choose,
     /// Begins a new delve from the title screen.
     NewDelve,
+    /// In the inventory, rolls to identify the unknown item under the mouse.
+    Identify,
     MusicQuieter,
     MusicLouder,
 }
@@ -342,6 +344,7 @@ impl Default for Keymap {
                 bind(Action::Back, "Go back, or open the menu", Group::Screens, &[Key(KeyCode::Escape)]).in_contexts(EVERYWHERE),
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Menus]),
                 bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]).in_contexts(&[Context::Menus]),
+                bind(Action::Identify, "Identify the unknown item under the mouse", Group::Items, &[Key(KeyCode::KeyY)]).in_contexts(&[Context::Inventory]),
                 bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]).in_contexts(EVERYWHERE),
                 bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]).in_contexts(EVERYWHERE),
             ],

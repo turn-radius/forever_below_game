@@ -359,10 +359,13 @@ pub fn hold_spec(spec: &str) -> (Option<Option<String>>, Option<Option<String>>)
 }
 
 /// The first item of `base` rolled at or after `seed`, lit if it is a light that can be.
+/// `Chamberstick` is a candle in its holder.
 fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
+    let (base, holder) = if base == "Chamberstick" { ("Candle", true) } else { (base, false) };
     let rolled = |s: u32| fb_items::roll_item(base, s);
-    let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| crate::carry::item_light(&i.shape).is_some());
-    lit.filter(|_| matches!(base, "Torch" | "Lantern")).or_else(|| rolled(seed))
+    let wanted = |i: &fb_items::Item| crate::carry::item_light(&i.shape).is_some() && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder));
+    let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(wanted);
+    lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle")).or_else(|| rolled(seed))
 }
 
 /// For captures: the hands hold what `FB_HOLD` names ([`hold_spec`]), whatever the kit gave.
@@ -1073,7 +1076,7 @@ pub fn cell_tag(price: card::Price) -> Option<(String, Color, Color)> {
             let (text, metal) = crate::ui::coin_tag(price.total_copper());
             Some((text, metal, OK))
         }
-        card::Price::Worth(_) | card::Price::Holds(_) => None,
+        card::Price::Worth(_) | card::Price::Holds(_) | card::Price::Unsure => None,
     }
 }
 
@@ -1207,7 +1210,7 @@ impl ScreenLayout<'_> {
                                         border_radius: BorderRadius::MAX,
                                         ..default()
                                     },
-                                    BackgroundColor(rarity_color(item.rarity)),
+                                    BackgroundColor(rarity_color(item.shown_rarity())),
                                 ));
                             }
                             if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {

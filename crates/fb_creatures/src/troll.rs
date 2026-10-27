@@ -1026,6 +1026,15 @@ mod tests {
     use crate::{Creature, Species};
 
     #[test]
+    fn a_burn_just_before_the_turn_keeps_a_fallen_troll_down() {
+        let mut regeneration = Regeneration::new();
+        regeneration.fall();
+        assert_eq!(regeneration.tick(TURN_SECONDS - 0.1, 0, 84), None);
+        regeneration.burn();
+        assert_eq!(regeneration.tick(0.2, 0, 84), Some(Turn::Died));
+    }
+
+    #[test]
     fn the_same_seed_gives_the_same_troll() {
         for seed in [0, 1, 7, 1207, u32::MAX] {
             let (a, b) = (TrollState::roll(seed), TrollState::roll(seed));

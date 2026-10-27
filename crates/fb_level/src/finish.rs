@@ -461,7 +461,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn level_at(seed: u32, depth: u32) -> (Level, LevelParams) {
-        let params = LevelParams::for_style(LevelStyle::for_depth(depth));
+        let params = LevelParams::for_depth(depth);
         (generate_with(seed, depth, &params), params)
     }
 
@@ -475,7 +475,7 @@ mod tests {
             cobble_chance: 0.0,
             flagstone_chance: 0.0,
             arch_chance: 0.0,
-            ..LevelParams::for_style(LevelStyle::for_depth(depth))
+            ..LevelParams::for_depth(depth)
         }
     }
 

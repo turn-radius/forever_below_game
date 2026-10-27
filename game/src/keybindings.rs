@@ -33,7 +33,7 @@ use crate::keymap::{Action, Context, CrouchMode, Input, Keymap};
 
 impl Action {
     /// Every action, in the order the keymap lists them.
-    pub const ALL: [Action; 35] = [
+    pub const ALL: [Action; 36] = [
         Action::WalkForward,
         Action::WalkBack,
         Action::StepLeft,
@@ -67,6 +67,7 @@ impl Action {
         Action::Back,
         Action::Choose,
         Action::NewDelve,
+        Action::Identify,
         Action::MusicQuieter,
         Action::MusicLouder,
     ];
@@ -108,6 +109,7 @@ impl Action {
             Action::Back => "back",
             Action::Choose => "choose",
             Action::NewDelve => "new_delve",
+            Action::Identify => "identify",
             Action::MusicQuieter => "music_quieter",
             Action::MusicLouder => "music_louder",
         }
@@ -463,6 +465,15 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("fly"), "{warnings:?}");
         assert_eq!(keymap.inputs(Action::Primary), &[Input::Key(KeyCode::KeyE)]);
+    }
+
+    #[test]
+    fn a_saved_file_naming_the_old_skip_roll_action_still_loads() {
+        let (keymap, warnings) = Keymap::from_toml("[menus]\nskip_roll = [\"Space\"]\n[level]\nprimary = [\"KeyE\"]\n");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("skip_roll"), "{warnings:?}");
+        assert_eq!(keymap.inputs(Action::Primary), &[Input::Key(KeyCode::KeyE)]);
+        assert_eq!(keymap.inputs(Action::Jump), &[Input::Key(KeyCode::Space)]);
     }
 
     #[test]

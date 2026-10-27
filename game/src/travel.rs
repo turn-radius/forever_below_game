@@ -116,7 +116,7 @@ impl Abyss {
     /// The level at `depth`: the same level every time it is asked for. The place to apply what
     /// was recorded on a level (#285) is on the level this returns.
     pub fn level_at(&self, depth: u32) -> Level {
-        fb_level::generate_in(self.run_seed, depth, &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(depth)))
+        fb_level::generate_in(self.run_seed, depth, &fb_level::LevelParams::for_depth(depth))
     }
 }
 

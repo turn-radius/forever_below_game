@@ -426,7 +426,9 @@ fn land_blows(
             let from = at.translation.xz();
             let forward = at.forward().as_vec3().xz();
             let combat = &tuning.combat;
-            if let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets()) {
+            let found = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.targets());
+            let living = found.is_some();
+            if let Some(target) = found {
                 swung.write(SwungAt { target });
                 let ac = armour.get(target).copied().unwrap_or(ArmourClass::UNARMOURED);
                 let odds = crate::character::DelverEffects::attack_odds(effects, rules);
@@ -435,25 +437,50 @@ fn land_blows(
                 if attack.hit {
                     let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
                     let damage = rolled + super::bane_damage(&swing.weapon.bane, strikeable.foe(target), &mut dice.0);
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
                     if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
                         burned.write(Burned { target });
                     }
+                } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
+                    info!("swing: grazes for {damage}");
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true });
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
-            } else if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand))
-                && let Some(target) = target_in_reach_from(from, Some(at.translation.y + HAND_HEIGHT), forward, swing.weapon.reach * combat.reach_scale, combat.hit_cone(), &strikeable.fallen_trolls())
-            {
-                // A lit torch put to a troll lying down: nothing to roll against, it burns.
-                swung.write(SwungAt { target });
-                burned.write(Burned { target });
+            }
+            // A lit torch burns every troll lying down in reach as well, whatever else the blow
+            // found: nothing to roll against.
+            if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
+                let reach = swing.weapon.reach * combat.reach_scale;
+                for target in targets_in_reach(from, Some(at.translation.y + HAND_HEIGHT), forward, reach, combat.hit_cone(), &strikeable.fallen_trolls()) {
+                    if !living {
+                        swung.write(SwungAt { target });
+                    }
+                    burned.write(Burned { target });
+                }
             }
         }
         if swing.is_over() {
             commands.entity(player).remove::<Swing>();
         }
     }
+}
+
+/// Every body in `targets` that a blow from `from` reaches ([`target_in_reach_from`]'s reach and
+/// cone), each once, in the order `targets` first names them.
+pub fn targets_in_reach(from: Vec2, hand: Option<f32>, forward: Vec2, reach: f32, cone: f32, targets: &[Target]) -> Vec<Entity> {
+    let mut seen: Vec<Entity> = Vec::new();
+    for t in targets {
+        if !seen.contains(&t.entity) {
+            seen.push(t.entity);
+        }
+    }
+    seen.into_iter()
+        .filter(|&entity| {
+            let own: Vec<Target> = targets.iter().filter(|t| t.entity == entity).copied().collect();
+            target_in_reach_from(from, hand, forward, reach, cone, &own).is_some()
+        })
+        .collect()
 }
 
 /// A creature's body as a blow finds it: a circle on the floor under each sphere of each bone's

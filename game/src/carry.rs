@@ -64,6 +64,7 @@ use crate::player::{Gait, blocked_by, slide_around};
 use crate::props::{Container, PropPiece};
 use crate::record::{WorldRecord, restore_item};
 use crate::render::{ItemAppearance, ItemPalette, ItemSpawner, Shimmer, ToonMaterial};
+use crate::sparkle::Sparkles;
 use crate::tuning::{LightTuning, Tuning};
 use crate::ui::{BG, BRIGHT, UiFonts, rarity_color};
 use crate::view_model::{HipInView, held_in_view, hip_in_view, hip_swing, side_of};
@@ -155,7 +156,7 @@ impl Plugin for CarryPlugin {
                     lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
-                    (widen_view_models, rescale_floor_items, reshimmer_floor_items).run_if(resource_changed::<Tuning>),
+                    (widen_view_models, rescale_floor_items, reshimmer_floor_items, resparkle_floor_items).run_if(resource_changed::<Tuning>),
                     relight_given_lights,
                     follow_player_camera,
                     sway_held,
@@ -745,7 +746,33 @@ impl DebugPose {
             }
             _ => (sx as f32 + 0.5, sy as f32 + 0.5, facing.yaw(), 0.0),
         };
+        let (x, y) = Self::standable(level, x, y);
         DebugPose { at: Vec3::new(x * CELL, 0.0, y * CELL), yaw, pitch }
+    }
+
+    /// The grid point `(x, y)` if the delver could stand there, else the middle of the nearest cell
+    /// they could. An eye in rock sees the level from behind its walls, which are one-sided: the
+    /// near wall is culled and the far ones show through it, as long bars and slabs (#575).
+    pub fn standable(level: &Level, x: f32, y: f32) -> (f32, f32) {
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        if level.is_open(cx, cy) {
+            return (x, y);
+        }
+        let range = 12;
+        let nearest = (-range..=range)
+            .flat_map(|dy| (-range..=range).map(move |dx| (cx + dx, cy + dy)))
+            .filter(|&(nx, ny)| level.is_open(nx, ny))
+            .min_by(|a, b| {
+                let d = |c: &(i32, i32)| (c.0 as f32 + 0.5 - x).powi(2) + (c.1 as f32 + 0.5 - y).powi(2);
+                d(a).total_cmp(&d(b))
+            });
+        match nearest {
+            Some((nx, ny)) => {
+                warn!("FB_DEBUG_POSE {x},{y} is in rock; standing in the middle of the nearest open cell, {nx},{ny}");
+                (nx as f32 + 0.5, ny as f32 + 0.5)
+            }
+            None => (x, y),
+        }
     }
 
     /// The eye's world transform in this pose.
@@ -879,6 +906,9 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
     let mut root = spawner.spawn(&mesh, &appearance);
     root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
+    if let Some(sparkles) = floor_sparkles(item, min, max, tuning) {
+        root.insert(sparkles);
+    }
     // A bedroll or tent set down covers the floor it was checked against (`crate::camp`), and a
     // tent blocks the way as a prop does, from a child at the middle of what it covers.
     if let Some(camp) = item.camp().filter(|_| item.is_set_camp()) {
@@ -918,6 +948,24 @@ pub fn floor_shimmer(item: &fb_items::Item, tuning: &Tuning) -> Shimmer {
         Shimmer::new(rarity_color(fb_items::Rarity::Legendary), tuning.view.legendary_shimmer.max(0.0))
     } else {
         Shimmer::default()
+    }
+}
+
+/// The stars that drift up off an item lying on the floor, from its box `min` to `max`: a
+/// legendary's in the legendary colour, the tuning's `legendary_sparkles` of them, over its
+/// shimmer, the user's call ("little 4 pointed stars drifting up from them"); none for anything
+/// else. Like the shimmer they stop once it is picked up.
+pub fn floor_sparkles(item: &fb_items::Item, min: Vec3, max: Vec3, tuning: &Tuning) -> Option<Sparkles> {
+    (item.rarity == fb_items::Rarity::Legendary).then(|| Sparkles { color: rarity_color(fb_items::Rarity::Legendary), count: tuning.view.legendary_sparkles, min, max })
+}
+
+/// Gives every floor item the stars the tuning asks for ([`floor_sparkles`]).
+fn resparkle_floor_items(mut commands: Commands, tuning: Res<Tuning>, inventory: Res<Inventory>, items: Query<(Entity, &FloorItem, Option<&Sparkles>)>) {
+    for (entity, floor, had) in &items {
+        let Some(item) = inventory.item(floor.id) else { continue };
+        if let Some(sparkles) = floor_sparkles(item, floor.min, floor.max, &tuning).filter(|s| had != Some(s)) {
+            commands.entity(entity).insert(sparkles);
+        }
     }
 }
 
@@ -1133,12 +1181,11 @@ fn equip_player_camera(
 pub fn held_pose(item: &Item, hand: fb_items::Slot) -> (Vec3, Quat) {
     let left = hand == fb_items::Slot::Offhand;
     let flame = if left { HELD_FLAME * Vec3::new(-1.0, 1.0, 1.0) } else { HELD_FLAME };
-    let lean = match item {
-        Item::Lantern(_) => 0.0,
-        _ => 0.22,
-    };
+    // A lantern, candle or chamberstick stands on its base: flame straight up.
+    let upright = matches!(item, Item::Lantern(_) | Item::Sundry(_));
+    let lean = if upright { 0.0 } else { 0.22 };
     let lean = if left { -lean } else { lean };
-    let tip = if matches!(item, Item::Lantern(_)) { 0.0 } else { -0.32 };
+    let tip = if upright { 0.0 } else { -0.32 };
     (flame, Quat::from_euler(EulerRot::XYZ, tip, 0.0, lean))
 }
 
@@ -2058,10 +2105,24 @@ mod tests {
         let start = DebugPose::parse(&level, "1");
         assert_eq!(start.at, Vec3::new((x as f32 + 0.5) * CELL, 0.0, (y as f32 + 0.5) * CELL));
         assert_eq!(start.yaw, facing.yaw());
-        let there = DebugPose::parse(&level, "4.5, 6.2, 0, -30");
-        assert_eq!(there.at, Vec3::new(90.0, 0.0, 124.0));
+        let spot = (x as f32 + 0.25, y as f32 + 0.75);
+        let there = DebugPose::parse(&level, &format!("{}, {}, 0, -30", spot.0, spot.1));
+        assert_eq!(there.at, Vec3::new(spot.0 * CELL, 0.0, spot.1 * CELL));
         assert_eq!(there.eye().translation.y, EYE_HEIGHT);
         assert!(there.eye().forward().y < -0.4);
+    }
+
+    #[test]
+    fn a_debug_pose_in_rock_moves_to_open_floor() {
+        // Seed 4's stone halls at depth 2: the way into rock east of the claim door at 28,15.
+        let level = crate::travel::Abyss::new(4).level_at(2);
+        assert!(!level.is_open(30, 15));
+        let pose = DebugPose::parse(&level, "30.5,15.5,90,0");
+        let (x, z) = ((pose.at.x / CELL).floor() as i32, (pose.at.z / CELL).floor() as i32);
+        assert!(level.is_open(x, z), "stands at {x},{z}");
+        assert_eq!((pose.yaw, pose.pitch), (90f32.to_radians(), 0.0));
+        // Open floor is left where it is.
+        assert_eq!(DebugPose::parse(&level, "29.25,15.5").at, Vec3::new(29.25 * CELL, 0.0, 15.5 * CELL));
     }
 
     #[test]
@@ -2377,7 +2438,7 @@ mod tests {
     }
 
     #[test]
-    fn legendary_floor_items_shimmer_and_others_do_not() {
+    fn legendary_floor_items_shimmer_and_sparkle_and_others_do_not() {
         let drops = crate::inventory::underfoot::drops_for_capture("Sword:legendary,Sword:common");
         let [legendary, common] = [&drops[0], &drops[1]];
         assert_eq!((legendary.rarity, common.rarity), (Rarity::Legendary, Rarity::Common));
@@ -2413,6 +2474,13 @@ mod tests {
         app.world_mut().resource_mut::<Tuning>().view.legendary_shimmer = 0.5;
         app.update();
         assert!(shimmers(&mut app, spawned[0]).iter().all(|s| s.strength == 0.5));
+        // Stars drift up off the legendary alone, as many as the tuning asks for.
+        let count = |app: &App, entity: Entity| app.world().get::<Sparkles>(entity).map(|s| s.count);
+        assert_eq!((count(&app, spawned[0]), count(&app, spawned[1])), (Some(Tuning::default().view.legendary_sparkles), None));
+        app.add_systems(Update, resparkle_floor_items);
+        app.world_mut().resource_mut::<Tuning>().view.legendary_sparkles = 0;
+        app.update();
+        assert_eq!((count(&app, spawned[0]), count(&app, spawned[1])), (Some(0), None));
     }
 
     #[test]

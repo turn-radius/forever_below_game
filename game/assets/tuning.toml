@@ -21,6 +21,8 @@ aim_buffer_degrees = 2.0
 aim_min_radius = 0.6
 # How strongly a legendary lying on the floor shimmers (0 = not at all). It lights nothing.
 legendary_shimmer = 0.25
+# How many little stars drift up off a legendary lying on the floor at once (0 = none).
+legendary_sparkles = 5
 # How much larger than its own size a chest, barrel, crate or other container standing in the
 # level is drawn, and the floor it blocks (1 = true size; 1.6 makes a chest about a metre wide).
 # The level lays containers out for 1.6, so much more may push one into a wall.

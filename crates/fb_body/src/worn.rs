@@ -1374,7 +1374,8 @@ fn gloves(body: &Body, env: &Envelope, state: &HandsState) -> ItemMesh {
 /// own): it hung where the robe's skirt falls and caught in it.
 fn belt(body: &Body, env: &Envelope, state: &BeltState, robed: bool) -> ItemMesh {
     let mut s = state.clone();
-    s.fittings.pouch &= !robed;
+    // A minotaur carries no pouch either: its belt keeps its frogs and goes without.
+    s.fittings.pouch &= !robed && body.folk() != Folk::Minotaur;
     on_body(body, Belts::on_form(&env.form(Over::Trunk, 1.0), &s))
 }
 

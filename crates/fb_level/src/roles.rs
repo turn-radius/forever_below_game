@@ -1,5 +1,6 @@
 //! What each room of a claim is for: a hall by the claim's main door, a hearth, a place to
-//! sleep, a market where the faction trades, and stores in any rooms left over.
+//! sleep, a market where the faction trades (or, in a claim with rooms to spare, a workshop for
+//! each of its trades), and stores in any rooms left over.
 //!
 //! Roles come from a stream of the level seed of their own, after the claims and before the
 //! folk, so who stands where follows from them. They never move a wall or an item. The hearth
@@ -29,8 +30,12 @@ pub enum RoomRole {
     Hearth,
     /// Where its members bed down.
     Sleeping,
-    /// Where it trades: stalls of goods. Only a faction that trades has one.
+    /// Where it trades: stalls of goods. Only a faction that trades has one, and only where the
+    /// claim has no room for a workshop of each trade.
     Market,
+    /// Where one trade works and sells: a claim with rooms to spare gives each of its trades one,
+    /// and its traders of that profession stand in it. Furnished and tended as a market is.
+    Workshop(fb_faction::Profession),
     /// Spare rooms: stocks laid by.
     Store,
 }
@@ -43,8 +48,16 @@ impl RoomRole {
             RoomRole::Hearth => 'F',
             RoomRole::Sleeping => 'S',
             RoomRole::Market => 'M',
+            RoomRole::Workshop(_) => 'W',
             RoomRole::Store => 'T',
         }
+    }
+}
+
+impl RoomRole {
+    /// Whether goods are sold in a room with this role: a market or a workshop.
+    pub fn is_trade_room(self) -> bool {
+        matches!(self, RoomRole::Market | RoomRole::Workshop(_))
     }
 }
 
@@ -59,9 +72,19 @@ impl Level {
         claim.rooms.iter().copied().find(|&r| self.roles_of(r).contains(&role))
     }
 
-    /// Whether the faction `claim` belongs to has traders, so keeps a market.
+    /// The first room of `claim` where goods are sold: its market, or its first workshop.
+    pub fn trade_room(&self, claim: &Claim) -> Option<usize> {
+        claim.rooms.iter().copied().find(|&r| self.roles_of(r).iter().any(|role| role.is_trade_room()))
+    }
+
+    /// The workshop of `claim` for `profession`, if its trade has one.
+    pub fn workshop_of(&self, claim: &Claim, profession: fb_faction::Profession) -> Option<usize> {
+        self.room_with_role(claim, RoomRole::Workshop(profession))
+    }
+
+    /// Whether the faction `claim` belongs to has traders, so keeps a market or workshops.
     pub fn trades(&self, claim: &Claim) -> bool {
-        self.room_with_role(claim, RoomRole::Market).is_some()
+        self.trade_room(claim).is_some()
     }
 }
 
@@ -94,7 +117,7 @@ impl Level {
     /// between two rooms of the same claim is no claim door.
     pub fn claim_doors(&self) -> Vec<ClaimDoor> {
         let (sx, sy, _) = self.start();
-        let mut doors = self.edge_doors(&self.claims);
+        let mut doors = self.edge_doors_in(&RoomGraph::new(self), &self.claims);
         for door in &mut doors {
             if let Some(spec) = self.factions.iter().find(|f| f.id == door.faction) {
                 let mut rng = crate::doorkind::door_stream(self.seed, door.x, door.y);
@@ -115,7 +138,7 @@ impl Level {
 
     /// The doors on the edge of `claims` (not yet marked main), whether or not they are the
     /// level's own claims, so growth can ask what a claim would shut.
-    pub(crate) fn edge_doors(&self, claims: &[Claim]) -> Vec<ClaimDoor> {
+    pub(crate) fn edge_doors_in(&self, graph: &RoomGraph, claims: &[Claim]) -> Vec<ClaimDoor> {
         let entrance = (self.entrance.x as i32, self.entrance.y as i32);
         let claim_of = |r: usize| claims.iter().find(|c| c.rooms.contains(&r));
         let mut doors = Vec::new();
@@ -127,9 +150,10 @@ impl Level {
                 // A door stands in the wall beside its room, or on the room's own edge.
                 let near: Vec<(i32, i32)> = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().map(|(dx, dy)| (x + dx, y + dy)).filter(|&(nx, ny)| self.is_open(nx, ny)).collect();
                 let Some((room, claim)) = near.iter().filter_map(|&(nx, ny)| self.room_at(nx, ny)).find_map(|r| Some((r, claim_of(r)?))) else { continue };
-                let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && self.room_at(nx, ny).is_none_or(|r| !claim.rooms.contains(&r)));
+                // The corridors a claim holds between its own rooms are its ground too.
+                let held = |nx: i32, ny: i32| crate::claims::in_ground(self, graph, &claim.rooms, nx, ny);
+                let leads_out = near.iter().any(|&(nx, ny)| (nx, ny) != (x, y) && !held(nx, ny));
                 if leads_out {
-                    let held = |nx: i32, ny: i32| self.is_open(nx, ny) && self.room_at(nx, ny).is_some_and(|r| claim.rooms.contains(&r));
                     let outside = |nx: i32, ny: i32| self.is_open(nx, ny) && !held(nx, ny);
                     let inward = [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().find(|&(dx, dy)| held(x + dx, y + dy) && outside(x - dx, y - dy)).unwrap_or((0, 0));
                     let shared = inward == (0, 0) || self.room_at(x - inward.0, y - inward.1).is_some_and(|r| self.claim_of(r).is_some());
@@ -158,6 +182,12 @@ pub(crate) fn assign_roles(level: &Level, plans: &[Vec<Option<fb_faction::Trade>
         });
         let market = plan.iter().flatten().any(|t| t.profession != fb_faction::Profession::Guard);
         roles[hall].push(RoomRole::Hall);
+        if let Some(layout) = workshop_layout(&plan_trades(plan), hall, &others) {
+            for (room, role) in layout {
+                roles[room].push(role);
+            }
+            continue;
+        }
         match others.len() {
             0 => {
                 roles[hall].push(RoomRole::Hearth);
@@ -192,6 +222,59 @@ pub(crate) fn assign_roles(level: &Level, plans: &[Vec<Option<fb_faction::Trade>
         }
     }
     roles
+}
+
+/// Rooms a claim needs before its trades work in workshops of their own: a smaller claim keeps
+/// one market as it always did.
+pub(crate) const WORKSHOP_ROOMS: usize = 4;
+
+/// The distinct trades of a camp's plan, in the order its traders come: the guards sell nothing.
+pub(crate) fn plan_trades(plan: &[Option<fb_faction::Trade>]) -> Vec<fb_faction::Profession> {
+    let mut trades: Vec<fb_faction::Profession> = Vec::new();
+    for t in plan.iter().flatten().filter(|t| t.profession != fb_faction::Profession::Guard) {
+        if !trades.contains(&t.profession) {
+            trades.push(t.profession);
+        }
+    }
+    trades
+}
+
+/// The roles (past the hall's own) of a claim with a workshop for each of `trades`, or `None`
+/// where the claim has too few rooms or too few trades: it then keeps one market. `others` are
+/// the claim's rooms but the hall, nearest the hall first, and the trades take the nearest.
+///
+/// - With a room to spare for each trade past hearth and sleeping room, the hearth is nearest the
+///   hall, the sleeping room deepest, workshops between and stores in any left over.
+/// - With a room for each but no more, the hall is the hearth too, and the sleeping room is the
+///   deepest room (a workshop's, if every room works).
+/// - With a room per trade counting the hall, the hall is a workshop as well.
+fn workshop_layout(trades: &[fb_faction::Profession], hall: usize, others: &[usize]) -> Option<Vec<(usize, RoomRole)>> {
+    let (t, n) = (trades.len(), others.len() + 1);
+    if t == 0 || n < WORKSHOP_ROOMS || n < t {
+        return None;
+    }
+    let mut roles = Vec::new();
+    if n >= t + 3 {
+        roles.push((others[0], RoomRole::Hearth));
+        roles.push((others[n - 2], RoomRole::Sleeping));
+        for (i, &room) in others[1..n - 2].iter().enumerate() {
+            roles.push((room, trades.get(i).map_or(RoomRole::Store, |&p| RoomRole::Workshop(p))));
+        }
+    } else if n > t {
+        roles.push((hall, RoomRole::Hearth));
+        for (&room, &p) in others.iter().zip(trades) {
+            roles.push((room, RoomRole::Workshop(p)));
+        }
+        roles.push((others.get(t).copied().unwrap_or(others[t - 1]), RoomRole::Sleeping));
+    } else {
+        roles.push((hall, RoomRole::Hearth));
+        roles.push((hall, RoomRole::Workshop(trades[0])));
+        for (&room, &p) in others.iter().zip(&trades[1..]) {
+            roles.push((room, RoomRole::Workshop(p)));
+        }
+        roles.push((others[n - 2], RoomRole::Sleeping));
+    }
+    Some(roles)
 }
 
 /// A way out of a claim: the claim's floor cell `cell` in room `room`, with an open cell beside
@@ -332,7 +415,7 @@ mod tests {
     use crate::generate;
 
     fn sweep() -> impl Iterator<Item = (u32, u32)> {
-        [1, 2].into_iter().flat_map(|depth| (1..=64).map(move |seed| (seed, depth)))
+        [1, 2, 6, 12].into_iter().flat_map(|depth| (1..=32).map(move |seed| (seed, depth)))
     }
 
     #[test]
@@ -344,10 +427,100 @@ mod tests {
                 for role in [RoomRole::Hearth, RoomRole::Sleeping] {
                     assert!(level.room_with_role(claim, role).is_some(), "seed {seed} depth {depth}: no {role:?}");
                 }
-                assert_eq!(level.room_with_role(claim, RoomRole::Market).is_some(), level.trades(claim), "seed {seed} depth {depth}");
+                assert_eq!(level.trade_room(claim).is_some(), level.trades(claim), "seed {seed} depth {depth}");
+                // A claim keeps a market or workshops, never both.
+                let workshops = claim.rooms.iter().filter(|&&r| level.roles_of(r).iter().any(|x| matches!(x, RoomRole::Workshop(_)))).count();
+                assert!(workshops == 0 || level.room_with_role(claim, RoomRole::Market).is_none(), "seed {seed} depth {depth}");
             }
             for r in 0..level.rooms.len() {
                 assert_eq!(level.roles_of(r).is_empty(), !level.is_claimed(r), "seed {seed} depth {depth}: room {r}");
+            }
+        }
+    }
+
+    /// The claim of `level` that holds the most folk, with the folk it holds.
+    fn biggest_claim(level: &Level) -> Option<(&Claim, Vec<&crate::FolkSpot>)> {
+        let held = |c: &Claim| level.folk.iter().filter(|f| f.faction == c.faction).collect::<Vec<_>>();
+        level.claims.iter().map(|c| (c, held(c))).max_by_key(|(_, folk)| folk.len())
+    }
+
+    fn traders<'a>(folk: &[&'a crate::FolkSpot]) -> Vec<&'a crate::FolkSpot> {
+        folk.iter().copied().filter(|f| f.trade.is_some_and(|t| t.profession != fb_faction::Profession::Guard)).collect()
+    }
+
+    #[test]
+    fn a_workshop_claim_gives_each_trade_a_room_and_its_traders_stand_in_it() {
+        let (mut claims, mut traders_seen, mut in_workshop, mut marketed) = (0, 0, 0, 0);
+        for (seed, depth) in (1..=48).flat_map(|seed| [(seed, 8), (seed, 12)]) {
+            let level = generate(seed, depth);
+            for claim in &level.claims {
+                let workshops: Vec<_> = claim.rooms.iter().flat_map(|&r| level.roles_of(r).iter().map(move |&role| (r, role))).filter_map(|(r, role)| match role {
+                    RoomRole::Workshop(p) => Some((r, p)),
+                    _ => None,
+                }).collect();
+                if workshops.is_empty() {
+                    marketed += level.room_with_role(claim, RoomRole::Market).is_some() as u32;
+                    continue;
+                }
+                claims += 1;
+                // A trade has one workshop, and a claim keeps no market beside them.
+                for (i, (_, p)) in workshops.iter().enumerate() {
+                    assert!(workshops[i + 1..].iter().all(|(_, q)| q != p), "seed {seed} depth {depth}: two workshops for {p:?}");
+                }
+                assert!(level.room_with_role(claim, RoomRole::Market).is_none(), "seed {seed} depth {depth}");
+                let folk: Vec<_> = level.folk.iter().filter(|f| f.faction == claim.faction).collect();
+                for f in traders(&folk) {
+                    let Some(t) = f.trade else { continue };
+                    traders_seen += 1;
+                    in_workshop += (level.workshop_of(claim, t.profession).is_some() && level.workshop_of(claim, t.profession) == level.room_at(f.x as i32, f.y as i32)) as u32;
+                }
+            }
+        }
+        assert!(claims >= 10, "{claims} claims with workshops ({marketed} with a market)");
+        // A workshop too cramped to stand in sends its trader to another room.
+        assert!(in_workshop * 10 >= traders_seen * 9, "{in_workshop} of {traders_seen} traders stand in their workshop");
+    }
+
+    #[test]
+    fn no_two_traders_of_a_faction_share_a_trade_until_all_are_taken() {
+        for (seed, depth) in (1..=32).flat_map(|seed| [(seed, 1), (seed, 6), (seed, 12)]) {
+            let level = generate(seed, depth);
+            for claim in &level.claims {
+                let folk: Vec<_> = level.folk.iter().filter(|f| f.faction == claim.faction).collect();
+                let mut kinds: Vec<_> = traders(&folk).iter().filter_map(|f| f.trade.map(|t| t.profession)).collect();
+                let count = kinds.len();
+                kinds.sort();
+                kinds.dedup();
+                assert!(kinds.len() == count || count > 7, "seed {seed} depth {depth}: {count} traders in {} trades", kinds.len());
+            }
+        }
+    }
+
+    /// The issue's example: at depth 8 most levels have a holder with eight or more folk over
+    /// four or more rooms and four or more trades, each trader standing in a workshop of their own.
+    #[test]
+    fn at_depth_eight_most_levels_have_a_holder_working_many_trades_in_workshops_of_their_own() {
+        let (mut kept, total) = (0, 60);
+        for seed in 1..=total {
+            let level = generate(seed, 8);
+            let Some((claim, folk)) = biggest_claim(&level) else { continue };
+            let mut trades: Vec<_> = traders(&folk).iter().filter_map(|f| f.trade.map(|t| t.profession)).collect();
+            trades.sort();
+            trades.dedup();
+            let own = traders(&folk).iter().all(|f| f.trade.is_some_and(|t| level.workshop_of(claim, t.profession).is_some() && level.workshop_of(claim, t.profession) == level.room_at(f.x as i32, f.y as i32)));
+            kept += (folk.len() >= 8 && claim.rooms.len() >= 4 && trades.len() >= 4 && own) as u32;
+        }
+        assert!(kept * 2 >= total, "{kept} of {total} levels have such a holder");
+    }
+
+    #[test]
+    fn depth_one_has_small_camps_and_no_workshops() {
+        for seed in 1..=64 {
+            let level = generate(seed, 1);
+            assert!(level.folk.len() <= 10, "seed {seed}");
+            for claim in &level.claims {
+                assert!(claim.rooms.len() <= 3, "seed {seed}: a claim of {} rooms", claim.rooms.len());
+                assert!(claim.rooms.iter().all(|&r| level.roles_of(r).iter().all(|x| !matches!(x, RoomRole::Workshop(_)))), "seed {seed}");
             }
         }
     }
@@ -371,7 +544,7 @@ mod tests {
         let (mut markets, mut staffed) = (0, 0);
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
-            for claim in level.claims.iter().filter(|c| level.trades(c)) {
+            for claim in level.claims.iter().filter(|c| level.room_with_role(c, RoomRole::Market).is_some()) {
                 let market = level.room_with_role(claim, RoomRole::Market).unwrap();
                 markets += 1;
                 let there = level.folk.iter().filter(|f| f.faction == claim.faction && level.room_at(f.x as i32, f.y as i32) == Some(market)).count();

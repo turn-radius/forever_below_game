@@ -53,7 +53,7 @@ The game opens on the title screen, to Forever Below's theme. New delve (or Ente
 
 **Saving.** The delve is saved when the delver lies down in a set bedroll or tent (set one down from the pack with F, then F on it to sleep): "Your delve is saved." shows, and there is no other way to save. The title then offers "Resume <name>, depth N" above New delve, which rebuilds the world from its seed, every level as it was left, and the delver lying in the same camp with their gear, needs, hit points, clock, standings, commissions and lessons. Quitting without sleeping loses the progress since the last camp. Dying deletes the save. Resume is the highlighted choice and Enter resumes. New delve and Continue as ask "Replace your saved delve?" first. The save is `delve.json` beside `settings.json`, written to a temporary file and renamed, so a crash cannot leave half of one; a save the game cannot read is renamed `delve.unreadable.json` and the title says so in one line. A delve begun with `--seed`, `FB_NEW_DELVE` or a debug switch never writes or deletes the save. The design is in the header of `game/src/save.rs`.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`, `FB_READ`, `FB_TEACH`, `FB_TEACH_READ`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`, `FB_READ`, `FB_TEACH`, `FB_TEACH_READ`, `FB_BURN_TROLL`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
 
 ### Play a level
 
@@ -210,6 +210,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps\|denizen` | a lit camera at a fixed view of the level |
+| `FB_BURN_TROLL=1\|scorch` | with `FB_SPAWN=troll`, fells the troll in front of you and burns it where it lies (`1`), or burns it standing (`scorch`), a couple of seconds in, for captures of its flames and char; try `FB_DEBUG_LIGHT=lantern` |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
@@ -228,6 +229,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_CONDITION_HOVER=<n>` | shows the card of the `n`th status badge (0 the first, worst first) as if hovered |
 | `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
 | `FB_DOORS=open` | a few frames in, swings open every claim door that is not locked to the delver at their standing (with `FB_STANDING`), for captures of the doors |
+| `FB_TALK_BAND=<band>` | with `FB_TALK=1`, holds the faction of the folk it talks to at the middle of the band (`hostile`, `wary`, `neutral`, `friendly`, `allied`) a few frames in, to capture a parley (`FB_TALK_BAND=hostile FB_TALK=1 FB_TALK_TOPIC=persuade`) |
 | `FB_STANDING=<faction index>:<band>` | holds the delver's standing with that faction at the middle of the band (`hostile`, `wary`, `neutral`, `friendly`, `allied`), for captures of folk watching, greeting, attacking or helping (`FB_STANDING=2:wary`) |
 | `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |
@@ -275,6 +277,7 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[view]` | `aim_buffer_degrees` | 2.0 | How far off the crosshair, in degrees, something can be and still be aimed at. |
 | `[view]` | `aim_min_radius` | 0.6 | The least that leeway is, in world units off the crosshair, for small things close by (0.6 = 6 cm). |
 | `[view]` | `legendary_shimmer` | 0.25 | How strongly a legendary lying on the floor shimmers (0 = not at all). It lights nothing. |
+| `[view]` | `legendary_sparkles` | 5 | How many little stars drift up off a legendary lying on the floor at once (0 = none). |
 | `[view]` | `container_scale` | 1.6 | How much larger than its own size a chest, barrel, crate or other container standing in the level is drawn (1 = true size; 1.6 makes a chest about a metre wide). |
 | `[moving]` | `walk_speed` | 14.0 | Walking pace, in world units per second (14 = 1.4 m/s). |
 | `[moving]` | `hurry_speed` | 45.0 | Pace with Shift held, in world units per second. |

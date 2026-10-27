@@ -106,7 +106,7 @@ impl LevelForge {
                 other => return Err(format!("unknown argument {other:?}")),
             }
         }
-        Ok(LevelForge::at_depth(seed, depth, LevelParams::for_style(LevelStyle::for_depth(depth))))
+        Ok(LevelForge::at_depth(seed, depth, LevelParams::for_depth(depth)))
     }
 
     /// Lays the level out again from the seed and parameters.
@@ -128,7 +128,7 @@ impl LevelForge {
 
     /// Back to the generator's own parameters for this depth, as the game lays levels out.
     pub fn reset(&mut self) {
-        self.params = LevelParams::for_style(LevelStyle::for_depth(self.depth));
+        self.params = LevelParams::for_depth(self.depth);
         self.framing += 1;
         self.relay();
     }

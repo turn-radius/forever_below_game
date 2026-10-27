@@ -245,6 +245,16 @@ pub fn attack_roll_with(rules: &Rules, to_hit: &[(&str, i32)], armour_class: i32
     Attack { roll, natural, set_aside, armour_class, hit }
 }
 
+/// Whether a missed `attack` still grazes, and for how much: on a miss, `graze_chance` under
+/// `rules` gives `graze_damage` (our own, after the Graze weapon mastery, SRD 5.2, "Mastery
+/// Properties"). A hit grazes nothing and draws nothing; a miss draws once.
+pub fn graze(rules: &Rules, attack: &Attack, rng: &mut Mulberry32) -> Option<u32> {
+    if attack.hit {
+        return None;
+    }
+    (rng.next_f64() < rules.combat.graze_chance).then_some(rules.combat.graze_damage)
+}
+
 /// The proficiency bonus the delver and folk add to their attack rolls: +2, a character's from
 /// 1st to 4th level (SRD 5.1, "Beyond 1st Level", the Character Advancement table; "Attack
 /// Rolls", p. 96). Everyone counts as proficient with whatever they swing, as everyone is with
@@ -417,6 +427,20 @@ pub fn ammunition_breaks(attack: &Attack) -> bool {
 mod tests {
     use super::*;
     use crate::modifier;
+
+    #[test]
+    fn a_miss_grazes_about_as_often_as_the_rules_say_and_a_hit_never_does() {
+        let rules = defaults();
+        let mut rng = Mulberry32::new(5);
+        let misses: Vec<Attack> = (0..4_000).map(|_| attack_roll(&[], 100, &mut rng)).filter(|a| !a.hit).collect();
+        let grazes: Vec<u32> = misses.iter().filter_map(|a| graze(rules, a, &mut rng)).collect();
+        let share = grazes.len() as f64 / misses.len() as f64;
+        assert!((share - rules.combat.graze_chance).abs() < 0.03, "{share:.3} of misses grazed");
+        assert!(grazes.iter().all(|&d| d == rules.combat.graze_damage));
+        let hit = attack_roll(&[], -100, &mut rng);
+        assert!(hit.hit);
+        assert_eq!(graze(rules, &hit, &mut rng), None);
+    }
 
     /// A seed whose first d20 is `natural`.
     fn seed_for(natural: u32) -> u32 {

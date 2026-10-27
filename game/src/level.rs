@@ -1027,6 +1027,20 @@ fn fog_cameras(
     }
 }
 
+/// Where `FB_DEBUG_CAMERA=arch` stands to look at `doorway`: on whichever side has the longer open
+/// run, two and a half cells back or as far as that run goes. Never in rock, where the one-sided
+/// walls show the level from behind (#575).
+fn arch_eye(level: &fb_level::Level, doorway: &geometry::Doorway) -> Vec3 {
+    let eye = Vec3::Y * EYE_HEIGHT;
+    let centre = v3(geometry::cell_centre(doorway.x, doorway.y));
+    let through = v3(doorway.through);
+    let step = |dir: Vec3, k: i32| (doorway.x + (dir.x * k as f32).round() as i32, doorway.y + (dir.z * k as f32).round() as i32);
+    let run = |dir: Vec3| (1..=3).take_while(|&k| level.is_open(step(dir, k).0, step(dir, k).1)).count();
+    let score = |dir: Vec3| run(dir) * 2 + level.room_at(step(dir, 1).0, step(dir, 1).1).is_some() as usize * 10;
+    let from_dir = if score(-through) >= score(through) { -through } else { through };
+    centre + from_dir * CELL * (run(from_dir) as f32).min(2.5) + eye
+}
+
 /// The capture camera from `FB_DEBUG_CAMERA`, and whether its mode walks the player in.
 #[derive(Component, Debug, Default)]
 pub struct DebugCamera {
@@ -1082,12 +1096,7 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let roomy = |d: &geometry::Doorway| [-1, 1].iter().any(|&s| level.room_at(d.x + (d.through[0] as i32) * s, d.y + (d.through[2] as i32) * s).is_some());
             let Some(doorway) = styled.iter().copied().find(roomy).or(styled.first().copied()) else { return };
             let centre = v3(geometry::cell_centre(doorway.x, doorway.y));
-            let through = v3(doorway.through);
-            // Stand on whichever side has the longer open run.
-            let step = |dir: Vec3, k: i32| (doorway.x + (dir.x * k as f32).round() as i32, doorway.y + (dir.z * k as f32).round() as i32);
-            let score = |dir: Vec3| (1..=3).take_while(|&k| level.is_open(step(dir, k).0, step(dir, k).1)).count() * 2 + level.room_at(step(dir, 1).0, step(dir, 1).1).is_some() as usize * 10;
-            let from_dir = if score(-through) >= score(through) { -through } else { through };
-            let at = centre + from_dir * CELL * 2.5 + eye;
+            let at = arch_eye(level, &doorway);
             Transform::from_translation(at).looking_at(centre + Vec3::Y * 11.0, Vec3::Y)
         }
         "cells" => {
@@ -1246,11 +1255,17 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 Ok("hall") => fb_level::RoomRole::Hall,
                 Ok("sleeping") => fb_level::RoomRole::Sleeping,
                 Ok("market") => fb_level::RoomRole::Market,
+                Ok("workshop") => fb_level::RoomRole::Market,
                 Ok("store") => fb_level::RoomRole::Store,
                 _ => fb_level::RoomRole::Hearth,
             };
             let by_index = std::env::var("FB_DEBUG_ROOM").ok().and_then(|v| v.parse::<usize>().ok());
-            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| level.roles_of(r).contains(&want))) else { return };
+            // `workshop` finds the first room of any trade's workshop.
+            let is_want = |r: usize| match std::env::var("FB_DEBUG_ROLE").as_deref() {
+                Ok("workshop") => level.roles_of(r).iter().any(|role| matches!(role, fb_level::RoomRole::Workshop(_))),
+                _ => level.roles_of(r).contains(&want),
+            };
+            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| is_want(r))) else { return };
             let room = level.rooms[index];
             // At the room's middle, or for a sleeping room at the middle of its bedrolls.
             let beds: Vec<(f32, f32)> = level
@@ -1450,6 +1465,20 @@ mod tests {
         for part in &mossy_column(&spot, level.seed, 3).parts {
             assert_eq!(part.uvs_b.len(), part.positions.len(), "{}", part.name);
             assert!(part.uvs_b.iter().all(|uv| uv[0] == 0.75));
+        }
+    }
+
+    #[test]
+    fn the_arch_camera_stands_on_open_floor() {
+        // Seed 4 at depth 2 once put it in the rock east of the claim door at 28,15 (#575), and the
+        // one-sided walls then showed the level from behind as bars and slabs.
+        for seed in [4, 1207, 7, 11, 23] {
+            let level = crate::travel::Abyss::new(seed).level_at(2);
+            for doorway in geometry::doorways(&geometry::CellView::new(&level)) {
+                let at = arch_eye(&level, &doorway);
+                let (x, y) = ((at.x / fb_level::CELL).floor() as i32, (at.z / fb_level::CELL).floor() as i32);
+                assert!(level.is_open(x, y) || (x, y) == (doorway.x, doorway.y), "seed {seed}: the eye for the doorway at {},{} stands at {x},{y}", doorway.x, doorway.y);
+            }
         }
     }
 

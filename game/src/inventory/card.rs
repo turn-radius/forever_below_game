@@ -13,7 +13,7 @@ use super::items::{Inventory, ItemId, Location};
 use super::{Dragging, Hovered};
 use crate::keymap::{Action, ActionInput};
 use crate::play::{Screen, ScreenOpen};
-use crate::ui::{BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, coin_spans, numbers_line, rarity_color};
+use crate::ui::{ACCENT, BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, coin_spans, numbers_line, rarity_color};
 
 /// The price line under a card's title, its coins each in their metal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,8 @@ pub enum Price {
     Costs { price: Coins, worth: Coins, afford: bool },
     /// What the trader pays for something of the delver's, and what it is worth.
     SellsFor { price: Coins, worth: Coins },
+    /// An item not yet fully known: "Worth ?".
+    Unsure,
 }
 
 impl Price {
@@ -33,6 +35,7 @@ impl Price {
     pub fn parts(self) -> (&'static str, Coins, Option<String>) {
         match self {
             Price::Worth(c) => ("Worth", c, None),
+            Price::Unsure => ("Worth ?", Coins::default(), None),
             Price::Holds(c) => ("Holds", c, Some("double-click to open".into())),
             Price::Costs { price, worth, .. } => ("Costs", price, Some(format!("worth {}", worth.short()))),
             Price::SellsFor { price, worth } => ("Sells for", price, Some(format!("worth {}", worth.short()))),
@@ -42,6 +45,9 @@ impl Price {
     /// The line as plain text: "Costs 2 gp 3 sp · worth 1 gp 5 sp".
     pub fn line(self) -> String {
         let (word, coins, note) = self.parts();
+        if self == Price::Unsure {
+            return word.to_string();
+        }
         match note {
             Some(note) => format!("{word} {} \u{b7} {note}", coins.short()),
             None => format!("{word} {}", coins.short()),
@@ -72,6 +78,10 @@ pub struct CardText {
     /// What a container holds.
     pub contents: Option<String>,
     pub affixes: Vec<AffixLine>,
+    /// How many affixes are still hidden, while the item is unknown or partly known.
+    pub hidden: usize,
+    /// Why it cannot be identified yet: "Try again after resting". [`show_card`] fills it.
+    pub note: Option<String>,
     /// Stats the meta line leaves out that differ from an ordinary thing's.
     pub stats: Vec<String>,
     /// A light's state and what L does to it: "Burning \u{b7} L puts it out".
@@ -104,6 +114,12 @@ pub fn light_line(item: &armory::Item) -> Option<String> {
         ),
         armory::Item::Lantern(s) if s.flame.fuel_left <= 0.0 => return Some("Empty".into()),
         armory::Item::Lantern(s) => (if s.flame.lit { "Lit" } else { "Unlit" }, s.flame.lit),
+        armory::Item::Sundry(s) if item.lit().is_some() => {
+            if s.article.burnt >= armory::kindle::CANDLE_BURNT_OUT {
+                return Some("Spent".into());
+            }
+            (if s.article.lit { "Burning" } else { "Unlit" }, s.article.lit)
+        }
         _ => return None,
     };
     Some(format!("{state} \u{b7} {} \u{b7} L {}", fuel?, if lit { "puts it out" } else { "lights it" }))
@@ -167,7 +183,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
             format!("{d}{bonus} damage")
         });
         [
-            Some(capitalised(item.rarity).to_string()),
+            Some(capitalised(item.shown_rarity()).to_string()),
             item.legend.is_none().then_some(noun),
             Some(weight),
             (s.armour > 0.0).then(|| format!("armour +{}", number(s.armour))),
@@ -184,7 +200,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         let description = (!p.description.is_empty() && item.coins.is_none()).then(|| p.description.clone());
         [description, Some(weight), Some(cells)].into_iter().flatten().collect()
     };
-    let price = item.coins.map_or_else(|| Price::Worth(item.value()), Price::Holds);
+    let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.value()) } else { Price::Unsure }, Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
         let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
         match held {
@@ -196,19 +212,22 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         }
     });
     CardText {
-        title: item.title().to_string(),
-        rarity: item.rarity,
-        subtitle: item.legend.as_ref().map(|l| l.subtitle.clone()),
+        title: item.shown_title(),
+        rarity: item.shown_rarity(),
+        subtitle: item.legend.as_ref().filter(|_| item.is_known()).map(|l| l.subtitle.clone()),
         price,
         meta: meta.join(" \u{b7} "),
         contents,
-        affixes: item.affixes.iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
-        stats: stat_lines(s),
+        affixes: item.shown_affixes().iter().map(|a| AffixLine { text: a.text.clone(), name: a.name.clone(), good: a.good }).collect(),
+        hidden: item.hidden_affixes(),
+        note: None,
+        // The totals count every affix, so they would give the hidden ones away.
+        stats: if item.is_known() { stat_lines(s) } else { Vec::new() },
         light: light_line(&item.shape),
         consume: consume_line(item),
         words: item.words.clone(),
         actions: Vec::new(),
-        history: item.legend.as_ref().map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
+        history: item.legend.as_ref().filter(|_| item.is_known()).map_or_else(Vec::new, |l| l.history.to_vec()).into_iter().chain(item.history.iter().cloned()).collect(),
     }
 }
 
@@ -579,7 +598,7 @@ fn price_line(info: &mut ChildSpawnerCommands, fonts: &UiFonts, price: Price) {
         column.spawn((Text::new(format!("{word}\u{a0}\u{a0}")), UiFonts::style(&fonts.body_medium, size, INK))).with_children(|line| {
             if matches!(price, Price::Costs { afford: false, .. }) {
                 line.spawn((TextSpan::new(coins.short()), UiFonts::style(&fonts.mono_bold, size - 1.0, BAD)));
-            } else {
+            } else if price != Price::Unsure {
                 coin_spans(line, fonts, coins, size - 1.0);
             }
         });
@@ -621,6 +640,13 @@ fn fill_item(card: &mut ChildSpawnerCommands, item: &Item, text: &CardText, font
                     TextSpan::new(format!("({})", affix.name)),
                     UiFonts::style(&fonts.mono, 12.0, MUTED),
                 ));
+            }
+            if text.hidden > 0 {
+                let line = format!("{} hidden {}", text.hidden, if text.hidden == 1 { "property" } else { "properties" });
+                info.spawn((Text::new(line), UiFonts::style(&fonts.body_italic, 14.0, MUTED)));
+            }
+            if let Some(note) = &text.note {
+                info.spawn((Text::new(note.clone()), UiFonts::style(&fonts.body_medium, 14.0, ACCENT)));
             }
             // The totals, with every affix counted, on one line under them.
             if !text.stats.is_empty() {
@@ -719,7 +745,7 @@ pub fn show_card(
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    (tuning, time, barter): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>),
+    (tuning, time, barter, record): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>, Option<Res<crate::record::WorldRecord>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
@@ -741,7 +767,7 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+        if *shown != Some(id) || inventory.is_changed() || record.as_ref().is_some_and(|r| r.is_changed()) || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
             let item = inventory.item(id).expect("checked above");
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
@@ -754,6 +780,14 @@ pub fn show_card(
             {
                 let verbs = crate::interact::verbs_for(&target, &crate::interact::Delver::default());
                 text.actions = crate::interact::key_actions(keymap, &verbs);
+            }
+            let rests = record.as_deref().map_or(0, |r| r.identify_epoch());
+            if item.can_identify(rests)
+                && let Some(key) = keymap.inputs(Action::Identify).first()
+            {
+                text.actions.push((key.label(), "Identify"));
+            } else if !item.is_known() {
+                text.note = Some("Try again after resting or a potion of insight".to_string());
             }
             if inventory.is_carried(id)
                 && let Some(key) = keymap.inputs(Action::Drop).first()
@@ -865,6 +899,17 @@ mod tests {
         // The crosshair's card does not wait.
         let aimed = Some((ItemId(9), CardAnchor::Crosshair));
         assert_eq!(after_hover_delay(aimed, 2.3, 0.5, &mut since), aimed);
+    }
+
+    #[test]
+    fn an_unknown_item_shows_no_worth_and_no_rarity() {
+        let ring = (1..20_000).filter_map(|s| fb_items::roll_item_with("Ring", s, fb_items::Odds::loot(10))).find(|i| i.rarity >= Rarity::Rare && i.affixes.len() >= 2).unwrap();
+        let card = card_text(&ring.clone().unidentified(), None);
+        assert_eq!((card.price, card.rarity), (Price::Unsure, Rarity::Common));
+        assert_eq!(card.price.line(), "Worth ?");
+        assert!(card.meta.starts_with("Common"), "{}", card.meta);
+        let known = card_text(&ring, None);
+        assert!(matches!(known.price, Price::Worth(_)) && known.rarity == ring.rarity);
     }
 
     #[test]

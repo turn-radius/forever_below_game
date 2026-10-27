@@ -155,6 +155,11 @@ fn candidates(inventory: &Inventory, mode: Service) -> Vec<ItemId> {
         .filter(|&id| inventory.is_carried(id))
         .filter(|&id| {
             let Some(item) = inventory.item(id) else { return false };
+            // Not what is unknown or partly known: it is identified first (a bench works only
+            // on what its owner can see).
+            if !item.is_known() {
+                return false;
+            }
             match mode {
                 Service::Scrap => inventory.contents_count(id) == 0 && scrap(item).is_some(),
                 _ => enchant::enchantable(item),

@@ -147,7 +147,7 @@ fn worn_pieces(app: &mut App, skeleton: Entity) -> usize {
 }
 
 fn strike_dead(app: &mut App, skeleton: Entity) {
-    app.world_mut().write_message(Struck { target: skeleton, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false });
+    app.world_mut().write_message(Struck { target: skeleton, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false });
 }
 
 #[test]

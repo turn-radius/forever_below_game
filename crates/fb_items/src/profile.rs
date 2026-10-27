@@ -99,6 +99,14 @@ pub fn stands_upright(family: Family) -> bool {
     )
 }
 
+/// Whether `shape` is shown standing as built: its family stands ([`stands_upright`]), or it has
+/// a base it stands on ([`stands_on_base`]: a candle or chamberstick, a bottle, a tankard, a
+/// pitched tent). Swords, torches, ropes and the like have none and are laid along their
+/// longest side. Its footprint runs the same way.
+pub fn shape_stands_upright(shape: &Item) -> bool {
+    stands_upright(shape.family()) || stands_on_base(shape)
+}
+
 /// Whether `shape` has a base it stands on as built, and so rests on the floor as made rather
 /// than laid on its largest face: helms, hats, boots, bags, chests, lanterns, food and drink
 /// (the Armory builds each sitting on the table, bottles and tankards upright) and candles.
@@ -172,7 +180,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     } else if let Some(row) = goods().get(base) {
         Profile {
             kind: Kind::Good,
-            slot: held_light_slot(family),
+            slot: held_light_slot(shape),
             tags: if row.food { vec![Tag::Food] } else { vec![] },
             stats: Stats { weight: row.weight, ..Stats::default() },
             footprint: row.footprint,
@@ -214,11 +222,15 @@ fn is_carried_form(shape: &Item) -> bool {
 }
 
 /// Where a good that is a hand-held light is held: the off hand, where `data/bases.json` puts
-/// the gear `Torch` and `Lantern`. A spare torch is a torch, so it can be held wherever it is
+/// the gear `Torch` and `Lantern`; a candle or chamberstick is held the same way. A spare torch is a torch, so it can be held wherever it is
 /// found (pack, chest or floor) without becoming gear: it stays common, plain and described.
 /// The plate had it only as a pack good; holding it is this port's own.
-pub fn held_light_slot(family: Family) -> Option<Slot> {
-    matches!(family, Family::Torch | Family::Lantern).then_some(Slot::Offhand)
+pub fn held_light_slot(shape: &Item) -> Option<Slot> {
+    let light = match shape {
+        Item::Sundry(s) => s.article.kind == armory::families::sundry::SundryKind::Candle,
+        _ => matches!(shape.family(), Family::Torch | Family::Lantern),
+    };
+    light.then_some(Slot::Offhand)
 }
 
 fn gear(slot: Slot, tags: &[Tag], stats: Stats, footprint: [u8; 2]) -> Profile {
@@ -465,7 +477,7 @@ mod tests {
                 assert!((1..=9).contains(&p.footprint.cols) && (1..=9).contains(&p.footprint.rows), "{name}: {:?}", p.footprint);
                 match p.kind {
                     Kind::Gear => assert!(p.slot.is_some(), "{name}"),
-                    Kind::Good => assert_eq!(p.slot, held_light_slot(shape.family()), "{name}"),
+                    Kind::Good => assert_eq!(p.slot, held_light_slot(&shape), "{name}"),
                 }
                 if p.tags.contains(&Tag::Weapon) {
                     assert!(p.stats.damage.is_some(), "{name}");
@@ -520,6 +532,62 @@ mod tests {
     #[test]
     fn worn_gear_runs_its_footprint_the_way_it_stands_smoke() {
         worn_gear_runs_its_footprint_the_way_it_stands_check(1..3, &[1207], &["Shoes", "Boots", "Mail coif", "Hood"], 1..10);
+    }
+
+    #[test]
+    fn candles_chambersticks_and_other_based_things_are_drawn_upright() {
+        use armory::families::sundry::{Sundry, SundryKind};
+        for holder in [false, true] {
+            let mut s = Sundry::roll_as(6, SundryKind::Candle);
+            s.article.holder = holder;
+            let shape = Item::Sundry(s);
+            assert!(shape_stands_upright(&shape), "candle holder {holder}");
+            // The icon stands it; the cells it takes stay what they were.
+            let (long, wide) = extents_of(shape.build().bounds());
+            assert_eq!(profile("Candle", &shape).footprint, Footprint { cols: cells(wide), rows: cells(long) });
+        }
+        for base in ["Lantern", "Wine", "Pack", "Boots"] {
+            assert!(shape_stands_upright(&rolled(base, 3).0), "{base}");
+        }
+        for base in ["Sword", "Torch", "Rope", "Crossbow", "Shield"] {
+            assert!(!shape_stands_upright(&rolled(base, 3).0), "{base}");
+        }
+    }
+
+    /// Footprints as they were before the icon pose and the footprint were told apart: the
+    /// row's cells for what folds, else the shape's own cells, turned only for `stands_upright(family)`.
+    #[test]
+    fn existing_goods_keep_their_footprints() {
+        for base in ["Bread", "Cheese", "Waterskin", "Blind cavefish", "Lantern", "Wine", "Tankard", "Candle"] {
+            for seed in 1..40 {
+                let (shape, p) = rolled(base, seed);
+                let bounds = shape.build().bounds();
+                let (long, wide) = extents_of(bounds);
+                let family = shape.family();
+                let row = bases().get(base).map(|r| r.footprint).or_else(|| goods().get(base).map(|r| r.footprint));
+                let mut expected = row.unwrap_or(Footprint { cols: 1, rows: 1 });
+                if !folds(family) {
+                    expected = Footprint { cols: cells(wide), rows: cells(long) };
+                }
+                if stands_upright(family) {
+                    expected = upright_footprint_of(expected, bounds);
+                }
+                assert_eq!(p.footprint, expected, "{base} {seed}");
+            }
+        }
+        for family in [Family::Food, Family::Lantern, Family::Sundry] {
+            assert!(!stands_upright(family), "{family:?}: its footprints were never turned");
+        }
+    }
+
+    #[test]
+    fn a_candle_is_held_in_a_hand_and_a_rope_is_not() {
+        for seed in 1..40 {
+            let (shape, p) = rolled("Candle", seed);
+            assert_eq!(held_light_slot(&shape), Some(Slot::Offhand), "{seed}");
+            assert_eq!(p.slot, Some(Slot::Offhand), "{seed}");
+        }
+        assert_eq!(rolled("Rope", 3).1.slot, None);
     }
 
     #[test]

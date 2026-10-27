@@ -269,14 +269,6 @@
    "belt": [
     "Belt"
    ],
-   "hands": [
-    0.5,
-    "Gloves"
-   ],
-   "cloak": [
-    0.25,
-    "Mantle"
-   ],
    "mainhand": [
     "Hand axe",
     "Hand axe",
@@ -301,12 +293,7 @@
    ],
    "hands": [
     0.7,
-    "Gloves",
     "Gauntlets"
-   ],
-   "cloak": [
-    0.5,
-    "Mantle"
    ],
    "body": [
     0.6,
@@ -314,10 +301,6 @@
     "Brigandine",
     "Scale coat",
     "Mail"
-   ],
-   "head": [
-    0.5,
-    "Helm"
    ],
    "mainhand": [
     "Hand axe",

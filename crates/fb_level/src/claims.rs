@@ -18,14 +18,93 @@ use crate::{Faction, Level};
 
 /// Salt for the claim stream.
 pub(crate) const CLAIM_SALT: u32 = 0xC1A1_4D07;
-/// Folk a level aims for in all, inclusive, shared out among its factions.
-const TARGET_COUNT: (u32, u32) = (6, 10);
 /// Members a room of a claim is sized for.
 const MEMBERS_PER_ROOM: usize = 3;
 /// Smallest room a claim starts from or a group gathers in.
 pub(crate) const MIN_ROOM_AREA: u32 = 9;
+/// Seeds the holder tries, keeping the claim that grows biggest.
+const HOLDER_SEED_TRIES: usize = 12;
 /// Smallest room a trading faction's claim starts from, if it holds but the one.
 const TRADER_SEED_AREA: u32 = 16;
+
+/// The numbers claims grow by with depth, here so a designer can tune them. The abyss near the
+/// top is a scatter of small camps; further down the factions are bigger and take more ground.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClaimRules {
+    /// Folk a level aims for in all at depth 1, inclusive, shared out among its factions.
+    pub folk_shallow: (u32, u32),
+    /// Folk a level aims for at `levels_off` and below.
+    pub folk_deep: (u32, u32),
+    /// The depth growth stops at: everything below is as this one.
+    pub levels_off: u32,
+    /// Share of a level's candidate rooms the factions may claim at depth 1.
+    pub share_shallow: f64,
+    /// Share of them at `levels_off` and below.
+    pub share_deep: f64,
+    /// First depth with a holder: one faction that takes the larger part of the folk and rooms.
+    pub holder_from: u32,
+    /// Share of the level's folk the holder takes at `holder_from`.
+    pub holder_share_from: f64,
+    /// Share of the folk the holder takes at `levels_off` and below.
+    pub holder_share_deep: f64,
+    /// The fewest folk any other faction keeps; fewer factions claim than leave one less.
+    pub camp_min: usize,
+    /// Members a room of the holder's claim is sized for: it takes more rooms than a camp, so
+    /// many trades each have somewhere to work.
+    pub holder_folk_per_room: usize,
+}
+
+impl ClaimRules {
+    pub const DEFAULT: ClaimRules = ClaimRules {
+        folk_shallow: (6, 10), folk_deep: (16, 24), levels_off: 12,
+        share_shallow: 0.5,
+        share_deep: 0.8,
+        holder_from: 4,
+        holder_share_from: 0.43,
+        holder_share_deep: 2.0 / 3.0,
+        camp_min: 3,
+        holder_folk_per_room: 2,
+    };
+
+    /// How far `depth` is along the growth from depth 1 (0.0) to `levels_off` (1.0).
+    pub fn progress(&self, depth: u32) -> f64 {
+        if self.levels_off <= 1 { 1.0 } else { (depth.saturating_sub(1) as f64 / (self.levels_off - 1) as f64).min(1.0) }
+    }
+
+    /// The least and most folk a level at `depth` aims for.
+    pub fn folk_range(&self, depth: u32) -> (u32, u32) {
+        let t = self.progress(depth);
+        let lerp = |a: u32, b: u32| (a as f64 + (b as f64 - a as f64) * t).round() as u32;
+        (lerp(self.folk_shallow.0, self.folk_deep.0), lerp(self.folk_shallow.1, self.folk_deep.1))
+    }
+
+    /// The share of its candidate rooms a level at `depth` lets the factions claim.
+    pub fn claim_share(&self, depth: u32) -> f64 {
+        self.share_shallow + (self.share_deep - self.share_shallow) * self.progress(depth)
+    }
+
+    /// The share of the level's folk the holder takes at `depth`: none below `holder_from`,
+    /// about half at depth 6 and two thirds at the depth growth levels off.
+    pub fn holder_share(&self, depth: u32) -> Option<f64> {
+        if depth < self.holder_from {
+            return None;
+        }
+        let span = self.levels_off.saturating_sub(self.holder_from).max(1) as f64;
+        let t = ((depth - self.holder_from) as f64 / span).min(1.0);
+        Some(self.holder_share_from + (self.holder_share_deep - self.holder_share_from) * t)
+    }
+
+    /// The most rooms the factions may claim of `candidates` rooms at `depth`.
+    pub fn claim_budget(&self, candidates: usize, depth: u32) -> usize {
+        ((candidates as f64 * self.claim_share(depth) + 1e-9).floor() as usize).max(1)
+    }
+}
+
+impl Default for ClaimRules {
+    fn default() -> Self {
+        ClaimRules::DEFAULT
+    }
+}
 
 /// The rooms one faction holds on a level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,25 +134,54 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
     if n == 0 {
         return (Vec::new(), Vec::new());
     }
-    // The creatures keep half the rooms, so a small level claims for fewer factions than it
-    // holds; the rest stand on no ground and place no one.
+    // The creatures keep the rest of the rooms (half at the top, a third far down), so a small
+    // level claims for fewer factions than it holds; the rest stand on no ground and place no one.
+    let rules = ClaimRules::DEFAULT;
     let candidates = (0..level.rooms.len()).filter(|&i| i != start_room && level.rooms[i].area() >= MIN_ROOM_AREA).count();
-    let mut budget = (candidates / 2).max(1);
-    let total = rng.int(TARGET_COUNT.0, TARGET_COUNT.1) as usize;
+    let mut budget = rules.claim_budget(candidates, level.depth);
+    let (least, most) = rules.folk_range(level.depth);
+    let total = rng.int(least, most) as usize;
     let mut order: Vec<usize> = (0..n).collect();
     shuffle(&mut order, rng);
     // A denizen faction is why the level is deep: when the creatures leave room for only some of
     // the factions, the denizens are the ones that keep theirs (the shuffle's order otherwise).
     order.sort_by_key(|&k| !level.factions[k].is_denizen());
     order.truncate(budget.min(n));
-    let m = order.len();
+    // From a few levels down one faction holds the level: it claims first, with the larger part
+    // of the folk, and the others keep a camp each or do not claim at all.
     let mut strength = vec![0; n];
-    for (j, &k) in order.iter().enumerate() {
-        strength[k] = total / m + (j < total % m) as usize;
+    let holder = rules.holder_share(level.depth).filter(|_| order.len() >= 2).map(|share| {
+        let pick = rng.int(0, order.len() as u32 - 1) as usize;
+        let k = order.remove(pick);
+        order.insert(0, k);
+        let held = ((total as f64 * share).round() as usize).clamp(1, total);
+        let camps = (order.len() - 1).min((total - held) / rules.camp_min.max(1));
+        order.truncate(1 + camps);
+        (k, if camps == 0 { total } else { held })
+    });
+    let m = order.len();
+    match holder {
+        Some((k, held)) if m > 1 => {
+            strength[k] = held;
+            let rest = total - held;
+            for (j, &o) in order.iter().skip(1).enumerate() {
+                strength[o] = rest / (m - 1) + (j < rest % (m - 1)) as usize;
+            }
+        }
+        Some((k, held)) => strength[k] = held,
+        None => {
+            for (j, &k) in order.iter().enumerate() {
+                strength[k] = total / m + (j < total % m) as usize;
+            }
+        }
     }
+    let holder = holder.map(|(k, _)| k);
+    // Denizens claim before the holder does (a denizen holder stays first of them), so a deep level keeps the faction that is why it is deep.
+    order.sort_by_key(|&k| !level.factions[k].is_denizen());
     let halls = level.style == crate::LevelStyle::StoneHalls;
     let hall = |r: usize| halls && is_colonnaded(level, &level.rooms[r]);
     let graph = RoomGraph::new(level);
+    let wild_whole = |trial: &[Claim]| wild_stays_whole(level, &graph, trial);
     let mut owner: Vec<Option<usize>> = vec![None; level.rooms.len()];
     let mut claims: Vec<Claim> = Vec::new();
     let mut strengths = Vec::new();
@@ -88,36 +196,85 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
         let fits = |rooms: &[usize], claims: &[Claim]| {
             let mut trial = claims.to_vec();
             trial.push(Claim { faction: level.factions[k].id, rooms: rooms.to_vec() });
-            wild_stays_whole(level, &trial)
+            wild_whole(&trial)
         };
-        let Some(&seed) = seeds.iter().find(|&&r| !avoid.contains(&r) && level.rooms[r].area() >= min_seed && fits(&[r], &claims)) else { continue };
+        let valid: Vec<usize> = seeds.iter().copied().filter(|&r| !avoid.contains(&r) && level.rooms[r].area() >= min_seed && fits(&[r], &claims)).collect();
+        if valid.is_empty() {
+            continue;
+        }
         let extra = rng.int(0, 1) as usize;
         // One room stays back for each faction still to place.
         let spare = budget.saturating_sub(m - j - 1).max(1);
-        let want = (strength[k].div_ceil(MEMBERS_PER_ROOM) + extra).clamp(1, spare);
+        let per_room = if holder == Some(k) { rules.holder_folk_per_room } else { MEMBERS_PER_ROOM };
+        let want = (strength[k].div_ceil(per_room) + extra).clamp(1, spare);
         budget = budget.saturating_sub(want);
-        let mut rooms = vec![seed];
-        owner[seed] = Some(k);
-        while rooms.len() < want {
-            let mut frontier: Vec<usize> = rooms
-                .iter()
-                .flat_map(|&r| graph.links(r).iter().copied())
-                .filter(|&r| r != start_room && owner[r].is_none() && level.rooms[r].area() >= MIN_ROOM_AREA)
-                .collect();
-            frontier.sort_unstable();
-            frontier.dedup();
-            // A room whose loss would cut wild rooms off from the start, or from each other, stays wild.
-            frontier.retain(|&r| fits(&[rooms.as_slice(), &[r]].concat(), &claims));
-            if frontier.iter().any(|&r| hall(r)) {
-                frontier.retain(|&r| hall(r));
+        // Grows a claim from `seed` over the rooms `owner` leaves free.
+        let grow = |seed: usize, owner: &mut Vec<Option<usize>>, rng: &mut Mulberry32| -> Vec<usize> {
+            let mut rooms = vec![seed];
+            owner[seed] = Some(k);
+            while rooms.len() < want {
+                let mut frontier: Vec<usize> = rooms
+                    .iter()
+                    .flat_map(|&r| graph.links(r).iter().copied())
+                    .filter(|&r| r != start_room && owner[r].is_none() && level.rooms[r].area() >= MIN_ROOM_AREA)
+                    .collect();
+                frontier.sort_unstable();
+                frontier.dedup();
+                let candidates = frontier.clone();
+                // A room whose loss would cut wild rooms off from the start, or from each other, stays wild.
+                frontier.retain(|&r| fits(&[rooms.as_slice(), &[r]].concat(), &claims));
+                if frontier.iter().any(|&r| hall(r)) {
+                    frontier.retain(|&r| hall(r));
+                }
+                if frontier.is_empty() {
+                    // A room that would cut off a pocket of rooms takes the pocket with it, when the
+                    // claim has room for all: a run of halls is held whole rather than left behind.
+                    let mut runs: Vec<Vec<usize>> = Vec::new();
+                    for &r in &candidates {
+                        let grown = [rooms.as_slice(), &[r]].concat();
+                        let mut trial = claims.clone();
+                        trial.push(Claim { faction: level.factions[k].id, rooms: grown.clone() });
+                        let cut = cut_off_rooms(level, &graph, &trial);
+                        if cut.is_empty() || grown.len() + cut.len() > want {
+                            continue;
+                        }
+                        if cut.iter().any(|&c| c == start_room || owner[c].is_some() || level.rooms[c].area() < MIN_ROOM_AREA) {
+                            continue;
+                        }
+                        let whole = [grown.as_slice(), cut.as_slice()].concat();
+                        if fits(&whole, &claims) {
+                            runs.push([&[r], cut.as_slice()].concat());
+                        }
+                    }
+                    if runs.is_empty() {
+                        break;
+                    }
+                    let run = runs.swap_remove(rng.int(0, runs.len() as u32 - 1) as usize);
+                    for r in run {
+                        owner[r] = Some(k);
+                        rooms.push(r);
+                    }
+                    continue;
+                }
+                let next = frontier[rng.int(0, frontier.len() as u32 - 1) as usize];
+                owner[next] = Some(k);
+                rooms.push(next);
             }
-            if frontier.is_empty() {
-                break;
+            rooms
+        };
+        // The holder sets its claim where it can grow furthest: it tries a few seeds and keeps the biggest.
+        let tries = if holder == Some(k) { HOLDER_SEED_TRIES } else { 1 };
+        let mut best: Option<(Vec<usize>, Vec<Option<usize>>, Mulberry32)> = None;
+        for &seed in valid.iter().take(tries) {
+            let (mut o, mut r) = (owner.clone(), rng.clone());
+            let rooms = grow(seed, &mut o, &mut r);
+            if best.as_ref().is_none_or(|(b, _, _)| rooms.len() > b.len()) {
+                best = Some((rooms, o, r));
             }
-            let next = frontier[rng.int(0, frontier.len() as u32 - 1) as usize];
-            owner[next] = Some(k);
-            rooms.push(next);
         }
+        let (rooms, grown_owner, grown_rng) = best.expect("a valid seed");
+        owner = grown_owner;
+        *rng = grown_rng;
         claims.push(Claim { faction: level.factions[k].id, rooms });
         strengths.push(strength[k]);
     }
@@ -127,8 +284,16 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
 /// Whether the ground `claims` leave free is one piece with the start: every open cell outside
 /// their rooms and their edge doors can be walked to from the start without crossing either.
 /// The stairs lie in that ground, so the way down is never behind a faction.
-pub(crate) fn wild_stays_whole(level: &Level, claims: &[Claim]) -> bool {
-    let held = held_cells(level, claims);
+pub(crate) fn wild_stays_whole(level: &Level, graph: &RoomGraph, claims: &[Claim]) -> bool {
+    let held = held_cells_in(level, graph, claims);
+    let (_, reached) = wild_reach_from_start(level, &held);
+    let wild = (0..level.cells.len()).filter(|&i| level.cells[i].is_open() && !held[i]).count();
+    reached == wild
+}
+
+/// The wild ground (open cells not in `held`) the start reaches, as a flag per cell, and how
+/// many cells that is.
+fn wild_reach_from_start(level: &Level, held: &[bool]) -> (Vec<bool>, usize) {
     let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
     let (sx, sy, _) = level.start();
     let mut seen = vec![false; level.cells.len()];
@@ -146,23 +311,57 @@ pub(crate) fn wild_stays_whole(level: &Level, claims: &[Claim]) -> bool {
             }
         }
     }
-    let wild = (0..level.cells.len()).filter(|&i| level.cells[i].is_open() && !held[i]).count();
-    reached == wild
+    (seen, reached)
 }
 
-/// The cells `claims` shut to the delver in the wild: their rooms' open cells and their edge
-/// doors, as a flag per cell.
+/// The rooms `claims` would leave as wild ground the start cannot reach: the pocket a claim
+/// would cut off.
+fn cut_off_rooms(level: &Level, graph: &RoomGraph, claims: &[Claim]) -> Vec<usize> {
+    let held = held_cells_in(level, graph, claims);
+    let (seen, _) = wild_reach_from_start(level, &held);
+    let mut rooms: Vec<usize> = (0..level.cells.len())
+        .filter(|&i| level.cells[i].is_open() && !held[i] && !seen[i])
+        .filter_map(|i| level.room_at((i as u32 % level.width) as i32, (i as u32 / level.width) as i32))
+        .collect();
+    rooms.sort_unstable();
+    rooms.dedup();
+    rooms
+}
+
+/// Whether open cell `(x, y)` is ground of a claim over `rooms`: a cell of one of its rooms, or
+/// of a corridor that opens into its rooms alone. A claim of several rooms holds the corridors
+/// between them, which lead nowhere else, so the wild ground need not reach them.
+pub(crate) fn in_ground(level: &Level, graph: &RoomGraph, rooms: &[usize], x: i32, y: i32) -> bool {
+    if !level.is_open(x, y) {
+        return false;
+    }
+    match level.room_at(x, y) {
+        Some(r) => rooms.contains(&r),
+        None => {
+            let opens = graph.rooms_of(x, y);
+            !opens.is_empty() && opens.iter().all(|r| rooms.contains(r))
+        }
+    }
+}
+
+/// The cells `claims` shut to the delver in the wild: their rooms' open cells, the corridors
+/// between those rooms and their edge doors, as a flag per cell.
 pub(crate) fn held_cells(level: &Level, claims: &[Claim]) -> Vec<bool> {
+    held_cells_in(level, &RoomGraph::new(level), claims)
+}
+
+/// [`held_cells`] with the level's room graph at hand.
+pub(crate) fn held_cells_in(level: &Level, graph: &RoomGraph, claims: &[Claim]) -> Vec<bool> {
     let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
     let mut held = vec![false; level.cells.len()];
     for y in 0..level.height as i32 {
         for x in 0..level.width as i32 {
-            if level.is_open(x, y) && level.room_at(x, y).is_some_and(|r| claims.iter().any(|c| c.rooms.contains(&r))) {
+            if claims.iter().any(|c| in_ground(level, graph, &c.rooms, x, y)) {
                 held[index(x, y)] = true;
             }
         }
     }
-    for door in level.edge_doors(claims) {
+    for door in level.edge_doors_in(graph, claims) {
         held[index(door.x, door.y)] = true;
     }
     held
@@ -222,6 +421,105 @@ mod tests {
         [1, 2].into_iter().flat_map(|depth| (1..=64).map(move |seed| (seed, depth)))
     }
 
+    /// Depths the claim rules change at: the top, the middle and where growth levels off.
+    const DEPTHS: [u32; 3] = [1, 6, 12];
+
+    fn deep_sweep() -> impl Iterator<Item = (u32, u32)> {
+        DEPTHS.into_iter().flat_map(|depth| (1..=24).map(move |seed| (seed, depth)))
+    }
+
+    #[test]
+    fn the_folk_a_level_aims_for_grow_with_depth_and_level_off() {
+        let rules = ClaimRules::DEFAULT;
+        assert_eq!(rules.folk_range(1), (6, 10));
+        assert_eq!(rules.folk_range(12), (16, 24));
+        assert_eq!(rules.folk_range(40), (16, 24));
+        let mut last = rules.folk_range(1);
+        for depth in 2..=14 {
+            let now = rules.folk_range(depth);
+            assert!(now.0 >= last.0 && now.1 >= last.1, "depth {depth}");
+            last = now;
+        }
+        assert_eq!(rules.claim_share(1), 0.5);
+        assert!((rules.claim_share(12) - 0.8).abs() < 1e-9);
+        assert_eq!(rules.claim_share(30), rules.claim_share(12));
+    }
+
+    #[test]
+    fn the_holder_share_starts_at_the_holder_depth_and_grows() {
+        let rules = ClaimRules::DEFAULT;
+        assert_eq!(rules.holder_share(rules.holder_from - 1), None);
+        assert_eq!(rules.holder_share(1), None);
+        let at6 = rules.holder_share(6).unwrap();
+        assert!((0.45..=0.55).contains(&at6), "{at6}");
+        let deep = rules.holder_share(12).unwrap();
+        assert!((deep - 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(rules.holder_share(40), Some(deep));
+    }
+
+    /// The folk and rooms of each claim of `level`, in claim order.
+    fn camps(level: &Level) -> Vec<(usize, usize)> {
+        level.claims.iter().map(|c| (level.folk.iter().filter(|f| f.faction == c.faction).count(), c.rooms.len())).collect()
+    }
+
+    #[test]
+    fn above_the_holder_depth_camps_are_even_and_below_it_one_faction_leads() {
+        let rules = ClaimRules::DEFAULT;
+        let (mut led, mut multi) = (0, 0);
+        for (seed, depth) in (1..=40).flat_map(|seed| [(seed, 1), (seed, 3), (seed, 8)]) {
+            let level = generate(seed, depth);
+            let camps = camps(&level);
+            if camps.len() < 2 {
+                continue;
+            }
+            let most = camps.iter().map(|c| c.0).max().unwrap();
+            let least = camps.iter().map(|c| c.0).min().unwrap();
+            if depth < rules.holder_from {
+                // Strengths split evenly; placing can only drop folk the rooms cannot hold.
+                assert!(most <= least + 3, "seed {seed} depth {depth}: {camps:?}");
+            } else if depth == 8 {
+                multi += 1;
+                led += (camps.iter().filter(|c| c.0 == most).count() == 1) as u32;
+                // Whoever leads in folk is not out-roomed by a camp.
+                let leader = camps.iter().max_by_key(|c| c.0).unwrap();
+                assert!(camps.iter().all(|c| c.1 <= leader.1 + 1), "seed {seed} depth {depth}: {camps:?}");
+            }
+        }
+        assert!(multi >= 20, "{multi} levels with several factions");
+        assert!(led * 10 >= multi * 8, "{led} of {multi} levels have a clear holder");
+    }
+
+    #[test]
+    fn camps_beside_a_holder_are_never_left_empty() {
+        let rules = ClaimRules::DEFAULT;
+        for (seed, depth) in (1..=40).flat_map(|seed| [(seed, 6), (seed, 8), (seed, 12)]) {
+            let level = generate(seed, depth);
+            let camps = camps(&level);
+            if camps.len() < 2 {
+                continue;
+            }
+            let mut sorted = camps.clone();
+            sorted.sort_by_key(|c| std::cmp::Reverse(c.0));
+            for c in &sorted[1..] {
+                // A camp is planned with at least the camp minimum; placing drops only folk its rooms cannot hold.
+                assert!(c.0 >= rules.camp_min.min(2), "seed {seed} depth {depth}: {camps:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn deeper_levels_hold_more_folk_and_more_rooms() {
+        // Depths 1 and 11 are both rough rock, so their levels are as big.
+        let (mut shallow, mut deep) = ((0, 0), (0, 0));
+        for seed in 1..=24 {
+            let (a, b) = (generate(seed, 1), generate(seed, 11));
+            shallow = (shallow.0 + a.folk.len(), shallow.1 + a.claims.iter().map(|c| c.rooms.len()).sum::<usize>());
+            deep = (deep.0 + b.folk.len(), deep.1 + b.claims.iter().map(|c| c.rooms.len()).sum::<usize>());
+        }
+        assert!(deep.0 * 10 >= shallow.0 * 15, "folk {shallow:?} -> {deep:?}");
+        assert!(deep.1 > shallow.1, "rooms {shallow:?} -> {deep:?}");
+    }
+
     #[test]
     fn claims_are_the_same_for_the_same_seed() {
         for seed in [1, 1207, u32::MAX] {
@@ -245,12 +543,14 @@ mod tests {
     }
 
     #[test]
-    fn claims_leave_the_creatures_half_the_rooms_and_hold_only_rooms_folk_can_stand_in() {
-        for (seed, depth) in sweep() {
+    fn claims_leave_the_creatures_the_rest_of_the_rooms_and_hold_only_rooms_folk_can_stand_in() {
+        let rules = ClaimRules::DEFAULT;
+        for (seed, depth) in sweep().chain(deep_sweep()) {
             let level = generate(seed, depth);
             let candidates = level.rooms.len() - 1;
             let claimed: usize = level.claims.iter().map(|c| c.rooms.len()).sum();
-            assert!(claimed <= candidates.div_ceil(2), "seed {seed} depth {depth}: {claimed} of {candidates}");
+            let share = (candidates as f64 * rules.claim_share(depth)).ceil() as usize;
+            assert!(claimed <= share, "seed {seed} depth {depth}: {claimed} of {candidates}");
             for c in &level.claims {
                 assert!(c.rooms.iter().all(|&r| level.rooms[r].area() >= MIN_ROOM_AREA), "seed {seed} depth {depth}: small room claimed");
             }
@@ -270,7 +570,7 @@ mod tests {
 
     #[test]
     fn no_room_is_in_two_claims_and_the_start_room_is_never_claimed() {
-        for (seed, depth) in sweep() {
+        for (seed, depth) in sweep().chain(deep_sweep()) {
             let level = generate(seed, depth);
             let start = level.start_room().unwrap();
             let mut seen = HashSet::new();
@@ -287,7 +587,7 @@ mod tests {
 
     #[test]
     fn claims_are_connected() {
-        for (seed, depth) in sweep() {
+        for (seed, depth) in sweep().chain(deep_sweep()) {
             let level = generate(seed, depth);
             let graph = RoomGraph::new(&level);
             for claim in &level.claims {
@@ -308,7 +608,7 @@ mod tests {
 
     #[test]
     fn every_folk_stands_in_their_factions_claim() {
-        for (seed, depth) in sweep() {
+        for (seed, depth) in sweep().chain(deep_sweep()) {
             let level = generate(seed, depth);
             for f in &level.folk {
                 let room = level.room_at(f.x as i32, f.y as i32).unwrap();
@@ -330,9 +630,16 @@ mod tests {
         }
     }
 
-    /// Cells the delver can walk from the start without entering a claim room or passing a
+    /// Whether `(x, y)` is ground a claim holds: a room, a corridor between its rooms or an
+    /// edge door.
+    fn held_by_claims(level: &Level, graph: &RoomGraph, doors: &HashSet<(i32, i32)>, x: i32, y: i32) -> bool {
+        doors.contains(&(x, y)) || level.claims.iter().any(|c| in_ground(level, graph, &c.rooms, x, y))
+    }
+
+    /// Cells the delver can walk from the start without entering a claim's ground or passing a
     /// claim door, as a flag per cell.
     fn wild_reach(level: &Level) -> Vec<bool> {
+        let graph = RoomGraph::new(level);
         let doors: HashSet<(i32, i32)> = level.claim_doors().iter().map(|d| (d.x, d.y)).collect();
         let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
         let mut seen = vec![false; level.cells.len()];
@@ -342,7 +649,7 @@ mod tests {
         while let Some((x, y)) = stack.pop() {
             for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let (nx, ny) = (x + dx, y + dy);
-                let held = level.room_at(nx, ny).is_some_and(|r| level.is_claimed(r)) || doors.contains(&(nx, ny));
+                let held = held_by_claims(level, &graph, &doors, nx, ny);
                 if level.is_open(nx, ny) && !held && !seen[index(nx, ny)] {
                     seen[index(nx, ny)] = true;
                     stack.push((nx, ny));
@@ -377,6 +684,10 @@ mod tests {
     fn the_start_reaches_every_stair_through_wild_ground() {
         let blocked = blocked_levels(1..=200, 1..=4);
         assert!(blocked.is_empty(), "{} blocked (seed, depth): {:?}", blocked.len(), blocked);
+        for depth in [6, 12] {
+            let blocked = blocked_levels(1..=60, depth..=depth);
+            assert!(blocked.is_empty(), "{} blocked (seed, depth): {:?}", blocked.len(), blocked);
+        }
     }
 
     #[test]
@@ -390,13 +701,14 @@ mod tests {
 
     #[test]
     fn wild_ground_stays_connected() {
-        for (seed, depth) in sweep() {
+        for (seed, depth) in sweep().chain(deep_sweep()) {
             let level = generate(seed, depth);
             let seen = wild_reach(&level);
             let doors: HashSet<(i32, i32)> = level.claim_doors().iter().map(|d| (d.x, d.y)).collect();
+            let graph = RoomGraph::new(&level);
             for y in 0..level.height as i32 {
                 for x in 0..level.width as i32 {
-                    let held = level.room_at(x, y).is_some_and(|r| level.is_claimed(r)) || doors.contains(&(x, y));
+                    let held = held_by_claims(&level, &graph, &doors, x, y);
                     if level.is_open(x, y) && !held {
                         assert!(seen[(y as u32 * level.width + x as u32) as usize], "seed {seed} depth {depth}: wild cell ({x}, {y}) is cut off");
                     }

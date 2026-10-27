@@ -2,7 +2,7 @@
 //! `cargo run -p fb_level --example trades -- <world seed> [deepest level]`
 
 use fb_faction::{Profession, TradeRules};
-use fb_level::{LevelParams, LevelStyle, generate_in};
+use fb_level::{LevelParams, generate_in};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -22,7 +22,7 @@ fn main() {
         println!("  {:<22} {}", p.label(), at.join("; "));
     }
     for depth in 1..=deepest {
-        let level = generate_in(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)));
+        let level = generate_in(seed, depth, &LevelParams::for_depth(depth));
         println!("level {depth}: {} folk", level.folk.len());
         for f in &level.folk {
             let trade = f.trade.map(|t| t.label()).unwrap_or_else(|| "-".into());

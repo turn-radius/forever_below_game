@@ -67,7 +67,7 @@ impl NotesView {
 
     /// The lore of the level shown.
     pub fn lore(&self) -> Lore {
-        fb_level::generate_in(self.world, self.depth, &fb_level::LevelParams::for_style(fb_level::LevelStyle::for_depth(self.depth))).lore()
+        fb_level::generate_in(self.world, self.depth, &fb_level::LevelParams::for_depth(self.depth)).lore()
     }
 
     /// The seeds of the notes shown.

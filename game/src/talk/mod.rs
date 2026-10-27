@@ -1,19 +1,24 @@
 //! Talking to folk: the Talk key (Primary, F by default) on a folk in reach.
 //!
-//! - A folk who is Hostile to the delver, by their faction's standing or because they have
-//!   turned on them, spits ("Hilda Stonefoot spits at your feet.") and no panel opens. A Wary folk says
-//!   one line in a toast and keeps walking, which reads as turning away. Neutral and better open the dialogue
-//!   panel ([`Screen::Talk`]) and hold the folk's routine, so they stop and face the delver
-//!   ([`crate::folk_routine::Routine::hold`]).
+//! - Neutral and better folk open the dialogue panel ([`Screen::Talk`]) and hold the folk's routine,
+//!   so they stop and face the delver ([`crate::folk_routine::Routine::hold`]).
+//! - A folk who is Hostile or Wary to the delver, or who has turned on them, opens a parley
+//!   instead ([`Reception::Parley`]): the same panel with a curt line ("Not a step closer.
+//!   What do you want?") and Persuade as its one topic ([`lines::parley_topics`]). They hold
+//!   their blows while it lasts ([`crate::hostility::Parleying`]), and being hostile does not
+//!   end it. A failed roll against a Hostile folk, or one who has turned, closes the panel and
+//!   they fight on. A success against one makes a truce with their group: the faction's folk on
+//!   the level stand down until the delver strikes one of them or rests
+//!   ([`WorldRecord::make_truce`], `crate::hostility`).
 //! - The panel is on the right of the view, so the folk stays in sight to its left. It shows
 //!   their name, folk, trade and tier, faction and the band the faction stands in, a greeting
-//!   (warmer for Friendly and Allied), and the topics ([`lines::topics`]). A topic is chosen
+//!   (warmer for Friendly and Allied, curt in a parley), and the topics ([`lines::topics`]). A topic is chosen
 //!   with its number key or a click, and its answer shows under the greeting. Everything is
 //!   laid out for the 1920 by 1080 reference and scaled with the window ([`crate::ui`]), and the
 //!   mouse is read in the interface's own pixels ([`ui_cursor`]).
 //! - The Talk key again or Esc (which closes any screen, [`crate::play::switch_screens`]) leaves,
 //!   and the folk's routine is released however the screen closes. A folk who falls or turns on
-//!   the delver while the panel is open ends the talk.
+//!   the delver while the panel is open ends the talk (not a parley, which is with such a folk).
 //! - What folk say is written in [`lines`] from the grammars in `data/talk.json`, drawn from the
 //!   folk's own seed, so the same folk always say the same thing.
 //! - Commission, Enchant and Scrap list for the trades that offer them and answer "Not yet."
@@ -21,7 +26,7 @@
 //!   topic sends a [`ServiceChosen`] for that screen to open on.
 //!
 //! - A denizen (minotaur, faun, ...) answers in its own tongue ([`fb_denizens::tongue`]). Standing
-//!   works as for folk (Hostile snort and spit, Wary turn away, the rest open the panel), but
+//!   works as for folk (Hostile and Wary ones snort or turn away and open a parley, the rest open the panel), but
 //!   each line names the words it needs ([`lines::line_needs`]) and shows as the tongue's glyphs
 //!   until the delver knows them all ([`WorldRecord::lexicon`]), then in plain words. The panel
 //!   says how much of the tongue is known. The Trade topic and Barter need the trade words
@@ -32,12 +37,22 @@
 //!   each denizen faction on their level; shallower, a folk sometimes has a rumour of them,
 //!   more often the deeper they stand ([`lines::strange_tale`]).
 //!
+//! - Persuade is a d20 check, shown as dice ([`crate::dice`]; the rules are in [`persuade`]), to
+//!   raise the folk's faction's standing with the delver. A success raises it by an amount scaled
+//!   by the roll, a failure costs a little, and a folk gets one try per rest. Any folk can be
+//!   persuaded, whatever their faction's band: the worse it stands, the harder the roll, through
+//!   the standing modifier. A denizen is persuaded in its tongue: its persuasion line needs the
+//!   words `peace` and `friend` and the greeting's ([`lines::line_needs`]), and until the delver
+//!   knows them it does not follow, shows glyphs, and nothing is rolled.
+//!
 //! `FB_LEARN=<kind>:<topic>[+<topic>...]` (`minotaur:greeting+trade`) teaches those words at
-//! once, for captures. `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
-//! `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1; `strange` or `denizens` choose a
+//! once, for captures (`minotaur:greeting` covers the words of the Persuade topic). `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
+//! `FB_TALK_BAND=<band>` first holds that folk's faction at the middle of the band (`hostile`, `wary`, ...)
+//! so a parley can be captured, and `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1; `strange`, `denizens` or `persuade` choose a
 //! folk's topic of the denizens), for captures; `FB_TALK=folk` skips the denizens.
 
 pub mod lines;
+pub mod persuade;
 
 #[cfg(test)]
 mod tests;
@@ -52,9 +67,11 @@ use procgen_rng::Mulberry32;
 
 use crate::carry::ViewModelCamera;
 use crate::combat::feedback::Corpse;
+use crate::character::Character;
 use crate::folk::{AimedFolk, Denizen};
+use crate::inventory::Inventory;
 use crate::folk_routine::Routine;
-use crate::hostility::Hostility;
+use crate::hostility::{Hostility, Parleying};
 use crate::inventory::Toasts;
 use crate::keymap::{Action, ActionInput, Input, Keymap};
 use crate::play::{CurrentLevel, DelveSystems, Player, Screen, ScreenOpen, show_screen};
@@ -65,15 +82,15 @@ use fb_denizens::DenizenKind;
 use fb_denizens::tongue::Lexicon;
 
 /// The width of the panel at the reference size, logical pixels.
-const PANEL_WIDTH: f32 = 600.0;
+pub const PANEL_WIDTH: f32 = 600.0;
 /// How far the panel stands from the right edge, logical pixels.
-const PANEL_MARGIN: f32 = 64.0;
+pub const PANEL_MARGIN: f32 = 64.0;
 
 pub struct TalkPlugin;
 
 impl Plugin for TalkPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Talk>().init_resource::<TalkRequest>().add_message::<ServiceChosen>();
+        app.init_resource::<Talk>().init_resource::<TalkRequest>().init_resource::<Persuading>().add_message::<ServiceChosen>().add_message::<crate::dice::RollRequest>().add_message::<crate::dice::RollDone>();
         if std::env::var_os("FB_TALK").is_some() {
             app.add_systems(Update, talk_for_capture.in_set(DelveSystems));
         }
@@ -81,13 +98,14 @@ impl Plugin for TalkPlugin {
             app.add_systems(Update, learn_for_capture.in_set(DelveSystems));
         }
         app.add_systems(OnExit(crate::launch::AppState::Delving), reset_talk);
-        app.add_systems(Update, (click_topics, talk, end_talk, build_talk_screen, hover_topics).chain().in_set(DelveSystems));
+        app.add_systems(Update, (click_topics, talk, start_persuasion, finish_persuasion, end_talk, build_talk_screen, hover_topics).chain().in_set(DelveSystems));
     }
 }
 
 /// Drops the talk when the delve ends, so no folk outlives it.
-fn reset_talk(mut talk: ResMut<Talk>) {
+fn reset_talk(mut talk: ResMut<Talk>, mut persuading: ResMut<Persuading>) {
     *talk = Talk::default();
+    persuading.0 = None;
 }
 
 /// Whether a service's screen exists to open: the barter screen ([`crate::barter`]), the
@@ -123,6 +141,16 @@ pub struct Talk {
     rumour: Option<Option<MasterRumour>>,
     /// How many times a rumour was resolved this talk.
     pub resolved: u32,
+    /// The Persuade topic was chosen and its check is not yet started ([`start_persuasion`]).
+    persuade_asked: bool,
+    /// A persuasion's dice are showing: no other topic is chosen until they close.
+    waiting: bool,
+    /// A parley with a wary or hostile folk: Persuade is the one topic, and a folk who has turned
+    /// on the delver does not end it.
+    pub parley: bool,
+    /// The folk is Hostile, or has turned on the delver: a failed persuasion ends the parley and
+    /// they attack, and a success makes a truce ([`WorldRecord::make_truce`]).
+    hostile: bool,
     revision: u32,
 }
 
@@ -169,7 +197,7 @@ fn talk_for_capture(
     folk: Query<(Entity, &Denizen, &Transform), Without<Corpse>>,
     mut request: ResMut<TalkRequest>,
     talk: Res<Talk>,
-    record: Option<Res<WorldRecord>>,
+    mut record: Option<ResMut<WorldRecord>>,
     mut frames: Local<u32>,
     mut chosen: Local<bool>,
 ) {
@@ -179,6 +207,19 @@ fn talk_for_capture(
         let Some(at) = player.iter().next().map(|t| t.translation) else { return };
         // `FB_TALK=folk` skips the denizens, for the folk who speak of them.
         let only_folk = std::env::var("FB_TALK").is_ok_and(|v| v == "folk");
+        // `FB_TALK_BAND=<band>` holds the nearest folk's faction at the middle of that band first.
+        let nearest = folk.iter().filter(|(_, d, _)| d.person.faction.denizen.is_none() || !only_folk).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at)));
+        if let (Some(band), Some((_, d, _)), Some(record)) = (std::env::var("FB_TALK_BAND").ok().and_then(|v| Band::ALL.into_iter().find(|b| b.label().eq_ignore_ascii_case(v.trim()))), nearest, record.as_deref_mut()) {
+            let middle = match band {
+                Band::Hostile => -75,
+                Band::Wary => -30,
+                Band::Neutral => 0,
+                Band::Friendly => 30,
+                Band::Allied => 75,
+            };
+            let now = record.standings.get(d.person.faction.id).value();
+            record.standings.shift(d.person.faction.id, middle - now);
+        }
         request.folk = folk.iter().filter(|(_, d, _)| !only_folk || (d.person.faction.denizen.is_none() && record.as_ref().is_none_or(|r| r.standings.band(d.person.faction.id) > Band::Wary))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))).map(|(e, ..)| e);
     }
     if *frames == OPEN_AT + 8 && !*chosen && talk.folk.is_some() {
@@ -187,6 +228,7 @@ fn talk_for_capture(
         let by_name = |v: &str| match v {
             "strange" => talk.topics.iter().position(|t| *t == Topic::Strange),
             "denizens" => talk.topics.iter().position(|t| matches!(t, Topic::Faction(_))),
+            "persuade" => talk.topics.iter().position(|t| *t == Topic::Persuade),
             _ => None,
         };
         if let Some(n) = std::env::var("FB_TALK_TOPIC").ok().and_then(|v| v.trim().parse::<usize>().ok().or_else(|| by_name(v.trim()).map(|i| i + 1))) {
@@ -239,6 +281,22 @@ fn master_rumour(speaker: &Speaker, run_seed: u32) -> Option<MasterRumour> {
 /// sent on instead ([`ServiceChosen`]) and says nothing here.
 fn choose(talk: &mut Talk, topic: Topic, run_seed: Option<u32>, lexicon: &Lexicon, services: &mut MessageWriter<ServiceChosen>) {
     let (Some(folk), Some(speaker)) = (talk.folk, talk.speaker.as_ref()) else { return };
+    if talk.waiting {
+        return;
+    }
+    if topic == Topic::Persuade {
+        // A denizen is persuaded in its tongue: without the words its persuasion line needs it does
+        // not follow, and nothing is rolled.
+        if let Some(kind) = speaker.denizen
+            && !lexicon.readable(kind, &lines::line_needs(speaker, Some(topic)))
+        {
+            let said = lines::answer(speaker, topic, None);
+            talk.say(topic, said);
+            return;
+        }
+        talk.persuade_asked = true;
+        return;
+    }
     // A denizen trades only with one who has their trade words; else it shakes its head.
     if let (Some(kind), Topic::Service(Service::Barter)) = (speaker.denizen, topic)
         && !lexicon.can_barter(kind)
@@ -310,8 +368,8 @@ fn talk(
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
     mut talk: ResMut<Talk>,
     mut folk: Query<(Entity, &Denizen, Option<&Hostility>, Option<&mut Routine>), Without<Corpse>>,
-    mut toasts: Toasts,
     mut services: MessageWriter<ServiceChosen>,
+    mut commands: Commands,
 ) {
     let run_seed = abyss.map(|a| a.run_seed);
     if open.is(Screen::Talk) {
@@ -322,7 +380,7 @@ fn talk(
             Input::Mouse(button) => request.topic.is_none() && mouse.as_ref().is_some_and(|m| m.just_pressed(*button)),
             _ => false,
         });
-        if leave {
+        if leave && !talk.waiting {
             show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c));
             return;
         }
@@ -346,35 +404,152 @@ fn talk(
     let Ok((_, denizen, hostility, _)) = folk.get(entity) else { return };
     let band = record.as_ref().map_or(Band::Neutral, |r| r.standings.band(denizen.person.faction.id));
     let speaker = speaker_of(denizen, band, &level.0, folk.iter().map(|(_, d, ..)| d), |f| record.as_ref().map_or(Band::Neutral, |r| r.standings.band(f)));
-    match lines::reception(band, hostility.is_some_and(|h| h.is_hostile())) {
-        Reception::Spits => toasts.say(lines::spit_line(&speaker)),
-        Reception::Turns => {
-            toasts.say(format!("\u{201c}{}\u{201d}", lines::wary_line(&speaker)));
-            // They turn away: back to what they were doing.
-            if let Ok((_, _, _, Some(mut routine))) = folk.get_mut(entity) {
-                routine.release();
+    let turned = hostility.is_some_and(|h| h.is_hostile());
+    let reception = lines::reception(band, turned);
+    if let Ok((_, _, _, Some(mut routine))) = folk.get_mut(entity) {
+        routine.hold();
+    }
+    talk.folk = Some(entity);
+    talk.parley = reception == Reception::Parley;
+    talk.hostile = talk.parley && (turned || band == Band::Hostile);
+    if talk.parley {
+        // Hostile or not, they hold their blows while the delver parleys.
+        commands.entity(entity).insert(Parleying);
+        talk.greeting = lines::parley_greeting(&speaker, turned);
+        talk.topics = lines::parley_topics();
+    } else {
+        talk.greeting = lines::greeting(&speaker);
+        talk.topics = lines::topics(&speaker);
+    }
+    talk.tongue = speaker.denizen;
+    // A maker holding an order of the delver's offers to speak of it, after Commission.
+    if record.as_ref().is_some_and(|r| r.orders.iter().any(|o| o.maker_seed == speaker.seed && o.depth == speaker.depth))
+        && let Some(at) = talk.topics.iter().position(|t| *t == Topic::Service(Service::Commission))
+    {
+        talk.topics.insert(at + 1, Topic::Service(Service::Order));
+    }
+    talk.speaker = Some(speaker);
+    talk.answer = None;
+    talk.revision += 1;
+    show_screen(&mut open, Some(Screen::Talk), cursor.as_deref_mut().map(|c| &mut **c));
+}
+
+/// The persuasion whose dice are showing.
+#[derive(Resource, Default, Debug)]
+struct Persuading(Option<Pending>);
+
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    folk: Entity,
+    faction: fb_faction::Faction,
+    /// The folk, by depth and seed, for the record of who has been tried.
+    who: (u32, u32),
+}
+
+/// Rolls to win the folk's faction over: a d20 check ([`persuade::check`]) to raise its standing
+/// with the delver, whatever the faction's band: the worse it stands, the harder the roll. A folk
+/// already tried since the delver last rested says so and no dice roll.
+#[allow(clippy::too_many_arguments)]
+fn start_persuasion(
+    mut talk: ResMut<Talk>,
+    mut pending: ResMut<Persuading>,
+    character: Option<Res<Character>>,
+    inventory: Option<Res<Inventory>>,
+    mut record: Option<ResMut<WorldRecord>>,
+    folk: Query<&Denizen>,
+    mut rolls: MessageWriter<crate::dice::RollRequest>,
+) {
+    if !std::mem::take(&mut talk.persuade_asked) {
+        return;
+    }
+    let (Some(entity), Some(speaker)) = (talk.folk, talk.speaker.clone()) else { return };
+    let Ok(denizen) = folk.get(entity) else { return };
+    let faction = denizen.person.faction.id;
+    let who = (speaker.depth, speaker.seed);
+    let said = |talk: &mut Talk, stage: &str, salt: u32| {
+        let line = lines::persuade_line(&speaker, stage, salt);
+        talk.say(Topic::Persuade, line);
+    };
+    let standing = record.as_ref().map_or(0, |r| r.standings.get(faction).value());
+    if record.as_ref().is_some_and(|r| r.refuses(who)) {
+        return said(&mut talk, "not_now", 0x66);
+    }
+    let (wisdom, class) = character.as_ref().map_or((0, fb_faction::ClassKind::Fighter), |c| (crate::character::modifier(c.scores().wisdom), c.class.faction_class()));
+    let charm = inventory.as_ref().map_or(0, |i| i.equipped().iter().map(|(_, item)| item.profile.stats.charisma).sum::<f32>().round() as i32);
+    let check = persuade::check(&format!("Win over {}", speaker.name), standing, wisdom, class, charm);
+    // Drawn from the folk's own seed and how often they have been tried, so each try rolls afresh
+    // and the same try rolls the same.
+    let tries = record.as_ref().map_or(0, |r| r.persuasion_tries(who));
+    // The try is on the record as it starts, so a reload mid-roll does not replay it.
+    if let Some(record) = record.as_deref_mut() {
+        record.note_persuasion(who);
+    }
+    let mut rng = Mulberry32::new(speaker.seed.wrapping_mul(0x9E37_79B1) ^ 0x5052 ^ tries.wrapping_mul(0x85EB_CA6B) ^ speaker.depth << 20);
+    let roll = check.roll(&mut rng);
+    let result = if roll.succeeded { format!("+{} standing with {}", persuade::gain(&roll), speaker.faction) } else { format!("\u{2212}{} standing with {}", persuade::FAIL_COST, speaker.faction) };
+    pending.0 = Some(Pending { folk: entity, faction, who });
+    said(&mut talk, "hear", 0x60);
+    talk.waiting = true;
+    rolls.write(crate::dice::RollRequest { roll, purpose: crate::dice::RollPurpose::Persuade(entity), result: Some(result) });
+}
+
+/// Applies a persuasion's outcome once its dice have closed: standing with the folk's faction
+/// rises by [`persuade::gain`] or falls by [`persuade::FAIL_COST`], and the folk will not be
+/// tried again until the delver has rested.
+#[allow(clippy::too_many_arguments)]
+fn finish_persuasion(
+    mut done: MessageReader<crate::dice::RollDone>,
+    mut talk: ResMut<Talk>,
+    mut pending: ResMut<Persuading>,
+    mut record: Option<ResMut<WorldRecord>>,
+    mut toasts: Toasts,
+    mut open: ResMut<ScreenOpen>,
+    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+) {
+    for finished in done.read() {
+        let crate::dice::RollPurpose::Persuade(entity) = finished.purpose else { continue };
+        let Some(this) = pending.0.take_if(|p| p.folk == entity) else { continue };
+        talk.waiting = false;
+        let speaker = talk.speaker.clone();
+        let say = |talk: &mut Talk, stage: &str, salt: u32| {
+            if let (Some(speaker), true) = (&speaker, talk.folk == Some(entity)) {
+                let line = lines::persuade_line(speaker, stage, salt);
+                talk.say(Topic::Persuade, line);
             }
+        };
+        let faction = speaker.as_ref().map_or_else(|| "They".to_string(), |s| s.faction.clone());
+        if let Some(record) = record.as_deref_mut() {
+            let rests = record.rests;
+            record.refused.insert(this.who, rests);
+            let change = if finished.roll.succeeded { persuade::gain(&finished.roll) } else { -persuade::FAIL_COST };
+            record.standings.shift(this.faction, change);
         }
-        Reception::Talks => {
-            if let Ok((_, _, _, Some(mut routine))) = folk.get_mut(entity) {
-                routine.hold();
+        let here = talk.folk == Some(entity);
+        if finished.roll.succeeded {
+            say(&mut talk, "pass", 0x64);
+            toasts.say(format!("{} thinks better of you", capital_first(&faction)));
+            // A hostile folk won over stand down with their group, until the delver strikes one
+            // of them or rests.
+            if let (true, true, Some(record), Some(speaker)) = (here, talk.hostile, record.as_deref_mut(), &speaker) {
+                record.make_truce(speaker.depth, this.faction);
+                toasts.say(format!("{} stand down", capital_first(&faction)));
             }
-            talk.folk = Some(entity);
-            talk.greeting = lines::greeting(&speaker);
-            talk.topics = lines::topics(&speaker);
-            talk.tongue = speaker.denizen;
-            // A maker holding an order of the delver's offers to speak of it, after Commission.
-            if record.as_ref().is_some_and(|r| r.orders.iter().any(|o| o.maker_seed == speaker.seed && o.depth == speaker.depth))
-                && let Some(at) = talk.topics.iter().position(|t| *t == Topic::Service(Service::Commission))
-            {
-                talk.topics.insert(at + 1, Topic::Service(Service::Order));
-            }
-            talk.speaker = Some(speaker);
-            talk.answer = None;
-            talk.revision += 1;
-            show_screen(&mut open, Some(Screen::Talk), cursor.as_deref_mut().map(|c| &mut **c));
+        } else if let (true, true, Some(speaker)) = (here, talk.hostile, &speaker) {
+            // Failed, a hostile folk ends the parley and attacks: the panel closes and they are
+            // let go to the fight ([`end_talk`]).
+            toasts.say(format!("\u{201c}{}\u{201d}", lines::persuade_line(speaker, "fail", 0x63)));
+            show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c));
+        } else {
+            say(&mut talk, "fail", 0x63);
+            toasts.say(format!("{} thinks less of you for asking", capital_first(&faction)));
         }
     }
+}
+
+/// `text` with its first letter capitalised: "the Chime" is "The Chime".
+fn capital_first(text: &str) -> String {
+    let mut letters = text.chars();
+    letters.next().map(|c| c.to_uppercase().chain(letters).collect()).unwrap_or_default()
 }
 
 /// However the screen closes, lets the folk go on, and ends a talk whose folk fell or turned on
@@ -386,16 +561,17 @@ fn end_talk(
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
     mut folk: Query<(Option<&Hostility>, Option<&mut Routine>, Has<Corpse>)>,
     mut toasts: Toasts,
+    mut commands: Commands,
 ) {
     let Some(entity) = talk.folk else { return };
     let gone = match folk.get(entity) {
-        Ok((hostility, _, dead)) => dead || hostility.is_some_and(|h| h.is_hostile()),
+        Ok((hostility, _, dead)) => dead || (!talk.parley && hostility.is_some_and(|h| h.is_hostile())),
         Err(_) => true,
     };
     // The enchanter's bench is the talk going on, and holds the folk the same.
     let talking = open.is(Screen::Talk) || open.is(Screen::Enchant);
     if talking && gone {
-        let turned = folk.get(entity).is_ok_and(|(hostility, _, dead)| !dead && hostility.is_some_and(|h| h.is_hostile()));
+        let turned = folk.get(entity).is_ok_and(|(hostility, _, dead)| !dead && !talk.parley && hostility.is_some_and(|h| h.is_hostile()));
         if let (true, Some(speaker)) = (turned, talk.speaker.as_ref()) {
             toasts.say(format!("{} turns on you.", speaker.name));
         }
@@ -404,6 +580,10 @@ fn end_talk(
     if !talking || gone {
         if let Ok((_, Some(mut routine), _)) = folk.get_mut(entity) {
             routine.release();
+        }
+        // The parley is over: a hostile folk goes on with the fight, unless they were won over.
+        if let Ok(mut parleyed) = commands.get_entity(entity) {
+            parleyed.remove::<Parleying>();
         }
         let revision = talk.revision + 1;
         *talk = Talk { revision, ..Talk::default() };
@@ -543,7 +723,8 @@ fn build_talk_screen(
                 panel.spawn((Text::new(heading), UiFonts::style(&fonts.mono, 13.0, MUTED)));
             }
             // A denizen's line the delver cannot read yet is its script, dimmed and in italics.
-            let (text, readable) = shown(speaker, topic, &said, lexicon);
+            // A denizen's opening in a parley is what it does (a snort, a spit), plain to see.
+            let (text, readable) = if talk.parley && topic.is_none() { (said.clone(), true) } else { shown(speaker, topic, &said, lexicon) };
             if readable {
                 panel.spawn((Text::new(format!("\u{201c}{text}\u{201d}")), UiFonts::style(&fonts.body, 22.0, colour)));
             } else {
@@ -571,7 +752,7 @@ fn build_talk_screen(
                         row.spawn((Text::new(topic.label_for(speaker)), UiFonts::style(&fonts.body, 21.0, INK)));
                     });
             }
-            panel.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(format!("1-{} choose \u{b7} {leave} leave", talk.topics.len().max(1))), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+            panel.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(if talk.topics.len() > 1 { format!("1-{} choose \u{b7} {leave} leave", talk.topics.len()) } else { format!("1 to choose \u{b7} {leave} leave") }), UiFonts::style(&fonts.mono, 13.0, MUTED)));
         });
     });
 }

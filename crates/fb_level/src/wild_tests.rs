@@ -4,7 +4,7 @@ use super::*;
 use crate::creatures::{CREATURE_SALT, TROLLS_FROM_DEPTH, place_creatures};
 use crate::generate::{generate, generate_without_creatures};
 use crate::stairs::{STAIR_SALT, place_stairs};
-use crate::{LevelParams, LevelStyle};
+use crate::LevelParams;
 
 fn count(level: &Level, species: Species) -> usize {
     level.creatures.iter().filter(|c| c.species == species).count()
@@ -17,7 +17,7 @@ fn room_of(level: &Level, c: &CreatureSpot) -> Option<usize> {
 /// The level as the generator laid it out before the newer species: creatures from the creature
 /// stream, then the stairs.
 fn before(seed: u32, depth: u32) -> Level {
-    let params = LevelParams::for_style(LevelStyle::for_depth(depth));
+    let params = LevelParams::for_depth(depth);
     let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
