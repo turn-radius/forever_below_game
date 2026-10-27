@@ -2740,7 +2740,7 @@ mod tests {
     #[test]
     fn a_sword_dropped_on_the_doll_goes_in_the_main_hand_and_swaps() {
         let mut inventory = Inventory::default();
-        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
         let sword = inventory.add(fb_items::roll_item("Sword", 4).unwrap());
         inventory.put(sword, pack, Placement::new(0, 0, false)).unwrap();

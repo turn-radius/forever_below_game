@@ -204,7 +204,8 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     };
     let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.stack_value()) } else { Price::Unsure }, Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
-        let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
+        let plain = p.plain_grid().map_or_else(String::new, |(c, r)| format!(" (plain {c}\u{d7}{r})"));
+        let inside = format!("{}\u{d7}{} inside{plain}", holds.cols, holds.rows);
         match held {
             Some((inventory, id)) if inventory.contents_count(id) > 0 => {
                 let n = inventory.contents_count(id);
@@ -978,6 +979,14 @@ mod tests {
     }
 
     #[test]
+    fn a_bag_of_holding_shows_its_size_against_the_plain_one() {
+        let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Satchel", 3).unwrap());
+        parts.affixes = vec![fb_items::tables::affix_named("of Holding").unwrap()];
+        let bag = fb_items::Item::from_parts(parts).unwrap();
+        assert_eq!(card_text(&bag, None).contents.as_deref(), Some("Empty \u{b7} 6\u{d7}4 inside (plain 6\u{d7}3)"));
+    }
+
+    #[test]
     fn goods_and_containers_say_what_they_are() {
         let bread = fb_items::roll_item("Bread", 3).unwrap();
         let card = card_text(&bread, None);
@@ -986,7 +995,7 @@ mod tests {
         assert_eq!(card.price.line(), format!("Worth {}", bread.value().short()));
 
         let mut inventory = Inventory::default();
-        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
         assert_eq!(card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.as_deref(), Some("Empty \u{b7} 8\u{d7}5 inside"));
         let bread = inventory.add(bread);
         inventory.put(bread, pack, super::super::grid::Placement::new(0, 0, false)).unwrap();

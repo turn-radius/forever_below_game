@@ -167,6 +167,7 @@ impl Item {
         for a in &affixes {
             a.apply_to_stats(&mut profile.stats);
         }
+        profile.fit_capacity();
         Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried, quantity: quantity.max(1) })
     }
 }
@@ -384,6 +385,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     for a in &affixes {
         a.apply_to_stats(&mut profile.stats);
     }
+    profile.fit_capacity();
     let name = item_name(&noun, &affixes);
     let legend = (rarity == Rarity::Legendary).then(|| legendize(&mut rng, &name, &profile.tags));
     dress(&mut shape, rarity, &affixes, seed);
@@ -679,6 +681,63 @@ mod tests {
         let item = Item::from_parts(parts).unwrap();
         assert_eq!(item.profile.stats.warmth, plain.profile.stats.warmth + 2.0);
         assert_eq!(crate::tables::affix_named("Nope"), None);
+    }
+
+    fn grid(item: &Item) -> (u8, u8) {
+        item.profile.holds.as_ref().map(|g| (g.cols, g.rows)).unwrap()
+    }
+
+    #[test]
+    fn a_satchel_of_holding_has_a_bigger_grid_and_a_cramped_one_a_smaller() {
+        let plain = roll_item("Satchel", 3).unwrap();
+        let with = |name: &str| {
+            let mut parts = ItemParts::from(plain.clone());
+            parts.affixes = vec![crate::tables::affix_named(name).unwrap()];
+            Item::from_parts(parts).unwrap()
+        };
+        let base = grid(&Item::from_parts(ItemParts { affixes: vec![], ..plain.clone().into() }).unwrap());
+        assert_eq!(base, (6, 3));
+        assert_eq!(grid(&with("of Holding")), (6, 4));
+        assert_eq!(grid(&with("of the Bottomless")), (6, 5));
+        assert_eq!(grid(&with("Cramped")), (6, 2));
+        assert_eq!(with("of Holding").profile.plain_grid(), Some((6, 3)));
+        assert_eq!(Item::from_parts(ItemParts { affixes: vec![], ..plain.into() }).unwrap().profile.plain_grid(), None);
+    }
+
+    #[test]
+    fn bags_roll_capacity_affixes_and_the_grid_follows_them() {
+        let mut seen = [false; 3];
+        for base in ["Pack", "Satchel", "Sack", "Belt"] {
+            let plain_rows = grid(&Item::from_parts(ItemParts { affixes: vec![], ..roll_item(base, 1).unwrap().into() }).unwrap()).1 as i32;
+            for seed in 1..500 {
+                let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
+                let by = item.affixes.iter().map(|a| match a.name.as_str() {
+                    "of Holding" => 1,
+                    "of the Bottomless" => 2,
+                    "Cramped" => -1,
+                    _ => 0,
+                }).sum::<i32>();
+                assert_eq!(grid(&item).1 as i32, plain_rows + by, "{base} {seed}");
+                assert_eq!(item.affixes.iter().filter(|a| a.group.as_deref() == Some("capacity")).count() <= 1, true, "{base} {seed}");
+                if item.affixes.iter().any(|a| a.name == "of the Bottomless") {
+                    assert!(item.rarity >= Rarity::Rare);
+                }
+                for (i, n) in ["of Holding", "of the Bottomless", "Cramped"].into_iter().enumerate() {
+                    seen[i] |= item.affixes.iter().any(|a| a.name == n);
+                }
+            }
+        }
+        assert_eq!(seen, [true; 3]);
+    }
+
+    #[test]
+    fn quivers_and_purses_roll_no_capacity() {
+        for seed in 1..1_000 {
+            for base in ["Quiver", "Purse"] {
+                let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
+                assert!(item.affixes.iter().all(|a| a.group.as_deref() != Some("capacity")), "{base} {seed}");
+            }
+        }
     }
 
     #[test]

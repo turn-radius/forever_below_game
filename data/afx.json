@@ -1690,5 +1690,54 @@
   "t": "+1d4 against beasts and serpents",
   "grp": "bane_beast",
   "r": "rare"
+ },
+ {
+  "n": "of Holding",
+  "k": "suf",
+  "g": 1,
+  "on": "bag",
+  "fx": [
+   {
+    "add": {
+     "stat": "grid_rows",
+     "by": 1
+    }
+   }
+  ],
+  "t": "Holds one more row",
+  "grp": "capacity"
+ },
+ {
+  "n": "of the Bottomless",
+  "k": "suf",
+  "g": 1,
+  "on": "bag",
+  "fx": [
+   {
+    "add": {
+     "stat": "grid_rows",
+     "by": 2
+    }
+   }
+  ],
+  "t": "Holds two more rows",
+  "grp": "capacity",
+  "r": "rare"
+ },
+ {
+  "n": "Cramped",
+  "k": "pre",
+  "g": 0,
+  "on": "bag",
+  "fx": [
+   {
+    "add": {
+     "stat": "grid_rows",
+     "by": -1
+    }
+   }
+  ],
+  "t": "Holds one row less",
+  "grp": "capacity"
  }
 ]

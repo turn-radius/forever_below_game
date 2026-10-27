@@ -55,6 +55,27 @@ pub struct Profile {
 /// How many arrows or bolts share one cell.
 pub const AMMUNITION_STACK: u8 = 10;
 
+impl Profile {
+    /// Sizes a worn bag's grid to its capacity affixes: its plain rows plus `stats.grid_rows`,
+    /// never under one row. Call it once after the affixes are applied to the stats; a profile
+    /// with no inner grid, or with no capacity change, is left alone.
+    pub fn fit_capacity(&mut self) {
+        let by = self.stats.grid_rows.round() as i32;
+        if let Some(g) = self.holds.as_mut().filter(|_| by != 0) {
+            g.rows = (g.rows as i32 + by).clamp(1, u8::MAX as i32) as u8;
+        }
+    }
+
+    /// The columns and rows a plain bag of this size would open into, when its capacity
+    /// affixes made this one differ; `None` for a bag at its plain size and for anything else.
+    pub fn plain_grid(&self) -> Option<(u8, u8)> {
+        let g = self.holds.as_ref()?;
+        let by = self.stats.grid_rows.round() as i32;
+        let plain = g.rows as i32 - by;
+        (by != 0 && (1..=u8::MAX as i32).contains(&plain)).then_some((g.cols, plain as u8))
+    }
+}
+
 /// The ammunition a bow or crossbow takes and its range.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ranged {
@@ -387,7 +408,7 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
                 BagStyle::BeltPouch => (4, 2, "Belt pouch", Slot::Belt, 1.0, [2, 2]),
             };
             let stuff = if b.fabric == Textile::Leather { Leather } else { Cloth };
-            Profile { holds: Some(Grid { cols, rows, label: label.to_string(), accepts: vec![] }), ..gear(slot, &[Container, Wear, stuff], Stats { weight: wt, ..Stats::default() }, fp) }
+            Profile { holds: Some(Grid { cols, rows, label: label.to_string(), accepts: vec![] }), ..gear(slot, &[Container, Bag, Wear, stuff], Stats { weight: wt, ..Stats::default() }, fp) }
         }
         // SRD 5.1 p. 69: an arrow weighs 0.05 lb and a bolt 0.075 lb. Each takes one cell.
         Item::Arrow(_) => good(&[Ammunition], 0.05, [1, 1], "Ammunition · arrow"),

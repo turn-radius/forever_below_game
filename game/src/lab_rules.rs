@@ -581,14 +581,15 @@ fn write_effects(doc: &mut toml_edit::DocumentMut, rules: &Rules) -> Result<(), 
 }
 
 /// `text` (the contents of `data/afx.json`) with each effect's `by` set to `strengths`, nothing
-/// else touched: the nth `"by":` in the file is the nth strength of the table.
+/// else touched: the nth `"by":` or `"chance":` in the file is the nth strength of the table.
 pub fn write_afx_json(text: &str, strengths: &Strengths) -> String {
     let wanted: Vec<f32> = affixes().iter().flat_map(|a| strengths.get(&a.name).cloned().unwrap_or_default()).collect();
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut wanted = wanted.into_iter();
-    while let Some(at) = rest.find("\"by\":") {
-        let (head, tail) = rest.split_at(at + "\"by\":".len());
+    // A shun's strength is its `chance`; every other effect's is its `by`.
+    while let Some((at, key)) = [("\"by\":"), ("\"chance\":")].into_iter().filter_map(|k| rest.find(k).map(|at| (at, k))).min_by_key(|&(at, _)| at) {
+        let (head, tail) = rest.split_at(at + key.len());
         out.push_str(head);
         let spaces = tail.len() - tail.trim_start().len();
         out.push_str(&tail[..spaces]);

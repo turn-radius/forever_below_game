@@ -755,7 +755,7 @@ mod tests {
     }
 
     fn worn_pack(inventory: &mut Inventory) -> ItemId {
-        let pack = inventory.add(rolled("Pack", 7));
+        let pack = inventory.add(rolled("Pack", 1));
         inventory.wear(pack, Slot::Back).unwrap();
         pack
     }
