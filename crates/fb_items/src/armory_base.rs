@@ -163,7 +163,13 @@ pub fn bases_of(family: Family) -> impl Iterator<Item = &'static str> {
 /// (the level's item spots). Its own stream, so `roll_item(base, seed)` with the same seed is
 /// unaffected; the mixing constant is this port's own. `None` for a family no base uses.
 pub fn base_for(family: Family, seed: u32) -> Option<&'static str> {
-    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b))).filter(|&(_, w)| w > 0).collect();
+    // Eight potion bases would crowd the other food out, so among food each is a quarter as
+    // likely to be found as the rest (our own): potions are about one find in six.
+    let share = |b: &str| match (family, crate::provision::potion_size(b)) {
+        (Family::Food, None) => 4,
+        _ => 1,
+    };
+    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b) * share(b))).filter(|&(_, w)| w > 0).collect();
     (!bases.is_empty()).then(|| *Mulberry32::new(seed ^ 0xBA5E_F00D).weighted(&bases))
 }
 
@@ -176,10 +182,6 @@ pub fn find_weight(name: &str) -> u32 {
     }
     match name {
         "Scroll" | "Note" => 10,
-        // Eight potion bases would crowd the other food out, so each is a quarter as likely
-        // to be found as a loaf (our own): potions are about one find in six.
-        n if crate::provision::POTIONS.iter().any(|(p, _)| *p == n) => 1,
-        _ if bases_of(Family::Food).any(|b| b == name) => 4,
         _ => 1,
     }
 }

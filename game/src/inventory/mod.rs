@@ -323,6 +323,9 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
     for item in potions.chain(manas).chain(stacked).chain(legendary).chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
+            if let Some(item) = inventory.item(id) {
+                warn!("debug kit: no room for {}", item.title());
+            }
             inventory.forget(id);
         }
     }

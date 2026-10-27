@@ -622,7 +622,9 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: FoodStyle) -> FoodState {
             p.fill = rng.range_f32(0.3, 0.95);
             p.glow = rng.range_f32(0.0, 0.9);
             p.count = rng.int(2, 7);
-            p.sized(*rng.weighted(&[(PotionSize::Vial, 3), (PotionSize::Small, 4), (PotionSize::Medium, 4), (PotionSize::Large, 2)]));
+            // The size comes off a stream of its own, so every other draw of a potion seed stays
+            // what it was.
+            p.sized(*Mulberry32::new(seed ^ 0x9071_0A5E).weighted(&[(PotionSize::Vial, 3), (PotionSize::Small, 4), (PotionSize::Medium, 4), (PotionSize::Large, 2)]));
             p.seal = rng.chance(0.3).then(|| pick_rgb(rng, &[0x8a1f1f, 0x2a2a2a, 0xc9a13b]));
         }
         F::Waterskin => {

@@ -111,6 +111,17 @@ pub fn coin_depth_factor(depth: u32) -> f64 {
     1.0 + RULES.coin_depth_step * f64::from(depth.saturating_sub(1))
 }
 
+/// What a brew's price is of its size's plain potion (our own): healing and mana at the plain
+/// price, an antidote half, insight half as much again, an elixir and holy water the plain price.
+pub fn brew_factor(brew: armory::families::food::Brew) -> f64 {
+    use armory::families::food::Brew;
+    match brew {
+        Brew::Antidote => 0.5,
+        Brew::Insight => 1.5,
+        Brew::Healing | Brew::Mana | Brew::Elixir | Brew::HolyWater => 1.0,
+    }
+}
+
 impl Item {
     /// What it is worth, in copper: the base's price, times rarity, affixes and condition, at
     /// least 1 cp. A container's value leaves out what it holds, and a purse is worth its coins.
@@ -119,6 +130,11 @@ impl Item {
             return coins.total_copper();
         }
         let base = f64::from(base_copper(&self.base).unwrap_or(1));
+        // A potion is worth its brew at its size, whichever base rolled it.
+        let base = match (self.potion_size(), self.brew()) {
+            (Some(size), Some(brew)) => f64::from(base_copper(crate::provision::plain_base(size)).unwrap_or(1)) * brew_factor(brew),
+            _ => base,
+        };
         // Until it is fully known an item is worth what a plain one is: no one pays for magic
         // that has not been found out.
         let (rarity, affixes): (_, &[&Affix]) = if self.is_known() { (self.rarity, &self.affixes) } else { (Rarity::Common, &[]) };

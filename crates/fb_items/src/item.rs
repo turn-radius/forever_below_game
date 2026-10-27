@@ -164,6 +164,12 @@ impl Item {
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
         let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried, quantity } = parts;
+        // A potion's base is its size: a record from before sizes (any scale) is made the size
+        // its base names, so its bottle, its name's size word and its stack agree.
+        let mut shape = shape;
+        if let (Some(size), armory::Item::Food(s)) = (crate::provision::potion_size(&base), &mut shape) {
+            s.provision.sized(size);
+        }
         let mut profile = profile(&base, &shape);
         if let Some(c) = coins {
             profile.description = c.to_string();

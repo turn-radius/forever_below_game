@@ -166,7 +166,7 @@
    1
   ],
   "wt": 0.2,
-  "desc": "Drink it to find out",
+  "desc": "A brew, known by its colour",
   "stack": 5
  },
  "Small potion": {
@@ -175,7 +175,7 @@
    1
   ],
   "wt": 0.3,
-  "desc": "Drink it to find out",
+  "desc": "A brew, known by its colour",
   "stack": 4
  },
  "Potion": {
@@ -184,16 +184,16 @@
    1
   ],
   "wt": 0.5,
-  "desc": "Drink it to find out",
+  "desc": "A brew, known by its colour",
   "stack": 3
  },
  "Large potion": {
   "fp": [
    1,
-   1
+   2
   ],
   "wt": 0.8,
-  "desc": "Drink it to find out",
+  "desc": "A brew, known by its colour",
   "stack": 2
  },
  "Healing vial": {
@@ -226,7 +226,7 @@
  "Large healing draught": {
   "fp": [
    1,
-   1
+   2
   ],
   "wt": 0.8,
   "desc": "Restores 4d4 + 4 health",

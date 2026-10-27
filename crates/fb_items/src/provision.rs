@@ -89,6 +89,21 @@ pub const POTIONS: &[(&str, PotionSize)] = &[
     ("Large healing draught", PotionSize::Large),
 ];
 
+/// The size of bottle potion base `base` is.
+pub fn potion_size(base: &str) -> Option<PotionSize> {
+    POTIONS.iter().find(|(name, _)| *name == base).map(|(_, size)| *size)
+}
+
+/// The plain potion base of `size`: the one whose price a potion of that size takes.
+pub fn plain_base(size: PotionSize) -> &'static str {
+    match size {
+        PotionSize::Vial => "Vial",
+        PotionSize::Small => "Small potion",
+        PotionSize::Medium => "Potion",
+        PotionSize::Large => "Large potion",
+    }
+}
+
 /// The healing potion base of `size`.
 pub fn healing_base(size: PotionSize) -> &'static str {
     match size {
@@ -162,9 +177,9 @@ impl Item {
         provision(&self.base)
     }
 
-    /// The size of bottle this is, if it is a potion.
+    /// The size of bottle this is, if it is a potion: its base's.
     pub fn potion_size(&self) -> Option<PotionSize> {
-        POTIONS.iter().find(|(name, _)| *name == self.base).map(|(_, size)| *size)
+        potion_size(&self.base)
     }
 
     /// What drinking this gives the delver, if it is an elixir.
@@ -332,5 +347,32 @@ mod tests {
             let mana = Food::roll_potion(12, size, Brew::Mana);
             assert_eq!((h.provision.size, h.provision.shape, h.provision.count), (mana.provision.size, mana.provision.shape, mana.provision.count));
         }
+    }
+
+    #[test]
+    fn a_saved_old_potion_keeps_its_name_and_takes_its_bases_size() {
+        use crate::ItemParts;
+        let mut old = roll_item("Healing draught", 4).unwrap();
+        // As saved before sizes: any scale.
+        if let armory::Item::Food(s) = &mut old.shape {
+            s.provision.size = 0.88;
+        }
+        let name = old.name.clone();
+        let back = crate::Item::from_parts(ItemParts::from(old)).unwrap();
+        assert_eq!((back.name.clone(), back.potion_size()), (name, Some(PotionSize::Medium)));
+        let armory::Item::Food(s) = &back.shape else { panic!() };
+        assert_eq!(s.provision.potion_size(), PotionSize::Medium);
+    }
+
+    #[test]
+    fn a_potion_is_priced_by_its_brew_and_size_and_a_large_flask_is_two_cells_tall() {
+        let find = |base, brew| (0..400).map(|seed| roll_item(base, seed).unwrap()).find(|p| p.brew() == Some(brew)).unwrap();
+        let plain = find("Large potion", Brew::Healing);
+        let named = roll_item("Large healing draught", 3).unwrap();
+        assert_eq!(plain.value_copper(), named.value_copper());
+        assert_eq!(find("Large potion", Brew::Mana).value_copper(), named.value_copper());
+        assert!(find("Large potion", Brew::Antidote).value_copper() < named.value_copper());
+        assert_eq!((named.profile.footprint.cols, named.profile.footprint.rows), (1, 2));
+        assert_eq!(roll_item("Potion", 3).unwrap().profile.footprint.rows, 1);
     }
 }
