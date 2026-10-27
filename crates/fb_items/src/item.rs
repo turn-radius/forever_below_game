@@ -375,10 +375,12 @@ impl Item {
 
     /// Whether a weapon strap holds it: a weapon at least [`STRAP_CELLS`] cells long by its
     /// footprint, so a staff, spear, bow or long sword, and a polearm (an axe or mace with a long
-    /// haft) as well, but not a dagger, a club or a short axe.
+    /// haft) as well, but not a dagger, a club or a short axe. Only long and thin things: a
+    /// crossbow, as wide as it is long, is not strapped (the user's call, to keep the strap's grid
+    /// narrow).
     pub fn strappable(&self) -> bool {
         let fp = self.profile.footprint;
-        self.profile.tags.contains(&Tag::Weapon) && fp.cols.max(fp.rows) >= STRAP_CELLS
+        self.profile.tags.contains(&Tag::Weapon) && self.shape.family() != armory::Family::Crossbow && fp.cols.max(fp.rows) >= STRAP_CELLS
     }
 
     /// Whether a belt's frog holds it: a one-handed weapon (a dagger, sword, mace, club or axe)
@@ -543,10 +545,11 @@ mod tests {
         for base in ["Dagger", "Shield", "Torch", "Mail", "Pack"] {
             assert!((1..30).all(|s| !roll_item(base, s).unwrap().strappable()), "{base}");
         }
-        // Whatever the family, it is the length that decides.
-        for base in ["Sword", "Axe", "Mace", "Club", "Crossbow"] {
+        // Whatever the family, it is the length that decides, but a crossbow is never strapped.
+        for base in ["Sword", "Axe", "Mace", "Club"] {
             assert!((1..30).filter_map(|s| roll_item(base, s)).all(|w| w.strappable() == (w.profile.footprint.rows.max(w.profile.footprint.cols) >= STRAP_CELLS)), "{base}");
         }
+        assert!((1..30).filter_map(|s| roll_item("Crossbow", s)).all(|w| !w.strappable()), "a crossbow is never strapped");
     }
 
     #[test]
