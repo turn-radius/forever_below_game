@@ -1749,9 +1749,19 @@ mod tests {
     /// A cloak drapes over a sword and a mace hung in a belt's frogs: where the cloak covers them,
     /// nothing of either stands out through it, and the cloak's hem does not balloon for them.
     #[test]
+    #[ignore = "slow sweep; the _smoke twin runs by default"]
     fn a_cloak_drapes_over_what_hangs_in_the_frogs() {
+        a_cloak_drapes_over_what_hangs_in_the_frogs_check(&[Folk::Human, Folk::Gnome, Folk::Goblin, Folk::Dwarf]);
+    }
+
+    #[test]
+    fn a_cloak_drapes_over_what_hangs_in_the_frogs_smoke() {
+        a_cloak_drapes_over_what_hangs_in_the_frogs_check(&[Folk::Human]);
+    }
+
+    fn a_cloak_drapes_over_what_hangs_in_the_frogs_check(folks: &[Folk]) {
         use crate::held::fit_frogged;
-        for folk in [Folk::Human, Folk::Gnome, Folk::Goblin, Folk::Dwarf] {
+        for &folk in folks {
             let body = folk_body(folk);
             let belt = (0..4000).map(|s| Item::roll(Family::Belt, s).unwrap()).find(|b| matches!(b, Item::Belt(s) if s.fittings.frogs == 2)).unwrap();
             let sword = Item::roll(Family::Sword, 5).unwrap();
@@ -1764,6 +1774,7 @@ mod tests {
             let (plain, draped) = (cloak_of(&bare), cloak_of(&hung));
             let belt_mesh = &hung.layer(Slot::Belt).unwrap().mesh;
             let polar = |p: &V3| (p[2].atan2(p[0]), p[0].hypot(p[2]));
+            let cloak: Vec<(f32, f32, f32)> = draped.iter().map(|c| (polar(c).0, c[1], polar(c).1)).collect();
             let mut worst = f32::MIN;
             for (weapon, left) in [(&sword, true), (&mace, false)] {
                 let fitted = fit_frogged(weapon, belt_mesh, left).unwrap();
@@ -1771,12 +1782,20 @@ mod tests {
                     let (phi, r) = polar(p);
                     // The cloak's outermost reach about that direction and height, and where its hem is
                     // there: a weapon's tip below or at the hem hangs out under it.
-                    let about = |c: &&V3| ((polar(c).0 - phi + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs() < 0.2;
-                    let hem = draped.iter().filter(about).map(|c| c[1]).fold(f32::MAX, f32::min);
+                    let (mut hem, mut reach) = (f32::MAX, f32::MIN);
+                    let near: Vec<&(f32, f32, f32)> = cloak
+                        .iter()
+                        .filter(|c| ((c.0 - phi + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs() < 0.2)
+                        .collect();
+                    for c in &near {
+                        hem = hem.min(c.1);
+                    }
                     if p[1] < hem + 0.5 * body.scale {
                         continue;
                     }
-                    let reach = draped.iter().filter(about).filter(|c| (c[1] - p[1]).abs() < 0.35 * body.scale).map(|c| polar(c).1).fold(f32::MIN, f32::max);
+                    for c in near.iter().filter(|c| (c.1 - p[1]).abs() < 0.35 * body.scale) {
+                        reach = reach.max(c.2);
+                    }
                     if reach > f32::MIN {
                         worst = worst.max(r - reach);
                     }
