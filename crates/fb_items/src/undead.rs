@@ -105,8 +105,10 @@ pub fn skeleton_outfit(seed: u32, odds: Odds) -> OutfitSet {
         };
         if let Some(quiver) = draw(&mut rng, "Quiver") {
             goods.push(quiver);
-            for _ in 0..rng.int(ARROWS_LEFT.0, ARROWS_LEFT.1) {
-                goods.extend(draw(&mut rng, "Arrow"));
+            // One kind of arrow, a few weathered, so they stack in the quiver's few places.
+            let left = rng.int(ARROWS_LEFT.0, ARROWS_LEFT.1) as usize;
+            if let Some(arrow) = draw(&mut rng, "Arrow") {
+                goods.extend(crate::stack_up(std::iter::repeat_n(arrow, left)));
             }
         }
     }
@@ -225,8 +227,8 @@ mod tests {
             }
             archers += 1;
             assert_eq!(set.goods[0].base, "Quiver", "{seed}");
-            let arrows = set.goods[1..].iter().filter(|i| i.base == "Arrow").count() as u32;
-            assert_eq!(arrows as usize, set.goods.len() - 1, "{seed}");
+            let arrows: u32 = set.goods[1..].iter().filter(|i| i.base == "Arrow").map(|i| i.quantity).sum();
+            assert_eq!(set.goods[1..].iter().filter(|i| i.base == "Arrow").count(), set.goods.len() - 1, "{seed}");
             assert!((ARROWS_LEFT.0..=ARROWS_LEFT.1).contains(&arrows), "{seed}: {arrows}");
         }
         assert!(archers > 5, "only {archers} archers in 300");

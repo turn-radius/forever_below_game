@@ -46,10 +46,13 @@ pub fn set_down_around<'a>(
     let loose: Vec<ItemId> = ids
         .into_iter()
         .filter(|&id| {
-            let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
-            !holders.iter().any(|&holder| {
-                holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) && inventory.grid(holder).and_then(|g| g.first_free(footprint)).is_some_and(|at| inventory.put(id, holder, at).is_ok())
-            })
+            for &holder in &holders {
+                if holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) {
+                    // Arrows fold into the holder's stacks; what its places cannot take lies about.
+                    let _ = inventory.stow_in(id, holder);
+                }
+            }
+            inventory.item(id).is_some() && inventory.location(id) == Some(super::items::Location::Loose)
         })
         .collect();
     let count = loose.len().max(1);

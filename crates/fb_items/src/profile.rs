@@ -415,11 +415,16 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
         // SRD 5.1 p. 69: an arrow weighs 0.05 lb and a bolt 0.075 lb. Each takes one cell.
         Item::Arrow(_) => good(&[Ammunition], 0.05, [1, 1], "Ammunition · arrow"),
         Item::Bolt(_) => good(&[Ammunition], 0.075, [1, 1], "Ammunition · crossbow bolt"),
-        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68), slung in a slot
-        // of its own so it never vies with the lantern at the hip or the pack on the back.
+        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68) or more, slung in
+        // a slot of its own so it never vies with the lantern at the hip or the pack on the back.
+        // Its place is one row of stacks, 3 to 5 of them by its size: 30 to 50 shots.
         Item::Quiver(_) | Item::BoltCase(_) => {
-            let (ammunition, label) = if matches!(shape, Item::Quiver(_)) { (Family::Arrow, "Quiver") } else { (Family::Bolt, "Bolt case") };
-            let holds = Grid { cols: 5, rows: 4, label: label.to_string(), accepts: vec![ammunition] };
+            let (ammunition, label, stacks) = match shape {
+                Item::Quiver(s) => (Family::Arrow, "Quiver", armory::families::quiver::Quivers::stacks(s)),
+                Item::BoltCase(s) => (Family::Bolt, "Bolt case", armory::families::quiver::BoltCases::stacks(s)),
+                _ => unreachable!(),
+            };
+            let holds = Grid { cols: stacks, rows: 1, label: label.to_string(), accepts: vec![ammunition] };
             Profile { holds: Some(holds), ..gear(Slot::Quiver, &[Container, Wear, Leather], Stats { weight: 1.0, ..Stats::default() }, [1, 3]) }
         }
         Item::Ring(_) => gear(Slot::Ring1, &[Trinket], Stats { weight: 0.05, ..Stats::default() }, [1, 1]),
@@ -652,10 +657,30 @@ mod tests {
         let (q, c) = (quiver.holds.unwrap(), case.holds.unwrap());
         assert!(q.takes(Family::Arrow) && !q.takes(Family::Bolt) && !q.takes(Family::Food));
         assert!(c.takes(Family::Bolt) && !c.takes(Family::Arrow));
-        assert!(q.cols as usize * q.rows as usize >= 20 && c.cols as usize * c.rows as usize >= 20);
+        assert!((3..=5).contains(&q.cols) && q.rows == 1 && (3..=5).contains(&c.cols) && c.rows == 1);
         assert_eq!((quiver.stats.weight, case.stats.weight), (1.0, 1.0));
         // A bag takes anything.
         assert!(rolled("Pack", 3).1.holds.unwrap().takes(Family::Bolt));
+    }
+
+    #[test]
+    fn holders_hold_three_to_five_stacks_by_their_size() {
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 1..200 {
+            for base in ["Quiver", "Bolt case"] {
+                let (shape, p) = rolled(base, seed);
+                let (cols, size) = (p.holds.unwrap().cols, match &shape {
+                    Item::Quiver(s) | Item::BoltCase(s) => s.holder.length * s.holder.width,
+                    _ => unreachable!(),
+                });
+                assert!((3..=5).contains(&cols), "{base} {seed}");
+                seen.insert((base, cols));
+                let _ = size;
+            }
+        }
+        for base in ["Quiver", "Bolt case"] {
+            assert!(seen.iter().filter(|(b, _)| *b == base).count() >= 2, "{base} varies: {seen:?}");
+        }
     }
 
     #[test]

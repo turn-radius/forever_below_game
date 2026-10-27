@@ -125,6 +125,35 @@ impl ItemMesh {
         self
     }
 
+    /// `pieces` copies of an item lying along +X (arrows, bolts) laid in one bundle, for a stack in a small icon:
+    /// fanned across `spread` radians about a point near its tail, like a sheaf and the whole bundle turned
+    /// `tilt` radians in the XY plane, each copy `thicken` times as wide as built (a shaft
+    /// a fifth of a cell across is a hairline at icon size). A pure function of its arguments.
+    pub fn fanned(&self, pieces: usize, spread: f32, tilt: f32, thicken: f32) -> ItemMesh {
+        let Some((lo, hi)) = self.bounds() else { return ItemMesh::default() };
+        let mid = [lo[0] + (hi[0] - lo[0]) * 0.3, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+        let mut out = ItemMesh::default();
+        for i in 0..pieces.max(1) {
+            let t = if pieces > 1 { i as f32 / (pieces - 1) as f32 - 0.5 } else { 0.0 };
+            let (sin, cos) = (tilt + spread * t).sin_cos();
+            // Each copy stepped back a little so the fanned copies do not share a plane.
+            let back = i as f32 * 0.02;
+            let turn = |v: [f32; 3]| [v[0] * cos - v[1] * sin, v[0] * sin + v[1] * cos, v[2]];
+            for part in &self.parts {
+                let mut part = part.clone();
+                for p in &mut part.positions {
+                    let r = turn([p[0] - mid[0], (p[1] - mid[1]) * thicken, (p[2] - mid[2]) * thicken]);
+                    *p = [r[0] + mid[0], r[1] + mid[1], r[2] + mid[2] + back];
+                }
+                for n in part.normals.iter_mut().chain(part.outline_normals.iter_mut()) {
+                    *n = turn(*n);
+                }
+                out.parts.push(part);
+            }
+        }
+        out
+    }
+
     /// Lowest and highest corner over every part, or `None` when empty.
     pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
         let mut points = self.parts.iter().flat_map(|p| &p.positions).peekable();

@@ -483,8 +483,12 @@ pub fn show_loaded(mut inventory: ResMut<Inventory>, marksman: Res<Marksman>) {
             .into_iter()
             .filter_map(|id| ammo_state(&inventory, id).map(|state| (state, inventory.item(id).map_or(1, |i| i.quantity as usize))))
             .flat_map(|(state, n)| std::iter::repeat_n(state, n))
-            .take(capacity)
             .collect();
+        // The model shows how full the holder is: its drawn arrows are the fraction of its
+        // stacks in use, so a quiver of 32 shots out of 40 is four fifths full whatever its size.
+        let most = inventory.item(container).and_then(|i| i.profile.holds.as_ref()).map_or(1, |g| g.cols as usize * fb_items::profile::AMMUNITION_STACK as usize);
+        let shown = if contents.is_empty() { 0 } else { (capacity * contents.len()).div_ceil(most).clamp(1, capacity) };
+        let contents: Vec<_> = contents.into_iter().take(shown).collect();
         if contents != state.contents {
             holders.push((container, contents));
         }

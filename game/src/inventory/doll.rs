@@ -617,6 +617,25 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                                     icon.insert(UiTransform { rotation: Rot2::degrees(45.0), ..default() });
                                 }
                             });
+                        // A quiver or bolt case counts the shots in it, as a stack's cell does.
+                        if let Some(id) = inventory.worn(place.slot).filter(|_| item.profile.holds.as_ref().is_some_and(|h| !h.accepts.is_empty())) {
+                            let shots = inventory.pieces_in(id);
+                            if shots > 0 {
+                                slot.spawn((
+                                    super::CountBadge,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        right: px(3),
+                                        bottom: px(2),
+                                        padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                                        border_radius: BorderRadius::all(px(4)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(BG.with_alpha(0.88)),
+                                ))
+                                .with_child((Text::new(shots.to_string()), UiFonts::style(&fonts.mono_bold, 12.0, Color::WHITE)));
+                            }
+                        }
                         if item.profile.kind == Kind::Gear {
                             slot.spawn((
                                 Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },

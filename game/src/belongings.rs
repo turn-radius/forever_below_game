@@ -250,7 +250,7 @@ mod tests {
         let spot = spot(Species::Skeleton, seed);
         let Creature::Skeleton(state) = spot.creature() else { panic!("a skeleton") };
         let kit = SkeletonKit::armed(&state, &SkeletonGear::roll(&state, odds));
-        let arrows = kit.outfit.goods.iter().filter(|i| i.base == "Arrow").count();
+        let arrows: usize = kit.outfit.goods.iter().filter(|i| i.base == "Arrow").map(|i| i.quantity as usize).sum();
         assert!(arrows > 0, "an archer carries arrows");
         let (mut app, _) = body_of(Critter::new(spot, spot.creature()).with_kit(kit), false);
         app.update();
@@ -261,7 +261,7 @@ mod tests {
             FloorChange::SetDownAt(id, ..) if inventory.item(*id).is_some_and(|i| i.base == "Quiver") => Some(*id),
             _ => None,
         });
-        assert_eq!(quiver.map(|q| inventory.contents_count(q)), Some(arrows), "the quiver falls with every arrow in it");
+        assert_eq!(quiver.map(|q| inventory.pieces_in(q)), Some(arrows), "the quiver falls with every arrow in it");
     }
 
     #[test]

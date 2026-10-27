@@ -427,7 +427,15 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
 pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: &[Stowed]) {
     for stowed in contents {
         let Some(id) = restore_item(inventory, &stowed.item) else { continue };
-        if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_err() {
+        // An older save laid a quiver's arrows out cell by cell: stackable pieces fold into the
+        // container's stacks now, and what the stacks cannot hold is carried on, else lost.
+        let stackable = inventory.item(id).is_some_and(|i| i.stack_limit() > 1);
+        if stackable {
+            let _ = inventory.stow_in(id, container);
+            if inventory.item(id).is_some() && inventory.location(id) == Some(crate::inventory::items::Location::Loose) && (inventory.stow(id).is_err() || inventory.is_partial(id)) {
+                inventory.forget(id);
+            }
+        } else if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_err() {
             inventory.forget(id);
         }
     }
@@ -702,19 +710,31 @@ mod tests {
     fn a_quiver_and_its_arrows_round_trip_and_a_loose_arrow_rolls_again() {
         let mut inventory = Inventory::default();
         let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
-        for seed in 0..20 {
-            let arrow = inventory.add(fb_items::roll_item("Arrow", seed).unwrap());
-            let at = inventory.grid(quiver).unwrap().first_free(inventory.footprint(arrow).unwrap()).unwrap();
-            inventory.put(arrow, quiver, at).unwrap();
+        for _ in 0..20 {
+            let arrow = inventory.add(fb_items::roll_item("Arrow", 3).unwrap());
+            inventory.stow_in(arrow, quiver).unwrap();
         }
         let json = serde_json::to_string(&record_item(&inventory, quiver).unwrap()).unwrap();
         let mut other = Inventory::default();
         let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
-        assert_eq!(other.contents_count(again), 20);
+        assert_eq!((other.contents_count(again), other.pieces_in(again)), (2, 20));
         assert_eq!(other.item(again), inventory.item(quiver));
         // A shot that came to rest is a level spot of its family and seed, which rolls the arrow again.
         let arrow = fb_items::roll_item("Arrow", 77).unwrap();
         assert_eq!(fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds), Some(arrow));
+    }
+
+    #[test]
+    fn loose_arrows_from_an_old_save_fold_into_the_quivers_stacks() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
+        let mut loose = Inventory::default();
+        let arrow = loose.add(fb_items::roll_item("Arrow", 3).unwrap());
+        let record = record_item(&loose, arrow).unwrap();
+        // The old 5 by 4 grid: twenty loose arrows, most of them beyond today's row.
+        let contents: Vec<Stowed> = (0..20u8).map(|i| Stowed { x: i % 5, y: i / 5, turned: false, item: record.clone() }).collect();
+        restore_contents(&mut inventory, quiver, &contents);
+        assert_eq!((inventory.contents_count(quiver), inventory.pieces_in(quiver)), (2, 20));
     }
 
     #[test]

@@ -435,9 +435,20 @@ impl Inventory {
     /// `Err` means nothing moved. Use [`Inventory::stow_apart`] to keep `id` itself.
     pub fn stow(&mut self, id: ItemId) -> Result<ItemId, Refusal> {
         let (footprint, containers) = self.stowing(id)?;
+        self.stow_among(id, footprint, &containers)
+    }
+
+    /// Puts `id` in `container` alone, folding stacks as [`Inventory::stow`] does: for loose
+    /// ammunition an older save laid out cell by cell.
+    pub fn stow_in(&mut self, id: ItemId, container: ItemId) -> Result<ItemId, Refusal> {
+        let (footprint, _) = self.stowing(id)?;
+        self.stow_among(id, footprint, &[container])
+    }
+
+    fn stow_among(&mut self, id: ItemId, footprint: Footprint, containers: &[ItemId]) -> Result<ItemId, Refusal> {
         let mut first = None;
         if self.item(id).is_some_and(|i| i.stack_limit() > 1) {
-            for &container in &containers {
+            for &container in containers {
                 if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
                     continue;
                 }
@@ -455,7 +466,7 @@ impl Inventory {
                 let mut chunk = self.item(id).ok_or(Refusal::Unknown)?.clone();
                 chunk.quantity = limit;
                 let chunk_id = self.add(chunk);
-                match self.stow_whole(chunk_id, footprint, &containers) {
+                match self.stow_whole(chunk_id, footprint, containers) {
                     Ok(container) => {
                         first.get_or_insert(container);
                         if let Some(rest) = self.items.get_mut(&id) {
@@ -469,7 +480,7 @@ impl Inventory {
                 }
             }
         }
-        match self.stow_whole(id, footprint, &containers) {
+        match self.stow_whole(id, footprint, containers) {
             Ok(container) => Ok(first.unwrap_or(container)),
             Err(refusal) => first.ok_or(refusal),
         }
@@ -1142,13 +1153,14 @@ mod tests {
         assert_eq!(inventory.check_put(bread, quiver, at), Err(Refusal::NotAccepted));
         assert_eq!(inventory.check_put(bolt, case, at), Ok(()));
         assert_eq!(inventory.check_put(arrow, case, Placement::new(1, 0, false)), Err(Refusal::NotAccepted));
-        // Twenty arrows fit, found by the quiver before a pack.
+        // Arrows fit, found by the quiver before a pack, a kind to each place.
         inventory.wear(quiver, Slot::Quiver).unwrap();
-        for seed in 2..21 {
+        let places = u32::from(inventory.item(quiver).unwrap().profile.holds.as_ref().unwrap().cols);
+        for seed in 2..=places {
             let more = inventory.add(rolled("Arrow", seed));
             assert_eq!(inventory.stow(more), Ok(quiver));
         }
-        assert_eq!(inventory.contents_count(quiver), 20);
+        assert_eq!(inventory.contents_count(quiver) as u32, places);
     }
 
     #[test]
@@ -1171,6 +1183,31 @@ mod tests {
         let bundle = other.add(rolled("Arrow", 5).with_quantity(14));
         assert_eq!(other.stow(bundle), Ok(quiver));
         assert_eq!((other.contents_count(quiver), other.pieces_in(quiver)), (2, 14));
+    }
+
+    #[test]
+    fn a_quiver_of_four_stacks_takes_forty_arrows_and_the_forty_first_goes_to_the_pack() {
+        let seed = (1..400).find(|&s| rolled("Quiver", s).profile.holds.as_ref().unwrap().cols == 4).expect("a quiver of four stacks");
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", seed));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        let pack = inventory.add(rolled("Pack", 1));
+        inventory.wear(pack, Slot::Back).unwrap();
+        for _ in 0..40 {
+            let arrow = inventory.add(rolled("Arrow", 5));
+            assert_eq!(inventory.stow(arrow), Ok(quiver));
+        }
+        assert_eq!((inventory.contents_count(quiver), inventory.pieces_in(quiver)), (4, 40));
+        let arrow = inventory.add(rolled("Arrow", 5));
+        assert_eq!(inventory.stow(arrow), Ok(pack), "the quiver is full");
+        assert_eq!(inventory.pieces_in(quiver), 40);
+        // Only arrows go in a quiver, and bolts only in a case.
+        let bolt = inventory.add(rolled("Bolt", 5));
+        assert!(inventory.check_put(bolt, quiver, Placement::new(0, 0, false)).is_err());
+        let sword = inventory.add(rolled("Sword", 5));
+        assert!(inventory.check_put(sword, quiver, Placement::new(0, 0, false)).is_err());
+        let case = inventory.add(rolled("Bolt case", 5));
+        assert!(inventory.check_put(arrow, case, Placement::new(0, 0, false)).is_err());
     }
 
     #[test]

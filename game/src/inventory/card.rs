@@ -204,6 +204,18 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     };
     let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.stack_value()) } else { Price::Unsure }, Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
+        // A quiver or bolt case is a row of stacks: its card counts shots against its capacity.
+        if let Some(family) = holds.accepts.first().filter(|f| matches!(f, armory::Family::Arrow | armory::Family::Bolt)) {
+            let shots = if *family == armory::Family::Arrow { "arrows" } else { "bolts" };
+            let room = holds.cols as u32 * u32::from(fb_items::profile::AMMUNITION_STACK);
+            let stacks = format!("{} stacks", holds.cols);
+            return match held {
+                Some((inventory, id)) => {
+                    format!("Holds {stacks} \u{b7} {}/{room} {shots} \u{b7} {} lb inside", inventory.pieces_in(id), number(inventory.contents_weight(id)))
+                }
+                _ => format!("Holds {stacks} \u{b7} {room} {shots} when full"),
+            };
+        }
         let plain = p.plain_grid().map_or_else(String::new, |(c, r)| format!(" (plain {c}\u{d7}{r})"));
         let inside = format!("{}\u{d7}{} inside{plain}", holds.cols, holds.rows);
         let line = match held {

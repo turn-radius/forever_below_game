@@ -29,7 +29,7 @@
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
 //! card over the `n`th thing in the first carried grid (`u<n>` underfoot, `o<n>` in the open
-//! container or trader's shelf).
+//! container or trader's shelf; `q` the worn quiver on the doll).
 
 pub mod card;
 pub mod doll;
@@ -1606,9 +1606,22 @@ fn debug_hover(
     underfoot: Res<Underfoot>,
     open: Res<OpenContainer>,
     views: Query<(&ItemView, &ComputedNode, &UiGlobalTransform)>,
+    slots: Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     mut hovered: ResMut<Hovered>,
 ) {
     let spec = std::env::var("FB_DEBUG_HOVER").unwrap_or_default();
+    // `q` is the worn quiver's own slot on the doll.
+    if spec == "q" {
+        if let Some(id) = inventory.worn(Slot::Quiver)
+            && let Some((_, node, transform)) = slots.iter().find(|(v, ..)| v.0 == Slot::Quiver)
+        {
+            let rect = node_rect(node, transform);
+            if rect.width() > 0.0 {
+                hovered.set_if_neq(Hovered(Some((id, rect))));
+            }
+        }
+        return;
+    }
     let (place, number) = match spec.chars().next() {
         Some(c @ ('u' | 'o')) => (Some(c), &spec[1..]),
         _ => (None, spec.as_str()),
