@@ -325,7 +325,7 @@ pub fn take_folk_blows(
 
 /// `person` with nothing worn, held or carried: a body whose gear has been set down.
 pub fn bare(person: &Person) -> Person {
-    Person { gear: Vec::new(), goods: Vec::new(), ..person.clone() }
+    Person { gear: Vec::new(), goods: Vec::new(), hung: Vec::new(), ..person.clone() }
 }
 
 /// Draws the figure under `stance` again as `figure`: its skeleton and meshes, and any light it

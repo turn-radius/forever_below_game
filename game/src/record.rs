@@ -282,6 +282,10 @@ pub struct Stowed {
     pub y: u8,
     pub turned: bool,
     pub item: ItemRecord,
+    /// The small grid of the pack or belt it lies in, if it hangs on one (the tent in a lashing, the
+    /// spear on a strap); `x` and `y` are then its cell in that grid. Absent for the container's main grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitting: Option<fb_items::Accessory>,
 }
 
 /// What is left on a fallen body: its things, each where it lay in the body's grid, and which
@@ -392,10 +396,17 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
 /// What is in `container`'s grid.
 pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> {
     let Some(grid) = inventory.grid(container) else { return vec![] };
-    grid.entries()
-        .iter()
-        .filter_map(|e| Some(Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)? }))
-        .collect()
+    let stowed = |grid: &crate::inventory::Grid<ItemId>, fitting| -> Vec<Stowed> {
+        grid.entries().iter().filter_map(|e| Some(Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)?, fitting })).collect()
+    };
+    // What hangs on a pack or belt lies in its small grids, after the main grid's.
+    let mut all = stowed(grid, None);
+    for &(accessory, fitting) in inventory.fittings_of(container) {
+        if let Some(grid) = inventory.grid(fitting) {
+            all.extend(stowed(grid, Some(accessory)));
+        }
+    }
+    all
 }
 
 /// Keeps track of the item `record` describes in `inventory`, loose, with its contents where
@@ -455,7 +466,16 @@ pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: 
     let mut spilled = 0;
     for stowed in contents {
         let Some(id) = restore_item(inventory, &stowed.item) else { continue };
-        if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_ok() {
+        // Back in the small grid of the pack or belt it hung on, where it hung.
+        let into = match stowed.fitting {
+            Some(accessory) => inventory.fitting(container, accessory),
+            None => Some(container),
+        };
+        if let Some(into) = into
+            && inventory.put(id, into, Placement::new(stowed.x, stowed.y, stowed.turned)).is_ok()
+            // A stack put in a fitting gives it one piece and keeps the rest.
+            && inventory.location(id) != Some(crate::inventory::items::Location::Loose)
+        {
             continue;
         }
         let _ = inventory.stow_in(id, container);
@@ -755,7 +775,7 @@ mod tests {
     }
 
     fn stowed(inventory: &Inventory, id: ItemId, x: u8, y: u8, turned: bool) -> Stowed {
-        Stowed { x, y, turned, item: record_item(inventory, id).unwrap() }
+        Stowed { x, y, turned, item: record_item(inventory, id).unwrap(), fitting: None }
     }
 
     #[test]
@@ -951,5 +971,47 @@ mod tests {
         record.levels.insert(4, LevelRecord::default());
         let json = serde_json::to_string(&record).unwrap();
         assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn what_hangs_on_a_pack_or_belt_is_recorded_with_it_wherever_it_lies() {
+        use fb_items::Accessory::{LeftFrog, Lashing, WeaponStrap};
+        let mut inventory = Inventory::default();
+        let pack = (1..4000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap();
+        let pack = inventory.add(pack);
+        let (tent, spear, loaf) = (inventory.add(fb_items::roll_item("Tent", 3).unwrap()), inventory.add(fb_items::roll_item("Spear", 3).unwrap()), inventory.add(fb_items::roll_item("Bread", 3).unwrap()));
+        let (lashing, strap) = (inventory.fitting(pack, Lashing).unwrap(), inventory.fitting(pack, WeaponStrap).unwrap());
+        inventory.put(tent, lashing, Placement::new(0, 0, false)).unwrap();
+        inventory.put(spear, strap, Placement::new(0, 0, false)).unwrap();
+        inventory.put(loaf, pack, Placement::new(2, 1, false)).unwrap();
+        // A belt with a dagger in its frog, packed in a sack.
+        let belt = (1..4000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(LeftFrog)).unwrap();
+        let belt = inventory.add(belt);
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
+        inventory.put(dagger, inventory.fitting(belt, LeftFrog).unwrap(), Placement::new(0, 0, false)).unwrap();
+        let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
+        inventory.put(belt, sack, Placement::new(0, 0, false)).unwrap();
+        for (host, weight) in [(pack, inventory.contents_weight(pack)), (sack, inventory.contents_weight(sack))] {
+            // Down to the level record's json and back, as a bag set down or a chest's contents are.
+            let json = serde_json::to_string(&record_item(&inventory, host).unwrap()).unwrap();
+            assert!(json.contains("\"fitting\""), "the fitting grids are recorded");
+            let mut other = Inventory::default();
+            let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+            assert_eq!(other.contents_weight(again), weight, "the same load");
+            assert_eq!(record_item(&other, again), record_item(&inventory, host), "and the same record");
+        }
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &record_item(&inventory, pack).unwrap()).unwrap();
+        assert_eq!(other.hung_on(again).iter().map(|&(a, id)| (a, other.item(id).unwrap().base.clone())).collect::<Vec<_>>(), vec![(Lashing, "Tent".to_string()), (WeaponStrap, "Spear".to_string())]);
+        assert_eq!(other.contents_count(again), 1, "and the loaf in the main grid");
+        // Counted without duplicates: the items are the pack, its three things and nothing else.
+        assert_eq!(other.ids().count(), 4);
+        // A save that put a fitting's contents where its grid is gone puts them in the main grid, never loses them.
+        let mut record = record_item(&inventory, pack).unwrap();
+        record.contents[1].fitting = Some(fb_items::Accessory::PotionPouch);
+        let mut third = Inventory::default();
+        let kept = restore_item(&mut third, &record).unwrap();
+        assert_eq!(third.ids().count(), 4, "{:?}", third.spill);
+        assert!(third.holds(kept, third.ids().find(|&id| third.item(id).is_some_and(|i| i.base == "Tent" || i.base == "Spear")).unwrap()) || !third.spill.is_empty());
     }
 }

@@ -333,7 +333,11 @@ fn count_nodes(record: &ItemRecord) -> usize {
 pub fn walk(inventory: &Inventory, id: Option<ItemId>, record: &ItemRecord, out: &mut Vec<Option<ItemId>>) {
     out.push(id);
     for stowed in &record.contents {
-        let child = id.and_then(|id| inventory.grid(id)).and_then(|grid| grid.entries().iter().find(|e| e.at.x == stowed.x && e.at.y == stowed.y)).map(|e| e.id);
+        let grid = id.and_then(|id| match stowed.fitting {
+            Some(accessory) => inventory.fitting(id, accessory).and_then(|fitting| inventory.grid(fitting)),
+            None => inventory.grid(id),
+        });
+        let child = grid.and_then(|grid| grid.entries().iter().find(|e| e.at.x == stowed.x && e.at.y == stowed.y)).map(|e| e.id);
         if child.is_none() {
             // Everything under a missing item is missing too.
             out.extend(std::iter::repeat_n(None, count_nodes(&stowed.item)));
@@ -677,7 +681,7 @@ pub(crate) fn sample_delve() -> SavedDelve {
     let signatures = LevelSignature::of_record(1207, &record);
     let bed = fb_items::roll_item("Tent", 9).unwrap();
     let sack = ItemRecord {
-        contents: vec![Stowed { x: 1, y: 0, turned: true, item: item_record(&fb_items::roll_item("Dagger", 4).unwrap()) }],
+        contents: vec![Stowed { x: 1, y: 0, turned: true, item: item_record(&fb_items::roll_item("Dagger", 4).unwrap()), fitting: None }],
         ..item_record(&fb_items::roll_item("Sack", 3).unwrap())
     };
     SavedDelve {
@@ -755,16 +759,18 @@ mod tests {
 
     #[test]
     fn what_a_belts_fittings_hold_is_saved_and_put_back_on_the_belt() {
+        use crate::inventory::Placement;
         use fb_items::{Accessory, Slot};
         let mut inventory = Inventory::default();
-        let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::RightFrog) && b.has_accessory(Accessory::PotionPouch) && b.has_accessory(Accessory::BeltSack)).unwrap();
+        let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::LeftFrog) && b.has_accessory(Accessory::RightFrog) && b.has_accessory(Accessory::PotionPouch) && b.has_accessory(Accessory::BeltSack)).unwrap();
         let belt = inventory.add(belt);
         inventory.wear(belt, Slot::Belt).unwrap();
         let (sword, mace, vial) = (inventory.add(fb_items::roll_item("Sword", 3).unwrap()), inventory.add(fb_items::roll_item("Mace", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
         let held = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
         inventory.wear(held, Slot::Mainhand).unwrap();
-        for (id, slot) in [(sword, Slot::Frog1), (mace, Slot::Frog2), (vial, Slot::Potion3)] {
-            inventory.wear(id, slot).unwrap();
+        for (id, accessory, at) in [(sword, Accessory::LeftFrog, (0, 0)), (mace, Accessory::RightFrog, (0, 1)), (vial, Accessory::PotionPouch, (2, 0))] {
+            let fitting = inventory.fitting(belt, accessory).unwrap();
+            inventory.put(id, fitting, Placement::new(at.0, at.1, false)).unwrap();
         }
         let records: Vec<_> = inventory.worn_ids().into_iter().map(|(slot, id)| (slot, record_item(&inventory, id).unwrap())).collect();
         let json = serde_json::to_string(&records).unwrap();
@@ -774,24 +780,28 @@ mod tests {
             let id = restore_item(&mut back, record).unwrap();
             back.wear(id, *slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
         }
-        let kept: Vec<(Slot, String)> = back.fitted().into_iter().map(|(slot, id)| (slot, back.item(id).unwrap().base.clone())).collect();
-        assert_eq!(kept, vec![(Slot::Frog1, "Sword".to_string()), (Slot::Frog2, "Mace".to_string()), (Slot::Potion3, "Vial".to_string())]);
-        assert_eq!(back.item(back.worn(Slot::Belt).unwrap()).unwrap().accessories(), inventory.item(belt).unwrap().accessories());
+        let back_belt = back.worn(Slot::Belt).unwrap();
+        let kept: Vec<(Accessory, String)> = back.hung_on(back_belt).into_iter().map(|(accessory, id)| (accessory, back.item(id).unwrap().base.clone())).collect();
+        assert_eq!(kept, vec![(Accessory::LeftFrog, "Sword".to_string()), (Accessory::RightFrog, "Mace".to_string()), (Accessory::PotionPouch, "Vial".to_string())]);
+        let vial_at = |inventory: &Inventory, belt| inventory.hung_on(belt).into_iter().find(|(a, _)| *a == Accessory::PotionPouch).and_then(|(_, id)| inventory.location(id));
+        assert!(matches!(vial_at(&back, back_belt), Some(crate::inventory::Location::In { at, .. }) if (at.x, at.y) == (2, 0)), "and where it hung");
+        assert_eq!(back.item(back_belt).unwrap().accessories(), inventory.item(belt).unwrap().accessories());
+        assert_eq!(back.contents_weight(back_belt), inventory.contents_weight(belt), "the same load");
     }
 
     #[test]
-    fn a_tent_tied_to_the_lashing_is_saved_and_tied_again_after_the_pack() {
+    fn a_tent_tied_to_the_lashing_is_saved_and_tied_again_with_the_pack() {
         use fb_items::Slot;
         let mut inventory = Inventory::default();
         let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
         let pack = inventory.add(pack);
         inventory.wear(pack, Slot::Back).unwrap();
         let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
-        inventory.wear(tent, Slot::Lash).unwrap();
-        // As `gather` saves it and `restore_delve` puts it back, worn items in the slots' order.
+        inventory.lash(tent).unwrap();
         let saved: Vec<(Slot, ItemRecord)> = inventory.worn_ids().into_iter().map(|(slot, id)| (slot, record_item(&inventory, id).unwrap())).collect();
         let text = serde_json::to_string(&saved).unwrap();
-        assert!(text.contains("\"lash\""), "{text}");
+        assert!(text.contains("\"fitting\":\"Lashing\""), "{text}");
+        assert!(!text.contains("\"lash\""), "no worn place of its own");
         let saved: Vec<(Slot, ItemRecord)> = serde_json::from_str(&text).unwrap();
         let mut back = Inventory::default();
         for (slot, record) in &saved {
@@ -800,6 +810,12 @@ mod tests {
         }
         let tied = back.lashed().and_then(|id| back.item(id)).expect("tied again");
         assert_eq!((tied.base.as_str(), tied.seed), ("Tent", 3));
+        // The quickslots find a thing tied on by its place in the walk of what is carried.
+        let mut walked = Vec::new();
+        for (slot, record) in &saved {
+            walk(&back, back.worn(current_slot(&back, back.worn(*slot).unwrap(), *slot)), record, &mut walked);
+        }
+        assert!(walked.contains(&back.lashed()), "{walked:?}");
     }
 
     #[test]

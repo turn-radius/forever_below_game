@@ -155,11 +155,11 @@ impl Default for Character {
 }
 
 /// Where a fitting holds what it holds, for the load's breakdown ("on the strap").
-fn fitting_place(slot: fb_items::Slot) -> &'static str {
-    match slot {
-        fb_items::Slot::Strap => "on the strap",
-        fb_items::Slot::Lash => "on the lashing",
-        fb_items::Slot::Frog1 | fb_items::Slot::Frog2 => "in a frog",
+fn fitting_place(accessory: fb_items::Accessory) -> &'static str {
+    match accessory {
+        fb_items::Accessory::WeaponStrap => "on the strap",
+        fb_items::Accessory::Lashing => "on the lashing",
+        fb_items::Accessory::LeftFrog | fb_items::Accessory::RightFrog => "in a frog",
         _ => "in the potion pouch",
     }
 }
@@ -410,12 +410,6 @@ impl Character {
                 e = add(e, format!("{} contents", item.name), contents as f64);
             }
         }
-        // A weapon on the pack's strap is carried outside its grid, and weighs as it does.
-        for (slot, id) in inventory.fitted() {
-            if let Some(item) = inventory.item(id) {
-                e = add(e, format!("{} {}", item.name, fitting_place(slot)), (item.profile.stats.weight * item.quantity as f32) as f64);
-            }
-        }
         if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
     }
 
@@ -477,10 +471,11 @@ impl Character {
                 // What a bag inside the bag holds counts with it.
                 lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight * inside.quantity as f32 + inventory.contents_weight(entry.id)));
             }
-        }
-        for (slot, id) in inventory.fitted() {
-            if let Some(item) = inventory.item(id) {
-                lines.push(format!("  {} ({})  {:.1} lb", item.name, fitting_place(slot), item.profile.stats.weight * item.quantity as f32));
+            // What hangs on a pack or belt, in its small grids, is carried outside the main grid and weighs as it does.
+            for (accessory, id) in inventory.hung_on(container) {
+                if let Some(item) = inventory.item(id) {
+                    lines.push(format!("    {} ({})  {:.1} lb", item.name, fitting_place(accessory), item.profile.stats.weight * item.quantity as f32));
+                }
             }
         }
         let band = LoadBand::from_load_with(rules, carried.value(), capacity);
@@ -1138,8 +1133,9 @@ mod tests {
         inventory.wear(belt, Slot::Belt).unwrap();
         let before = delver.derive(&inventory);
         let (mace, vial) = (inventory.add(fb_items::roll_item("Mace", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
-        inventory.wear(mace, Slot::Frog1).unwrap();
-        inventory.wear(vial, Slot::Potion1).unwrap();
+        let (frog, pouch) = (inventory.fitting(belt, Accessory::LeftFrog).unwrap(), inventory.fitting(belt, Accessory::PotionPouch).unwrap());
+        inventory.put(mace, frog, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        inventory.put(vial, pouch, crate::inventory::Placement::new(0, 0, false)).unwrap();
         let after = delver.derive(&inventory);
         let weight = inventory.item(mace).unwrap().profile.stats.weight + inventory.item(vial).unwrap().profile.stats.weight;
         assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "load {} to {} for {weight}", before.load, after.load);
@@ -1159,7 +1155,8 @@ mod tests {
         let before = delver.derive(&inventory);
         let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
         let weight = inventory.item(spear).unwrap().profile.stats.weight;
-        inventory.wear(spear, Slot::Strap).unwrap();
+        let strap = inventory.fitting(pack, fb_items::Accessory::WeaponStrap).unwrap();
+        inventory.put(spear, strap, crate::inventory::Placement::new(0, 0, false)).unwrap();
         let after = delver.derive(&inventory);
         assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
         assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));
@@ -1177,7 +1174,7 @@ mod tests {
         let before = delver.derive(&inventory);
         let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
         let weight = inventory.item(tent).unwrap().profile.stats.weight;
-        inventory.wear(tent, Slot::Lash).unwrap();
+        inventory.lash(tent).unwrap();
         let after = delver.derive(&inventory);
         assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
         assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));

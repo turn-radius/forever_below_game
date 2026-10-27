@@ -90,6 +90,9 @@ pub struct Person {
     /// quiver or case they wear when they are slain. (The rest of the outfit's goods are not
     /// theirs yet.)
     pub goods: Vec<Item>,
+    /// What hangs on the pack and belt they wear, each with the fitting that holds it: drawn on the
+    /// pack or belt. Nothing is rolled hung on a folk; it is what a fallen body's pack still has on it.
+    pub hung: Vec<(fb_items::Accessory, Item)>,
     /// How dirty their skin is, 0 clean to about 0.85 (the plate's `C.dirt`).
     pub dirt: f32,
 }
@@ -177,7 +180,7 @@ impl Person {
         goods.extend(crate::doors::key_of(faction));
         // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
         let spec = if spot.denizen.is_some() && !succubus { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, sex) };
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
+        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, hung: Vec::new(), dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -400,8 +403,14 @@ pub(crate) fn spawn_folk(
             // A body that still has things on it lies dressed in them where it fell, long
             // fallen ([`crate::remains`]).
             let stock = crate::remains::restore_body(inventory, body, person.spot.seed, &person.name);
-            let worn = Person { gear: crate::remains::drawn_kit(inventory, &stock.kit).iter().filter_map(|&(slot, id)| Some((slot, inventory.item(id)?.clone()))).collect(), goods: Vec::new(), ..person.clone() };
-            let figure = Figure::dress(&worn.spec, &worn.gear, worn.dirt);
+            let hung = crate::remains::hung_kit(inventory, &stock.kit);
+            let worn = Person {
+                gear: stock.kit.iter().filter_map(|&(slot, id)| Some((slot, inventory.item(id)?.clone()))).collect(),
+                hung: hung.iter().filter_map(|&(accessory, id)| Some((accessory, inventory.item(id)?.clone()))).collect(),
+                goods: Vec::new(),
+                ..person.clone()
+            };
+            let figure = Figure::dress_hung(&worn.spec, &worn.gear, &worn.hung, worn.dirt);
             let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &worn, &figure);
             let fallen = crate::combat::feedback::Corpse { since: LONG_FALLEN, fell: left.transform() };
             commands.entity(root).insert((health, hostility, fallen, stock)).remove::<BlocksTheWay>();

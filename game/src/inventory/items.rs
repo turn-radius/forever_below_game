@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bevy::prelude::Resource;
-use fb_items::{Coins, Item, Slot, footprint::Footprint};
+use fb_items::{Accessory, Coins, Item, Slot, footprint::Footprint};
 
 use super::grid::{Grid, Misfit, Placement};
 
@@ -41,16 +41,6 @@ pub enum Refusal {
     WrongSlot,
     /// The hip with no belt to hang from.
     NoBelt,
-    /// The strap slot with no pack worn that has a weapon strap.
-    NoStrap,
-    /// A frog slot with no belt worn that has a frog at that hip.
-    NoFrog,
-    /// A potion place with no belt worn that has a potion pouch.
-    NoPouch,
-    /// The lash slot with no pack worn that has a lashing.
-    NoLashing,
-    /// A potion from a stack, with every place of the pouch taken.
-    PouchFull,
     /// A quickslot has nothing to do with it.
     NotUsable,
     /// Not carried: a quickslot only takes what the delver has with them.
@@ -76,11 +66,6 @@ impl Refusal {
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
             Refusal::NoBelt => "It hangs from a belt. Wear one first.",
-            Refusal::NoStrap => "It needs a pack with a weapon strap.",
-            Refusal::NoFrog => "It needs a belt with a frog at that hip.",
-            Refusal::NoPouch => "It needs a belt with a potion pouch.",
-            Refusal::NoLashing => "It needs a pack with a lashing.",
-            Refusal::PouchFull => "The potion pouch is full.",
             Refusal::NotUsable => "A quickslot cannot use that.",
             Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
@@ -149,6 +134,12 @@ pub struct Inventory {
     /// Each container's grid and what lies in it, wherever the container is.
     grids: HashMap<ItemId, Grid<ItemId>>,
     worn: HashMap<Slot, ItemId>,
+    /// The small grids a pack or belt came with (its lashing, weapon strap, frogs and potion pouch,
+    /// [`fb_items::fitting_grids`]), each a hidden container item of its own that stays with the pack or
+    /// belt wherever it goes. Made when the pack or belt is added, in the order it was rolled with them.
+    fittings: HashMap<ItemId, Vec<(Accessory, ItemId)>>,
+    /// Each fitting's container and the pack or belt it belongs to.
+    fitted_on: HashMap<ItemId, (ItemId, Accessory)>,
     /// The delver's own coin purse: what they are paid, and what the purses they open hold.
     coins: Coins,
     /// Items a load could find no place for in their container (an old quiver's twenty kinds of
@@ -178,6 +169,19 @@ impl Inventory {
 
     /// Keeps track of `item`, loose. A container gets its empty grid.
     pub fn add(&mut self, item: Item) -> ItemId {
+        let id = self.add_plain(item);
+        // A pack or belt comes with the small grids it was rolled with, empty.
+        let host = self.items[&id].clone();
+        for grid in fb_items::fitting_grids(&host) {
+            let fitting = self.add_plain(fb_items::fitting_item(&host, &grid));
+            self.fittings.entry(id).or_default().push((grid.accessory, fitting));
+            self.fitted_on.insert(fitting, (id, grid.accessory));
+        }
+        id
+    }
+
+    /// [`Inventory::add`] without the fitting grids of a pack or belt.
+    fn add_plain(&mut self, item: Item) -> ItemId {
         let id = ItemId(self.next);
         self.next += 1;
         if let Some(holds) = &item.profile.holds {
@@ -191,6 +195,10 @@ impl Inventory {
     /// Stops keeping track of `id` and of everything inside it, wherever it is.
     pub fn forget(&mut self, id: ItemId) {
         self.take_out(id);
+        for (_, fitting) in self.fittings.remove(&id).unwrap_or_default() {
+            self.fitted_on.remove(&fitting);
+            self.forget(fitting);
+        }
         if let Some(grid) = self.grids.remove(&id) {
             for entry in grid.entries() {
                 self.locations.insert(entry.id, Location::Loose);
@@ -297,9 +305,7 @@ impl Inventory {
 
     /// Everything worn or held, with its slot, in the slots' order.
     pub fn equipped(&self) -> Vec<(Slot, &Item)> {
-        // What sits in a pack's or belt's fitting is carried, not held: it gives none of its stats,
-        // only its weight ([`Inventory::fitted`]).
-        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter(|(slot, _)| !slot.is_fitting()).filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
+        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
         worn.sort_by_key(|(slot, _)| *slot as u8);
         worn
     }
@@ -316,6 +322,8 @@ impl Inventory {
             match self.location(at) {
                 Some(Location::Worn(_)) => return true,
                 Some(Location::In { container, .. }) => at = container,
+                // A fitting's grid is as carried as its pack or belt.
+                Some(Location::Loose) if self.fitted_on.contains_key(&at) => at = self.fitted_on[&at].0,
                 _ => return false,
             }
         }
@@ -324,7 +332,9 @@ impl Inventory {
 
     /// Whether `holder` is `id` or holds it, at any depth (the plate's `holdsId`).
     pub fn holds(&self, holder: ItemId, id: ItemId) -> bool {
-        holder == id || self.grids.get(&holder).is_some_and(|g| g.entries().iter().any(|e| self.holds(e.id, id)))
+        holder == id
+            || self.grids.get(&holder).is_some_and(|g| g.entries().iter().any(|e| self.holds(e.id, id)))
+            || self.fittings.get(&holder).is_some_and(|f| f.iter().any(|&(_, fitting)| self.holds(fitting, id)))
     }
 
     /// The footprint of `id`, upright.
@@ -339,12 +349,24 @@ impl Inventory {
         if self.holds(id, container) {
             return Err(Refusal::IntoItself);
         }
-        // A body's grid takes whatever it wore or held, a long spear included.
-        if !item.profile.packable && !self.is_body(container) {
+        // A body's grid takes whatever it wore or held, a long spear included, and so does a
+        // pack's strap its long weapon and its lashing a tent.
+        let fitting = self.fitted_on.get(&container).map(|&(_, accessory)| accessory);
+        if !item.profile.packable && !self.is_body(container) && fitting.is_none() {
             return Err(Refusal::Unpackable);
         }
         if !self.accepts(container, item) {
             return Err(Refusal::NotAccepted);
+        }
+        // A fitting takes only what it holds, and only so many of them.
+        if let Some(accessory) = fitting {
+            if !item.fits_accessory(accessory) {
+                return Err(Refusal::NotAccepted);
+            }
+            let held = grid.entries().iter().filter(|e| e.id != id).count();
+            if fb_items::fitting_grid(accessory).is_some_and(|g| held >= g.holds as usize) {
+                return Err(Refusal::NoRoom);
+            }
         }
         let size = super::grid::oriented(item.profile.footprint, at.turned);
         let ignoring = matches!(self.location(id), Some(Location::In { container: c, .. }) if c == container).then_some(id);
@@ -414,11 +436,30 @@ impl Inventory {
     /// stays where it was.
     pub fn put(&mut self, id: ItemId, container: ItemId, at: Placement) -> Result<(), Refusal> {
         self.check_put(id, container, at)?;
+        // A stack gives a fitting one piece (a place of the potion pouch holds one) and keeps the rest.
+        if self.fitted_on.contains_key(&container) && self.item(id).is_some_and(|i| i.quantity > 1) {
+            let one = self.take_one(id).ok_or(Refusal::Unknown)?;
+            if let Err(refusal) = self.put(one, container, at) {
+                self.merge_back(one, id);
+                return Err(refusal);
+            }
+            return Ok(());
+        }
         let footprint = self.item(id).ok_or(Refusal::Unknown)?.profile.footprint;
         self.take_out(id);
         self.grids.get_mut(&container).ok_or(Refusal::NotAContainer)?.place(id, footprint, at)?;
         self.locations.insert(id, Location::In { container, at });
         Ok(())
+    }
+
+    /// Puts the piece `one`, split off the stack `stack`, back on it.
+    fn merge_back(&mut self, one: ItemId, stack: ItemId) {
+        if let Some(piece) = self.items.get(&one).map(|i| i.quantity) {
+            if let Some(stack) = self.items.get_mut(&stack) {
+                stack.quantity += piece;
+            }
+            self.forget(one);
+        }
     }
 
     /// Whether `id` could go on the trader's `shelf` at `at`: any size of thing, long ones too,
@@ -560,6 +601,10 @@ impl Inventory {
 
     /// A stack in `container` at cell `(x, y)` that `id` could be dropped on and top up.
     pub fn stack_at(&self, id: ItemId, container: ItemId, x: i32, y: i32) -> Option<ItemId> {
+        // A fitting's places each hold one piece; stacks do not pile up in them.
+        if self.fitted_on.contains_key(&container) {
+            return None;
+        }
         let onto = self.grids.get(&container)?.at_cell(x, y)?.id;
         let (from, to) = (self.item(id)?, self.item(onto)?);
         (onto != id && to.can_stack_with(from) && to.stack_room() > 0 && !self.holds(id, container)).then_some(onto)
@@ -662,23 +707,6 @@ impl Inventory {
     /// there is no bar: equipping swaps it out ([`Inventory::equip`]).
     pub fn check_wear(&self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
         let item = self.item(id).ok_or(Refusal::Unknown)?;
-        // A fitting holds one thing, and is the worn pack's or belt's own: the weapon strap a long
-        // weapon, a frog a short one, the potion pouch three small potions (goods, not gear).
-        if slot.is_fitting() {
-            if !item.fits_fitting(slot) {
-                return Err(Refusal::WrongSlot);
-            }
-            return if self.has_fitting(slot) {
-                Ok(())
-            } else {
-                Err(match slot {
-                    Slot::Strap => Refusal::NoStrap,
-                    Slot::Lash => Refusal::NoLashing,
-                    Slot::Frog1 | Slot::Frog2 => Refusal::NoFrog,
-                    _ => Refusal::NoPouch,
-                })
-            };
-        }
         item.profile.slot.ok_or(Refusal::NotWearable)?;
         if !item.fits(slot) {
             return Err(Refusal::WrongSlot);
@@ -709,61 +737,51 @@ impl Inventory {
         Some((id, went))
     }
 
-    /// Whether the pack worn on the back was rolled with a weapon strap
-    /// ([`fb_items::Accessory::WeaponStrap`]).
-    pub fn has_strap(&self) -> bool {
-        self.has_fitting(Slot::Strap)
+    /// The fitting grids of the pack or belt `host`, in the order it was rolled with them.
+    pub fn fittings_of(&self, host: ItemId) -> &[(Accessory, ItemId)] {
+        self.fittings.get(&host).map_or(&[], Vec::as_slice)
     }
 
-    /// Whether fitting slot `slot` ([`Slot::FITTINGS`]) exists: what is worn in its host slot (the
-    /// pack on the back, the belt) was rolled with the accessory it is. False for any other slot.
-    pub fn has_fitting(&self, slot: Slot) -> bool {
-        let (Some(host), Some(needs)) = (slot.host(), slot.needs()) else { return false };
-        self.worn(host).and_then(|id| self.item(id)).is_some_and(|item| item.has_accessory(needs))
+    /// The grid of `host`'s `accessory`, if it was rolled with one.
+    pub fn fitting(&self, host: ItemId, accessory: Accessory) -> Option<ItemId> {
+        self.fittings_of(host).iter().find(|(a, _)| *a == accessory).map(|&(_, id)| id)
     }
 
-    /// With the pack or belt that carried them gone (or swapped for one without that fitting), what
-    /// sat in its fittings comes off: into the first carried bag with room ([`Inventory::stow`]),
-    /// or else loose, to be set down underfoot (a long weapon often cannot be packed). Returns
-    /// each item that came off with where it went.
-    pub fn unfit(&mut self) -> Vec<(ItemId, Displaced)> {
-        let mut gone = vec![];
-        for slot in Slot::FITTINGS {
-            let Some(id) = self.worn(slot).filter(|_| !self.has_fitting(slot)) else { continue };
-            self.take_out(id);
-            let went = match self.stow(id) {
-                Ok(container) => match self.location(id) {
-                    Some(Location::In { at, .. }) => Displaced::In { container, at },
-                    None => Displaced::Folded { container },
-                    _ => Displaced::Underfoot,
-                },
-                Err(_) => Displaced::Underfoot,
-            };
-            gone.push((id, went));
-        }
-        gone
+    /// The pack or belt a fitting's grid belongs to, and which fitting it is; none for any other container.
+    pub fn fitting_host(&self, container: ItemId) -> Option<(ItemId, Accessory)> {
+        self.fitted_on.get(&container).copied()
     }
 
-    /// Whether the pack worn on the back was rolled with a lashing
-    /// ([`fb_items::Accessory::Lashing`]).
-    pub fn has_lashing(&self) -> bool {
-        self.has_fitting(Slot::Lash)
+    /// Everything sitting in a fitting of `host`, with the fitting that holds it, in the order of its
+    /// fittings: the bedroll in the lashing, the spear on the strap, the weapons in the frogs, the potions.
+    pub fn hung_on(&self, host: ItemId) -> Vec<(Accessory, ItemId)> {
+        self.fittings_of(host).iter().flat_map(|&(accessory, fitting)| self.grids.get(&fitting).into_iter().flat_map(move |g| g.entries().iter().map(move |e| (accessory, e.id)))).collect()
+    }
+
+    /// Everything hung on the pack worn on the back and the belt worn at the waist.
+    pub fn worn_hung(&self) -> Vec<(Accessory, ItemId)> {
+        [Slot::Back, Slot::Belt].into_iter().filter_map(|slot| self.worn(slot)).flat_map(|host| self.hung_on(host)).collect()
     }
 
     /// The bedroll or tent tied to the worn pack's lashing.
     pub fn lashed(&self) -> Option<ItemId> {
-        self.worn(Slot::Lash)
+        let lashing = self.fitting(self.worn(Slot::Back)?, Accessory::Lashing)?;
+        self.grids.get(&lashing)?.entries().first().map(|e| e.id)
     }
 
-    /// The weapon strapped to the worn pack.
-    pub fn strapped(&self) -> Option<ItemId> {
-        self.worn(Slot::Strap)
+    /// Whether `id` is tied to a lashing, of any pack.
+    pub fn is_lashed(&self, id: ItemId) -> bool {
+        matches!(self.location(id), Some(Location::In { container, .. }) if self.fitting_host(container).is_some_and(|(_, a)| a == Accessory::Lashing))
     }
 
-    /// Everything sitting in a fitting of the worn pack or belt, with its slot, in the slots'
-    /// order: the strapped weapon, the weapons in the frogs, the potions in the pouch.
-    pub fn fitted(&self) -> Vec<(Slot, ItemId)> {
-        Slot::FITTINGS.iter().filter_map(|&slot| Some((slot, self.worn(slot)?))).collect()
+    /// Ties `id` to the lashing of the pack worn on the back, if it has one that is free and `id`
+    /// is a bedroll or tent.
+    pub fn lash(&mut self, id: ItemId) -> Result<(), Refusal> {
+        let lashing = self.worn(Slot::Back).and_then(|pack| self.fitting(pack, Accessory::Lashing)).ok_or(Refusal::NotAccepted)?;
+        let footprint = self.footprint(id).ok_or(Refusal::Unknown)?;
+        let grid = self.grids.get(&lashing).ok_or(Refusal::NotAContainer)?;
+        let at = grid.first_free(footprint).ok_or(Refusal::NoRoom)?;
+        self.put(id, lashing, at)
     }
 
     /// The slot `id` goes in when worn without saying where: the first of its slots
@@ -781,11 +799,7 @@ impl Inventory {
     /// ring fills whichever ring slot is free.
     fn ring_slot(&self, id: ItemId, slot: Slot) -> Slot {
         let free = |s| self.worn(s).is_none_or(|other| other == id);
-        // A frog or potion place taken: the other of its kind, if that is free.
-        let like = |kinds: &[Slot]| kinds.iter().copied().find(|&s| s != slot && free(s) && self.check_wear(id, s).is_ok());
         match slot {
-            Slot::Frog1 | Slot::Frog2 if !free(slot) => like(&[Slot::Frog1, Slot::Frog2]).unwrap_or(slot),
-            Slot::Potion1 | Slot::Potion2 | Slot::Potion3 if !free(slot) => like(&[Slot::Potion1, Slot::Potion2, Slot::Potion3]).unwrap_or(slot),
             Slot::Ring1 | Slot::Ring2 if !free(slot) => {
                 let other = if slot == Slot::Ring1 { Slot::Ring2 } else { Slot::Ring1 };
                 if self.worn(other).is_none() { other } else { slot }
@@ -815,15 +829,6 @@ impl Inventory {
     /// underfoot (the plate's `commitDrop`). Returns the displaced item and where it went.
     pub fn equip(&mut self, id: ItemId, slot: Slot) -> Result<Option<(ItemId, Displaced)>, Refusal> {
         self.check_wear(id, slot)?;
-        // A stack of potions gives the pouch one piece, in the place dropped on or else the next free
-        // one, and keeps the rest where it was; with every place taken it is refused.
-        if matches!(slot, Slot::Potion1 | Slot::Potion2 | Slot::Potion3) && self.item(id).is_some_and(|i| i.quantity > 1) {
-            let places = [slot, Slot::Potion1, Slot::Potion2, Slot::Potion3];
-            let free = places.into_iter().find(|&s| self.worn(s).is_none()).ok_or(Refusal::PouchFull)?;
-            let one = self.take_one(id).ok_or(Refusal::Unknown)?;
-            self.wear(one, free)?;
-            return Ok(None);
-        }
         let slot = self.ring_slot(id, slot);
         let from = self.location(id);
         let Some(old) = self.worn(slot).filter(|&old| old != id) else {
@@ -834,21 +839,20 @@ impl Inventory {
         self.wear(id, slot)?;
         let back = match from {
             Some(Location::Worn(was)) if self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
-            // Drawn from a fitting, the weapon it was swapped for (a mace on the strap, a torch in a
-            // frog) cannot go back on it: it is stowed if a bag has room.
-            Some(Location::Worn(from)) if from.is_fitting() => match self.stow(old) {
-                Ok(container) => match self.location(old) {
-                    Some(Location::In { at, .. }) => Displaced::In { container, at },
-                    _ => Displaced::Underfoot,
+            // Upright where it fits, else turned, else set down. Drawn from a fitting, the weapon it
+            // was swapped for (a mace on the strap, a torch in a frog) cannot go back there: it is
+            // stowed if a bag has room.
+            Some(Location::In { container, at }) => match [false, true].into_iter().map(|turned| Placement { turned, ..at }).find(|&placed| self.put(old, container, placed).is_ok()) {
+                Some(at) => Displaced::In { container, at },
+                None if self.fitted_on.contains_key(&container) => match self.stow(old) {
+                    Ok(container) => match self.location(old) {
+                        Some(Location::In { at, .. }) => Displaced::In { container, at },
+                        _ => Displaced::Underfoot,
+                    },
+                    Err(_) => Displaced::Underfoot,
                 },
-                Err(_) => Displaced::Underfoot,
+                None => Displaced::Underfoot,
             },
-            // Upright where it fits, else turned, else set down.
-            Some(Location::In { container, at }) => [false, true]
-                .into_iter()
-                .map(|turned| Placement { turned, ..at })
-                .find(|&placed| self.put(old, container, placed).is_ok())
-                .map_or(Displaced::Underfoot, |at| Displaced::In { container, at }),
             _ => Displaced::Underfoot,
         };
         Ok(Some((old, back)))
@@ -880,14 +884,21 @@ impl Inventory {
     /// Pounds inside `container`, counted through every bag in it (the plate's
     /// `contentsWeight`).
     pub fn contents_weight(&self, container: ItemId) -> f32 {
-        self.grids.get(&container).map_or(0.0, |g| {
+        let inside: f32 = self.grids.get(&container).map_or(0.0, |g| {
             g.entries().iter().map(|e| self.item(e.id).map_or(0.0, |i| i.profile.stats.weight * i.quantity as f32) + self.contents_weight(e.id)).sum()
-        })
+        });
+        // What hangs on a pack or belt weighs with it.
+        inside + self.fittings_of(container).iter().map(|&(_, fitting)| self.contents_weight(fitting)).sum::<f32>()
     }
 
-    /// Every item kept track of, in the order added.
+    /// How many things lie in `container` and in the fitting grids of a pack or belt.
+    pub fn holding(&self, container: ItemId) -> usize {
+        self.contents_count(container) + self.fittings_of(container).iter().map(|&(_, fitting)| self.contents_count(fitting)).sum::<usize>()
+    }
+
+    /// Every item kept track of, in the order added. The fitting grids of packs and belts are not items.
     pub fn ids(&self) -> impl Iterator<Item = ItemId> + '_ {
-        self.items.keys().copied()
+        self.items.keys().copied().filter(|id| !self.fitted_on.contains_key(id))
     }
 }
 
@@ -1108,95 +1119,107 @@ mod tests {
         (1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing) == lashing).expect("a pack of that kind")
     }
 
+    /// The grid of the worn pack's `accessory`.
+    fn grid_of(inventory: &Inventory, host: ItemId, accessory: fb_items::Accessory) -> ItemId {
+        inventory.fitting(host, accessory).expect("the pack or belt has that grid")
+    }
+
+    fn at(x: u8, y: u8) -> Placement {
+        Placement::new(x, y, false)
+    }
+
     #[test]
-    fn a_lashing_holds_one_bedroll_or_tent_outside_the_grid_and_nothing_else() {
+    fn a_lashing_holds_one_bedroll_or_tent_and_nothing_else() {
+        use fb_items::Accessory::Lashing;
         let mut inventory = Inventory::default();
         let bedroll = inventory.add(rolled("Bedroll", 3));
         let tent = inventory.add(rolled("Tent", 3));
         let sword = inventory.add(rolled("Sword", 3));
-        assert_eq!(inventory.check_wear(bedroll, Slot::Lash), Err(Refusal::NoLashing), "no pack");
         let bare = inventory.add(pack_lashed(false));
-        inventory.wear(bare, Slot::Back).unwrap();
-        assert_eq!(inventory.check_wear(bedroll, Slot::Lash), Err(Refusal::NoLashing), "a pack with no lashing");
+        assert_eq!(inventory.fittings_of(bare), &[], "a pack with no lashing has no lashing grid");
         let pack = inventory.add(pack_lashed(true));
-        inventory.equip(pack, Slot::Back).unwrap();
-        assert_eq!(inventory.check_wear(sword, Slot::Lash), Err(Refusal::WrongSlot), "not a bundle");
-        assert_eq!(inventory.equip(bedroll, Slot::Lash), Ok(None));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let lashing = grid_of(&inventory, pack, Lashing);
+        assert_eq!(inventory.grid(lashing).map(|g| (g.cols, g.rows)), Some((2, 6)));
+        assert_eq!(inventory.put(sword, lashing, at(0, 0)), Err(Refusal::NotAccepted), "not a bundle");
+        assert_eq!(inventory.put(bedroll, lashing, at(0, 0)), Ok(()));
         assert_eq!(inventory.lashed(), Some(bedroll));
-        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's grid");
+        assert!(inventory.is_lashed(bedroll));
+        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's main grid");
         assert!(inventory.is_carried(bedroll));
-        assert!(inventory.equipped().iter().all(|(slot, _)| *slot != Slot::Lash), "it gives nothing, only weight");
-        // One only: another bundle swaps it out.
-        assert_eq!(inventory.equip(tent, Slot::Lash).map(|d| d.map(|(old, _)| old)), Ok(Some(bedroll)));
+        assert!(inventory.holds(pack, bedroll));
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot == Slot::Back), "it gives nothing, only weight");
+        // One only: a second bundle finds no room.
+        assert_eq!(inventory.put(tent, lashing, at(0, 3)), Err(Refusal::NoRoom));
+        assert_eq!(inventory.location(tent), Some(Location::Loose));
         // A bundle laid out is no bundle.
         let laid = fb_items::camp::set_up(&rolled("Bedroll", 4)).unwrap();
         assert!(!laid.lashable());
+        // Tied by the camp code's call.
+        let tent2 = inventory.add(rolled("Tent", 5));
+        inventory.take_out(bedroll);
+        assert_eq!(inventory.lash(tent2), Ok(()));
+        assert_eq!(inventory.lashed(), Some(tent2));
     }
 
     #[test]
-    fn what_is_lashed_comes_off_with_its_pack() {
+    fn what_hangs_on_a_pack_goes_where_it_goes() {
+        use fb_items::Accessory::{Lashing, WeaponStrap};
         let mut inventory = Inventory::default();
-        let pack = inventory.add(pack_lashed(true));
+        let pack = inventory.add((1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
-        let tent = inventory.add(rolled("Tent", 3));
-        inventory.wear(tent, Slot::Lash).unwrap();
-        assert!(inventory.unfit().is_empty(), "the pack is still on");
-        let bare = inventory.add(pack_lashed(false));
-        inventory.equip(bare, Slot::Back).unwrap();
-        let off = inventory.unfit();
-        assert_eq!(off.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![tent]);
-        assert_eq!(inventory.lashed(), None);
+        let (tent, spear) = (inventory.add(rolled("Tent", 3)), inventory.add((1..99).map(|s| rolled("Spear", s)).find(|s| s.strappable() && s.profile.footprint.cols <= 2).unwrap()));
+        let (lashing, strap) = (grid_of(&inventory, pack, Lashing), grid_of(&inventory, pack, WeaponStrap));
+        inventory.put(tent, lashing, at(0, 0)).unwrap();
+        inventory.put(spear, strap, at(0, 0)).unwrap();
+        let load = inventory.contents_weight(pack);
+        assert!(load >= inventory.item(tent).unwrap().profile.stats.weight + inventory.item(spear).unwrap().profile.stats.weight);
+        assert_eq!(inventory.worn_hung(), vec![(Lashing, tent), (WeaponStrap, spear)]);
+        // Taken off and set down, the pack keeps its tent tied and its spear strapped; nothing is carried.
+        inventory.take_out(pack);
+        assert!(!inventory.is_carried(tent) && !inventory.is_carried(spear));
+        assert_eq!(inventory.hung_on(pack), vec![(Lashing, tent), (WeaponStrap, spear)]);
+        assert_eq!(inventory.contents_weight(pack), load);
+        assert!(inventory.worn_hung().is_empty());
+        // Packed in a sack's grid, it is still a pack with things on it.
+        let sack = inventory.add(rolled("Sack", 3));
+        inventory.wear(sack, Slot::Back).unwrap();
+        let small = inventory.add((1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(Lashing) && p.profile.packable).unwrap_or_else(|| rolled("Pack", 1)));
+        let bedroll = inventory.add(rolled("Bedroll", 3));
+        let small_lashing = inventory.fitting(small, Lashing);
+        if let Some(lashing) = small_lashing {
+            inventory.put(bedroll, lashing, at(0, 0)).unwrap();
+            if inventory.put(small, sack, at(0, 0)).is_ok() {
+                assert!(inventory.is_carried(bedroll) && inventory.holds(sack, bedroll));
+            }
+        }
+        // Forgetting the pack forgets all of it.
+        inventory.forget(pack);
+        assert_eq!((inventory.item(tent), inventory.item(spear), inventory.item(lashing), inventory.item(strap)), (None, None, None, None));
+        assert!(inventory.ids().all(|id| inventory.fitting_host(id).is_none()), "grids are not items");
     }
 
     #[test]
-    fn a_weapon_strap_holds_one_long_weapon_outside_the_grid() {
+    fn a_weapon_strap_holds_one_long_weapon_and_it_can_be_drawn() {
+        use fb_items::Accessory::WeaponStrap;
         let mut inventory = Inventory::default();
-        let staff = inventory.add(rolled("Staff", 3));
+        let pack = inventory.add(pack_strapped(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let strap = grid_of(&inventory, pack, WeaponStrap);
         let dagger = inventory.add(rolled("Dagger", 3));
-        assert_eq!(inventory.check_wear(staff, Slot::Strap), Err(Refusal::NoStrap), "no pack");
-        let bare = inventory.add(pack_strapped(false));
-        inventory.wear(bare, Slot::Back).unwrap();
-        assert_eq!(inventory.check_wear(staff, Slot::Strap), Err(Refusal::NoStrap), "a pack with no strap");
-        let pack = inventory.add(pack_strapped(true));
-        inventory.equip(pack, Slot::Back).unwrap();
-        assert_eq!(inventory.check_wear(dagger, Slot::Strap), Err(Refusal::WrongSlot), "not a long weapon");
-        assert_eq!(inventory.equip(staff, Slot::Strap), Ok(None));
-        assert_eq!(inventory.strapped(), Some(staff));
-        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's grid");
-        assert!(inventory.is_carried(staff));
-        assert!(inventory.equipped().iter().all(|(slot, _)| *slot != Slot::Strap), "it gives no stats, only weight");
-        // One only: another long weapon swaps it out.
         let spear = inventory.add(rolled("Spear", 3));
-        assert_eq!(inventory.equip(spear, Slot::Strap).map(|d| d.map(|(old, _)| old)), Ok(Some(staff)));
-    }
-
-    #[test]
-    fn drawing_from_the_strap_stows_what_cannot_go_back_on_it() {
-        let mut inventory = Inventory::default();
-        let pack = inventory.add(pack_strapped(true));
-        inventory.wear(pack, Slot::Back).unwrap();
-        let spear = inventory.add(rolled("Spear", 3));
-        inventory.wear(spear, Slot::Strap).unwrap();
-        let mace = inventory.add(rolled("Dagger", 2));
-        inventory.wear(mace, Slot::Mainhand).unwrap();
-        // The spear is drawn into the main hand; the dagger cannot go on the strap, so it is packed.
-        let swapped = inventory.equip(spear, Slot::Mainhand).unwrap();
-        assert!(matches!(swapped, Some((old, Displaced::In { container, .. })) if old == mace && container == pack), "{swapped:?}");
-        assert_eq!((inventory.strapped(), inventory.worn(Slot::Mainhand)), (None, Some(spear)));
-    }
-
-    #[test]
-    fn a_strapped_weapon_comes_off_with_its_pack() {
-        let mut inventory = Inventory::default();
-        let pack = inventory.add(pack_strapped(true));
-        inventory.wear(pack, Slot::Back).unwrap();
         let staff = inventory.add(rolled("Staff", 3));
-        inventory.wear(staff, Slot::Strap).unwrap();
-        assert_eq!(inventory.unfit(), vec![], "the pack is still on");
-        let bare = inventory.add(pack_strapped(false));
-        inventory.equip(bare, Slot::Back).unwrap();
-        let gone = inventory.unfit();
-        assert_eq!((gone.iter().map(|(id, _)| *id).collect::<Vec<_>>(), inventory.strapped()), (vec![staff], None));
+        assert_eq!(inventory.put(dagger, strap, at(0, 0)), Err(Refusal::NotAccepted), "not a long weapon");
+        inventory.put(spear, strap, at(0, 0)).unwrap();
+        assert_eq!(inventory.put(staff, strap, at(1, 0)), Err(Refusal::NoRoom), "one only");
+        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's main grid");
+        assert!(inventory.is_carried(spear));
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot == Slot::Back), "it gives no stats, only weight");
+        // Drawn into the main hand, where the dagger was: the dagger cannot go on the strap, so it is packed.
+        inventory.wear(dagger, Slot::Mainhand).unwrap();
+        let swapped = inventory.equip(spear, Slot::Mainhand).unwrap();
+        assert!(matches!(swapped, Some((old, Displaced::In { container, .. })) if old == dagger && container == pack), "{swapped:?}");
+        assert_eq!((inventory.hung_on(pack), inventory.worn(Slot::Mainhand)), (vec![], Some(spear)));
     }
 
     /// A belt rolled with the given fittings.
@@ -1211,30 +1234,25 @@ mod tests {
         let sword = inventory.add(rolled("Sword", 3));
         let mace = inventory.add(rolled("Mace", 3));
         let spear = inventory.add(rolled("Spear", 3));
-        assert_eq!(inventory.check_wear(sword, Slot::Frog1), Err(Refusal::NoFrog), "no belt");
-        let bare = inventory.add(belt_with(|b| !b.has_accessory(LeftFrog)));
-        inventory.wear(bare, Slot::Belt).unwrap();
-        assert_eq!(inventory.check_wear(sword, Slot::Frog1), Err(Refusal::NoFrog), "a belt with no frog");
         let one = inventory.add(belt_with(|b| b.has_accessory(LeftFrog) && !b.has_accessory(RightFrog)));
-        inventory.equip(one, Slot::Belt).unwrap();
-        assert_eq!(inventory.check_wear(sword, Slot::Frog1), Ok(()));
-        assert_eq!(inventory.check_wear(sword, Slot::Frog2), Err(Refusal::NoFrog), "one frog");
-        assert_eq!(inventory.check_wear(spear, Slot::Frog1), Err(Refusal::WrongSlot), "not a short weapon");
-        let two = inventory.add(belt_with(|b| b.has_accessory(RightFrog)));
-        inventory.equip(two, Slot::Belt).unwrap();
-        inventory.equip(sword, Slot::Frog1).unwrap();
-        // A second weapon dropped on the taken frog goes in the other.
-        inventory.equip(mace, Slot::Frog1).unwrap();
-        assert_eq!((inventory.worn(Slot::Frog1), inventory.worn(Slot::Frog2)), (Some(sword), Some(mace)));
-        assert!(inventory.equipped().iter().all(|(slot, _)| !slot.is_fitting()), "a framed weapon gives no stats");
-        // Drawn into the hand; the hand's old weapon goes back in the frog it left.
+        assert_eq!(inventory.fitting(one, RightFrog), None, "one frog");
+        let two = inventory.add(belt_with(|b| b.has_accessory(LeftFrog) && b.has_accessory(RightFrog)));
+        inventory.wear(two, Slot::Belt).unwrap();
+        let (left, right) = (grid_of(&inventory, two, LeftFrog), grid_of(&inventory, two, RightFrog));
+        assert_eq!(inventory.put(spear, left, at(0, 0)), Err(Refusal::NotAccepted), "not a short weapon");
+        inventory.put(sword, left, at(0, 0)).unwrap();
+        inventory.put(mace, right, at(0, 0)).unwrap();
+        assert_eq!(inventory.worn_hung(), vec![(LeftFrog, sword), (RightFrog, mace)]);
+        let another = inventory.add(rolled("Mace", 4));
+        assert_eq!(inventory.put(another, left, at(0, 2)), Err(Refusal::NoRoom), "a frog holds one");
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot == Slot::Belt), "a framed weapon gives no stats");
+        // Drawn into the hand; the hand's old weapon is stowed or set down.
         inventory.equip(sword, Slot::Mainhand).unwrap();
-        assert_eq!((inventory.worn(Slot::Frog1), inventory.worn(Slot::Mainhand)), (None, Some(sword)));
-        // The belt off, whatever hung in its frogs comes off with it.
-        let plain = inventory.add(belt_with(|b| b.accessories().is_empty()));
-        inventory.equip(plain, Slot::Belt).unwrap();
-        let gone: Vec<ItemId> = inventory.unfit().into_iter().map(|(id, _)| id).collect();
-        assert_eq!((gone, inventory.fitted()), (vec![mace], vec![]));
+        assert_eq!((inventory.hung_on(two), inventory.worn(Slot::Mainhand)), (vec![(RightFrog, mace)], Some(sword)));
+        // The belt off and set down: the weapon stays in its frog.
+        inventory.take_out(two);
+        assert_eq!(inventory.hung_on(two), vec![(RightFrog, mace)]);
+        assert!(!inventory.is_carried(mace));
     }
 
     #[test]
@@ -1244,23 +1262,21 @@ mod tests {
         let potions: Vec<ItemId> = ["Vial", "Small potion", "Healing vial", "Small healing draught"].iter().map(|b| inventory.add(rolled(b, 2))).collect();
         let large = inventory.add(rolled("Large potion", 2));
         let medium = inventory.add(rolled("Potion", 2));
-        assert_eq!(inventory.check_wear(potions[0], Slot::Potion1), Err(Refusal::NoPouch), "no belt");
         let belt = inventory.add(belt_with(|b| b.has_accessory(PotionPouch)));
         inventory.wear(belt, Slot::Belt).unwrap();
-        assert_eq!(inventory.check_wear(large, Slot::Potion1), Err(Refusal::WrongSlot));
-        assert_eq!(inventory.check_wear(medium, Slot::Potion1), Err(Refusal::WrongSlot));
-        for &potion in &potions[..3] {
-            inventory.equip(potion, Slot::Potion1).unwrap();
+        let pouch = grid_of(&inventory, belt, PotionPouch);
+        assert_eq!(inventory.put(large, pouch, at(0, 0)), Err(Refusal::NotAccepted));
+        assert_eq!(inventory.put(medium, pouch, at(0, 0)), Err(Refusal::NotAccepted));
+        for (n, &potion) in potions[..3].iter().enumerate() {
+            inventory.put(potion, pouch, inventory.grid(pouch).unwrap().first_free(inventory.footprint(potion).unwrap()).unwrap_or(at(n as u8, 0))).unwrap();
         }
-        assert_eq!(inventory.fitted().iter().map(|(_, id)| *id).collect::<Vec<_>>(), potions[..3]);
-        assert_eq!(inventory.equip(potions[3], Slot::Potion2).map(|d| d.map(|(old, _)| old)), Ok(Some(potions[1])), "a full pouch swaps");
+        assert_eq!(inventory.hung_on(belt).iter().map(|(_, id)| *id).collect::<Vec<_>>().len(), 3);
+        let free = inventory.grid(pouch).unwrap().first_free(inventory.footprint(potions[3]).unwrap());
+        assert_eq!(inventory.put(potions[3], pouch, free.unwrap_or(at(0, 1))), Err(Refusal::NoRoom), "the fourth has no place");
         // A potion in the pouch is carried, and drunk from it frees its place.
         assert!(inventory.is_carried(potions[0]));
         inventory.use_one(potions[0]);
-        assert_eq!(inventory.worn(Slot::Potion1), None);
-        let plain = inventory.add(belt_with(|b| !b.has_accessory(PotionPouch)));
-        inventory.equip(plain, Slot::Belt).unwrap();
-        assert_eq!(inventory.unfit().len(), 2);
+        assert_eq!(inventory.hung_on(belt).len(), 2);
     }
 
     #[test]
@@ -1541,21 +1557,26 @@ mod tests {
         let mut inventory = Inventory::default();
         let belt = inventory.add(belt_with(|b| b.has_accessory(PotionPouch)));
         inventory.wear(belt, Slot::Belt).unwrap();
+        let pouch = grid_of(&inventory, belt, PotionPouch);
         let mut vials = rolled("Vial", 3);
         vials.quantity = 3;
         let stack = inventory.add(vials);
         let count = |inventory: &Inventory| inventory.ids().filter_map(|id| inventory.item(id)).filter(|i| i.base == "Vial").map(|i| i.quantity).sum::<u32>();
-        assert_eq!(inventory.equip(stack, Slot::Potion2), Ok(None));
-        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.fitted().len(), count(&inventory)), (2, 1, 3), "one piece went in, none lost");
-        inventory.equip(stack, Slot::Potion2).unwrap();
-        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.fitted().len()), (1, 2));
-        // The last piece goes in whole, to the free place.
-        inventory.equip(stack, Slot::Potion2).unwrap();
-        assert_eq!((inventory.worn(Slot::Potion3), inventory.fitted().len(), count(&inventory)), (Some(stack), 3, 3));
+        let spot = |inventory: &Inventory, id| inventory.grid(pouch).unwrap().first_free(inventory.footprint(id).unwrap()).unwrap();
+        let first = spot(&inventory, stack);
+        assert_eq!(inventory.put(stack, pouch, first), Ok(()));
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.hung_on(belt).len(), count(&inventory)), (2, 1, 3), "one piece went in, none lost");
+        let second = spot(&inventory, stack);
+        inventory.put(stack, pouch, second).unwrap();
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.hung_on(belt).len()), (1, 2));
+        // The last piece goes in whole.
+        let third = spot(&inventory, stack);
+        inventory.put(stack, pouch, third).unwrap();
+        assert_eq!((inventory.location(stack), inventory.hung_on(belt).len(), count(&inventory)), (Some(Location::In { container: pouch, at: third }), 3, 3));
         let mut more = rolled("Vial", 4);
         more.quantity = 2;
         let more = inventory.add(more);
-        assert_eq!(inventory.equip(more, Slot::Potion1), Err(Refusal::PouchFull));
+        assert_eq!(inventory.put(more, pouch, at(0, 1)), Err(Refusal::NoRoom));
         assert_eq!((inventory.item(more).unwrap().quantity, count(&inventory)), (2, 5), "a full pouch refuses and loses nothing");
     }
 }

@@ -42,7 +42,7 @@ use armory::build::parts::{Look, Parts};
 use armory::build::strap::strap;
 use armory::families::Generator;
 use armory::families::amulet::{AmuletState, NecklaceStyle, necklace_parts, pendant_parts};
-use armory::families::bags::{BagState, BagStyle, Bags};
+use armory::families::bags::{Accessory, BagState, BagStyle, Bags};
 use armory::families::belt::{BeltState, Belts};
 use armory::families::feet::FeetState;
 use armory::families::garment::GarmentState;
@@ -159,6 +159,13 @@ impl WornFit {
 /// whatever order they are given in. Items in slots outside [`LAYER_ORDER`] are skipped, as
 /// are items whose family has no place on the body (a sword in the shirt slot).
 pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
+    fit_worn_hung(body, worn, &[])
+}
+
+/// [`fit_worn`] with what hangs on the worn pack and belt: the things in their lashing, weapon strap and
+/// frogs, each with the fitting that holds it. A cloak drapes over the weapons in the frogs, as it does
+/// over a pack; the rest are drawn by [`fit_strapped`], [`fit_lashed`] and [`fit_frogged`].
+pub fn fit_worn_hung(body: &Body, worn: &[(Slot, Item)], hung: &[(Accessory, Item)]) -> WornFit {
     let mut fit = WornFit::default();
     let mut env = Envelope::new(body);
     // Hooves take no boots: footwear is skipped for a race on its toes (see docs/body.md).
@@ -225,8 +232,8 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             env.absorb(slot, matches!(item, Item::Hood(_)), &mesh);
             // What hangs in the belt's frogs is part of what a cloak drapes over, as a pack is.
             if slot == Slot::Belt {
-                for (frog, left) in [(Slot::Frog1, true), (Slot::Frog2, false)] {
-                    if let Some((_, hung)) = worn.iter().find(|(s, _)| *s == frog)
+                for (frog, left) in [(Accessory::LeftFrog, true), (Accessory::RightFrog, false)] {
+                    if let Some((_, hung)) = hung.iter().find(|(a, _)| *a == frog)
                         && let Some(fitted) = crate::held::fit_frogged(hung, &mesh, left)
                     {
                         // Down to the upper thigh: a long weapon's lower end would balloon the cloak's hem
@@ -1770,9 +1777,8 @@ mod tests {
             let sword = Item::roll(Family::Sword, 5).unwrap();
             let mace = Item::roll(Family::Mace, 5).unwrap();
             let base = vec![(Slot::Belt, belt), (Slot::Cloak, Item::Garment(Garment::roll_as(2, GarmentStyle::Cloak)))];
-            let mut kit = base.clone();
-            kit.extend([(Slot::Frog1, sword.clone()), (Slot::Frog2, mace.clone())]);
-            let (bare, hung) = (fit_worn(&body, &base), fit_worn(&body, &kit));
+            let frogs = [(Accessory::LeftFrog, sword.clone()), (Accessory::RightFrog, mace.clone())];
+            let (bare, hung) = (fit_worn(&body, &base), fit_worn_hung(&body, &base, &frogs));
             let cloak_of = |fit: &WornFit| -> Vec<V3> { fit.layer(Slot::Cloak).unwrap().mesh.parts.iter().flat_map(|p| p.positions.iter().copied()).collect() };
             let (plain, draped) = (cloak_of(&bare), cloak_of(&hung));
             let belt_mesh = &hung.layer(Slot::Belt).unwrap().mesh;

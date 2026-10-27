@@ -39,7 +39,7 @@ use crate::launch::AppState;
 use crate::carry::item_light;
 use crate::character::Character;
 use crate::figure::{Figure, spawn_figure};
-use crate::fitting::{FitCache, Fitting, figure_key};
+use crate::fitting::{FitCache, Fitting, figure_key_hung};
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
 use crate::play::{Screen, ScreenOpen};
 use crate::render::ItemSpawner;
@@ -337,11 +337,16 @@ pub fn start_doll_fitting(
     }
     let spec = character.spec();
     let dirt = character.dirt;
-    let mut worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
+    let worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
     // A weapon on the pack's strap and a bundle on its lashing ride the pack and one in a frog hangs at the hip, drawn with them
-    // ([`Figure::dress`]); the potions in the pouch are not drawn.
-    worn.extend(inventory.fitted().into_iter().filter(|(slot, _)| matches!(slot, Slot::Strap | Slot::Lash | Slot::Frog1 | Slot::Frog2)).filter_map(|(slot, id)| Some((slot, inventory.item(id)?.clone()))));
-    let key = figure_key(&spec, &worn, dirt);
+    // ([`Figure::dress_hung`]); the potions in the pouch are not drawn.
+    let hung: Vec<(fb_items::Accessory, fb_items::Item)> = inventory
+        .worn_hung()
+        .into_iter()
+        .filter(|(accessory, _)| matches!(accessory, fb_items::Accessory::WeaponStrap | fb_items::Accessory::Lashing | fb_items::Accessory::LeftFrog | fb_items::Accessory::RightFrog))
+        .filter_map(|(accessory, id)| Some((accessory, inventory.item(id)?.clone())))
+        .collect();
+    let key = figure_key_hung(&spec, &worn, &hung, dirt);
     if stage.dressed.as_ref() == Some(&key) {
         // Already dressed for this equipment; drop any in-flight fit
         stage.fitting = None;
@@ -355,7 +360,7 @@ pub fn start_doll_fitting(
         stage.fitting = Some(Fitting::ready(key, figure));
         return;
     }
-    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &worn, dirt))));
+    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress_hung(&spec, &worn, &hung, dirt))));
 }
 
 /// Poll the fitting task and spawn the figure when it's ready.
@@ -572,14 +577,6 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
             ImageNode::new(assets.doll.clone()),
         ));
         for place in slot_places() {
-            // A fitting is the worn pack's or belt's own: it shows only while that has it.
-            if place.slot.is_fitting() && !inventory.has_fitting(place.slot) {
-                continue;
-            }
-            // Likewise the lashing's place.
-            if place.slot == fb_items::Slot::Lash && !inventory.has_lashing() {
-                continue;
-            }
             let size = match place.size {
                 SlotSize::Big => BIG_SLOT,
                 SlotSize::Small => SMALL_SLOT,

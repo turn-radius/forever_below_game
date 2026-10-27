@@ -367,7 +367,7 @@ pub fn lay_out(
     }
     let line = set_down_line(&set);
     // Out of its pack (or off its lashing) and into its new form in one step, or not at all.
-    let lashed = inventory.location(id) == Some(crate::inventory::Location::Worn(fb_items::Slot::Lash));
+    let lashed = inventory.is_lashed(id);
     if !inventory.set_form_out(id, set) {
         return Err("That cannot be set down.");
     }
@@ -767,7 +767,7 @@ pub fn pack(inventory: &mut Inventory, changes: &mut FloorChanges, id: ItemId) -
         return Err("That cannot be packed.");
     }
     // It goes back on the lashing it came off, if the pack still has one free, else into a bag.
-    let relash = inventory.lashed_out == Some(id) && inventory.lashed().is_none() && inventory.wear(id, fb_items::Slot::Lash).is_ok();
+    let relash = inventory.lashed_out == Some(id) && inventory.lashed().is_none() && inventory.lash(id).is_ok();
     if relash {
         inventory.lashed_out = None;
     } else if inventory.stow(id).is_err() {
@@ -986,7 +986,7 @@ mod tests {
         let pack = inventory.add(pack);
         inventory.wear(pack, fb_items::Slot::Back).unwrap();
         let bedroll = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
-        inventory.wear(bedroll, fb_items::Slot::Lash).unwrap();
+        inventory.lash(bedroll).unwrap();
         // It is offered to be laid out where it hangs.
         let target = interact::item_target(&inventory, bedroll).unwrap();
         assert_eq!(interact::verbs_for(&target, &interact::Delver::default()).primary, Some(Verb::LayOut));
@@ -1020,7 +1020,7 @@ mod tests {
         let pack = inventory.add(pack);
         inventory.wear(pack, fb_items::Slot::Back).unwrap();
         let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
-        inventory.wear(tent, fb_items::Slot::Lash).unwrap();
+        inventory.lash(tent).unwrap();
         let target = interact::item_target(&inventory, tent).unwrap();
         assert_eq!(interact::verbs_for(&target, &interact::Delver::default()).primary, Some(Verb::Pitch));
         let mut changes = FloorChanges::default();

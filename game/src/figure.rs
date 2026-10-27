@@ -3,7 +3,7 @@
 //! and by the inventory's doll in the runic seal ([`crate::inventory::doll`]).
 //!
 //! The fitting is all `fb_body`'s: [`fit_hands`] poses the arms for what they hold, and
-//! [`fit_worn`] dresses that posed body, so sleeves follow the arms that hold the items and
+//! [`fb_body::fit_worn`] dresses that posed body, so sleeves follow the arms that hold the items and
 //! hands close round their grips. This module only keeps each item's own look with its mesh
 //! (its palette, condition and etching, as on the floor and in its icon), so every worn layer
 //! and held item wears as the item itself does, and the skin wears with the character's dirt.
@@ -14,8 +14,8 @@ use armory::{
     cond::{Condition, ConditionState},
 };
 use bevy::prelude::*;
-use fb_body::{Body, BodySpec, Gait, Joint, PartSkin, Rig, Side, SkinRegion, Skinner, fit_hands, fit_hip, fit_worn};
-use fb_items::Slot;
+use fb_body::{Body, BodySpec, Gait, Joint, PartSkin, Rig, Side, SkinRegion, Skinner, fit_hands, fit_hip};
+use fb_items::{Accessory, Slot};
 
 use crate::carry::{appearance_of, item_light};
 use crate::render::{ItemAppearance, ItemSpawner};
@@ -74,11 +74,19 @@ impl Figure {
     /// items are held, rings and charms are not drawn), its skin worn with `dirt` (0 clean to
     /// 1 filthy, the plate's `C.dirt`).
     pub fn dress(spec: &BodySpec, worn: &[(Slot, fb_items::Item)], dirt: f32) -> Figure {
+        Self::dress_hung(spec, worn, &[], dirt)
+    }
+
+    /// [`Figure::dress`] with what hangs on the worn pack and belt: the bedroll or tent in the pack's
+    /// lashing, the long weapon on its strap and the weapons in the belt's frogs
+    /// ([`crate::inventory::Inventory::worn_hung`]), each drawn on the pack or belt.
+    pub fn dress_hung(spec: &BodySpec, worn: &[(Slot, fb_items::Item)], hung: &[(Accessory, fb_items::Item)], dirt: f32) -> Figure {
         let held = |slot| worn.iter().find(|(s, _)| *s == slot).map(|(_, item)| &item.shape);
         let hands = fit_hands(spec, held(Slot::Mainhand), held(Slot::Offhand));
         let body = hands.body;
         let shapes: Vec<(Slot, armory::Item)> = worn.iter().map(|(slot, item)| (*slot, item.shape.clone())).collect();
-        let fit = fit_worn(&body, &shapes);
+        let shapes_hung: Vec<(Accessory, armory::Item)> = hung.iter().map(|(accessory, item)| (*accessory, item.shape.clone())).collect();
+        let fit = fb_body::fit_worn_hung(&body, &shapes, &shapes_hung);
 
         let mut skin = body.skin_mesh_lifted(fit.wing_lift);
         skin.parts.retain(|p| !fit.covered.hides(p.name));
@@ -131,8 +139,8 @@ impl Figure {
             }
         }
         // A lantern hung at the hip, from the belt; the carried light if no hand holds one.
-        let hung = worn.iter().find(|(s, _)| *s == Slot::Hip);
-        if let (Some((_, item)), Some(belt)) = (hung, fit.layer(Slot::Belt))
+        let at_hip = worn.iter().find(|(s, _)| *s == Slot::Hip);
+        if let (Some((_, item)), Some(belt)) = (at_hip, fit.layer(Slot::Belt))
             && let Some(hip) = fit_hip(&body, &item.shape, &belt.mesh)
         {
             let anchor = item_light(&hip.item);
@@ -152,7 +160,7 @@ impl Figure {
             }
         }
         // A long weapon lashed to the pack's weapon strap, riding the trunk with the pack.
-        if let (Some((_, item)), Some(pack)) = (worn.iter().find(|(s, _)| *s == Slot::Strap), fit.layer(Slot::Back))
+        if let (Some((_, item)), Some(pack)) = (hung.iter().find(|(a, _)| *a == Accessory::WeaponStrap), fit.layer(Slot::Back))
             && let Some(lashed) = fb_body::fit_strapped(&item.shape, &pack.mesh)
         {
             pieces.push(Piece {
@@ -166,8 +174,8 @@ impl Figure {
             });
         }
         // A weapon in each of the belt's frogs, riding the pelvis with the belt.
-        for (slot, left) in [(Slot::Frog1, true), (Slot::Frog2, false)] {
-            if let (Some((_, item)), Some(belt)) = (worn.iter().find(|(s, _)| *s == slot), fit.layer(Slot::Belt))
+        for (frog, left) in [(Accessory::LeftFrog, true), (Accessory::RightFrog, false)] {
+            if let (Some((_, item)), Some(belt)) = (hung.iter().find(|(a, _)| *a == frog), fit.layer(Slot::Belt))
                 && let Some(hung) = fb_body::fit_frogged(&item.shape, &belt.mesh, left)
             {
                 pieces.push(Piece {
@@ -182,7 +190,7 @@ impl Figure {
             }
         }
         // A bedroll or tent tied in the pack's lashing, riding the trunk with the pack.
-        if let (Some((_, item)), Some(pack)) = (worn.iter().find(|(s, _)| *s == Slot::Lash), fit.layer(Slot::Back))
+        if let (Some((_, item)), Some(pack)) = (hung.iter().find(|(a, _)| *a == Accessory::Lashing), fit.layer(Slot::Back))
             && let Some(tied) = fb_body::fit_lashed(&item.shape, &pack.mesh)
         {
             pieces.push(Piece {

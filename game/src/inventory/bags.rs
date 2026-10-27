@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use bevy::{prelude::*, window::PrimaryWindow};
 
-use super::{Dragging, Grid, Inventory, ItemId, Screen, ScreenOpen, grid_size};
+use super::{Dragging, Inventory, ItemId, Screen, ScreenOpen, grid_size};
 use crate::keymap::{Action, ActionInput};
 use crate::tuning::Tuning;
 use crate::ui::{node_rect, ui_cursor};
@@ -95,11 +95,33 @@ pub struct BagTitle(pub ItemId);
 #[derive(Component, Debug)]
 pub struct BagClose(pub ItemId);
 
-/// How big a window is for a grid, logical pixels.
-pub(super) fn window_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
-    let grid = grid_size(grid, cell);
+/// Height of the label over a fitting's small grid ("Lashing", "Potion pouch").
+pub(super) const FITTING_LABEL_PX: f32 = 22.0;
+/// Space between the main grid and the fittings beside it, and between one fitting and the next.
+pub(super) const FITTING_GAP_PX: f32 = 12.0;
+/// The narrowest a fitting's column is, so its label shows over a small grid.
+const FITTING_MIN_PX: f32 = 90.0;
+
+/// How big the row of the small grids that belong to `host` (a pack's lashing and strap, a belt's frogs
+/// and potion pouch) is, each under its label, logical pixels; zero for a container with none.
+pub fn fittings_size(inventory: &Inventory, host: ItemId, cell: f32) -> Vec2 {
+    let sizes: Vec<Vec2> = inventory.fittings_of(host).iter().filter_map(|&(_, fitting)| inventory.grid(fitting)).map(|g| grid_size(g, cell)).collect();
+    if sizes.is_empty() {
+        return Vec2::ZERO;
+    }
+    let width: f32 = sizes.iter().map(|s| s.x.max(FITTING_MIN_PX)).sum::<f32>() + FITTING_GAP_PX * (sizes.len() - 1) as f32;
+    let height = sizes.iter().map(|s| s.y).fold(0.0, f32::max) + FITTING_LABEL_PX;
+    Vec2::new(width, height)
+}
+
+/// How big a window is for the container `id`, logical pixels: its main grid with the fittings of a
+/// pack or belt beside it. `None` for something that holds nothing.
+pub fn window_size(inventory: &Inventory, id: ItemId, cell: f32) -> Option<Vec2> {
+    let main = grid_size(inventory.grid(id)?, cell);
+    let fittings = fittings_size(inventory, id, cell);
+    let (width, height) = if fittings.x > 0.0 { (main.x + FITTING_GAP_PX + fittings.x, main.y.max(fittings.y)) } else { (main.x, main.y) };
     let edge = 2.0 * (PAD_PX + BORDER_PX);
-    Vec2::new(grid.x.max(MIN_CONTENT_PX) + edge, grid.y + TITLE_PX + GAP_PX + edge)
+    Some(Vec2::new(width.max(MIN_CONTENT_PX) + edge, height + TITLE_PX + GAP_PX + edge))
 }
 
 /// `at` moved to keep a window of `size` inside a screen of `screen`.
@@ -224,7 +246,7 @@ pub fn place_windows(
     }
     let frame_rects: Vec<Rect> = frames.iter().map(|(_, n, t)| node_rect(n, t)).collect();
     let fixed = fixed_rects(&leaf, &column, &dolls, &grids, &frame_rects);
-    let size_of = |id: ItemId| inventory.grid(id).map(|g| window_size(g, cell));
+    let size_of = |id: ItemId| window_size(&inventory, id, cell);
     // New windows wait for the page to be laid out, to know where its panels are.
     let waiting = windows.order.iter().any(|id| !windows.at.contains_key(id));
     if waiting && fixed.is_none() {
@@ -303,10 +325,9 @@ pub fn drag_windows(
         *held = None;
         return;
     }
-    let Some(grid) = inventory.grid(id) else { return };
+    let Some(size) = window_size(&inventory, id, tuning.interface.cell_size) else { return };
     let Some((entity, ..)) = frames.iter().find(|(_, w, ..)| w.0 == id) else { return };
     let screen = ui_size(&window, ui_scale.as_deref(), &cameras);
-    let size = window_size(grid, tuning.interface.cell_size);
     // The title bar starts inside the border and padding, so `grab` is from there.
     let to = clamp_window(point - grab - Vec2::splat(PAD_PX + BORDER_PX), size, screen);
     // Not through change detection: the screen is not rebuilt for a move, only the node moves.
@@ -474,7 +495,7 @@ mod tests {
         let mut window = Window::default();
         window.resolution.set(1920.0, 1080.0);
         let window = app.world_mut().spawn((window, PrimaryWindow)).id();
-        let size = window_size(app.world().resource::<Inventory>().grid(pack).unwrap(), app.world().resource::<Tuning>().interface.cell_size);
+        let size = window_size(app.world().resource::<Inventory>(), pack, app.world().resource::<Tuning>().interface.cell_size).unwrap();
         {
             let mut windows = app.world_mut().resource_mut::<BagWindows>();
             windows.order = vec![pack];

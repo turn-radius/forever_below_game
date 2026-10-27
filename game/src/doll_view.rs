@@ -130,7 +130,10 @@ impl DollChoice {
                     let text = value()?;
                     for pair in text.split(',') {
                         let (slot, base) = pair.split_once('=').ok_or(format!("--wear: {pair:?} is not slot=Base"))?;
-                        serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")).map_err(|_| format!("--wear: unknown slot {slot:?}"))?;
+                        // What hangs on a pack or belt (`strap`, `lash`, `frog1`, `frog2`) is not a slot of the doll.
+                        if !["strap", "lash", "frog1", "frog2"].contains(&slot) {
+                            serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")).map_err(|_| format!("--wear: unknown slot {slot:?}"))?;
+                        }
                         // `lash=empty` asks for a pack with a lashing and ties nothing on it.
                         if base != "empty" {
                             fb_items::roll_item(base, 1).ok_or(format!("--wear: unknown item {base:?}"))?;
@@ -173,25 +176,30 @@ impl DollChoice {
     pub fn figure(&self) -> Figure {
         let mut worn = if self.bare { vec![] } else { self.outfit().roll(self.seed, self.folk.key()).worn };
         worn.retain(|(slot, _)| Some(*slot) != self.without);
-        for pair in self.wear.into_iter().flat_map(|w| w.split(',')) {
-            let Some((slot, base)) = pair.split_once('=') else { continue };
+        // What hangs on a pack or belt: `strap`, `lash`, `frog1` and `frog2`, drawn on the pack or belt.
+        let fitting_named = |name: &str| match name {
+            "strap" => Some((fb_items::Accessory::WeaponStrap, "back")),
+            "lash" => Some((fb_items::Accessory::Lashing, "back")),
+            "frog1" => Some((fb_items::Accessory::LeftFrog, "belt")),
+            "frog2" => Some((fb_items::Accessory::RightFrog, "belt")),
+            _ => None,
+        };
+        let pairs: Vec<(&str, &str)> = self.wear.into_iter().flat_map(|w| w.split(',')).filter_map(|pair| pair.split_once('=')).collect();
+        let mut hung: Vec<(fb_items::Accessory, fb_items::Item)> = Vec::new();
+        for &(slot, base) in &pairs {
+            if let Some((accessory, _)) = fitting_named(slot) {
+                hung.extend(fb_items::roll_item(base, self.seed).map(|item| (accessory, item)));
+                continue;
+            }
             // A pack or belt asked for beside what its fittings hold (`--wear back=Pack,strap=Spear` or
-            // `belt=Belt,frog1=Sword,frog2=Mace,potion1=Vial`) is the first of the seed's on that has
-            // every fitting asked for.
-            let needs: Vec<fb_items::Accessory> = self
-                .wear
-                .into_iter()
-                .flat_map(|w| w.split(','))
-                .filter_map(|p| serde_json::from_str::<fb_items::Slot>(&format!("{:?}", p.split_once('=')?.0)).ok())
-                .filter(|fit| fit.host().is_some_and(|host| format!("{host:?}").to_lowercase() == slot))
-                .filter_map(|fit| fit.needs())
-                .collect();
+            // `belt=Belt,frog1=Sword,frog2=Mace`) is the first of the seed's on that has every fitting asked for.
+            let needs: Vec<fb_items::Accessory> = pairs.iter().filter_map(|(name, _)| fitting_named(name)).filter(|(_, host)| *host == slot).map(|(accessory, _)| accessory).collect();
             let rolled = if needs.is_empty() { fb_items::roll_item(base, self.seed) } else { (self.seed..self.seed + 4000).filter_map(|s| fb_items::roll_item(base, s)).find(|i| needs.iter().all(|a| i.has_accessory(*a))) };
             let (Ok(slot), Some(item)) = (serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")), rolled) else { continue };
             worn.retain(|(s, _)| *s != slot);
             worn.push((slot, item));
         }
-        Figure::dress(&self.spec(), &worn, DIRT)
+        Figure::dress_hung(&self.spec(), &worn, &hung, DIRT)
     }
 
     /// The body: rolled from the seed, with `--body`'s fields over it.

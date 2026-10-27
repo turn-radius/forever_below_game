@@ -313,7 +313,8 @@ impl Session {
         if item.coins.is_some() {
             return Err(Refusal::NotAWare);
         }
-        if inventory.contents_count(id) > 0 {
+        // A pack or belt with a tent tied on or a weapon hung from it is not empty either.
+        if inventory.holding(id) > 0 {
             return Err(Refusal::HoldsThings);
         }
         Ok(())
@@ -515,10 +516,7 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
 /// go is kept out of the shelf's fate.
 pub fn end(inventory: &mut Inventory, session: Session) {
     let shelf = session.shelf;
-    let mut moved: Vec<(ItemId, Location)> = session.moved.into_iter().collect();
-    // What sat in a fitting (a strapped weapon, a framed sword, a potion in the pouch) goes back after
-    // the pack or belt it hangs on.
-    moved.sort_by_key(|(_, was)| matches!(was, Location::Worn(slot) if slot.is_fitting()));
+    let moved: Vec<(ItemId, Location)> = session.moved.into_iter().collect();
     for &(id, _) in &moved {
         inventory.take_out(id);
     }

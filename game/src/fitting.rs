@@ -165,10 +165,19 @@ pub fn shape_key(shape: &armory::Item) -> String {
 /// Everything [`Figure::dress`] depends on: every field of `spec`, the dirt, and each worn
 /// item ([`item_key`]) in order.
 pub fn figure_key(spec: &BodySpec, worn: &[(Slot, Item)], dirt: f32) -> String {
+    figure_key_hung(spec, worn, &[], dirt)
+}
+
+/// [`figure_key`] with what hangs on the worn pack and belt ([`Figure::dress_hung`]), each with the
+/// fitting that holds it. With nothing hung it is [`figure_key`].
+pub fn figure_key_hung(spec: &BodySpec, worn: &[(Slot, Item)], hung: &[(fb_items::Accessory, Item)], dirt: f32) -> String {
     let mut key = format!("figure|{spec:?}|{}", dirt.to_bits());
     for (slot, item) in worn {
         key.push('|');
         key.push_str(&item_key(*slot, item));
+    }
+    for (accessory, item) in hung {
+        key.push_str(&format!("|hung/{accessory:?}/{}/{}/{}/{}", item.base, item.seed, item.title(), shape_key(&item.shape)));
     }
     key
 }

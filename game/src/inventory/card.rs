@@ -219,8 +219,8 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         let plain = p.plain_grid().map_or_else(String::new, |(c, r)| format!(" (plain {c}\u{d7}{r})"));
         let inside = format!("{}\u{d7}{} inside{plain}", holds.cols, holds.rows);
         let line = match held {
-            Some((inventory, id)) if inventory.contents_count(id) > 0 => {
-                let n = inventory.contents_count(id);
+            Some((inventory, id)) if inventory.holding(id) > 0 => {
+                let n = inventory.holding(id);
                 format!("Holds {n} {} \u{b7} {} lb inside \u{b7} {inside}", if n == 1 { "thing" } else { "things" }, number(inventory.contents_weight(id)))
             }
             _ => format!("Empty \u{b7} {inside}"),

@@ -161,7 +161,7 @@ fn candidates(inventory: &Inventory, mode: Service) -> Vec<ItemId> {
                 return false;
             }
             match mode {
-                Service::Scrap => inventory.contents_count(id) == 0 && scrap(item).is_some(),
+                Service::Scrap => inventory.holding(id) == 0 && scrap(item).is_some(),
                 _ => enchant::enchantable(item),
             }
         })

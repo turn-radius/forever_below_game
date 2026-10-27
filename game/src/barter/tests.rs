@@ -661,68 +661,80 @@ fn settling_folds_what_was_bought_into_the_stacks_carried() {
     assert_eq!(arrow_pieces(&inventory, pack), vec![3, 10]);
 }
 
+/// The drag of `id` for the barter checks.
+fn drag_of(inventory: &Inventory, id: ItemId) -> Drag {
+    Drag { id, grab: IVec2::ZERO, size: inventory.footprint(id).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None }
+}
+
 #[test]
-fn cancelling_a_deal_that_moved_a_lashed_pack_puts_pack_and_bundle_back() {
+fn a_pack_with_a_tent_tied_on_or_a_spear_strapped_is_not_sold_until_it_is_emptied() {
+    use fb_items::Accessory::{Lashing, WeaponStrap};
     let person = person(smith());
     let mut inventory = delver(Coins::from_copper(0));
-    // The tent has the lower id, so it is put back first unless the lashing waits for its pack.
+    let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap();
+    let pack = inventory.add(pack);
+    let _ = inventory.equip(pack, Slot::Back);
     let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
-    let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
-    let pack = inventory.add(pack);
-    let _ = inventory.equip(pack, fb_items::Slot::Back);
-    inventory.wear(tent, fb_items::Slot::Lash).unwrap();
-    let shelf = shelf_of(vec![], 6000);
-    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
-    for id in [tent, pack] {
-        session.note(&inventory, id);
-        inventory.shelve(id, session.shelf).unwrap();
-    }
-    assert_eq!(inventory.worn(Slot::Back), None);
-    end(&mut inventory, session);
-    assert_eq!((inventory.worn(Slot::Back), inventory.lashed()), (Some(pack), Some(tent)));
-}
-
-#[test]
-fn cancelling_a_deal_that_moved_a_strapped_pack_puts_pack_and_weapon_back() {
-    let person = person(smith());
-    let mut inventory = delver(Coins::from_copper(0));
-    // The weapon has the lower id, so it is put back first unless the strap waits for its pack.
     let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
-    let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap)).unwrap();
-    let pack = inventory.add(pack);
-    let _ = inventory.equip(pack, fb_items::Slot::Back);
-    inventory.wear(spear, fb_items::Slot::Strap).unwrap();
+    inventory.lash(tent).unwrap();
+    let strap = inventory.fitting(pack, WeaponStrap).unwrap();
+    inventory.put(spear, strap, Placement::new(0, 0, false)).unwrap();
     let shelf = shelf_of(vec![], 6000);
-    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
-    for id in [spear, pack] {
-        session.note(&inventory, id);
-        inventory.shelve(id, session.shelf).unwrap();
-    }
-    assert_eq!(inventory.worn(fb_items::Slot::Back), None);
-    end(&mut inventory, session);
-    assert_eq!((inventory.worn(fb_items::Slot::Back), inventory.worn(fb_items::Slot::Strap)), (Some(pack), Some(spear)));
+    let session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    let on_shelf = Target::Cell { view: GridView::Container(session.shelf), cell: IVec2::ZERO };
+    let barter = Barter { session: Some(session), ..Default::default() };
+    let drag = drag_of(&inventory, pack);
+    assert_eq!(barter.check(&inventory, &drag, on_shelf), Some(Err(Refusal::HoldsThings)), "what hangs on it keeps it off the shelf");
+    // The tent and spear stay tied and strapped, in reach of the deal.
+    assert_eq!(inventory.hung_on(pack).len(), 2);
+    // Emptied, it is a ware like any pack.
+    inventory.take_out(tent);
+    inventory.take_out(spear);
+    assert!(matches!(barter.check(&inventory, &drag, on_shelf), Some(Ok(_))));
 }
 
 #[test]
-fn cancelling_a_deal_that_moved_a_belt_puts_belt_frogged_sword_and_potion_back() {
-    use fb_items::{Accessory, Slot};
+fn a_belt_with_a_framed_sword_or_a_pouch_potion_is_not_sold_until_it_is_emptied() {
+    use fb_items::Accessory::{LeftFrog, PotionPouch};
     let person = person(smith());
     let mut inventory = delver(Coins::from_copper(0));
-    // The sword and vial have the lower ids, so they are put back first unless fittings wait for the belt.
-    let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
-    let vial = inventory.add(fb_items::roll_item("Vial", 3).unwrap());
-    let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::LeftFrog) && b.has_accessory(Accessory::PotionPouch)).unwrap();
+    let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(LeftFrog) && b.has_accessory(PotionPouch)).unwrap();
     let belt = inventory.add(belt);
     let _ = inventory.equip(belt, Slot::Belt);
-    inventory.wear(sword, Slot::Frog1).unwrap();
-    inventory.wear(vial, Slot::Potion2).unwrap();
+    let (sword, vial) = (inventory.add(fb_items::roll_item("Sword", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
+    let (frog, pouch) = (inventory.fitting(belt, LeftFrog).unwrap(), inventory.fitting(belt, PotionPouch).unwrap());
+    inventory.put(sword, frog, Placement::new(0, 0, false)).unwrap();
+    inventory.put(vial, pouch, Placement::new(0, 0, false)).unwrap();
+    let shelf = shelf_of(vec![], 6000);
+    let session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    let on_shelf = Target::Cell { view: GridView::Container(session.shelf), cell: IVec2::ZERO };
+    let barter = Barter { session: Some(session), ..Default::default() };
+    assert_eq!(barter.check(&inventory, &drag_of(&inventory, belt), on_shelf), Some(Err(Refusal::HoldsThings)));
+    // One of the two taken off is not enough.
+    inventory.take_out(sword);
+    assert_eq!(barter.check(&inventory, &drag_of(&inventory, belt), on_shelf), Some(Err(Refusal::HoldsThings)));
+    // A sword can be drawn from its frog into the hand while bartering is going on, or moved between the pack's grids.
+    assert!(inventory.is_carried(vial));
+}
+
+#[test]
+fn cancelling_a_deal_that_moved_an_emptied_pack_puts_it_back_with_its_fittings() {
+    use fb_items::Accessory::{Lashing, WeaponStrap};
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(0));
+    let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap();
+    let pack = inventory.add(pack);
+    let _ = inventory.equip(pack, Slot::Back);
+    let (lashing, strap) = (inventory.fitting(pack, Lashing).unwrap(), inventory.fitting(pack, WeaponStrap).unwrap());
     let shelf = shelf_of(vec![], 6000);
     let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
-    for id in [sword, vial, belt] {
-        session.note(&inventory, id);
-        inventory.shelve(id, session.shelf).unwrap();
-    }
-    assert_eq!(inventory.worn(Slot::Belt), None);
+    session.note(&inventory, pack);
+    inventory.shelve(pack, session.shelf).unwrap();
+    assert_eq!(inventory.worn(Slot::Back), None);
+    // On the shelf, it still has its grids, and a tent could be tied on only when it is carried again.
+    assert_eq!((inventory.fitting(pack, Lashing), inventory.fitting(pack, WeaponStrap)), (Some(lashing), Some(strap)));
     end(&mut inventory, session);
-    assert_eq!((inventory.worn(Slot::Belt), inventory.worn(Slot::Frog1), inventory.worn(Slot::Potion2)), (Some(belt), Some(sword), Some(vial)));
+    assert_eq!(inventory.worn(Slot::Back), Some(pack));
+    let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+    assert_eq!(inventory.lash(tent), Ok(()));
 }

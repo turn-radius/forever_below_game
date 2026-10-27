@@ -274,7 +274,8 @@ pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::
     if let Some(id) = slots.and_then(|s| s.0.iter().flatten().copied().find(|&id| is_draught(id))) {
         return Some(id);
     }
-    if let Some(id) = [Slot::Potion1, Slot::Potion2, Slot::Potion3].into_iter().filter_map(|slot| inventory.worn(slot)).find(|&id| is_draught(id)) {
+    let pouch = inventory.worn(Slot::Belt).and_then(|belt| inventory.fitting(belt, fb_items::Accessory::PotionPouch));
+    if let Some(id) = pouch.and_then(|pouch| inventory.grid(pouch)).and_then(|g| g.entries().iter().map(|e| e.id).find(|&id| is_draught(id))) {
         return Some(id);
     }
     let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Satchel, Slot::Quiver];

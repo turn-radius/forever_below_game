@@ -83,7 +83,7 @@ fn belts_roll_with_their_fittings_on() {
     let all = rolls(1..=2000);
     let share = |f: &dyn Fn(&BeltState) -> bool| all.iter().filter(|s| f(s)).count() as f32 / all.len() as f32;
     // About one belt in five has a frog (the sword belts), half of those two; a few in five a potion
-    // pouch; one in six a sack. Our own numbers (`docs/items.md`, "Belt accessories").
+    // pouch; one in six a sack. Our own numbers (`docs/items.md`, "Pack and belt accessories").
     let (frogged, two, potions, sack) = (share(&|s| s.fittings.frogs > 0), share(&|s| s.fittings.frogs == 2), share(&|s| s.fittings.potion_pouch), share(&|s| s.fittings.sack));
     assert!((0.15..0.25).contains(&frogged), "{frogged} of belts have a frog");
     assert!((0.07..0.14).contains(&two), "{two} of belts have two");

@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(bases().len(), 13);
         assert_eq!(goods().len(), 32);
         assert_eq!(affixes().len(), 86);
-        assert_eq!(slot_places().len(), 25);
+        assert_eq!(slot_places().len(), 18);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
         let charm = slot_places().iter().find(|p| p.slot == Slot::Charm).unwrap();

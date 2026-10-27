@@ -393,16 +393,16 @@ impl Item {
             && fp.cols.max(fp.rows) <= FROG_CELLS
     }
 
-    /// Whether it goes in fitting slot `slot` ([`Slot::FITTINGS`]), whatever is worn: a long
-    /// weapon on the strap, a short one in a frog, a small potion in the pouch. A stack of potions
-    /// fits too: the inventory takes one piece off it ([`Inventory::equip`]).
-    pub fn fits_fitting(&self, slot: Slot) -> bool {
-        match slot {
-            Slot::Strap => self.strappable(),
-            Slot::Lash => self.lashable(),
-            Slot::Frog1 | Slot::Frog2 => self.frogable(),
-            Slot::Potion1 | Slot::Potion2 | Slot::Potion3 => fits_potion_pouch(self),
-            _ => false,
+    /// Whether it goes in the small grid of `accessory` ([`crate::fittings`]): a bedroll or tent
+    /// in a lashing, a long weapon in a strap, a short one in a frog, a small potion in the pouch.
+    /// A stack of potions fits too: the inventory takes one piece off it.
+    pub fn fits_accessory(&self, accessory: Accessory) -> bool {
+        match accessory {
+            Accessory::WeaponStrap => self.strappable(),
+            Accessory::Lashing => self.lashable(),
+            Accessory::LeftFrog | Accessory::RightFrog => self.frogable(),
+            Accessory::PotionPouch => fits_potion_pouch(self),
+            Accessory::BeltSack => false,
         }
     }
 }
@@ -528,10 +528,10 @@ mod tests {
             assert_eq!(roll_item(base, 3).map(|i| fits_potion_pouch(&i)), Some(fits), "{base}");
         }
         let vial = roll_item("Vial", 3).unwrap();
-        assert!(vial.fits_fitting(Slot::Potion2) && !vial.fits_fitting(Slot::Frog1) && !vial.fits_fitting(Slot::Strap));
+        assert!(vial.fits_accessory(Accessory::PotionPouch) && !vial.fits_accessory(Accessory::LeftFrog) && !vial.fits_accessory(Accessory::WeaponStrap));
         let mut stack = vial;
         stack.quantity = 2;
-        assert!(stack.fits_fitting(Slot::Potion1), "a stack gives one piece to a place");
+        assert!(stack.fits_accessory(Accessory::PotionPouch), "a stack gives one piece to a place");
     }
 
     #[test]

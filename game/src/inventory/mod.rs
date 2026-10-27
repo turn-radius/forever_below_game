@@ -498,6 +498,28 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
             inventory.forget(id);
         }
     }
+    // `FB_HANG=Tent,Spear,Sword,Mace,Vial` hangs one of each base from the first fitting of the worn pack and belt
+    // that takes it (the lashing, strap, frogs and potion pouch), after the kit.
+    let hang = std::env::var("FB_HANG").unwrap_or_default();
+    for (i, base) in bases_in(&hang).enumerate() {
+        let Some(item) = roll(base, 0x40 + i as u32) else {
+            warn!("FB_HANG: no base called {base:?}");
+            continue;
+        };
+        let id = inventory.add(item);
+        let hosts: Vec<ItemId> = [Slot::Back, Slot::Belt].into_iter().filter_map(|slot| inventory.worn(slot)).collect();
+        let place = hosts.iter().flat_map(|&host| inventory.fittings_of(host).iter().map(|&(_, fitting)| fitting).collect::<Vec<_>>()).find_map(|fitting| {
+            let at = inventory.grid(fitting)?.first_free(inventory.footprint(id)?)?;
+            inventory.check_put(id, fitting, at).ok().map(|()| (fitting, at))
+        });
+        match place {
+            Some((fitting, at)) if inventory.put(id, fitting, at).is_ok() => {}
+            _ => {
+                warn!("FB_HANG: nothing worn takes {base:?}");
+                inventory.forget(id);
+            }
+        }
+    }
     let stow = std::env::var("FB_STOW").unwrap_or_default();
     for (i, base) in bases_in(&stow).enumerate() {
         let Some(item) = roll(base, i as u32) else {
@@ -924,7 +946,8 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
             }
             let at = landing(inventory, drag, container, cell)?;
             inventory.put(drag.id, container, at)?;
-            Ok(lying.then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
+            // A stack of potions left on the floor with a piece in the pouch is still lying there.
+            Ok((lying && inventory.location(drag.id) != Some(Location::Loose)).then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
         }
         Target::Slot(slot) => equip(inventory, drag.id, slot),
         Target::Doll => equip(inventory, drag.id, inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?),
@@ -1201,6 +1224,7 @@ impl ScreenLayout<'_> {
                 head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 18.0, INK)));
             });
             match scroll {
+                None if matches!(view, GridView::Container(_)) => self.grid_with_fittings(column, icons, id, grid),
                 None => self.grid(column, icons, view, grid, false),
                 Some(y) => {
                     let size = grid_size(grid, self.cell);
@@ -1221,7 +1245,7 @@ impl ScreenLayout<'_> {
     fn bag_window(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, at: Vec2, z: i32) {
         let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else { return };
         let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
-        let size = bags::window_size(grid, self.cell);
+        let size = bags::window_size(self.inventory, id, self.cell).unwrap_or_default();
         parent
             .spawn((
                 bags::BagWindow(id),
@@ -1257,8 +1281,35 @@ impl ScreenLayout<'_> {
                         close.spawn((Text::new("x"), UiFonts::style(&self.fonts.display, 18.0, INK)));
                     });
                 });
-                self.grid(window, icons, GridView::Container(id), grid, false);
+                self.grid_with_fittings(window, icons, id, grid);
             });
+    }
+
+    /// A container's main grid with, beside it, the small grids of the fittings a pack or belt came with
+    /// (a lashing, a weapon strap, frogs, a potion pouch), each under its label. Just the grid for a
+    /// container with none.
+    fn grid_with_fittings(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, grid: &Grid<ItemId>) {
+        let fittings: Vec<(ItemId, &Grid<ItemId>)> = self.inventory.fittings_of(id).iter().filter_map(|&(_, fitting)| Some((fitting, self.inventory.grid(fitting)?))).collect();
+        if fittings.is_empty() {
+            self.grid(parent, icons, GridView::Container(id), grid, false);
+            return;
+        }
+        parent.spawn(Node { align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), flex_shrink: 0.0, ..default() }).with_children(|row| {
+            self.grid(row, icons, GridView::Container(id), grid, false);
+            row.spawn(Node { align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), ..default() }).with_children(|fittings_row| {
+                for (fitting, small) in fittings {
+                    let label = self.inventory.item(fitting).and_then(|i| i.profile.holds.as_ref()).map_or("", |h| h.label.as_str()).to_string();
+                    fittings_row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|column| {
+                        column
+                            .spawn(Node { height: px(bags::FITTING_LABEL_PX - 4.0), min_width: px(grid_size(small, self.cell).x.max(90.0)), ..default() })
+                            .with_children(|head| {
+                                head.spawn((FittingLabel(fitting), Text::new(label), UiFonts::style(&self.fonts.body, 13.0, MUTED)));
+                            });
+                        self.grid(column, icons, GridView::Container(fitting), small, false);
+                    });
+                }
+            });
+        });
     }
 
     /// A grid of cells with its items drawn at their footprints. `faded` draws the cells paler,
@@ -1373,6 +1424,10 @@ impl ScreenLayout<'_> {
             });
     }
 }
+
+/// The label over a fitting's small grid in its pack's or belt's window.
+#[derive(Component)]
+pub struct FittingLabel(pub ItemId);
 
 /// The number on a stack's cell: how many arrows or bolts lie there.
 #[derive(Component)]
@@ -1672,23 +1727,7 @@ fn drag_items(
 /// With no belt worn, what hung at the hip comes off ([`Inventory::unhang`]): into a carried bag
 /// with room, or else set down underfoot. Every way of taking a belt off (a double-click, a drag
 /// to a grid or the floor, swapping in something that is not a belt) ends here.
-fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>, mut toast: ResMut<Toast>, barter: Option<Res<crate::barter::Barter>>, time: Option<Res<Time<Real>>>) {
-    // Likewise what sat in a pack's strap or a belt's frogs and potion pouch, once that fitting is gone
-    // ([`Inventory::unfit`]); not while a deal has the pack or belt on the shelf, since cancelling
-    // puts it back.
-    if !barter.is_some_and(|b| b.active()) && Slot::FITTINGS.iter().any(|&slot| inventory.worn(slot).is_some() && !inventory.has_fitting(slot)) {
-        let now = time.map_or(0.0, |t| t.elapsed_secs());
-        for (id, went) in inventory.unfit() {
-            let name = inventory.item(id).map_or_else(String::new, |i| i.title().to_string());
-            match went {
-                Displaced::Underfoot => {
-                    floor_changes.0.push(FloorChange::SetDown(id, 0.0));
-                    toast.say(format!("{name} falls to the floor."), now);
-                }
-                _ => toast.say(format!("{name} slips from its fitting into your pack."), now),
-            }
-        }
-    }
+fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>) {
     if inventory.worn(Slot::Hip).is_none() || inventory.worn(Slot::Belt).is_some() {
         return;
     }
@@ -2859,10 +2898,9 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
         let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
-        // The strap shows only while the worn pack has one.
-        let places: Vec<_> = fb_items::tables::slot_places().iter().filter(|p| !p.slot.is_fitting()).collect();
+        // A pack's strap and lashing and a belt's frogs and pouch are grids in their window, not places on the doll.
+        let places: Vec<_> = fb_items::tables::slot_places().iter().collect();
         assert_eq!(found.len(), places.len());
-        assert!(found.iter().all(|(s, ..)| !s.is_fitting()));
         for place in places {
             let (_, node, children) = found.iter().find(|(s, ..)| *s == place.slot).unwrap();
             let x = px(doll::FRAME.x * place.x_percent / 100.0);
@@ -3340,5 +3378,135 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         app.update();
         assert!(!app.world().resource::<Seen>().0, "a press on the window already in front changes nothing");
+    }
+
+    /// A pack rolled with both a lashing and a strap, worn, with a tent tied on and a spear strapped;
+    /// and a belt with both frogs and the pouch, worn.
+    fn hung_kit(inventory: &mut Inventory) -> (ItemId, ItemId) {
+        use fb_items::Accessory::{LeftFrog, Lashing, PotionPouch, RightFrog, WeaponStrap};
+        let pack = (1..4000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, Slot::Back).unwrap();
+        let belt = (1..4000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(LeftFrog) && b.has_accessory(RightFrog) && b.has_accessory(PotionPouch)).unwrap();
+        let belt = inventory.add(belt);
+        inventory.wear(belt, Slot::Belt).unwrap();
+        (pack, belt)
+    }
+
+    #[test]
+    fn a_packs_window_shows_its_lashing_and_strap_grids_beside_the_main_grid() {
+        use fb_items::Accessory::{Lashing, WeaponStrap};
+        let mut app = screen_app();
+        let (pack, tent, spear) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let (pack, _) = hung_kit(&mut inventory);
+            let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+            let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
+            inventory.lash(tent).unwrap();
+            let strap = inventory.fitting(pack, WeaponStrap).unwrap();
+            inventory.put(spear, strap, Placement::new(0, 0, false)).unwrap();
+            (pack, tent, spear)
+        };
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.update();
+        app.update();
+        let inventory = app.world().resource::<Inventory>();
+        let (lashing, strap) = (inventory.fitting(pack, Lashing).unwrap(), inventory.fitting(pack, WeaponStrap).unwrap());
+        let mut views = app.world_mut().query::<&GridView>();
+        let shown: Vec<GridView> = views.iter(app.world()).copied().collect();
+        for container in [pack, lashing, strap] {
+            assert!(shown.contains(&GridView::Container(container)), "{container:?} is a grid on the screen");
+        }
+        let mut labels = app.world_mut().query::<(&FittingLabel, &Text)>();
+        let mut names: Vec<(ItemId, String)> = labels.iter(app.world()).map(|(l, t)| (l.0, t.0.clone())).collect();
+        names.sort_by_key(|(id, _)| id.0);
+        assert!(names.iter().any(|(id, name)| *id == lashing && name == "Lashing") && names.iter().any(|(id, name)| *id == strap && name == "Strap"), "{names:?}");
+        // A tent in the lashing grid and a spear in the strap grid are on the screen as their items.
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!((inventory.hung_on(pack).len(), inventory.location(tent).is_some(), inventory.location(spear).is_some()), (2, true, true));
+        // The window is as wide as the main grid and the fittings together.
+        let cell = app.world().resource::<Tuning>().interface.cell_size;
+        let size = bags::window_size(inventory, pack, cell).unwrap();
+        let main = grid_size(inventory.grid(pack).unwrap(), cell);
+        assert!(size.x > main.x + 2.0 * cell && size.y >= main.y, "{size} against the main grid {main}");
+    }
+
+    #[test]
+    fn the_doll_has_no_lashing_strap_frog_or_potion_places() {
+        let mut app = screen_app();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            hung_kit(&mut inventory);
+        }
+        press(&mut app, KeyCode::KeyI);
+        let mut slots = app.world_mut().query::<&SlotView>();
+        let names: Vec<String> = slots.iter(app.world()).map(|s| format!("{:?}", s.0).to_lowercase()).collect();
+        assert!(!names.is_empty());
+        for gone in ["strap", "lash", "frog", "potion"] {
+            assert!(!names.iter().any(|n| n.contains(gone)), "{gone}: {names:?}");
+        }
+        assert!(fb_items::tables::slot_places().iter().all(|p| !["strap", "lash", "frog", "potion"].iter().any(|g| format!("{:?}", p.slot).to_lowercase().contains(g))));
+    }
+
+    #[test]
+    fn a_bedroll_dragged_into_the_lashing_is_tied_on_a_sword_is_refused_by_a_frog_and_a_mace_taken() {
+        use fb_items::Accessory::{LeftFrog, Lashing};
+        let mut inventory = Inventory::default();
+        let (pack, belt) = hung_kit(&mut inventory);
+        let lashing = inventory.fitting(pack, Lashing).unwrap();
+        let bedroll = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
+        inventory.put(bedroll, pack, Placement::new(0, 0, false)).unwrap();
+        let drag = |inventory: &Inventory, id| Drag { id, grab: IVec2::ZERO, size: inventory.footprint(id).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        let onto = |container| Target::Cell { view: GridView::Container(container), cell: IVec2::ZERO };
+        assert_eq!(check_drop(&inventory, &drag(&inventory, bedroll), onto(lashing)), Ok(()));
+        let tying = drag(&inventory, bedroll);
+        drop_at(&mut inventory, &tying, onto(lashing), 4).unwrap();
+        assert_eq!((inventory.lashed(), inventory.contents_count(pack)), (Some(bedroll), 0), "tied on, out of the main grid");
+        // A frog takes a mace and not a sword (a sword is for the hand or the main grid): the table calls a one-handed sword frogable,
+        // so the refusal here is for a two-handed one too long for the frog.
+        let frog = inventory.fitting(belt, LeftFrog).unwrap();
+        let mace = (1..99).filter_map(|s| fb_items::roll_item("Mace", s)).find(|m| m.frogable()).unwrap();
+        let mace = inventory.add(mace);
+        let staff = inventory.add(fb_items::roll_item("Staff", 3).unwrap());
+        assert_eq!(check_drop(&inventory, &drag(&inventory, staff), onto(frog)), Err(Refusal::NotAccepted));
+        assert_eq!(check_drop(&inventory, &drag(&inventory, mace), onto(frog)), Ok(()));
+        let hanging = drag(&inventory, mace);
+        drop_at(&mut inventory, &hanging, onto(frog), 4).unwrap();
+        assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, mace)]);
+        let second = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
+        assert_eq!(check_drop(&inventory, &drag(&inventory, second), onto(frog)), Err(Refusal::NoRoom), "a frog holds one");
+    }
+
+    #[test]
+    fn a_belt_taken_off_and_set_down_keeps_its_weapons_in_the_frogs() {
+        use fb_items::Accessory::{LeftFrog, RightFrog};
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let (sword, mace) = (inventory.add(fb_items::roll_item("Dagger", 3).unwrap()), inventory.add((1..99).filter_map(|s| fb_items::roll_item("Mace", s)).find(|m| m.frogable()).unwrap()));
+        for (id, accessory) in [(sword, LeftFrog), (mace, RightFrog)] {
+            let frog = inventory.fitting(belt, accessory).unwrap();
+            inventory.put(id, frog, Placement::new(0, 0, false)).unwrap();
+        }
+        // Taken off and set down underfoot as a bag is.
+        inventory.take_out(belt);
+        assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, sword), (RightFrog, mace)], "still in its frogs");
+        assert!(!inventory.is_carried(sword) && !inventory.is_carried(mace));
+        // Picked up and worn again, they are carried again.
+        inventory.wear(belt, Slot::Belt).unwrap();
+        assert!(inventory.is_carried(sword) && inventory.is_carried(mace));
+        assert_eq!(inventory.worn_hung().len(), 2);
+    }
+
+    #[test]
+    fn a_potion_in_the_pouch_can_be_bound_to_a_quickslot() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let vial = inventory.add(fb_items::roll_item("Healing vial", 3).unwrap());
+        let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+        inventory.put(vial, pouch, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(crate::quickslots::check_bind(&inventory, vial), Ok(()), "it is carried and a quickslot can use it");
+        assert_eq!(crate::eat::nearest_healing(&inventory, None), Some(vial), "and H drinks it");
     }
 }

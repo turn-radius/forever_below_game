@@ -418,7 +418,7 @@ mod tests {
             for outfit in outfits() {
                 for folk in ["human", "goblin"].into_iter().filter(|_| seed % 100 == 1) {
                     let set = outfit.roll(seed, folk);
-                    assert!(set.worn.iter().all(|(slot, _)| !matches!(slot, Slot::Lash | Slot::Strap)), "{seed} {folk}");
+                    assert!(set.worn.iter().all(|(_, item)| !item.lashable()), "{seed} {folk}");
                 }
             }
         }

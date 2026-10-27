@@ -55,4 +55,4 @@ pub use place::Placement;
 pub use rig::{JOINTS, Joint, Quat, Rig, RigPose, Rigid};
 pub use skin::{PartSkin, SkinRegion, Skinner};
 pub use spec::{BodyShape, BodySpec, STATURE, Sex, ShapeSlider, figure_bust};
-pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn};
+pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn, fit_worn_hung};

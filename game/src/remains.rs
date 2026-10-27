@@ -147,7 +147,7 @@ pub fn record_body(inventory: &Inventory, stock: &BodyStock) -> Option<BodyRecor
         .iter()
         .filter_map(|e| {
             let slot = stock.kit.iter().find(|(_, id)| *id == e.id).map(|(slot, _)| *slot);
-            Some(BodyStowed { slot, stowed: Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)? } })
+            Some(BodyStowed { slot, stowed: Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)?, fitting: None } })
         })
         .collect();
     (!contents.is_empty()).then_some(BodyRecord { rows: grid.rows, contents })
@@ -171,33 +171,26 @@ pub fn restore_body(inventory: &mut Inventory, record: &BodyRecord, seed: u32, l
     BodyStock { container, kit }
 }
 
-/// What of a body's `kit` is drawn on it: a fitting hangs from the pack or belt that carries it
-/// (`Slot::host`) and is drawn only while that is on the body and was rolled with the fitting. A
-/// pack taken from a body takes its strap and lashing with it from the picture, as it does from
-/// the delver ([`Inventory::unfit`]); what hung on it stays among the body's things to take.
-pub fn drawn_kit(inventory: &Inventory, kit: &[(Slot, ItemId)]) -> Vec<(Slot, ItemId)> {
-    kit.iter()
-        .copied()
-        .filter(|&(slot, _)| {
-            let (Some(host), Some(needs)) = (slot.host(), slot.needs()) else { return true };
-            kit.iter().any(|&(s, id)| s == host && inventory.item(id).is_some_and(|i| i.has_accessory(needs)))
-        })
-        .collect()
+/// What hangs on the packs and belts in a body's `kit`, with the fitting that holds it: the bedroll tied
+/// in a pack's lashing, the spear on its strap, the weapons in a belt's frogs, read from the small
+/// grids that belong to them. It is drawn on the body while the pack or belt is, and goes with it from
+/// the picture when the delver takes the pack ([`crate::inventory::Inventory::hung_on`]).
+pub fn hung_kit(inventory: &Inventory, kit: &[(Slot, ItemId)]) -> Vec<(fb_items::Accessory, ItemId)> {
+    kit.iter().filter(|(slot, _)| matches!(slot, Slot::Back | Slot::Belt)).flat_map(|&(_, host)| inventory.hung_on(host)).collect()
 }
 
-/// Pushes the `(family, seed)` of everything that lies in `container` at any depth onto `keys`
-/// (one for each thing, so two of one kind count twice): what is still among a body's things. A
-/// fitting that no longer hangs from anything (in `kit` but not `drawn`) is left out.
-fn keys_in(inventory: &Inventory, container: ItemId, drawn: &[(Slot, ItemId)], kit: &[(Slot, ItemId)], keys: &mut Vec<(armory::Family, u32)>) {
-    let Some(grid) = inventory.grid(container) else { return };
-    for entry in grid.entries() {
-        if kit.iter().any(|(_, k)| *k == entry.id) && !drawn.iter().any(|(_, d)| *d == entry.id) {
-            continue;
+/// Pushes the `(family, seed)` of everything that lies in `container` at any depth, in the small
+/// grids of a pack or belt too, onto `keys` (one for each thing, so two of one kind count twice): what
+/// is still among a body's things. A piece of the kit that is no longer among the body's things is left out.
+fn keys_in(inventory: &Inventory, container: ItemId, keys: &mut Vec<(armory::Family, u32)>) {
+    let grids = std::iter::once(container).chain(inventory.fittings_of(container).iter().map(|&(_, fitting)| fitting));
+    for grid in grids.filter_map(|id| inventory.grid(id)) {
+        for entry in grid.entries() {
+            if let Some(item) = inventory.item(entry.id) {
+                keys.push((item.shape.family(), item.shape.seed()));
+            }
+            keys_in(inventory, entry.id, keys);
         }
-        if let Some(item) = inventory.item(entry.id) {
-            keys.push((item.shape.family(), item.shape.seed()));
-        }
-        keys_in(inventory, entry.id, drawn, kit, keys);
     }
 }
 
@@ -212,7 +205,9 @@ fn stale_pieces(keys: Vec<(armory::Family, u32)>, pieces: &[(Entity, armory::Fam
 /// changes: every id in its grid and in the grids of what it holds, folded together.
 fn signature(inventory: &Inventory, container: ItemId) -> u64 {
     let mut mark = 0xcbf2_9ce4_8422_2325_u64;
-    if let Some(grid) = inventory.grid(container) {
+    // A pack's or belt's small grids count too, so a tent taken off the lashing is seen.
+    let grids = std::iter::once(container).chain(inventory.fittings_of(container).iter().map(|&(_, fitting)| fitting));
+    for grid in grids.filter_map(|id| inventory.grid(id)) {
         for entry in grid.entries() {
             mark = (mark ^ u64::from(entry.id.0)).wrapping_mul(0x0100_0000_01b3) ^ signature(inventory, entry.id);
         }
@@ -276,21 +271,23 @@ pub fn keep_bodies_dressed(
             let kit: Vec<(Slot, ItemId)> = stock.kit.iter().copied().filter(|&(_, id)| here(id)).collect();
             stock.kit = kit;
         }
-        let drawn = drawn_kit(&inventory, &stock.kit);
+        let drawn = stock.kit.clone();
+        let hung = hung_kit(&inventory, &stock.kit);
         if let Some(mut denizen) = denizen {
-            if denizen.person.gear.len() != drawn.len() {
+            if denizen.person.gear.len() != drawn.len() || denizen.person.hung.len() != hung.len() {
                 denizen.person.gear = drawn.iter().filter_map(|&(slot, id)| Some((slot, inventory.item(id)?.clone()))).collect();
+                denizen.person.hung = hung.iter().filter_map(|&(accessory, id)| Some((accessory, inventory.item(id)?.clone()))).collect();
                 let kept: Vec<ItemId> = inventory.grid(stock.container).map(|g| g.entries().iter().map(|e| e.id).filter(|id| !drawn.iter().any(|(_, k)| k == id)).collect()).unwrap_or_default();
                 denizen.person.goods = kept.into_iter().filter_map(|id| inventory.item(id).cloned()).collect();
                 let stance = children.into_iter().flat_map(|c| c.iter()).find(|&c| stances.contains(c));
                 if let (Some(stance), Some(bindposes)) = (stance, bindposes.as_deref_mut()) {
-                    let figure = crate::figure::Figure::dress(&denizen.person.spec, &denizen.person.gear, denizen.person.dirt);
+                    let figure = crate::figure::Figure::dress_hung(&denizen.person.spec, &denizen.person.gear, &denizen.person.hung, denizen.person.dirt);
                     crate::folk_combat::redraw(&mut spawner, bindposes, stance, &figure, denizen.person.spot.seed);
                 }
             }
         } else if let Some(bones) = bones {
             let mut keys = Vec::new();
-            keys_in(&inventory, stock.container, &drawn, &stock.kit, &mut keys);
+            keys_in(&inventory, stock.container, &mut keys);
             let on_bones: Vec<(Entity, armory::Family, u32, usize)> = pieces.iter().filter(|(_, parent, _)| bones.0.contains(&parent.parent())).map(|(piece, _, worn)| (piece, worn.family, worn.seed, worn.nth)).collect();
             for piece in stale_pieces(keys, &on_bones) {
                 commands.entity(piece).despawn();
@@ -488,7 +485,12 @@ mod tests {
         let pack = (1..400).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap)).expect("a pack with a strap");
         let satchel = rolled("Satchel", 3);
         let jerkin = rolled("Leather jerkin", 2);
-        let stock = stock_body(inventory, 9, "Grub", vec![(Slot::Mainhand, spear.clone()), (Slot::Back, pack), (Slot::Strap, spear), (Slot::Satchel, satchel), (Slot::Body, jerkin)], vec![]).expect("a goblin carries things");
+        let stock = stock_body(inventory, 9, "Grub", vec![(Slot::Mainhand, spear.clone()), (Slot::Back, pack), (Slot::Satchel, satchel), (Slot::Body, jerkin)], vec![]).expect("a goblin carries things");
+        // The spare spear hangs on the pack's strap.
+        let pack = stock.kit.iter().find(|(s, _)| *s == Slot::Back).unwrap().1;
+        let strap = inventory.fitting(pack, fb_items::Accessory::WeaponStrap).expect("the strap's grid");
+        let spare = inventory.add(spear);
+        inventory.put(spare, strap, Placement::new(0, 0, false)).expect("the strap takes a spear");
         let satchel = stock.kit.iter().find(|(s, _)| *s == Slot::Satchel).unwrap().1;
         let loaf = inventory.add(rolled("Bread", 1));
         inventory.stow_in(loaf, satchel).expect("room in the satchel");
@@ -499,7 +501,7 @@ mod tests {
     fn a_body_keeps_everything_it_wore_even_a_spear_too_long_to_pack() {
         let mut inventory = Inventory::default();
         let stock = goblin(&mut inventory);
-        assert_eq!(stock.kit.len(), 5, "all five are on the body, in their slots");
+        assert_eq!(stock.kit.len(), 4, "all four are on the body, in their slots");
         for &(_, id) in &stock.kit {
             assert!(matches!(inventory.location(id), Some(Location::In { container, .. }) if container == stock.container));
         }
@@ -511,15 +513,22 @@ mod tests {
     fn what_hangs_from_a_pack_is_drawn_only_while_the_pack_is_on_the_body() {
         let mut inventory = Inventory::default();
         let stock = goblin(&mut inventory);
-        assert_eq!(drawn_kit(&inventory, &stock.kit).len(), 5);
         let pack = stock.kit.iter().find(|(s, _)| *s == Slot::Back).unwrap().1;
+        let hung = hung_kit(&inventory, &stock.kit);
+        assert_eq!(hung.len(), 1, "the spear on the strap");
+        assert_eq!(hung[0].0, fb_items::Accessory::WeaponStrap);
+        let spear = hung[0].1;
+        // The pack opens with its strap, so the spear on it can be taken, by reach with the body.
+        assert!(crate::inventory::bags::reachable(&inventory, &[stock.container], None, spear));
+        assert!(!crate::inventory::bags::reachable(&inventory, &[], None, spear));
+        // The pack off the body takes its spear with it from the picture, and keeps it strapped.
         inventory.take_out(pack);
         let kit: Vec<_> = stock.kit.iter().copied().filter(|&(_, id)| id != pack).collect();
-        let drawn = drawn_kit(&inventory, &kit);
-        assert!(!drawn.iter().any(|(s, _)| *s == Slot::Strap), "the strapped spear is not drawn without its pack");
-        assert_eq!(drawn.len(), 3);
-        let strapped = kit.iter().find(|(s, _)| *s == Slot::Strap).unwrap().1;
-        assert!(matches!(inventory.location(strapped), Some(Location::In { container, .. }) if container == stock.container), "it is still among the body's things to take");
+        assert!(hung_kit(&inventory, &kit).is_empty(), "the strapped spear is not drawn without its pack");
+        assert_eq!(inventory.hung_on(pack), vec![(fb_items::Accessory::WeaponStrap, spear)], "still on the strap");
+        let mut keys = Vec::new();
+        keys_in(&inventory, stock.container, &mut keys);
+        assert_eq!(keys.len(), 3 + 1, "the mainhand spear, satchel, jerkin and the satchel's loaf; the pack and its spear are gone with it");
     }
 
     #[test]
@@ -548,11 +557,14 @@ mod tests {
         let stock = BodyStock { container: stock.container, kit };
         let record = record_body(&inventory, &stock).expect("things are left");
         let record: BodyRecord = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
-        assert_eq!(record.contents.len(), 4);
+        assert_eq!(record.contents.len(), 3);
         let mut other = Inventory::default();
         let back = restore_body(&mut other, &record, 9, "Grub");
-        assert_eq!(back.kit.len(), 4);
-        for slot in [Slot::Mainhand, Slot::Back, Slot::Strap, Slot::Satchel] {
+        assert_eq!(back.kit.len(), 3);
+        // The spear still hangs on the pack's strap.
+        let pack = back.kit.iter().find(|(s, _)| *s == Slot::Back).unwrap().1;
+        assert_eq!(other.hung_on(pack).len(), 1, "the strap's spear came back with the pack");
+        for slot in [Slot::Mainhand, Slot::Back, Slot::Satchel] {
             assert!(back.kit.iter().any(|(s, _)| *s == slot), "{slot:?} is back in its slot");
         }
         assert!(!back.kit.iter().any(|(s, _)| *s == Slot::Body), "the jerkin was taken");
