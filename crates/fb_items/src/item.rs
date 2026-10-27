@@ -856,9 +856,10 @@ mod tests {
     fn capacity_rolls(bags: &[(&str, Vec<u32>)]) -> [bool; 3] {
         let mut seen = [false; 3];
         for (base, seeds) in bags {
-            let plain_rows = grid(&Item::from_parts(ItemParts { affixes: vec![], ..roll_item(base, 1).unwrap().into() }).unwrap()).1 as i32;
             for &seed in seeds {
                 let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
+                // The same item bare of affixes: a belt's own rows vary by seed (a sack adds one).
+                let plain_rows = grid(&Item::from_parts(ItemParts { affixes: vec![], ..item.clone().into() }).unwrap()).1 as i32;
                 let by = item.affixes.iter().map(|a| match a.name.as_str() {
                     "of Holding" => 1,
                     "of the Bottomless" => 2,
