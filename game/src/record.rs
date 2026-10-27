@@ -70,7 +70,7 @@ pub struct WorldRecord {
     #[serde(default)]
     pub lexicon: fb_denizens::tongue::Lexicon,
     /// How many times each folk, by (depth, seed), has been persuaded at, so each try rolls afresh.
-    #[serde(default)]
+    #[serde(default, with = "crate::map_pairs")]
     pub persuasions: BTreeMap<(u32, u32), u32>,
     /// How many times the delver has woken from a sleep in a camp. Failed identifying and
     /// persuading wait for the next one.
@@ -82,7 +82,7 @@ pub struct WorldRecord {
     pub insights: u32,
     /// The folk who refused to be persuaded, by (depth, seed), with the rests then: they refuse
     /// again until the delver has rested.
-    #[serde(default)]
+    #[serde(default, with = "crate::map_pairs")]
     pub refused: BTreeMap<(u32, u32), u32>,
 }
 
@@ -496,6 +496,28 @@ mod tests {
         let back: WorldRecord = serde_json::from_str(&text).unwrap();
         assert_eq!(back.met_on, record.met_on);
         assert_eq!(back.met_on[&a].iter().copied().collect::<Vec<_>>(), vec![2, 5]);
+    }
+
+    #[test]
+    fn folk_persuaded_and_refused_survive_a_save() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        record.note_persuasion((2, 77));
+        record.note_persuasion((2, 77));
+        record.refused.insert((3, 9), 1);
+        let text = serde_json::to_string(&record).unwrap();
+        let back: WorldRecord = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.persuasion_tries((2, 77)), 2);
+        assert_eq!(back.refused, record.refused);
+    }
+
+    #[test]
+    fn a_record_saved_with_empty_persuasions_as_objects_still_loads() {
+        let record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        let mut value = serde_json::to_value(&record).unwrap();
+        value["persuasions"] = serde_json::json!({});
+        value["refused"] = serde_json::json!({});
+        let back: WorldRecord = serde_json::from_value(value).unwrap();
+        assert!(back.persuasions.is_empty() && back.refused.is_empty());
     }
 
     #[test]
