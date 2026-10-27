@@ -31,6 +31,7 @@
 //! card over the `n`th thing in the first carried grid (`u<n>` underfoot, `o<n>` in the open
 //! container or trader's shelf; `q` the worn quiver on the doll).
 
+pub mod bags;
 pub mod card;
 pub mod doll;
 pub mod factions;
@@ -140,6 +141,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Tuning>()
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
+            .init_resource::<bags::BagWindows>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
             .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
@@ -153,9 +155,9 @@ impl Plugin for InventoryPlugin {
                         underfoot::track_underfoot,
                         close_container_with_screen,
                         (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
+                        (bags::open_for_capture.run_if(|| env_flag("FB_OPEN_BAGS")), bags::place_windows).chain(),
                         build_screen,
-                        scroll_column,
-                        scroll_shelf,
+                        (bags::drag_windows, scroll_column, scroll_shelf).chain(),
                         drag_items,
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
@@ -192,6 +194,7 @@ pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut
     commands.insert_resource(Underfoot::default());
     commands.insert_resource(FloorChanges::default());
     commands.insert_resource(OpenContainer::default());
+    commands.insert_resource(bags::BagWindows::default());
     commands.insert_resource(Hovered::default());
     commands.insert_resource(card::ShownCard::default());
     commands.insert_resource(Toast::default());
@@ -953,7 +956,7 @@ pub(crate) fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
-    (tuning, scrolled, barter, shelf_scrolled, record, abyss): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::travel::Abyss>>),
+    (tuning, scrolled, barter, shelf_scrolled, record, abyss, windows): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::travel::Abyss>>, Res<bags::BagWindows>),
     rules: Option<Res<crate::rules::GameRules>>,
     keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
@@ -966,7 +969,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed())) && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !windows.is_changed() && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed())) && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -1045,10 +1048,14 @@ pub(crate) fn build_screen(
                             Node { flex_direction: FlexDirection::Column, row_gap: px(16), min_height: px(0), overflow: Overflow::scroll_y(), ..default() },
                         ))
                         .with_children(|leaf| {
+                        let popped = |id: ItemId| !barter.active() && windows.is_open(id);
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
+                                // A bag opened as a window leaves the column until it is closed.
                                 let carried = screen.inventory.carried_containers();
-                                if carried.is_empty() {
+                                let none_carried = carried.is_empty();
+                                let carried: Vec<ItemId> = carried.into_iter().filter(|&c| !popped(c)).collect();
+                                if none_carried {
                                     row.spawn((
                                         Text::new("Nothing to carry things in. Find a pack, a sack or a belt with a pouch."),
                                         UiFonts::style(&fonts.body, 14.0, MUTED),
@@ -1078,13 +1085,13 @@ pub(crate) fn build_screen(
                             });
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
-                                if let Some(container) = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c)) {
+                                if let Some(container) = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c) && !popped(c)) {
                                     screen.container(row, &mut icons, container, GridView::Container(container), "");
                                 }
                                 // Nothing lies about in the trader's stall.
                                 if !barter.active() {
                                     screen.underfoot(row, &mut icons, &underfoot);
-                                    for &bag in &underfoot.bags {
+                                    for &bag in underfoot.bags.iter().filter(|&&b| !popped(b)) {
                                         screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                     }
                                 }
@@ -1107,6 +1114,13 @@ pub(crate) fn build_screen(
                         leaf.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
             });
+            // Opened bags float over the ledger, the last opened in front.
+            if *tab == SheetTab::Inventory && !barter.active() {
+                for (z, &id) in windows.order.iter().enumerate() {
+                    let at = windows.at.get(&id).copied().unwrap_or_default();
+                    screen.bag_window(root, &mut icons, id, at, z as i32 + 1);
+                }
+            }
             root.spawn((
                 DragGhost,
                 Node { position_type: PositionType::Absolute, ..default() },
@@ -1200,6 +1214,51 @@ impl ScreenLayout<'_> {
                 }
             }
         });
+    }
+
+    /// A container opened as a window at `at`: a title bar to drag it by with a cross to close
+    /// it, over its grid. `z` stacks it among the other windows.
+    fn bag_window(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, at: Vec2, z: i32) {
+        let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else { return };
+        let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
+        let size = bags::window_size(grid, self.cell);
+        parent
+            .spawn((
+                bags::BagWindow(id),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(at.x),
+                    top: px(at.y),
+                    width: px(size.x),
+                    height: px(size.y),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(bags::GAP_PX),
+                    padding: UiRect::all(px(bags::PAD_PX)),
+                    border: UiRect::all(px(bags::BORDER_PX)),
+                    border_radius: BorderRadius::all(px(GRID_RADIUS_PX)),
+                    ..default()
+                },
+                BackgroundColor(BG),
+                BorderColor::all(LINE),
+                ZIndex(z),
+            ))
+            .with_children(|window| {
+                window.spawn((bags::BagTitle(id), Node { align_items: AlignItems::Center, column_gap: px(8), height: px(bags::TITLE_PX), flex_shrink: 0.0, ..default() })).with_children(|head| {
+                    let icon_size = icon::icon_size(item, false).as_vec2();
+                    let icon_size = icon_size * (30.0 / icon_size.max_element());
+                    icons.spawn(head, item, false, Node { width: px(icon_size.x), height: px(icon_size.y), ..default() }, icon_size.min_element().max(14.0));
+                    head.spawn((Text::new(label), UiFonts::style(&self.fonts.display, 18.0, INK), Node { flex_grow: 1.0, ..default() }));
+                    head.spawn((
+                        bags::BagClose(id),
+                        Node { width: px(26), height: px(26), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() },
+                        BackgroundColor(CELL),
+                    ))
+                    .with_children(|close| {
+                        close.spawn((Text::new("x"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                    });
+                });
+                self.grid(window, icons, GridView::Container(id), grid, false);
+            });
     }
 
     /// A grid of cells with its items drawn at their footprints. `faded` draws the cells paler,
@@ -1335,6 +1394,7 @@ fn target_under(
     ledger: Option<Rect>,
     column: Option<Rect>,
     shelf: Option<(GridView, Rect)>,
+    windows: &[Rect],
     cell: f32,
 ) -> Target {
     if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
@@ -1342,6 +1402,17 @@ fn target_under(
     }
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Slot(slot.0);
+    }
+    // A window floats over the page: under the mouse it takes the drop (a grid in it, else
+    // the page), and the grids behind it do not count. `windows` is front first.
+    if let Some(window) = windows.iter().find(|w| w.contains(point)) {
+        for (view, node, transform) in grids {
+            let rect = node_rect(node, transform);
+            if rect.contains(point) && window.contains(rect.center()) {
+                return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
+            }
+        }
+        return Target::Page;
     }
     // The grids' rectangles follow the scroll (`UiGlobalTransform` includes it), but a grid
     // scrolled out of the column is clipped, so only the visible part of the column counts.
@@ -1498,12 +1569,13 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    (time, tuning, ui_scale, mut barter): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>),
-    (drops, mut quickslots, columns, shelf_areas): (
+    (time, tuning, ui_scale, mut barter, mut bag_windows): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>, ResMut<bags::BagWindows>),
+    (drops, mut quickslots, columns, shelf_areas, window_frames): (
         Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
         ResMut<Quickslots>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
+        Query<(&bags::BagWindow, &ComputedNode, &UiGlobalTransform)>,
     ),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
@@ -1519,7 +1591,9 @@ fn drag_items(
     let column = columns.iter().next().map(|(n, t)| node_rect(n, t));
     // The shelf's grid is clipped to its own scroll area.
     let shelf = barter.session.as_ref().zip(shelf_areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
-    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, shelf, cell_px);
+    // The open windows' rectangles, front first.
+    let window_rects: Vec<Rect> = bag_windows.order.iter().rev().filter_map(|id| window_frames.iter().find(|(w, ..)| w.0 == *id)).map(|(_, n, t)| node_rect(n, t)).collect();
+    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, shelf, &window_rects, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -1569,9 +1643,17 @@ fn drag_items(
         let outcome = if drag.active {
             (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
+            // The first click opened or closed the bag's window; a double-click is not that.
+            if inventory.grid(drag.id).is_some() && !barter.active() {
+                bag_windows.toggle(drag.id);
+            }
             (if barter.active() { barter.quick(&mut inventory, drag.id) } else { None }).unwrap_or_else(|| quick(&mut inventory, drag.id))
         } else {
             *last_click = Some((drag.id, now));
+            // A click on a bag opens its grid as a window, or closes it.
+            if inventory.grid(drag.id).is_some() && !barter.active() {
+                bag_windows.toggle(drag.id);
+            }
             return;
         };
         match outcome {
@@ -1919,6 +2001,7 @@ mod tests {
             .init_resource::<Tuning>()
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
+            .init_resource::<bags::BagWindows>()
             .add_systems(PreUpdate, crate::keymap::track_context)
             .add_systems(Update, (switch_screens, header::click_tabs, reset_scroll_on_tab, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
@@ -3140,7 +3223,7 @@ mod tests {
         )>::new(&mut world);
         let (drops, grids, slots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
-        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, None, 72.0);
+        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, None, &[], 72.0);
         assert!(matches!(at(None), Target::Cell { .. }));
         assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
         // The column starts below this point: the grid is under the header, clipped away.
