@@ -469,6 +469,7 @@ fn refresh_header(forge: Res<LevelForge>, mut readouts: Query<(&Readout, &mut Te
             Readout::Seed => forge.seed.to_string(),
             Readout::Depth => format!("{} \u{b7} {}", forge.depth, match forge.level.style {
                 LevelStyle::RoughRock => "rough rock",
+                LevelStyle::CrystalCavern => "crystal cavern",
                 LevelStyle::StoneHalls => "stone halls",
             }),
             Readout::Summary => forge.summary(),

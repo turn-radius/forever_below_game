@@ -364,7 +364,7 @@ fn grid(cell: i32, i: usize) -> f32 {
 pub fn ceiling_at(level: &Level, x: f32, z: f32) -> f32 {
     match level.style {
         LevelStyle::StoneHalls => Vaults::new(level).height(x, z),
-        LevelStyle::RoughRock => level.ceiling,
+        LevelStyle::RoughRock | LevelStyle::CrystalCavern => level.ceiling,
     }
 }
 

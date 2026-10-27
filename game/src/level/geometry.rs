@@ -49,6 +49,8 @@ const WALL_RELIEF: f32 = 2.2;
 const FLOOR_RELIEF: f32 = 0.35;
 const CEILING_RELIEF: f32 = 1.6;
 const RELIEF_WAVELENGTH: f32 = 11.0;
+/// A crystal cavern's floor wanders this many times as far as a cave's: about 0.7 units (7 cm).
+const CAVERN_FLOOR_SCALE: f32 = 2.0;
 
 /// Ink ribbons sit this far off the stone, so they win the depth test without z-fighting.
 const INK_LIFT: f32 = 0.05;
@@ -209,11 +211,14 @@ pub struct Relief {
     ceiling: f32,
     /// Whether the stone wanders at all: dressed stone is true to the grid.
     rough: bool,
+    /// How much further the floor wanders than a rough rock level's: a crystal cavern's floor
+    /// heaves in long swells, where a cave's is nearly level.
+    floor_scale: f32,
 }
 
 impl Relief {
     pub fn new(level: &Level) -> Self {
-        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling, rough: level.style == LevelStyle::RoughRock }
+        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling, rough: level.style.is_rock(), floor_scale: if level.style == LevelStyle::CrystalCavern { CAVERN_FLOOR_SCALE } else { 1.0 } }
     }
 
     /// Two octaves of value noise in -0.5..0.5 for channel `channel`.
@@ -236,7 +241,8 @@ impl Relief {
             return p;
         }
         let up = (p[1] / self.ceiling.max(1.0)).clamp(0.0, 1.0);
-        let vertical = FLOOR_RELIEF + (CEILING_RELIEF - FLOOR_RELIEF) * up;
+        let floor = FLOOR_RELIEF * self.floor_scale;
+        let vertical = floor + (CEILING_RELIEF - floor) * up;
         [p[0] + WALL_RELIEF * self.wander(p, 1), p[1] + vertical * self.wander(p, 2), p[2] + WALL_RELIEF * self.wander(p, 3)]
     }
 

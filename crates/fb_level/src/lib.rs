@@ -122,6 +122,9 @@ pub enum LightKind {
     /// A hearth's campfire, built from the Armory campfire family ([`crate::Prop::Campfire`]
     /// stands at the same spot): warm, flickering, lit.
     Campfire,
+    /// One of a crystal cavern's largest crystals, glowing in its own colour: the light sits at
+    /// the crystal's own spot ([`Level::crystal_lit_by`] finds it), so the kind needs no colour.
+    Crystal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -138,13 +141,35 @@ pub enum LevelStyle {
     RoughRock,
     /// Wider, more regular rooms, colonnaded halls and straighter corridors.
     StoneHalls,
+    /// Deep caverns where crystals grow: a few large open chambers with uneven natural floors,
+    /// pillars of rock standing in them, joined by wide passages. Worked rock like rough rock,
+    /// only far bigger.
+    CrystalCavern,
 }
 
 impl LevelStyle {
+    /// The first depth a crystal cavern can lie at.
+    pub const FIRST_CAVERN_DEPTH: u32 = 5;
+
     /// The style of the level at `depth` (1 is the first level): rough rock at odd depths and
-    /// stone halls at even ones, so the two alternate on the way down.
+    /// stone halls at even ones, so the two alternate on the way down, and from depth 5 on every
+    /// second rough rock level (5, 9, 13...) is a crystal cavern instead. Shallower levels never
+    /// roll one.
     pub fn for_depth(depth: u32) -> Self {
-        if depth.max(1) % 2 == 1 { LevelStyle::RoughRock } else { LevelStyle::StoneHalls }
+        let depth = depth.max(1);
+        if depth % 2 == 0 {
+            LevelStyle::StoneHalls
+        } else if depth >= Self::FIRST_CAVERN_DEPTH && depth % 4 == 1 {
+            LevelStyle::CrystalCavern
+        } else {
+            LevelStyle::RoughRock
+        }
+    }
+
+    /// Whether the level is worked rock, not dressed stone: rough rock and the crystal caverns
+    /// share the rock's relief, finishes and doors.
+    pub fn is_rock(self) -> bool {
+        !matches!(self, LevelStyle::StoneHalls)
     }
 }
 
@@ -181,6 +206,9 @@ pub struct Level {
     /// Faction banners hung on the walls of claimed rooms and beside their doors ([`banners`]).
     #[serde(default)]
     pub banners: Vec<BannerSpot>,
+    /// Crystals growing in a crystal cavern ([`crystals`]); none on any other level.
+    #[serde(default)]
+    pub crystals: Vec<CrystalSpot>,
     /// Rats and snakes ([`creatures`]).
     pub creatures: Vec<CreatureSpot>,
     /// The ways to the levels above and below ([`stairs`]).
@@ -207,6 +235,14 @@ impl Level {
     /// The names of the factions on this level, as the world's items name them in their legends.
     pub fn faction_names(&self) -> Vec<String> {
         self.factions.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// The crystal a [`LightKind::Crystal`] light shines from: the one growing at its spot.
+    pub fn crystal_lit_by(&self, light: &LightSpot) -> Option<&CrystalSpot> {
+        if light.kind != LightKind::Crystal {
+            return None;
+        }
+        self.crystals.iter().find(|c| c.x == light.x && c.y == light.y)
     }
 
     /// The cell at `(x, y)`, or rock outside the grid.
@@ -319,6 +355,7 @@ impl Level {
 }
 
 pub mod banners;
+pub mod crystals;
 pub mod claims;
 pub mod doorkind;
 pub mod creatures;
@@ -340,6 +377,7 @@ pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use banners::{BannerSite, BannerSpot};
+pub use crystals::{CavernStone, CrystalSpot, CrystalSurface, crystal_state};
 pub use claims::{Claim, ClaimRules, settle_claims};
 pub use folk::{DenizenBody, DenizenKind, Faction, FactionSpec, FolkSpot, Trade};
 pub use props::{CONTAINER_SCALE, NO_LOOT, FloorShape, OPEN_LID, Prop, PropSpot, chest_state};

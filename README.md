@@ -320,6 +320,8 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[light]` | `brazier_reach` | 150.0 | How far a brazier's light reaches, in world units. |
 | `[light]` | `glowcap_peak` | 0.5 | A patch of glowcaps' strength close up (1 = full). |
 | `[light]` | `glowcap_reach` | 30.0 | How far glowcaps' light reaches, in world units. |
+| `[light]` | `crystal_peak` | 0.3 | A lit crystal's strength close up (1 = full). |
+| `[light]` | `crystal_reach` | 60.0 | How far a lit crystal's light reaches, in world units, for a crystal 3 m tall. |
 | `[light]` | `flicker_depth` | 1.0 | How deeply flames flicker (0 = steady, 1 = usual). |
 | `[light]` | `ambient_lux` | 4.0 | The abyss's own light where no flame reaches, in lux. |
 | `[light]` | `fog_start` | 40.0 | Where the dark starts to swallow far stone, in world units. |

@@ -20,7 +20,8 @@ fn all_levels_hash() -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for depth in 1..=4 {
         for seed in 1..=50 {
-            for b in round_floats(&format!("{:?}", generate(seed, depth))).bytes() {
+            // A level above the caverns grows no crystals (#658): the empty list the field prints is not a change.
+            for b in round_floats(&format!("{:?}", generate(seed, depth)).replace(", crystals: []", "")).bytes() {
                 h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
             }
         }
@@ -146,7 +147,7 @@ fn strip_tastes(text: &str) -> String {
 fn depth_hash(depth: u32) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for seed in 1..=50 {
-        let text = strip_tastes(&round_floats(&format!("{:?}", generate(seed, depth)))).replace(", denizen: None", "");
+        let text = strip_tastes(&round_floats(&format!("{:?}", generate(seed, depth)))).replace(", denizen: None", "").replace(", crystals: []", "");
         for b in text.bytes() {
             h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
         }

@@ -47,11 +47,12 @@ pub enum Family {
     #[serde(rename = "bolt_case")]
     BoltCase,
     Banner,
+    Crystal,
 }
 
 impl Family {
-    pub const ALL: [Family; 35] = [
-        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Hat, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch, Family::Lantern, Family::Sundry, Family::Writing, Family::Arrow, Family::Bolt, Family::Quiver, Family::Tent, Family::Campfire, Family::BoltCase, Family::Banner,
+    pub const ALL: [Family; 36] = [
+        Family::Staff, Family::Mace, Family::Sword, Family::Spear, Family::Dagger, Family::Club, Family::Axe, Family::Bow, Family::Crossbow, Family::Helm, Family::Hood, Family::Hat, Family::Garment, Family::Belt, Family::Hands, Family::Legs, Family::Feet, Family::Shield, Family::Ring, Family::Amulet, Family::Charm, Family::Bags, Family::Chests, Family::Food, Family::Torch, Family::Lantern, Family::Sundry, Family::Writing, Family::Arrow, Family::Bolt, Family::Quiver, Family::Tent, Family::Campfire, Family::BoltCase, Family::Banner, Family::Crystal,
     ];
     pub fn key(self) -> &'static str {
         match self {
@@ -90,11 +91,12 @@ impl Family {
             Family::Campfire => "campfire",
             Family::BoltCase => "bolt_case",
             Family::Banner => "banner",
+            Family::Crystal => "crystal",
         }
     }
     /// Whether the Spline Armory prototype had this family (and so example fixtures).
     pub fn in_armory_prototype(self) -> bool {
-        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Hat | Family::Belt | Family::Legs | Family::Torch | Family::Lantern | Family::Sundry | Family::Writing | Family::Arrow | Family::Bolt | Family::Quiver | Family::Tent | Family::Campfire | Family::BoltCase | Family::Banner)
+        !matches!(self, Family::Club | Family::Axe | Family::Hood | Family::Hat | Family::Belt | Family::Legs | Family::Torch | Family::Lantern | Family::Sundry | Family::Writing | Family::Arrow | Family::Bolt | Family::Quiver | Family::Tent | Family::Campfire | Family::BoltCase | Family::Banner | Family::Crystal)
     }
 }
 

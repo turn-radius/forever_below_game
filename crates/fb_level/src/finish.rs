@@ -92,7 +92,7 @@ impl Character {
     pub fn of_style(style: LevelStyle) -> &'static [Character] {
         match style {
             LevelStyle::StoneHalls => &[Character::Plain, Character::Timbered, Character::Vaulted],
-            LevelStyle::RoughRock => &[Character::Plain, Character::Timbered, Character::Hewn, Character::Layered],
+            LevelStyle::RoughRock | LevelStyle::CrystalCavern => &[Character::Plain, Character::Timbered, Character::Hewn, Character::Layered],
         }
     }
 }
@@ -321,7 +321,7 @@ fn dress(character: Character, rock: bool, floor: f64, arch: f64, params: &Level
 pub fn finishes(level: &Level, params: &LevelParams) -> Finishes {
     let seed = level.seed ^ level.depth.wrapping_mul(0x9E37_79B9) ^ FINISH_SALT;
     let mut rng = Mulberry32::new(seed);
-    let rock = level.style == LevelStyle::RoughRock;
+    let rock = level.style.is_rock();
 
     // The level has one dominant character and, now and then, one second character on one
     // quarter. Depth 1 is plain whatever the sliders say. The draws are fixed in number: four for
