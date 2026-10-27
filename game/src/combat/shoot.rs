@@ -173,7 +173,7 @@ pub fn ammunition_in(inventory: &Inventory, holder: ItemId) -> Vec<ItemId> {
 /// the one on the string or the deck.
 pub fn ammunition_left(inventory: &Inventory, marksman: &Marksman) -> Option<(armory::Family, usize)> {
     let (_, ranged) = ranged_in_hand(inventory)?;
-    let held = holder_of(inventory, ranged.ammunition).map_or(0, |h| inventory.pieces_in(h));
+    let held = holder_of(inventory, ranged.ammunition).map_or(0, |h| ammunition_in(inventory, h).into_iter().filter_map(|id| inventory.item(id)).filter(|i| i.shape.family() == ranged.ammunition).map(|i| i.quantity as usize).sum());
     Some((ranged.ammunition, held + usize::from(marksman.nocked.is_some())))
 }
 
@@ -252,8 +252,8 @@ fn feet_flown(origin: Vec3, at: Vec3) -> f32 {
 
 /// Takes the ammunition at `nock` back into its holder (or the first carried container with
 /// room), or loses it if there is no room.
-fn put_back(inventory: &mut Inventory, ammo: ItemId, _family: armory::Family) {
-    // The quiver is tried first, and a piece folds into the stack it came from.
+fn put_back(inventory: &mut Inventory, ammo: ItemId) {
+    // `stow` tries a quiver or bolt case before a pack, and a piece folds into the stack it came from.
     if inventory.stow(ammo).is_err() {
         inventory.forget(ammo);
     }
@@ -300,8 +300,7 @@ pub fn shoot(
         && (weapon.map(|w| w.0) != Some(nocked.weapon) || inventory.item(nocked.ammo).is_none())
     {
         if inventory.item(nocked.ammo).is_some() {
-            let family = inventory.item(nocked.ammo).map_or(armory::Family::Arrow, |i| i.shape.family());
-            put_back(&mut inventory, nocked.ammo, family);
+            put_back(&mut inventory, nocked.ammo);
         }
         *marksman = Marksman::default();
     }
@@ -320,7 +319,7 @@ pub fn shoot(
         // The screen opened mid-draw: lower the bow and put the arrow back.
         if marksman.draw.is_some() || marksman.reload.is_some() {
             if let Some(nocked) = marksman.nocked.take() {
-                put_back(&mut inventory, nocked.ammo, ranged.ammunition);
+                put_back(&mut inventory, nocked.ammo);
             }
             marksman.draw = None;
             marksman.reload = None;

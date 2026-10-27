@@ -179,14 +179,23 @@ impl Item {
         if self.profile.tags.contains(&Tag::Ammunition) { u32::from(self.profile.stack.max(1)) } else { 1 }
     }
 
-    /// Whether `other` could join this one's stack: the same base and seed (one model, one
-    /// seed for the stack), the same shape (condition, fuel), nothing written or taught that
-    /// differs, and a stack that can hold more than one. Two arrow types never do.
+    /// Whether `other` could join this one's stack: a kind that stacks at all, and every part of
+    /// it the same. The base and seed are one model, one seed for the stack; `shape` is compared
+    /// with the Armory state's derived `==`, so every slider, the condition (wear, rust, fuel)
+    /// and the palette must be bit for bit alike, and an arrow worn by a shot never joins a
+    /// fresh one; the rest (rarity, affixes, name, legend, history, coins, words, teaching, how
+    /// known, the rest an identify was tried at, the odds it was rolled against) must be equal
+    /// too. Two arrow types never stack. Quantity is not compared.
     pub fn can_stack_with(&self, other: &Item) -> bool {
         self.stack_limit() > 1
             && self.base == other.base
             && self.seed == other.seed
             && self.shape == other.shape
+            && self.legend == other.legend
+            && self.history == other.history
+            && self.teaching == other.teaching
+            && self.rest_tried == other.rest_tried
+            && self.odds == other.odds
             && self.rarity == other.rarity
             && self.affixes == other.affixes
             && self.name == other.name
@@ -315,6 +324,26 @@ impl Item {
     }
 }
 
+/// `items` with the pieces that stack folded together, a full stack at a time, in the order of
+/// each kind's first piece: twenty arrows of one seed come back as stacks of 10 and 10.
+pub fn stack_up(items: impl IntoIterator<Item = Item>) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::new();
+    for mut item in items {
+        for have in out.iter_mut() {
+            if !have.can_stack_with(&item) {
+                continue;
+            }
+            let moved = have.stack_room().min(item.quantity);
+            have.quantity += moved;
+            item.quantity -= moved;
+        }
+        if item.quantity > 0 {
+            out.push(item);
+        }
+    }
+    out
+}
+
 /// Rolls base `base` from `seed` at the first level's odds ([`roll_item_with`]).
 pub fn roll_item(base: &str, seed: u32) -> Option<Item> {
     roll_item_with(base, seed, Odds::default())
@@ -382,10 +411,20 @@ mod tests {
         assert!(arrow.can_stack_with(&roll_item("Arrow", 7).unwrap()));
         assert!(!arrow.can_stack_with(&roll_item("Arrow", 8).unwrap()), "another model is another stack");
         assert!(!arrow.can_stack_with(&roll_item("Bolt", 7).unwrap()));
+        let mut told = roll_item("Arrow", 7).unwrap();
+        told.history.push("Fletched by Brenna".into());
+        assert!(!arrow.can_stack_with(&told), "a different history is a different piece");
         let full = roll_item("Arrow", 7).unwrap().with_quantity(10);
         assert_eq!(full.stack_room(), 0);
         assert_eq!(roll_item("Sword", 1).unwrap().stack_limit(), 1);
         assert!(!roll_item("Bread", 1).unwrap().can_stack_with(&roll_item("Bread", 1).unwrap()));
+    }
+
+    #[test]
+    fn stacking_up_folds_pieces_ten_to_a_stack() {
+        let pieces = (0..24).map(|i| roll_item(if i == 5 { "Bolt" } else { "Arrow" }, 7).unwrap());
+        let stacks = stack_up(pieces);
+        assert_eq!(stacks.iter().map(|i| (i.base.as_str(), i.quantity)).collect::<Vec<_>>(), vec![("Arrow", 10), ("Bolt", 1), ("Arrow", 10), ("Arrow", 3)]);
     }
 
     #[test]

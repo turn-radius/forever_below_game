@@ -126,6 +126,16 @@ impl Item {
         (worth.round() as u64).max(1)
     }
 
+    /// What the whole stack is worth, in copper: [`Item::value_copper`] for each piece.
+    pub fn stack_value_copper(&self) -> u64 {
+        self.value_copper() * u64::from(self.quantity)
+    }
+
+    /// [`Item::stack_value_copper`] in coins, with change.
+    pub fn stack_value(&self) -> Coins {
+        Coins::from_copper(self.stack_value_copper())
+    }
+
     /// [`Item::value_copper`] in coins, with change.
     pub fn value(&self) -> Coins {
         Coins::from_copper(self.value_copper())

@@ -59,7 +59,8 @@ pub struct Belongings {
 
 impl Belongings {
     pub fn new(seed: u32, items: impl IntoIterator<Item = Item>) -> Belongings {
-        Belongings { items: items.into_iter().collect(), seed, stood_in: None }
+        // Pieces of one kind of arrow lie as stacks of ten, not as twenty things.
+        Belongings { items: fb_items::stack_up(items), seed, stood_in: None }
     }
 
     /// These belongings of a character that blocked a circle of `radius`.

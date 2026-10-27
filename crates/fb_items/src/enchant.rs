@@ -190,9 +190,10 @@ pub fn reforge_cost(item: &Item, tier: Tier) -> Cost {
     Cost { essence: scaled(t.reforge_essence[&rarity], t.essence_by_tier[&tier]), materials: vec![], copper: u64::from(scaled(t.reforge_copper[&rarity], t.copper_by_tier[&tier])) }
 }
 
-/// Whether an enchanter can work on `item`: gear, not a container, a purse or a legendary.
+/// Whether an enchanter can work on `item`: gear, not a container, a purse or a legendary, and
+/// one piece (a stack is never one piece's work: the work would change them all for one fee).
 pub fn enchantable(item: &Item) -> bool {
-    item.profile.kind == Kind::Gear && item.coins.is_none() && item.rarity != Rarity::Legendary && item.legend.is_none() && !item.profile.tags.contains(&Tag::Container)
+    item.quantity == 1 && item.profile.kind == Kind::Gear && item.coins.is_none() && item.rarity != Rarity::Legendary && item.legend.is_none() && !item.profile.tags.contains(&Tag::Container)
 }
 
 /// Why `item` can be worked on by no enchanter: a legend cannot be changed, and what is not gear
@@ -440,6 +441,15 @@ mod tests {
         for a in &item.affixes {
             assert!(a.fits_item(&item.profile.tags, item.profile.slot), "{} on {}", a.name, item.name);
         }
+    }
+
+    #[test]
+    fn a_stack_is_not_enchanted_for_one_fee() {
+        let sword = find("Sword", |i| enchantable(i));
+        assert!(enchantable(&sword));
+        let stack = sword.with_quantity(3);
+        assert!(!enchantable(&stack));
+        assert_eq!(unchangeable(&stack), Some(Refusal::NotEnchantable));
     }
 
     #[test]

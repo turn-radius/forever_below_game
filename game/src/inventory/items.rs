@@ -108,7 +108,17 @@ pub fn char_bucket(shape: &armory::Item) -> u8 {
 pub enum Displaced {
     Worn(Slot),
     In { container: ItemId, at: Placement },
+    /// Folded into a stack of its kind in the container, and gone as an item of its own.
+    Folded { container: ItemId },
     Underfoot,
+}
+
+/// What [`Inventory::top_up`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TopUp {
+    None,
+    Some,
+    Done,
 }
 
 /// Everything the delver has, and the items lying in the level.
@@ -403,24 +413,27 @@ impl Inventory {
     /// Puts `id` into the first carried container with room for it, at its first free spot.
     /// Returns the container. A stack (arrows, bolts) first tops up the stacks of its own kind
     /// already carried, then fills places of its own, ten to a place: 14 arrows make a stack of
-    /// 10 and one of 4. Folded wholly into others, `id` is forgotten.
+    /// 10 and one of 4.
+    ///
+    /// Contract for callers: on `Ok`, `id` may have been folded into other stacks and forgotten
+    /// (`item(id)` is `None`), and `id` may be in a different place than it was or even be
+    /// still loose: when some pieces were stowed and the rest found no room, the result is `Ok`
+    /// (a partial pickup) and `id` is still loose, holding what is left ([`Inventory::is_partial`]).
+    /// `Err` means nothing moved. Use [`Inventory::stow_apart`] to keep `id` itself.
     pub fn stow(&mut self, id: ItemId) -> Result<ItemId, Refusal> {
-        let item = self.item(id).ok_or(Refusal::Unknown)?;
-        if !item.profile.packable {
-            return Err(Refusal::Unpackable);
-        }
-        let footprint = item.profile.footprint;
-        // A container that names what it takes (a quiver) is tried before one that takes anything.
-        let mut containers = self.carried_containers();
-        containers.sort_by_key(|c| self.item(*c).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.accepts.is_empty()));
+        let (footprint, containers) = self.stowing(id)?;
         let mut first = None;
-        if item.stack_limit() > 1 {
+        if self.item(id).is_some_and(|i| i.stack_limit() > 1) {
             for &container in &containers {
                 if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
                     continue;
                 }
-                if self.top_up(id, container) {
-                    return Ok(container);
+                match self.top_up(id, container) {
+                    TopUp::Done => return Ok(container),
+                    TopUp::Some => {
+                        first.get_or_insert(container);
+                    }
+                    TopUp::None => {}
                 }
             }
             // What is left goes in places of its own, a full stack at a time.
@@ -449,6 +462,67 @@ impl Inventory {
         }
     }
 
+    /// Puts `id` itself, whole, in the first carried container with room, never folding it into
+    /// another stack: a deal's moves must keep every id, so Cancel can find it
+    /// ([`crate::barter`] folds what it bought at settle, [`Inventory::fold_into_stacks`]).
+    pub fn stow_apart(&mut self, id: ItemId) -> Result<ItemId, Refusal> {
+        let (footprint, containers) = self.stowing(id)?;
+        self.stow_whole(id, footprint, &containers)
+    }
+
+    /// Whether `id` is still loose with pieces left after a [`Inventory::stow`] said `Ok`.
+    pub fn is_partial(&self, id: ItemId) -> bool {
+        self.item(id).is_some() && self.location(id) == Some(Location::Loose)
+    }
+
+    /// Folds `id`, a carried stack, into the other stacks of its kind in the same bag, as far as
+    /// they have room. True when none is left and `id` has been forgotten.
+    pub fn fold_into_stacks(&mut self, id: ItemId) -> bool {
+        let Some(Location::In { container, .. }) = self.location(id) else { return false };
+        if self.item(id).is_none_or(|i| i.stack_limit() <= 1) {
+            return false;
+        }
+        self.top_up(id, container) == TopUp::Done
+    }
+
+    /// Moves what `id` has into `onto`, a stack of its kind with room (a drag let go on it).
+    /// True when `id` is emptied and forgotten; false when some is left in `id`, which stays
+    /// where it is. Refused when nothing could move.
+    pub fn merge_onto(&mut self, id: ItemId, onto: ItemId) -> Result<bool, Refusal> {
+        let (from, to) = (self.items.get(&id).ok_or(Refusal::Unknown)?, self.items.get(&onto).ok_or(Refusal::Unknown)?);
+        if id == onto || !to.can_stack_with(from) || to.stack_room() == 0 {
+            return Err(Refusal::NoRoom);
+        }
+        let moved = to.stack_room().min(from.quantity);
+        let left = from.quantity - moved;
+        self.items.get_mut(&onto).map(|t| t.quantity += moved);
+        if left == 0 {
+            self.forget(id);
+        } else {
+            self.items.get_mut(&id).map(|f| f.quantity = left);
+        }
+        Ok(left == 0)
+    }
+
+    /// A stack in `container` at cell `(x, y)` that `id` could be dropped on and top up.
+    pub fn stack_at(&self, id: ItemId, container: ItemId, x: i32, y: i32) -> Option<ItemId> {
+        let onto = self.grids.get(&container)?.at_cell(x, y)?.id;
+        let (from, to) = (self.item(id)?, self.item(onto)?);
+        (onto != id && to.can_stack_with(from) && to.stack_room() > 0 && !self.holds(id, container)).then_some(onto)
+    }
+
+    /// The footprint and the carried containers to try for `id`, the ones that name what they
+    /// take (a quiver) first.
+    fn stowing(&self, id: ItemId) -> Result<(Footprint, Vec<ItemId>), Refusal> {
+        let item = self.item(id).ok_or(Refusal::Unknown)?;
+        if !item.profile.packable {
+            return Err(Refusal::Unpackable);
+        }
+        let mut containers = self.carried_containers();
+        containers.sort_by_key(|c| self.item(*c).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.accepts.is_empty()));
+        Ok((item.profile.footprint, containers))
+    }
+
     /// Puts `id` as it is in the first of `containers` with room, at its first free spot.
     fn stow_whole(&mut self, id: ItemId, footprint: Footprint, containers: &[ItemId]) -> Result<ItemId, Refusal> {
         for &container in containers {
@@ -464,12 +538,12 @@ impl Inventory {
     }
 
     /// Moves what `id` has into the unfilled stacks of its kind lying directly in `container`.
-    /// True when none is left and `id` has been forgotten.
-    fn top_up(&mut self, id: ItemId, container: ItemId) -> bool {
-        let Some(grid) = self.grids.get(&container) else { return false };
+    fn top_up(&mut self, id: ItemId, container: ItemId) -> TopUp {
+        let Some(grid) = self.grids.get(&container) else { return TopUp::None };
         let targets: Vec<ItemId> = grid.entries().iter().map(|e| e.id).filter(|&t| t != id).collect();
+        let mut result = TopUp::None;
         for target in targets {
-            let (Some(from), Some(to)) = (self.items.get(&id), self.items.get(&target)) else { return false };
+            let (Some(from), Some(to)) = (self.items.get(&id), self.items.get(&target)) else { return result };
             if !to.can_stack_with(from) {
                 continue;
             }
@@ -481,15 +555,16 @@ impl Inventory {
             if let Some(to) = self.items.get_mut(&target) {
                 to.quantity += moved;
             }
+            result = TopUp::Some;
             if left == 0 {
                 self.forget(id);
-                return true;
+                return TopUp::Done;
             }
             if let Some(from) = self.items.get_mut(&id) {
                 from.quantity = left;
             }
         }
-        false
+        result
     }
 
     /// Takes one piece out of the stack `id`: the stack itself if it is one, else a loose piece
@@ -555,6 +630,7 @@ impl Inventory {
         let went = match self.stow(id) {
             Ok(container) => match self.location(id) {
                 Some(Location::In { at, .. }) => Displaced::In { container, at },
+                None => Displaced::Folded { container },
                 _ => Displaced::Underfoot,
             },
             Err(_) => Displaced::Underfoot,
@@ -1003,6 +1079,80 @@ mod tests {
         // The last of a stack comes off whole.
         let last = inventory.take_one(inventory.grid(quiver).unwrap().entries()[1].id).unwrap();
         assert_eq!(inventory.take_one(last), Some(last));
+    }
+
+    /// A quiver worn with stacks of `counts` arrows of one kind in it.
+    fn quiver_with(counts: &[u32]) -> (Inventory, ItemId, Vec<ItemId>) {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        let ids = counts
+            .iter()
+            .map(|&n| {
+                let id = inventory.add(rolled("Arrow", 5).with_quantity(n));
+                let at = inventory.grid(quiver).unwrap().first_free(Footprint { cols: 1, rows: 1 }).unwrap();
+                inventory.put(id, quiver, at).unwrap();
+                id
+            })
+            .collect();
+        (inventory, quiver, ids)
+    }
+
+    fn quantity(inventory: &Inventory, id: ItemId) -> Option<u32> {
+        inventory.item(id).map(|i| i.quantity)
+    }
+
+    #[test]
+    fn dropping_a_stack_on_another_tops_it_up_and_keeps_the_rest_in_hand() {
+        // 10 onto 4: six move, four stay where they were.
+        let (mut inventory, _, ids) = quiver_with(&[4, 10]);
+        assert_eq!(inventory.merge_onto(ids[1], ids[0]), Ok(false));
+        assert_eq!((quantity(&inventory, ids[0]), quantity(&inventory, ids[1])), (Some(10), Some(4)));
+        // 4 onto a full 10: nothing moves.
+        assert_eq!(inventory.merge_onto(ids[1], ids[0]), Err(Refusal::NoRoom));
+        assert_eq!((quantity(&inventory, ids[0]), quantity(&inventory, ids[1])), (Some(10), Some(4)));
+        // 6 onto 3 is 9, the dropped one gone.
+        let (mut inventory, quiver, ids) = quiver_with(&[3, 6]);
+        assert_eq!(inventory.merge_onto(ids[1], ids[0]), Ok(true));
+        assert_eq!((quantity(&inventory, ids[0]), quantity(&inventory, ids[1])), (Some(9), None));
+        assert_eq!(inventory.contents_count(quiver), 1);
+        // Another kind of arrow never merges.
+        let other = inventory.add(rolled("Arrow", 6));
+        assert_eq!(inventory.merge_onto(other, ids[0]), Err(Refusal::NoRoom));
+        assert!(inventory.stack_at(other, quiver, 0, 0).is_none());
+    }
+
+    #[test]
+    fn a_stack_is_found_under_the_cell_it_is_dropped_on() {
+        let (mut inventory, quiver, ids) = quiver_with(&[4]);
+        let hand = inventory.add(rolled("Arrow", 5).with_quantity(3));
+        assert_eq!(inventory.stack_at(hand, quiver, 0, 0), Some(ids[0]));
+        assert_eq!(inventory.stack_at(hand, quiver, 1, 0), None);
+    }
+
+    #[test]
+    fn a_pickup_with_no_room_for_the_rest_is_partial_and_the_rest_stays_loose() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        let (cols, rows) = {
+            let g = inventory.grid(quiver).unwrap();
+            (g.cols, g.rows)
+        };
+        for k in 0..cols as u32 * rows as u32 - 1 {
+            let other = inventory.add(rolled("Arrow", 100 + k));
+            inventory.stow(other).unwrap();
+        }
+        let ours = inventory.add(rolled("Arrow", 5).with_quantity(7));
+        inventory.stow(ours).unwrap();
+        let more = inventory.add(rolled("Arrow", 5).with_quantity(6));
+        assert_eq!(inventory.stow(more), Ok(quiver), "three fit the stack of seven");
+        assert_eq!(quantity(&inventory, ours), Some(10));
+        assert!(inventory.is_partial(more));
+        assert_eq!(quantity(&inventory, more), Some(3));
+        let none = inventory.add(rolled("Arrow", 5).with_quantity(2));
+        assert_eq!(inventory.stow(none), Err(Refusal::NoRoom));
+        assert_eq!(quantity(&inventory, none), Some(2));
     }
 
     #[test]

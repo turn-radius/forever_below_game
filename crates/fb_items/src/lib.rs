@@ -41,7 +41,7 @@ pub mod value;
 pub use foe::Foe;
 pub use identify::Known;
 pub use contents::{container_item, roll_contents};
-pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot};
+pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot, stack_up};
 pub use naming::Sex;
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;

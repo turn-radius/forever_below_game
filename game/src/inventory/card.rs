@@ -202,7 +202,7 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
         let weight = if item.quantity > 1 { format!("{} lb", number(s.weight * item.quantity as f32)) } else { weight };
         [description, count, Some(weight), Some(cells)].into_iter().flatten().collect()
     };
-    let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.value()) } else { Price::Unsure }, Price::Holds);
+    let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.stack_value()) } else { Price::Unsure }, Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
         let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
         match held {

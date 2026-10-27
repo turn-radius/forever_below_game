@@ -1539,6 +1539,8 @@ pub(crate) fn pick_up(
         return;
     }
     match inventory.pick_up(floor.id) {
+        // Some of a stack went in and the rest found no room: it keeps lying where it is.
+        Ok(()) if inventory.is_partial(floor.id) => info!("Took some; there is no room for the rest"),
         Ok(()) => {
             aimed.0 = None;
             lift(&mut commands, &mut level.bypass_change_detection().0, entity, floor);

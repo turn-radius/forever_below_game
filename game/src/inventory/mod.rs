@@ -709,7 +709,12 @@ pub fn landing(inventory: &Inventory, drag: &Drag, container: ItemId, cell: IVec
 /// Whether `drag` may be let go at `target`.
 pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<(), Refusal> {
     match target {
-        Target::Cell { view: GridView::Container(container), cell } => landing(inventory, drag, container, cell).map(|_| ()),
+        Target::Cell { view: GridView::Container(container), cell } => {
+            if inventory.stack_at(drag.id, container, cell.x, cell.y).is_some() {
+                return Ok(());
+            }
+            landing(inventory, drag, container, cell).map(|_| ())
+        }
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
         Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
         Target::Quickslot(_) => crate::quickslots::check_bind(inventory, drag.id),
@@ -863,6 +868,12 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
     };
     match target {
         Target::Cell { view: GridView::Container(container), cell } => {
+            // Let go on a stack of its kind with room, it tops that up and keeps what is left
+            // where it was.
+            if let Some(onto) = inventory.stack_at(drag.id, container, cell.x, cell.y) {
+                let whole = inventory.merge_onto(drag.id, onto)?;
+                return Ok((lying && whole).then_some(FloorChange::Lifted(drag.id)).into_iter().collect());
+            }
             let at = landing(inventory, drag, container, cell)?;
             inventory.put(drag.id, container, at)?;
             Ok(lying.then_some(FloorChange::Lifted(drag.id)).into_iter().collect())

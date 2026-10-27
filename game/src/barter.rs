@@ -126,7 +126,7 @@ pub fn is_their_trade(trade: Trade, item: &Item) -> bool {
 /// its value, times the tier's markup, times the band's. `None` if that band will not trade.
 pub fn price(item: &Item, trade: Trade, band: Band) -> Option<u64> {
     let band = RULES.sell_band.of(band)?;
-    let worth = item.value_copper() as f64 * RULES.tier_markup.of(trade.tier) * band;
+    let worth = item.stack_value_copper() as f64 * RULES.tier_markup.of(trade.tier) * band;
     Some((worth.round() as u64).max(1))
 }
 
@@ -136,7 +136,7 @@ pub fn price(item: &Item, trade: Trade, band: Band) -> Option<u64> {
 pub fn offer(item: &Item, trade: Trade, band: Band) -> Option<u64> {
     let band = RULES.buy_band.of(band)?;
     let share = if is_their_trade(trade, item) { RULES.trade_share } else { RULES.trade_share * RULES.other_share };
-    let worth = item.value_copper() as f64 * share * band;
+    let worth = item.stack_value_copper() as f64 * share * band;
     Some((worth.round() as u64).max(1))
 }
 
@@ -227,7 +227,7 @@ impl Session {
         if item.coins.is_some() || id == self.shelf {
             return None;
         }
-        let worth = item.value();
+        let worth = item.stack_value();
         if self.stock.contains(&id) {
             return price(item, self.trade, self.band).map(|p| Price::Costs { price: Coins::from_copper(p), worth, afford: wallet(inventory).total_copper() >= p });
         }
@@ -406,7 +406,7 @@ impl Barter {
         session.note(inventory, id);
         let session = &*session;
         let done = if session.on_shelf(inventory, id) {
-            inventory.stow(id).map(|_| ()).or_else(|refusal| match inventory.target_slot(id) {
+            inventory.stow_apart(id).map(|_| ()).or_else(|refusal| match inventory.target_slot(id) {
                 Some(slot) if inventory.item(id).is_some_and(|i| i.profile.slot.is_some()) => session.wear_check(inventory, id, slot).and_then(|()| inventory.wear(id, slot)),
                 _ => Err(refusal),
             })
@@ -529,7 +529,7 @@ pub fn end(inventory: &mut Inventory, session: Session) {
         if back.is_err() {
             let _ = match was {
                 Location::In { container, .. } if container == shelf => inventory.shelve(id, shelf).map(|_| ()),
-                _ => inventory.stow(id).map(|_| ()),
+                _ => inventory.stow_apart(id).map(|_| ()),
             };
         }
     }
@@ -537,7 +537,7 @@ pub fn end(inventory: &mut Inventory, session: Session) {
     // back) comes off before it is taken down with the rest.
     let strays: Vec<ItemId> = inventory.grid(shelf).map(|g| g.entries().iter().map(|e| e.id).filter(|id| !session.stock.contains(id)).collect()).unwrap_or_default();
     for id in strays {
-        if inventory.stow(id).is_err() {
+        if inventory.stow_apart(id).is_err() {
             inventory.take_out(id);
         }
     }
@@ -592,6 +592,11 @@ pub fn settle(inventory: &mut Inventory, session: &mut Session, shelf: &mut Shel
         }
     }
     shelf.purse = (shelf.purse as i64 + deal.cost as i64 - deal.offer as i64).max(0) as u64;
+    // What was bought folds into the stacks of its kind the delver carries, now that Cancel has
+    // nothing left to put back.
+    for &id in &deal.buying {
+        inventory.fold_into_stacks(id);
+    }
     session.purse = shelf.purse;
     session.rebase(inventory);
     Ok(Receipt { bought: deal.buying.len(), sold: deal.selling.len(), balance })

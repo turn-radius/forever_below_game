@@ -606,3 +606,57 @@ fn an_unknown_or_partly_known_item_fetches_what_a_plain_one_does() {
     assert_eq!(offer(&unknown, trade, Band::Neutral), offer(&plain, trade, Band::Neutral));
     assert_eq!(price(&unknown, trade, Band::Neutral), price(&plain, trade, Band::Neutral));
 }
+
+fn arrows(n: u32) -> Item {
+    fb_items::roll_item("Arrow", 7).unwrap().with_quantity(n)
+}
+
+fn arrow_pieces(inventory: &Inventory, container: ItemId) -> Vec<u32> {
+    let mut counts: Vec<u32> = inventory.grid(container).unwrap().entries().iter().filter_map(|e| inventory.item(e.id)).filter(|i| i.base == "Arrow").map(|i| i.quantity).collect();
+    counts.sort();
+    counts
+}
+
+#[test]
+fn a_stack_costs_and_sells_by_the_piece() {
+    let trade = smith().unwrap();
+    let (one, six) = (arrows(1), arrows(6));
+    assert_eq!(price(&six, trade, Band::Neutral).unwrap(), (six.value_copper() as f64 * 6.0 * 1.1 * 1.3).round() as u64);
+    assert!(offer(&six, trade, Band::Neutral).unwrap() > offer(&one, trade, Band::Neutral).unwrap());
+    assert_eq!(six.stack_value_copper(), one.value_copper() * 6);
+}
+
+#[test]
+fn a_bought_stack_is_not_folded_during_the_deal_so_cancel_finds_it() {
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(100_000));
+    let pack = inventory.carried_containers()[0];
+    let mine = inventory.add(arrows(8));
+    inventory.stow(mine).unwrap();
+    let shelf = shelf_of(vec![arrows(5)], 6000);
+    let session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    let ware = inventory.grid(session.shelf).unwrap().entries()[0].id;
+    let shelf_id = session.shelf;
+    let mut barter = Barter { session: Some(session), ..Default::default() };
+    assert!(barter.quick(&mut inventory, ware).unwrap().is_ok());
+    assert!(inventory.item(ware).is_some());
+    assert_eq!(arrow_pieces(&inventory, pack), vec![5, 8], "side by side, none folded");
+    end(&mut inventory, barter.session.take().unwrap());
+    assert_eq!(arrow_pieces(&inventory, pack), vec![8], "the pack is as it was, with no free arrows");
+    assert!(inventory.item(shelf_id).is_none());
+}
+
+#[test]
+fn settling_folds_what_was_bought_into_the_stacks_carried() {
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(100_000));
+    let pack = inventory.carried_containers()[0];
+    let mine = inventory.add(arrows(8));
+    inventory.stow(mine).unwrap();
+    let mut shelf = shelf_of(vec![arrows(5)], 6000);
+    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    let ware = inventory.grid(session.shelf).unwrap().entries()[0].id;
+    inventory.stow_apart(ware).unwrap();
+    settle(&mut inventory, &mut session, &mut shelf).unwrap();
+    assert_eq!(arrow_pieces(&inventory, pack), vec![3, 10]);
+}
