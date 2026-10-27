@@ -1638,13 +1638,16 @@ fn satchel(body: &Body, env: &Envelope, mut mesh: ItemMesh, tint: Option<armory:
     let ty = body.shoulder_y + 0.08 * t;
     let path: Vec<V3> = CatmullRom::centripetal(vec![
         [side, mid, cz - half],
-        [sw * 0.55, body.chest_y - 0.1 * t, -body.waist.half_depth * 0.9],
-        [sw * 0.15, ty, -0.12 * s],
-        // Over the shoulder nearer the neck than a pack's strap (at 0.46 of the shoulder's
-        // half width), so the two lie side by side.
-        [-sw * 0.22, ty, -0.08 * s],
-        [-sw * 0.15, body.chest_y, front],
-        [sw * 0.55, w, front],
+        // Up the back on a diagonal from the bag's hip to the far shoulder...
+        [sw * 0.6, w, -body.waist.half_depth * 0.9],
+        [sw * 0.05, body.chest_y + 0.1 * t, -body.chest.half_depth * 0.9],
+        [-sw * 0.55, ty - 0.04 * t, -0.1 * s],
+        // ...over that shoulder, outside a pack's strap (at 0.46 of the half width), so the two
+        // lie side by side, and back down across the chest to the bag's front.
+        [-sw * 0.72, ty, 0.0],
+        [-sw * 0.5, body.shoulder_y - 0.12 * t, front],
+        [-sw * 0.05, body.chest_y - 0.1 * t, front],
+        [sw * 0.5, w - 0.05 * t, front],
         [side, mid, cz + half],
     ])
     .sample_evenly(64)
@@ -1828,6 +1831,26 @@ mod tests {
             let (pack, satchel) = (strap(Slot::Back), strap(Slot::Satchel));
             let nearest = satchel.iter().map(|&a| pack.iter().map(|&b| vec3::distance(a, b)).fold(f32::MAX, f32::min)).fold(f32::MAX, f32::min);
             assert!(nearest > 0.012 * body.scale, "{folk:?} straps {nearest} apart");
+        }
+    }
+
+    /// A satchel's strap runs crossbody: on the chest and on the back it spans from the far
+    /// shoulder to the near hip, crossing the midline both ways.
+    #[test]
+    fn a_satchels_strap_crosses_the_body_front_and_back() {
+        for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome, Folk::Goblin] {
+            let body = folk_body(folk);
+            let kit = vec![(Slot::Satchel, Item::Bags(Bags::roll_as(1, BagStyle::Satchel)))];
+            let fit = fit_worn(&body, &kit);
+            let strap: Vec<V3> = fit.layers[0].mesh.parts.iter().filter(|p| p.name == "carry").flat_map(|p| p.positions.iter().copied()).collect();
+            for (name, side) in [("chest", 1.0f32), ("back", -1.0)] {
+                let pts: Vec<V3> = strap.iter().copied().filter(|p| p[2] * side > 0.0 && p[0].abs() < body.shoulder_half_width * 1.2).collect();
+                let hi = pts.iter().filter(|p| p[1] > body.chest_y).map(|p| p[0]).fold(f32::MAX, f32::min);
+                let lo = pts.iter().filter(|p| p[1] < body.waist_y + 0.1 * body.trunk_length).map(|p| p[0]).fold(f32::MIN, f32::max);
+                assert!(hi < -body.shoulder_half_width * 0.4, "{folk:?} {name}: strap high on the far shoulder side only reaches x {hi}");
+                assert!(lo > body.shoulder_half_width * 0.2, "{folk:?} {name}: strap low reaches only x {lo}");
+                assert!(pts.iter().any(|p| p[0].abs() < body.shoulder_half_width * 0.15), "{folk:?} {name}: strap never crosses the midline");
+            }
         }
     }
 
