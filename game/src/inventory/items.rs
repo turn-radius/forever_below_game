@@ -178,6 +178,14 @@ impl Inventory {
         self.locations.remove(&id);
     }
 
+    /// Uses up one of `id`: a stack gives a piece and stays where it is, under its id; the last
+    /// piece, or an item that is not a stack, is forgotten.
+    pub fn use_one(&mut self, id: ItemId) {
+        if let Some(one) = self.take_one(id) {
+            self.forget(one);
+        }
+    }
+
     pub fn item(&self, id: ItemId) -> Option<&Item> {
         self.items.get(&id)
     }

@@ -177,11 +177,11 @@ impl Item {
 }
 
 impl Item {
-    /// How many of it share one place in a grid: 10 arrows or bolts, 1 for everything else. The
-    /// goods table's `stack` column (bread 3...) is not read yet: only ammunition stacks until
-    /// the game can eat or drink one of a stack.
+    /// How many of it share one place in a grid: the goods table's `stack` for what is used one
+    /// at a time (ammunition, and food and drink, which the game eats and drinks one off a
+    /// stack), 1 for everything else.
     pub fn stack_limit(&self) -> u32 {
-        if self.profile.tags.contains(&Tag::Ammunition) { u32::from(self.profile.stack.max(1)) } else { 1 }
+        if self.profile.tags.contains(&Tag::Ammunition) || self.provision().is_some() { u32::from(self.profile.stack.max(1)) } else { 1 }
     }
 
     /// Whether `other` could join this one's stack: a kind that stacks at all, and every part of
@@ -191,11 +191,17 @@ impl Item {
     /// fresh one; the rest (rarity, affixes, name, legend, history, coins, words, teaching, how
     /// known, the rest an identify was tried at, the odds it was rolled against) must be equal
     /// too. Two arrow types never stack. Quantity is not compared.
+    /// Potions of one base (size) join when they hold the same brew, whatever bottle their seeds
+    /// made: the stack shows the first one's. Everything else needs one seed and one shape.
     pub fn can_stack_with(&self, other: &Item) -> bool {
+        let same_kind = if self.potion_size().is_some() {
+            self.brew().is_some() && self.brew() == other.brew()
+        } else {
+            self.seed == other.seed && self.shape == other.shape
+        };
         self.stack_limit() > 1
+            && same_kind
             && self.base == other.base
-            && self.seed == other.seed
-            && self.shape == other.shape
             && self.legend == other.legend
             && self.history == other.history
             && self.teaching == other.teaching
@@ -474,7 +480,10 @@ mod tests {
         let full = roll_item("Arrow", 7).unwrap().with_quantity(10);
         assert_eq!(full.stack_room(), 0);
         assert_eq!(roll_item("Sword", 1).unwrap().stack_limit(), 1);
-        assert!(!roll_item("Bread", 1).unwrap().can_stack_with(&roll_item("Bread", 1).unwrap()));
+        assert!(!roll_item("Sword", 1).unwrap().can_stack_with(&roll_item("Sword", 1).unwrap()));
+        // Food stacks by the goods table's column, one model to a stack.
+        assert_eq!(roll_item("Bread", 1).unwrap().stack_limit(), 3);
+        assert!(!roll_item("Bread", 1).unwrap().can_stack_with(&roll_item("Bread", 2).unwrap()));
     }
 
     #[test]

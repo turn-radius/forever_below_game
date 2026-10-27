@@ -160,13 +160,77 @@
   "wt": 0.5,
   "desc": "Warms you through · lifts the cold"
  },
+ "Vial": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.2,
+  "desc": "Drink it to find out",
+  "stack": 5
+ },
+ "Small potion": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.3,
+  "desc": "Drink it to find out",
+  "stack": 4
+ },
+ "Potion": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.5,
+  "desc": "Drink it to find out",
+  "stack": 3
+ },
+ "Large potion": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.8,
+  "desc": "Drink it to find out",
+  "stack": 2
+ },
+ "Healing vial": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.2,
+  "desc": "Restores 1d4 + 1 health",
+  "stack": 5
+ },
+ "Small healing draught": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.3,
+  "desc": "Restores 2d4 health",
+  "stack": 4
+ },
  "Healing draught": {
   "fp": [
    1,
    1
   ],
   "wt": 0.5,
-  "desc": "Restores 2d4 + 2 health"
+  "desc": "Restores 2d4 + 2 health",
+  "stack": 3
+ },
+ "Large healing draught": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.8,
+  "desc": "Restores 4d4 + 4 health",
+  "stack": 2
  },
  "Scroll": {
   "fp": [

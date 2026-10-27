@@ -312,8 +312,15 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let _ = inventory.wear(satchel, Slot::Satchel);
     }
     let legendary = (1..4_000).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|i| i.rarity == Rarity::Legendary);
-    let things = ["Sword", "Healing draught", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
-    for item in legendary.into_iter().chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {
+    let things = ["Sword", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
+    // Potions in all four sizes: healing, a mana potion of each (the brew the seed rolls, found
+    // by looking), and three small healing draughts that stack.
+    let sizes = [("Healing vial", "Vial"), ("Small healing draught", "Small potion"), ("Healing draught", "Potion"), ("Large healing draught", "Large potion")];
+    let mana = |plain: &str| (0..2_000).filter_map(|s| fb_items::roll_item(plain, seed(60) + s)).find(|i| i.brew() == Some(armory::families::food::Brew::Mana));
+    let potions = sizes.iter().enumerate().filter_map(|(i, (healing, _))| fb_items::roll_item(healing, seed(40 + i as u32)));
+    let manas = sizes.iter().filter_map(|(_, plain)| mana(plain));
+    let stacked = (0..3).filter_map(|k| fb_items::roll_item("Small healing draught", seed(50 + k)));
+    for item in potions.chain(manas).chain(stacked).chain(legendary).chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
             inventory.forget(id);

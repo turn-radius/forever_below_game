@@ -502,6 +502,10 @@ mod tests {
     }
 
     /// An item carried in the pack.
+    fn item_seeded(base: &str, seed: u32) -> fb_items::Item {
+        fb_items::roll_item(base, seed).unwrap()
+    }
+
     fn give(app: &mut App, item: fb_items::Item) -> ItemId {
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
         let id = inventory.add(item);
@@ -569,7 +573,7 @@ mod tests {
     #[test]
     fn pressing_3_eats_the_loaf_and_the_slot_empties_after_the_last_one() {
         let (mut app, player) = delve();
-        let (first, second) = (give(&mut app, item("Bread")), give(&mut app, item("Bread")));
+        let (first, second) = (give(&mut app, item_seeded("Bread", 5)), give(&mut app, item_seeded("Bread", 6)));
         bind(&mut app, 2, first);
         press(&mut app, KeyCode::Digit3);
         assert!(!has(&app, first) && has(&app, second));
@@ -586,7 +590,7 @@ mod tests {
     #[test]
     fn eating_from_one_slot_leaves_the_other_slots_alone() {
         let (mut app, _) = delve();
-        let (a, b, c) = (give(&mut app, item("Bread")), give(&mut app, item("Bread")), give(&mut app, item("Bread")));
+        let (a, b, c) = (give(&mut app, item_seeded("Bread", 5)), give(&mut app, item_seeded("Bread", 6)), give(&mut app, item_seeded("Bread", 7)));
         bind(&mut app, 0, a);
         bind(&mut app, 1, b);
         press(&mut app, KeyCode::Digit1);
@@ -672,6 +676,19 @@ mod tests {
         assert!((7..=12).contains(&hp), "{hp}");
         assert!(!has(&app, draught) && bound(&app, 3).is_none());
         assert!(toast(&app).starts_with("You drink the healing draught (+"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn a_slot_keeps_its_stack_of_draughts_until_the_last_is_drunk() {
+        let (mut app, player) = delve();
+        app.world_mut().entity_mut(player).insert(Health { hp: 1, max: 100 });
+        let stack = give(&mut app, item("Small healing draught").with_quantity(2));
+        bind(&mut app, 3, stack);
+        press(&mut app, KeyCode::Digit4);
+        assert!(has(&app, stack) && bound(&app, 3) == Some(stack));
+        assert_eq!(app.world().resource::<Inventory>().item(stack).unwrap().quantity, 1);
+        press(&mut app, KeyCode::Digit4);
+        assert!(!has(&app, stack) && bound(&app, 3).is_none());
     }
 
     #[test]

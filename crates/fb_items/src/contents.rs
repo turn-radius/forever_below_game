@@ -54,7 +54,10 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
                 ("Boots", 2),
                 ("Hood", 2),
                 ("Cloak", 2),
-                ("Healing draught", 3),
+                ("Healing vial", 2),
+                ("Small healing draught", 2),
+                ("Healing draught", 1),
+                ("Small potion", 1),
                 ("Candle", 2),
                 ("Lockpicks", 1),
                 ("Quiver", 1),
@@ -87,7 +90,7 @@ fn stock(style: ChestStyle) -> (&'static [(&'static str, u32)], (u32, u32)) {
             ],
             (2, 4),
         ),
-        ChestStyle::Amphora => (&[("Wine", 4), ("Potion", 3), ("Healing draught", 2), ("Lamp oil", 2), ("Purse", 1)], (1, 3)),
+        ChestStyle::Amphora => (&[("Wine", 4), ("Vial", 2), ("Small potion", 2), ("Potion", 1), ("Healing vial", 1), ("Small healing draught", 1), ("Healing draught", 1), ("Large potion", 1), ("Lamp oil", 2), ("Purse", 1)], (1, 3)),
     }
 }
 

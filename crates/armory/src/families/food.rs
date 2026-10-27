@@ -178,6 +178,51 @@ impl Brew {
     }
 }
 
+/// How big a potion's bottle is: four sizes of one model, which hold less or more. The size
+/// scales the bottle; the brew only colours the liquid. Our own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PotionSize {
+    Vial,
+    Small,
+    Medium,
+    Large,
+}
+
+impl PotionSize {
+    pub const ALL: [PotionSize; 4] = [PotionSize::Vial, PotionSize::Small, PotionSize::Medium, PotionSize::Large];
+
+    /// The `size` slider a bottle of this size is built at.
+    pub fn scale(self) -> f32 {
+        match self {
+            PotionSize::Vial => 0.7,
+            PotionSize::Small => 0.9,
+            PotionSize::Medium => 1.1,
+            PotionSize::Large => 1.4,
+        }
+    }
+
+    /// The size a bottle built at `scale` counts as (the nearest, a middling bottle medium).
+    pub fn of(scale: f32) -> PotionSize {
+        match scale {
+            s if s < 0.8 => PotionSize::Vial,
+            s if s < 1.0 => PotionSize::Small,
+            s if s < 1.25 => PotionSize::Medium,
+            _ => PotionSize::Large,
+        }
+    }
+
+    /// The word that goes before the brew's name: nothing for a medium bottle.
+    pub fn adjective(self) -> &'static str {
+        match self {
+            PotionSize::Vial => "Minor ",
+            PotionSize::Small => "Lesser ",
+            PotionSize::Medium => "",
+            PotionSize::Large => "Greater ",
+        }
+    }
+}
+
 /// One piece of food or drink: the prototype's `food` section.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Provision {
@@ -248,6 +293,24 @@ impl Provision {
     /// Whether a vessel holds anything worth naming.
     pub fn is_full(&self) -> bool {
         self.fill > 0.05
+    }
+
+    /// This potion's bottle size ([`PotionSize::of`] its scale).
+    pub fn potion_size(&self) -> PotionSize {
+        PotionSize::of(self.size)
+    }
+
+    /// The same bottle at `size`: only its scale changes.
+    pub fn sized(&mut self, size: PotionSize) {
+        self.size = size.scale();
+    }
+
+    /// The same bottle holding `brew`: only the liquid and the glass tinted toward it change,
+    /// and a bottle that is nearly empty is filled.
+    pub fn brewed(&mut self, brew: Brew) {
+        self.liquid = brew.rgb();
+        self.outer = mix(GLASS, brew.rgb(), 0.4);
+        self.fill = self.fill.max(0.6);
     }
 }
 
@@ -354,7 +417,7 @@ impl Generator for Food {
             },
             F::Tankard => if p.is_full() { "Tankard of Ale" } else { "Empty Tankard" },
             F::Bottle => if p.is_full() { "Bottle of Wine" } else { "Empty Bottle" },
-            F::Potion => if p.is_full() { Brew::nearest(p.liquid).name() } else { "Empty Vial" },
+            F::Potion => if p.is_full() { return format!("{}{}", p.potion_size().adjective(), Brew::nearest(p.liquid).name()) } else { "Empty Vial" },
             F::Waterskin => if p.is_full() { "Waterskin" } else { "Empty Waterskin" },
             F::Flask => match p.vessel {
                 Glass => "Glass Flask",
@@ -430,6 +493,16 @@ impl Food {
         let mut rng = Mulberry32::new(armory_stream_seed(seed));
         rng.next_f64();
         compose(&mut rng, seed, style)
+    }
+
+    /// The potion bottle `seed` makes, at `size` and holding `brew`. One family: the same seed
+    /// at any brew is the same bottle with other liquid, and at any size the same bottle larger
+    /// or smaller. Pure in `seed`.
+    pub fn roll_potion(seed: u32, size: PotionSize, brew: Brew) -> FoodState {
+        let mut s = Food::roll_as(seed, FoodStyle::Potion);
+        s.provision.sized(size);
+        s.provision.brewed(brew);
+        s
     }
 }
 
@@ -549,6 +622,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: FoodStyle) -> FoodState {
             p.fill = rng.range_f32(0.3, 0.95);
             p.glow = rng.range_f32(0.0, 0.9);
             p.count = rng.int(2, 7);
+            p.sized(*rng.weighted(&[(PotionSize::Vial, 3), (PotionSize::Small, 4), (PotionSize::Medium, 4), (PotionSize::Large, 2)]));
             p.seal = rng.chance(0.3).then(|| pick_rgb(rng, &[0x8a1f1f, 0x2a2a2a, 0xc9a13b]));
         }
         F::Waterskin => {

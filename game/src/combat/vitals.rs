@@ -874,7 +874,7 @@ mod tests {
             app.update();
         }
         let mut dice = procgen_rng::Mulberry32::new(1);
-        assert!(crate::eat::drink_healing(&mut app.world_mut().get_mut::<Health>(player).unwrap(), &mut dice) > 0);
+        assert!(crate::eat::drink_healing(&mut app.world_mut().get_mut::<Health>(player).unwrap(), &mut dice, armory::families::food::PotionSize::Medium) > 0);
         for _ in 0..60 {
             app.update();
         }

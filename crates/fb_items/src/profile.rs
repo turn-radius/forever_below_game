@@ -223,6 +223,10 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     if stands_upright(family) {
         p.footprint = upright_footprint_of(p.footprint, bounds);
     }
+    // A large flask stands two cells tall, so the sizes of potion read apart in a grid (our own).
+    if crate::provision::POTIONS.iter().any(|(b, size)| *b == base && *size == armory::families::food::PotionSize::Large) {
+        p.footprint = Footprint { cols: 1, rows: 2 };
+    }
     if matches!(family, Family::Arrow | Family::Bolt) {
         p.footprint = Footprint { cols: 1, rows: 1 };
         p.stack = AMMUNITION_STACK;

@@ -46,7 +46,7 @@ pub use armory::families::bags::Accessory;
 pub use naming::Sex;
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;
-pub use provision::{Consume, ELIXIRS, Elixir, Provision, SWALLOW, elixir, provision};
+pub use provision::{Consume, ELIXIRS, Elixir, Heal, POTIONS, Provision, SWALLOW, elixir, healing_base, provision};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};

@@ -3,7 +3,7 @@
 //! Each value is how much it takes off the meter, where a meter runs from 0 (Fed) up to 1.
 //! Healing is not here: the draught's cure is a separate rule.
 
-use armory::families::food::{Brew, FoodStyle};
+use armory::families::food::{Brew, FoodStyle, PotionSize};
 
 use crate::item::Item;
 
@@ -61,13 +61,70 @@ pub const PROVISIONS: &[(&str, Provision)] = &[
     ("Glowcap", food(0.1)),
     ("Tankard", drink(0.5)),
     ("Wine", drink(0.3)),
+    ("Vial", drink(0.0)),
+    ("Small potion", drink(0.0)),
     ("Potion", drink(0.0)),
+    ("Large potion", drink(0.0)),
+    ("Healing vial", drink(0.0)),
+    ("Small healing draught", drink(0.0)),
     ("Healing draught", drink(0.0)),
+    ("Large healing draught", drink(0.0)),
     ("Elixir of the Hare", drink(0.0)),
     ("Elixir of Vigil", drink(0.0)),
     ("Elixir of Fasting", drink(0.0)),
     ("Elixir of Embers", drink(0.0)),
 ];
+
+/// Every potion base and the size of bottle it is. The plain ones hold the brew their seed
+/// rolls, the healing ones the healing brew ([`crate::armory_base`]). The old `Potion` and
+/// `Healing draught` are the medium size, so old saves keep their meaning.
+pub const POTIONS: &[(&str, PotionSize)] = &[
+    ("Vial", PotionSize::Vial),
+    ("Small potion", PotionSize::Small),
+    ("Potion", PotionSize::Medium),
+    ("Large potion", PotionSize::Large),
+    ("Healing vial", PotionSize::Vial),
+    ("Small healing draught", PotionSize::Small),
+    ("Healing draught", PotionSize::Medium),
+    ("Large healing draught", PotionSize::Large),
+];
+
+/// The healing potion base of `size`.
+pub fn healing_base(size: PotionSize) -> &'static str {
+    match size {
+        PotionSize::Vial => "Healing vial",
+        PotionSize::Small => "Small healing draught",
+        PotionSize::Medium => "Healing draught",
+        PotionSize::Large => "Large healing draught",
+    }
+}
+
+/// What a healing potion restores: `dice` d4 and a bonus, so a bigger flask heals more. Our own
+/// numbers, the medium one SRD 5.1's Potion of Healing (2d4 + 2) and the large its Greater (4d4 + 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Heal {
+    pub dice: u32,
+    pub bonus: u32,
+}
+
+impl Heal {
+    pub fn of(size: PotionSize) -> Heal {
+        match size {
+            PotionSize::Vial => Heal { dice: 1, bonus: 1 },
+            PotionSize::Small => Heal { dice: 2, bonus: 0 },
+            PotionSize::Medium => Heal { dice: 2, bonus: 2 },
+            PotionSize::Large => Heal { dice: 4, bonus: 4 },
+        }
+    }
+
+    pub fn least(self) -> u32 {
+        self.dice + self.bonus
+    }
+
+    pub fn most(self) -> u32 {
+        self.dice * 4 + self.bonus
+    }
+}
 
 /// What drinking an elixir does: the id of an effect in `data/effects.json`, at an intensity
 /// (`docs/items.md`, "Elixirs"). Our own. The game gives it to the delver.
@@ -103,6 +160,11 @@ impl Item {
     /// What eating or drinking this does, or `None` for anything that cannot be.
     pub fn provision(&self) -> Option<Provision> {
         provision(&self.base)
+    }
+
+    /// The size of bottle this is, if it is a potion.
+    pub fn potion_size(&self) -> Option<PotionSize> {
+        POTIONS.iter().find(|(name, _)| *name == self.base).map(|(_, size)| *size)
     }
 
     /// What drinking this gives the delver, if it is an elixir.
@@ -235,5 +297,40 @@ mod tests {
         assert_eq!(antidote.title(), "Antidote");
         assert_eq!(roll_item("Healing draught", 4).unwrap().brew(), Some(Brew::Healing));
         assert_eq!(roll_item("Bread", 4).unwrap().brew(), None);
+    }
+
+    #[test]
+    fn potions_come_in_four_sizes_that_hold_less_or_more_and_stack_by_size_and_brew() {
+        use crate::roll_item;
+        let sizes: Vec<_> = ["Vial", "Small potion", "Potion", "Large potion"].map(|b| roll_item(b, 9).unwrap()).into_iter().collect();
+        let limits: Vec<u32> = sizes.iter().map(|p| p.stack_limit()).collect();
+        assert_eq!(limits, vec![5, 4, 3, 2], "our own stack sizes: the more it holds the fewer share a cell");
+        let height = |p: &Item| p.shape.build().bounds().unwrap().1[1];
+        assert!(sizes.windows(2).all(|w| height(&w[0]) < height(&w[1])), "each size stands taller");
+        // Two small healing draughts stack, whatever seeds made their bottles; a small and a large do not.
+        let (a, b) = (roll_item("Small healing draught", 1).unwrap(), roll_item("Small healing draught", 2).unwrap());
+        assert!(a.can_stack_with(&b));
+        assert!(!a.can_stack_with(&roll_item("Large healing draught", 1).unwrap()));
+        assert_eq!(a.stack_limit(), 4);
+        // Another brew of one size is another stack.
+        let find = |brew| (0..300).map(|seed| roll_item("Small potion", seed).unwrap()).find(|p| p.brew() == Some(brew)).unwrap();
+        let (mana, healing) = (find(Brew::Mana), find(Brew::Healing));
+        assert!(!mana.can_stack_with(&healing) && mana.can_stack_with(&mana.clone()));
+        // Old saves' bases are the medium size.
+        assert_eq!(roll_item("Potion", 3).unwrap().potion_size(), Some(PotionSize::Medium));
+        assert_eq!(roll_item("Healing draught", 3).unwrap().potion_size(), Some(PotionSize::Medium));
+        assert_eq!(roll_item("Elixir of Vigil", 3).unwrap().potion_size(), None);
+    }
+
+    #[test]
+    fn a_healing_and_a_mana_potion_of_one_size_and_seed_share_a_bottle() {
+        use armory::families::food::Food;
+        for (size, base) in [(PotionSize::Vial, "Healing vial"), (PotionSize::Large, "Large healing draught")] {
+            let healing = roll_item(base, 12).unwrap();
+            assert_eq!((healing.brew(), healing.potion_size(), healing_base(size)), (Some(Brew::Healing), Some(size), base));
+            let armory::Item::Food(h) = &healing.shape else { panic!() };
+            let mana = Food::roll_potion(12, size, Brew::Mana);
+            assert_eq!((h.provision.size, h.provision.shape, h.provision.count), (mana.provision.size, mana.provision.shape, mana.provision.count));
+        }
     }
 }
