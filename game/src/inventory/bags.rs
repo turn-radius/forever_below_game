@@ -18,24 +18,28 @@ use crate::keymap::{Action, ActionInput};
 use crate::tuning::Tuning;
 use crate::ui::{node_rect, ui_cursor};
 
-/// Height of a window's title bar, logical pixels.
-pub const TITLE_PX: f32 = 36.0;
+// A window's make, logical pixels.
+/// Height of a window's title bar.
+pub(super) const TITLE_PX: f32 = 36.0;
 /// Space between a window's border and what it holds.
-pub const PAD_PX: f32 = 10.0;
+pub(super) const PAD_PX: f32 = 10.0;
 /// A window's border.
-pub const BORDER_PX: f32 = 2.0;
+pub(super) const BORDER_PX: f32 = 2.0;
 /// Space between the title bar and the grid.
-pub const GAP_PX: f32 = 4.0;
+pub(super) const GAP_PX: f32 = 4.0;
 /// The narrowest a window's contents are, so the name and the cross fit over a small pouch.
 const MIN_CONTENT_PX: f32 = 200.0;
-/// Where a cascade of windows starts when no free place is left.
+
+// Where a new window goes, logical pixels.
+/// Top left of the first window of a cascade, used only when no free place is left: just under
+/// the header, clear of the screen's edge.
 const FIRST_AT: Vec2 = Vec2::new(24.0, 70.0);
+/// How far a window is offset from the one before when there is no free space left.
+const CASCADE_PX: f32 = 36.0;
 /// The step the search for a free place moves by.
 const SEARCH_STEP_PX: f32 = 24.0;
 /// Space kept between a new window and what it must not cover.
 const MARGIN_PX: f32 = 8.0;
-/// How far a window is offset from the one before when there is no free space left.
-const CASCADE_PX: f32 = 36.0;
 
 /// Which containers are open as windows, and where each sits.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
@@ -92,7 +96,7 @@ pub struct BagTitle(pub ItemId);
 pub struct BagClose(pub ItemId);
 
 /// How big a window is for a grid, logical pixels.
-pub(crate) fn window_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
+pub(super) fn window_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
     let grid = grid_size(grid, cell);
     let edge = 2.0 * (PAD_PX + BORDER_PX);
     Vec2::new(grid.x.max(MIN_CONTENT_PX) + edge, grid.y + TITLE_PX + GAP_PX + edge)
@@ -103,54 +107,63 @@ pub fn clamp_window(at: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
     at.clamp(Vec2::ZERO, (screen - size).max(Vec2::ZERO))
 }
 
-/// The size of the interface in its logical pixels: the window's, under `UiScale`.
-pub(crate) fn ui_size(window: &Window, scale: Option<&UiScale>) -> Vec2 {
-    Vec2::new(window.width(), window.height()) / scale.map_or(1.0, |s| s.0.max(f32::EPSILON))
+/// The size of the interface in its logical pixels: that of the view it is drawn in (the held
+/// torch's camera, as [`crate::ui::fit_interface`] reads it) under `UiScale`, else the
+/// window's. They are one in play; a capture draws to a view of another size than its window.
+fn ui_size(window: &Window, scale: Option<&UiScale>, cameras: &Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>) -> Vec2 {
+    let view = cameras.iter().filter(|c| c.is_active).find_map(Camera::logical_viewport_size).filter(|v| v.min_element() > 0.0);
+    view.unwrap_or_else(|| Vec2::new(window.width(), window.height())) / scale.map_or(1.0, |s| s.0.max(f32::EPSILON))
 }
 
-/// A free place for a window of `size`, clear of the `obstacles` (the fixed panels, the docked
-/// grids and the windows already placed), scanning from the top left; the first fit. With none,
-/// the `n`th window cascades from the top left so every title bar stays showing.
-pub fn free_place(size: Vec2, obstacles: &[Rect], screen: Vec2, n: usize) -> Vec2 {
-    let mut y = 0.0;
-    while y + size.y <= screen.y {
-        let mut x = 0.0;
-        while x + size.x <= screen.x {
-            let at = Vec2::new(x, y);
-            let rect = Rect::from_corners(at, at + size);
-            if obstacles.iter().all(|o| o.inflate(MARGIN_PX).intersect(rect).is_empty()) {
-                return at;
+/// A free place for a window of `size`, scanning from the top left; the first fit. It keeps
+/// clear of the `hard` obstacles (the header, the doll and the windows already placed) and, if it
+/// can, of the `soft` ones too (the grids docked in the column), which a window may cover when
+/// no other room is left. With no place even so, the `n`th window cascades from the top left so
+/// every title bar stays showing.
+pub fn free_place(size: Vec2, hard: &[Rect], soft: &[Rect], screen: Vec2, n: usize) -> Vec2 {
+    let scan = |obstacles: &[&[Rect]]| {
+        let mut y = 0.0;
+        while y + size.y <= screen.y {
+            let mut x = 0.0;
+            while x + size.x <= screen.x {
+                let at = Vec2::new(x, y);
+                let rect = Rect::from_corners(at, at + size);
+                if obstacles.iter().all(|set| set.iter().all(|o| o.inflate(MARGIN_PX).intersect(rect).is_empty())) {
+                    return Some(at);
+                }
+                x += SEARCH_STEP_PX;
             }
-            x += SEARCH_STEP_PX;
+            y += SEARCH_STEP_PX;
         }
-        y += SEARCH_STEP_PX;
-    }
-    clamp_window(FIRST_AT + Vec2::splat(CASCADE_PX) * n as f32, size, screen)
+        None
+    };
+    scan(&[hard, soft]).or_else(|| scan(&[hard])).unwrap_or_else(|| clamp_window(FIRST_AT + Vec2::splat(CASCADE_PX) * n as f32, size, screen))
 }
 
-/// Where the fixed panels of the inventory page are, in logical pixels: the header, the
-/// doll with its quickslots, and every grid docked in the column.
+/// Where the fixed panels of the inventory page are, in logical pixels, as (the header and the
+/// doll with its quickslots, every grid docked in the column).
 pub fn fixed_rects(
     leaf: &Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
     column: &Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
     dolls: &Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
     grids: &Query<(&super::GridView, &ComputedNode, &UiGlobalTransform)>,
     frames: &[Rect],
-) -> Option<Vec<Rect>> {
+) -> Option<(Vec<Rect>, Vec<Rect>)> {
     let leaf = leaf.iter().next().map(|(n, t)| node_rect(n, t))?;
     let column = column.iter().next().map(|(n, t)| node_rect(n, t))?;
     let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t))?;
     if leaf.width() <= 0.0 || doll.width() <= 0.0 {
         return None;
     }
-    let mut rects = vec![Rect::from_corners(leaf.min, Vec2::new(leaf.max.x, column.min.y)), doll];
+    let hard = vec![Rect::from_corners(leaf.min, Vec2::new(leaf.max.x, column.min.y)), doll];
+    let mut soft = Vec::new();
     for (_, n, t) in grids {
         let rect = node_rect(n, t);
         if !frames.iter().any(|f| f.contains(rect.center())) {
-            rects.push(rect);
+            soft.push(rect);
         }
     }
-    Some(rects)
+    Some((hard, soft))
 }
 
 /// The doll, quickslots and help column of the page, which windows keep off.
@@ -192,6 +205,7 @@ pub fn place_windows(
     dolls: Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
     grids: Query<(&super::GridView, &ComputedNode, &UiGlobalTransform)>,
     frames: Query<(&BagWindow, &ComputedNode, &UiGlobalTransform)>,
+    cameras: Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>,
 ) {
     let cell = tuning.interface.cell_size;
     // The trader's shelf is not the delver's to reach into.
@@ -201,7 +215,7 @@ pub fn place_windows(
         windows.close(id);
     }
     let Some(window) = window else { return };
-    let screen = ui_size(&window, ui_scale.as_deref());
+    let screen = ui_size(&window, ui_scale.as_deref(), &cameras);
     if screen.x < 1.0 || screen.y < 1.0 {
         return;
     }
@@ -213,7 +227,7 @@ pub fn place_windows(
     if waiting && fixed.is_none() {
         return;
     }
-    let mut placed: Vec<Rect> = fixed.unwrap_or_default();
+    let (mut placed, soft) = fixed.unwrap_or_default();
     placed.extend(windows.order.iter().filter_map(|id| Some(Rect::from_corners(*windows.at.get(id)?, *windows.at.get(id)? + size_of(*id)?))));
     let mut fixes: Vec<(ItemId, Vec2)> = Vec::new();
     let mut fresh = 0;
@@ -221,8 +235,11 @@ pub fn place_windows(
         let Some(size) = size_of(id) else { continue };
         let want = match windows.at.get(&id) {
             Some(&at) => clamp_window(at, size, screen),
+            // A new window is placed once the page has been built with it popped out of the
+            // column, so the grids it left have reflowed and the free space is the real one.
+            None if !frames.iter().any(|(w, n, _)| w.0 == id && n.size.x > 0.0) => continue,
             None => {
-                let at = free_place(size, &placed, screen, fresh);
+                let at = free_place(size, &placed, &soft, screen, fresh);
                 fresh += 1;
                 placed.push(Rect::from_corners(at, at + size));
                 at
@@ -252,6 +269,7 @@ pub fn drag_windows(
     titles: Query<(&BagTitle, &ComputedNode, &UiGlobalTransform)>,
     closes: Query<(&BagClose, &ComputedNode, &UiGlobalTransform)>,
     mut nodes: Query<&mut Node, With<BagWindow>>,
+    cameras: Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>,
     mut held: Local<Option<(ItemId, Vec2)>>,
 ) {
     if !open.is(Screen::Inventory) {
@@ -284,7 +302,7 @@ pub fn drag_windows(
     }
     let Some(grid) = inventory.grid(id) else { return };
     let Some((entity, ..)) = frames.iter().find(|(_, w, ..)| w.0 == id) else { return };
-    let screen = ui_size(&window, ui_scale.as_deref());
+    let screen = ui_size(&window, ui_scale.as_deref(), &cameras);
     let size = window_size(grid, tuning.interface.cell_size);
     // The title bar starts inside the border and padding, so `grab` is from there.
     let to = clamp_window(point - grab - Vec2::splat(PAD_PX + BORDER_PX), size, screen);
@@ -297,8 +315,13 @@ pub fn drag_windows(
 }
 
 /// `FB_OPEN_BAGS=1` opens every carried container as a window, for captures.
-pub fn open_for_capture(mut windows: ResMut<BagWindows>, inventory: Res<Inventory>, mut done: Local<bool>) {
+pub fn open_for_capture(mut windows: ResMut<BagWindows>, inventory: Res<Inventory>, mut done: Local<bool>, mut frames: Local<u32>) {
     if *done {
+        return;
+    }
+    // Let the floor's bags settle into the page first, so the windows are placed around them.
+    *frames += 1;
+    if *frames < 20 {
         return;
     }
     let carried = inventory.carried_containers();
@@ -361,7 +384,7 @@ mod tests {
                 for (n, &size) in sizes.iter().take(count).enumerate() {
                     let mut obstacles = fixed.clone();
                     obstacles.extend(placed.iter().copied());
-                    let at = free_place(size, &obstacles, screen, n);
+                    let at = free_place(size, &obstacles, &[], screen, n);
                     let rect = Rect::from_corners(at, at + size);
                     assert!(Rect::from_corners(Vec2::ZERO, screen).contains(rect.min) && Rect::from_corners(Vec2::ZERO, screen).contains(rect.max), "{screen} #{n} on screen");
                     for o in &obstacles {
@@ -371,6 +394,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_window_covers_a_docked_grid_before_it_covers_the_header_or_the_doll() {
+        let screen = Vec2::new(1000.0, 600.0);
+        let size = Vec2::new(300.0, 300.0);
+        let r = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_corners(Vec2::new(x0, y0), Vec2::new(x1, y1));
+        let hard = [r(0.0, 0.0, 1000.0, 100.0), r(500.0, 0.0, 1000.0, 600.0)];
+        let soft = [r(0.0, 100.0, 450.0, 600.0)];
+        let at = free_place(size, &hard, &soft, screen, 0);
+        let rect = Rect::from_corners(at, at + size);
+        assert!(hard.iter().all(|h| h.intersect(rect).is_empty()), "{at} keeps off the header and the doll");
+        assert!(!soft[0].intersect(rect).is_empty(), "and takes the docked grid's space, there being no other");
+        assert_eq!(free_place(size, &hard, &[], screen, 0), at, "with nothing docked it is the same place");
     }
 
     use crate::inventory::{OpenContainer, Placement, Underfoot};

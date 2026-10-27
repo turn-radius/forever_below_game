@@ -3282,6 +3282,34 @@ mod tests {
     }
 
     #[test]
+    fn a_double_click_on_a_bag_never_toggles_its_window() {
+        let mut app = screen_app();
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.add_systems(Update, bags::settle_click.after(drag_items));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let size = app.world().resource::<Inventory>().footprint(pack).unwrap();
+        for _ in 0..2 {
+            app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id: pack, grab: IVec2::ZERO, size, turned: false, press: Vec2::new(100.0, 100.0), active: false, target: None });
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            mouse.press(MouseButton::Left);
+            mouse.release(MouseButton::Left);
+            app.update();
+        }
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert_eq!(windows.pending, None, "the second click cancelled the first");
+        assert!(!windows.is_open(pack));
+    }
+
+    #[test]
     fn pressing_the_front_window_does_not_mark_the_windows_changed() {
         #[derive(Resource, Default)]
         struct Seen(bool);

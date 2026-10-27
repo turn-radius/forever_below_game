@@ -463,7 +463,7 @@ pub fn show_doll(open: Res<ScreenOpen>, stage: Res<DollStage>, mut cameras: Quer
 }
 
 /// Turns the doll while the mouse is dragged across it with the button down, unless the press
-/// took up an item or landed on a slot.
+/// took up an item or landed on a slot or a bag window.
 #[allow(clippy::too_many_arguments)]
 pub fn turn_doll(
     open: Res<ScreenOpen>,
@@ -473,6 +473,7 @@ pub fn turn_doll(
     ui_scale: Option<Res<UiScale>>,
     views: Query<(&ComputedNode, &UiGlobalTransform), With<DollView>>,
     slots: Query<(&ComputedNode, &UiGlobalTransform), With<SlotView>>,
+    bag_windows: Query<(&ComputedNode, &UiGlobalTransform), With<super::bags::BagWindow>>,
     dragging: Res<super::Dragging>,
     mut stage: ResMut<DollStage>,
     mut transforms: Query<&mut Transform>,
@@ -485,7 +486,7 @@ pub fn turn_doll(
     if buttons.just_pressed(MouseButton::Left) {
         let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
         let on = |rect: Rect| cursor.is_some_and(|c| rect.contains(c));
-        *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
+        *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t))) && !bag_windows.iter().any(|(n, t)| on(node_rect(n, t)));
     }
     if !*turning || motion.delta.x == 0.0 {
         return;
@@ -914,6 +915,19 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<DollStage>().turn, turn);
+    }
+
+    #[test]
+    fn the_doll_does_not_turn_under_a_bag_window() {
+        let mut app = stage_app();
+        wait_for_doll_fitting(&mut app);
+        let node = ComputedNode { size: Vec2::splat(100.0), inverse_scale_factor: 1.0, ..ComputedNode::DEFAULT };
+        app.world_mut().spawn((super::super::bags::BagWindow(crate::inventory::ItemId(1)), node, UiGlobalTransform::from_translation(Vec2::splat(320.0))));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(60.0, 0.0);
+        app.update();
+        assert_eq!(app.world().resource::<DollStage>().turn, 0.0, "the press belongs to the window");
     }
 
     #[test]
