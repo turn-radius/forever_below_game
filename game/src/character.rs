@@ -400,6 +400,10 @@ impl Character {
                 e = add(e, format!("{} contents", item.name), contents as f64);
             }
         }
+        // A weapon on the pack's strap is carried outside its grid, and weighs as it does.
+        if let Some(item) = inventory.strapped().and_then(|id| inventory.item(id)) {
+            e = add(e, format!("{} on the strap", item.name), item.profile.stats.weight as f64);
+        }
         if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
     }
 
@@ -461,6 +465,9 @@ impl Character {
                 // What a bag inside the bag holds counts with it.
                 lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight * inside.quantity as f32 + inventory.contents_weight(entry.id)));
             }
+        }
+        if let Some(item) = inventory.strapped().and_then(|id| inventory.item(id)) {
+            lines.push(format!("  {} (on the strap)  {:.1} lb", item.name, item.profile.stats.weight));
         }
         let band = LoadBand::from_load_with(rules, carried.value(), capacity);
         lines.push(format!("{} now", band.word()));
@@ -1105,6 +1112,24 @@ mod tests {
         };
         let (plain, light) = (load(None), load(Some("Featherlight")));
         assert!(plain > 0.0 && (light - plain * 0.6).abs() < 1e-3, "{light} against {plain}");
+    }
+
+    #[test]
+    fn a_strapped_weapon_weighs_on_the_load_but_gives_nothing_else() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, Slot::Back).unwrap();
+        let before = delver.derive(&inventory);
+        let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
+        let weight = inventory.item(spear).unwrap().profile.stats.weight;
+        inventory.wear(spear, Slot::Strap).unwrap();
+        let after = delver.derive(&inventory);
+        assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
+        assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));
+        assert!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).iter().any(|l| l.contains("on the strap")));
     }
 
     #[test]

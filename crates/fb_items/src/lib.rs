@@ -42,6 +42,7 @@ pub use foe::Foe;
 pub use identify::Known;
 pub use contents::{container_item, roll_contents};
 pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot, stack_up};
+pub use armory::families::bags::Accessory;
 pub use naming::Sex;
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;
@@ -67,7 +68,7 @@ pub enum Kind { Gear, Good }
 /// (the game moves it on load).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver, Satchel }
+pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver, Satchel, Strap }
 
 /// What an item is made of and how it is used. Affixes roll only on items with their tag
 /// (`docs/items.md`, "Rarity and affixes").

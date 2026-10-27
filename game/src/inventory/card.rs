@@ -206,13 +206,16 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     let contents = p.holds.as_ref().map(|holds| {
         let plain = p.plain_grid().map_or_else(String::new, |(c, r)| format!(" (plain {c}\u{d7}{r})"));
         let inside = format!("{}\u{d7}{} inside{plain}", holds.cols, holds.rows);
-        match held {
+        let line = match held {
             Some((inventory, id)) if inventory.contents_count(id) > 0 => {
                 let n = inventory.contents_count(id);
                 format!("Holds {n} {} \u{b7} {} lb inside \u{b7} {inside}", if n == 1 { "thing" } else { "things" }, number(inventory.contents_weight(id)))
             }
             _ => format!("Empty \u{b7} {inside}"),
-        }
+        };
+        // What the pack was rolled with: "with a bedroll, a weapon strap".
+        let accessories: Vec<String> = item.accessories().iter().map(|a| a.name().to_lowercase()).collect();
+        if accessories.is_empty() { line } else { format!("{line} \u{b7} with {}", accessories.join(", ")) }
     });
     CardText {
         title: item.shown_title(),
@@ -995,8 +998,13 @@ mod tests {
         assert_eq!(card.price.line(), format!("Worth {}", bread.value().short()));
 
         let mut inventory = Inventory::default();
+        // Seed 1 is a plain Rucksack (seed 7 rolls Cramped).
         let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
-        assert_eq!(card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.as_deref(), Some("Empty \u{b7} 8\u{d7}5 inside"));
+        let empty = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();
+        assert!(empty.starts_with("Empty \u{b7} 8\u{d7}5 inside"), "{empty}");
+        // What the pack was rolled with is named after.
+        let accessories = inventory.item(pack).unwrap().accessories();
+        assert_eq!(empty.contains("with "), !accessories.is_empty(), "{empty}");
         let bread = inventory.add(bread);
         inventory.put(bread, pack, super::super::grid::Placement::new(0, 0, false)).unwrap();
         let contents = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();

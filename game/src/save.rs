@@ -128,8 +128,10 @@ pub struct SavedDelve {
     /// What each recorded level was when it was recorded, so a game whose generators have changed
     /// since does not hang the record on the wrong things ([`SavedDelve::check_levels`]).
     pub signatures: Vec<LevelSignature>,
-    /// The camp they lay down in.
-    pub camp: fb_level::ItemSpot,
+    /// The camp they lay down in; none when they slept on their pack's bedroll, which has no
+    /// place in the level.
+    #[serde(default)]
+    pub camp: Option<fb_level::ItemSpot>,
 }
 
 /// What the delver wears and carries.
@@ -341,9 +343,14 @@ pub fn walk(inventory: &Inventory, id: Option<ItemId>, record: &ItemRecord, out:
 
 /// Everything about the delve that is not in the world record, from the live game; the world
 /// record is `record` (the current level just recorded). `bed` is the set camp they lie in.
-pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
-    world.get::<SetCamp>(bed).ok_or(SaveError::Missing("set camp"))?;
-    let camp = world.get::<FloorItem>(bed).map(|f| f.spot).ok_or(SaveError::Missing("camp on the floor"))?;
+pub fn gather(world: &mut World, bed: Option<Entity>) -> Result<SavedDelve, SaveError> {
+    let camp = match bed {
+        Some(bed) => {
+            world.get::<SetCamp>(bed).ok_or(SaveError::Missing("set camp"))?;
+            Some(world.get::<FloorItem>(bed).map(|f| f.spot).ok_or(SaveError::Missing("camp on the floor"))?)
+        }
+        None => None,
+    };
     // The current level is recorded as if just left. The record the game goes on with is the one
     // it had: leaving the level writes it again.
     let before = world.resource::<WorldRecord>().clone();
@@ -409,7 +416,7 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
 
 /// A command: saves the delve now that the delver has lain down in `bed`, if this delve may
 /// save, and says so in the toast (a failed write says that, and sleep goes on).
-pub fn save_in_camp(bed: Entity) -> impl FnOnce(&mut World) {
+pub fn save_in_camp(bed: Option<Entity>) -> impl FnOnce(&mut World) {
     move |world: &mut World| {
         if !may_touch(world.get_resource::<Saveable>()) {
             return;
@@ -699,7 +706,7 @@ pub(crate) fn sample_delve() -> SavedDelve {
         enchanting: EnchantingStock { essence: 4, materials: [("iron".to_string(), 2)].into() },
         signatures,
         explored: vec![SavedExplored { level_seed: 7, width: 8, height: 8, bits: to_hex(&[0xff, 0x00, 0x0f, 0, 0, 0, 0, 1]) }],
-        camp: fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed },
+        camp: Some(fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed }),
     }
 }
 

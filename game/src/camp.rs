@@ -47,6 +47,7 @@ use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles,
 use crate::player::Locomotion;
 use crate::rules::GameRules;
 use crate::ui::{BG, BRIGHT, MUTED, UiFonts};
+use bevy::window::{CursorOptions, PrimaryWindow};
 
 pub struct CampPlugin;
 
@@ -65,6 +66,7 @@ impl Plugin for CampPlugin {
                 (
                     debug_lie_down.run_if(|| std::env::var_os("FB_LIE_DOWN").is_some()),
                     go_to_sleep.run_if(level_has_focus),
+                    sleep_on_pack.run_if(inventory_open).run_if(crate::barter::not_bartering),
                     resume_in_bed.run_if(resource_exists::<PendingBed>),
                     wake_up,
                     spawn_veil,
@@ -420,8 +422,9 @@ pub struct Asleep(pub Option<Sleeping>);
 pub struct Sleeping {
     /// What they sleep in, which sets how well they sleep.
     pub camp: Camp,
-    /// The set camp's entity: if it goes, they wake.
-    pub bed: Entity,
+    /// The set camp's entity: if it goes, they wake. None when they sleep on the bedroll their
+    /// worn pack was rolled with ([`sleep_on_pack`]), which cannot go.
+    pub bed: Option<Entity>,
     /// Their hit points as last seen; any fewer wakes them.
     pub hit_points: i32,
     /// The game hour they lay down.
@@ -533,26 +536,74 @@ fn go_to_sleep(
         toast.say(reason, now);
         return;
     }
-    // Any light they carry is put out; the inventory is only touched if one burns.
-    let lit: Vec<ItemId> = crate::carry::carried_lights(&inventory).into_iter().map(|(_, id)| id).collect();
+    begin_sleep(&mut inventory, &mut locomotion);
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed: Some(bed), hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
+    // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
+    // goes on; it says so, or that it could not, over the line above.
+    commands.queue(crate::save::save_in_camp(Some(bed)));
+}
+
+/// F in the inventory on the worn pack rolled with a bedroll ("Sleep"): lies down on it where the
+/// delver stands, without setting anything down or carrying a bedroll of its own. The screen
+/// closes, lights are put out and the delve is saved as it is for any camp
+/// ([`begin_sleep`]); [`cannot_sleep`] says if they cannot.
+#[allow(clippy::too_many_arguments)]
+fn sleep_on_pack(
+    input: ActionInput,
+    hovered: Res<Hovered>,
+    rules: Res<GameRules>,
+    clock: Res<GameClock>,
+    watchers: Watchers,
+    mut asleep: ResMut<Asleep>,
+    mut screen: ResMut<ScreenOpen>,
+    mut inventory: ResMut<Inventory>,
+    mut toast: ResMut<Toast>,
+    mut players: Query<(&Transform, &DelverNeeds, &mut Locomotion, Option<&Health>), With<Player>>,
+    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    time: Option<Res<Time<Real>>>,
+    mut commands: Commands,
+) {
+    if asleep.0.is_some() || !input.just_pressed(Action::Primary) {
+        return;
+    }
+    let Some((id, _)) = hovered.0 else { return };
+    let Some(target) = interact::item_target(&inventory, id) else { return };
+    if interact::verbs_for(&target, &interact::Delver::default()).get(Slot::Primary) != Some(Verb::Sleep) {
+        return;
+    }
+    let Ok((body, needs, mut locomotion, health)) = players.single_mut() else { return };
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
+    if let Some(reason) = cannot_sleep(&rules, &needs.0, watched) {
+        toast.say(reason, now);
+        return;
+    }
+    begin_sleep(&mut inventory, &mut locomotion);
+    asleep.0 = Some(Sleeping { camp: Camp::Bedroll, bed: None, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    // The screen closes behind them and the mouse goes back to the level.
+    crate::play::show_screen(&mut screen, None, cursor.as_deref_mut().map(|c| &mut **c));
+    toast.say("You lie down on the bedroll from your pack", now);
+    commands.queue(crate::save::save_in_camp(None));
+}
+
+/// What lying down does to the delver: any light they carry is put out (a night would burn it
+/// down), and they stop moving.
+fn begin_sleep(inventory: &mut Inventory, locomotion: &mut Locomotion) {
+    let lit: Vec<ItemId> = crate::carry::carried_lights(inventory).into_iter().map(|(_, id)| id).collect();
     for id in lit {
         if inventory.item(id).is_some_and(|item| item.shape.lit() == Some(true)) {
             let _ = inventory.toggle_light(id);
         }
     }
     locomotion.velocity = Vec2::ZERO;
-    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
-    toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
-    // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
-    // goes on; it says so, or that it could not, over the line above.
-    commands.queue(crate::save::save_in_camp(bed));
 }
 
 /// Where the delver of a delve resumed lies down, until the level has laid its camp out: the spot
-/// of the set camp they saved in.
+/// of the set camp they saved in, or none when they slept on their pack's bedroll.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct PendingBed {
-    pub spot: fb_level::ItemSpot,
+    pub spot: Option<fb_level::ItemSpot>,
     /// Frames spent looking for the camp.
     pub waited: u32,
 }
@@ -575,18 +626,25 @@ fn resume_in_bed(
 ) {
     let Some(mut pending) = pending else { return };
     let now = time.map_or(0.0, |t| t.elapsed_secs());
-    let Some((bed, _, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == pending.spot) else {
-        pending.waited += 1;
-        if pending.waited >= BED_PATIENCE {
-            commands.remove_resource::<PendingBed>();
-            toast.say("Your camp is gone.", now);
+    // On the pack's bedroll there is no camp to wait for.
+    let found = match pending.spot {
+        Some(spot) => {
+            let Some((bed, _, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == spot) else {
+                pending.waited += 1;
+                if pending.waited >= BED_PATIENCE {
+                    commands.remove_resource::<PendingBed>();
+                    toast.say("Your camp is gone.", now);
+                }
+                return;
+            };
+            (camp.camp, Some(bed))
         }
-        return;
+        None => (Camp::Bedroll, None),
     };
     commands.remove_resource::<PendingBed>();
     let Ok((mut locomotion, health)) = players.single_mut() else { return };
     locomotion.velocity = Vec2::ZERO;
-    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    asleep.0 = Some(Sleeping { camp: found.0, bed: found.1, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
 }
 
 /// For captures (`FB_LIE_DOWN`): a while after a camp is laid out (`FB_LAY_OUT`), tires the delver
@@ -644,7 +702,7 @@ fn wake_up(
     let keyed = now - sleep.began > KEY_GRACE && (screen.0.is_some() || pressed);
     let hit_points = health.map_or(sleep.hit_points, |h| h.hp);
     let reason = reason_to_wake(&rules, &needs.0, hit_points, sleep.hit_points, watched)
-        .or_else(|| (!beds.contains(sleep.bed)).then_some("Your bed is gone, and you wake."))
+        .or_else(|| sleep.bed.filter(|&bed| !beds.contains(bed)).map(|_| "Your bed is gone, and you wake."))
         .or_else(|| keyed.then_some("You wake."));
     let Some(reason) = reason else {
         // Healed in their sleep: the next blow is measured from here.
@@ -1163,9 +1221,66 @@ mod tests {
         let (mut app, delver, bed) = sleeper("Tent");
         press(&mut app, KeyCode::KeyF);
         let sleep = app.world().resource::<Asleep>().0.expect("asleep");
-        assert_eq!((sleep.camp, sleep.bed, sleep.hit_points), (Camp::Tent, bed, 10));
+        assert_eq!((sleep.camp, sleep.bed, sleep.hit_points), (Camp::Tent, Some(bed), 10));
         assert_eq!(app.world().get::<Locomotion>(delver).unwrap().velocity, Vec2::ZERO);
         assert!(app.world().resource::<Toast>().text.starts_with("You lie down in the tent"));
+    }
+
+    /// A tired delver wearing a pack that has a bedroll (or not), the pack hovered in the open inventory.
+    fn pack_sleeper(bedroll: bool) -> (App, Entity) {
+        use crate::inventory::Hovered;
+        use crate::keymap::Keymap;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Keymap>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Inventory>()
+            .init_resource::<Toast>()
+            .init_resource::<GameClock>()
+            .init_resource::<GameRules>()
+            .init_resource::<Asleep>()
+            .insert_resource(ScreenOpen(Some(crate::play::Screen::Inventory)))
+            .add_systems(Update, (sleep_on_pack, wake_up).chain());
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Bedroll) == bedroll).unwrap();
+        let id = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let id = inventory.add(pack);
+            inventory.wear(id, fb_items::Slot::Back).unwrap();
+            id
+        };
+        app.insert_resource(Hovered(Some((id, Rect::default()))));
+        let mut tired = DelverNeeds::default();
+        tired.0.sleepiness.value = 0.8;
+        let delver = app.world_mut().spawn((Player, Transform::default(), tired, Locomotion { velocity: Vec2::new(4.0, 0.0), ..default() }, Health::full(10))).id();
+        (app, delver)
+    }
+
+    #[test]
+    fn f_on_a_worn_pack_with_a_bedroll_sleeps_on_it_with_no_bedroll_of_its_own() {
+        let (mut app, delver) = pack_sleeper(true);
+        assert!(app.world().resource::<Inventory>().ids().count() == 1, "no separate bedroll is carried");
+        press(&mut app, KeyCode::KeyF);
+        let sleep = app.world().resource::<Asleep>().0.expect("asleep");
+        assert_eq!((sleep.camp, sleep.bed), (Camp::Bedroll, None));
+        assert_eq!(app.world().get::<Locomotion>(delver).unwrap().velocity, Vec2::ZERO);
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "the screen closes");
+        // It wakes as any sleeper does: rested.
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.0;
+        app.update();
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert!(app.world().resource::<Toast>().text.starts_with("You wake rested."));
+    }
+
+    #[test]
+    fn a_pack_with_no_bedroll_is_not_slept_on_and_a_rested_delver_cannot() {
+        let (mut app, _) = pack_sleeper(false);
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        let (mut app, delver) = pack_sleeper(true);
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.05;
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert_eq!(app.world().resource::<Toast>().text, "You are not tired enough to sleep.");
     }
 
     #[test]

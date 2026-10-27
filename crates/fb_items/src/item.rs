@@ -1,6 +1,7 @@
 //! A whole Forever Below item from a base name and a seed: the plate's `rollSA` and
 //! `makeGood`, tying together the shape, profile, rarity, affixes, name, legend and dress.
 
+use armory::families::bags::Accessory;
 use crate::identify::Known;
 use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
@@ -323,6 +324,27 @@ impl Item {
     pub fn fits(&self, slot: Slot) -> bool {
         self.slots().contains(&slot)
     }
+
+    /// What a bag was rolled with: a pack's bedroll and weapon strap, in a fixed order. Accessories
+    /// are part of the Armory's roll, so they are never found loose or fitted by the delver. Empty
+    /// for anything but a bag.
+    pub fn accessories(&self) -> Vec<Accessory> {
+        match &self.shape {
+            armory::Item::Bags(s) => s.bag.accessories(),
+            _ => vec![],
+        }
+    }
+
+    /// Whether it was rolled with `accessory`.
+    pub fn has_accessory(&self, accessory: Accessory) -> bool {
+        self.accessories().contains(&accessory)
+    }
+
+    /// Whether a weapon strap holds it: a long weapon (a staff, spear, bow, crossbow or sword).
+    pub fn strappable(&self) -> bool {
+        self.profile.tags.contains(&Tag::Weapon)
+            && matches!(self.shape.family(), armory::Family::Staff | armory::Family::Spear | armory::Family::Bow | armory::Family::Crossbow | armory::Family::Sword)
+    }
 }
 
 /// `items` with the pieces that stack folded together, a full stack at a time, in the order of
@@ -403,6 +425,26 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packs_roll_with_their_accessories_and_nothing_else_does() {
+        let packs: Vec<Item> = (1..80).filter_map(|s| roll_item("Pack", s)).collect();
+        assert!(packs.iter().any(|p| p.has_accessory(Accessory::Bedroll)), "a bedroll");
+        assert!(packs.iter().any(|p| p.has_accessory(Accessory::WeaponStrap)), "a weapon strap");
+        assert!(packs.iter().any(|p| p.accessories().is_empty()), "a plain pack");
+        // The same seed rolls the same accessories.
+        assert!(packs.iter().all(|p| roll_item("Pack", p.seed).unwrap().accessories() == p.accessories()));
+        for base in ["Satchel", "Sack", "Purse", "Sword", "Bedroll"] {
+            assert!((1..20).all(|s| roll_item(base, s).unwrap().accessories().is_empty()), "{base}");
+        }
+    }
+
+    #[test]
+    fn only_long_weapons_are_strapped() {
+        for (base, strapped) in [("Staff", true), ("Spear", true), ("Bow", true), ("Crossbow", true), ("Sword", true), ("Dagger", false), ("Mace", false), ("Shield", false), ("Torch", false)] {
+            assert_eq!(roll_item(base, 2).unwrap().strappable(), strapped, "{base}");
+        }
+    }
     use crate::armory_base::{ARMORY_BASES, held_back};
 
     #[test]

@@ -44,7 +44,7 @@ fn every_slider_within_range() {
 fn rolls_are_coherent() {
     for s in rolls(1..=1024) {
         let (b, seed) = (&s.bag, s.seed);
-        if b.pocket || b.bedroll {
+        if b.pocket || b.bedroll || b.weapon_strap {
             assert_eq!(b.style, BagStyle::Backpack, "seed {seed}: pocket or bedroll on a {:?}", b.style);
         }
         if b.coins {
@@ -75,6 +75,8 @@ fn first_256_seeds_cover_the_variety() {
     assert!(any(&|s| s.bag.pocket), "no pocket");
     assert!(any(&|s| s.bag.style == BagStyle::Backpack && !s.bag.pocket), "always a pocket");
     assert!(any(&|s| s.bag.bedroll), "no bedroll");
+    assert!(any(&|s| s.bag.weapon_strap), "no weapon strap");
+    assert!(any(&|s| s.bag.bedroll && !s.bag.weapon_strap) && any(&|s| s.bag.weapon_strap && !s.bag.bedroll), "accessories roll apart");
     assert!(any(&|s| s.bag.patch), "no patch");
     assert!(any(&|s| s.etch.on), "no tooling or embroidery");
     for name in ["Drawstring Pouch", "Coin Purse", "Belt Pouch", "Satchel", "Adventurer's Pack", "Rucksack", "Grain Sack", "Sack"] {

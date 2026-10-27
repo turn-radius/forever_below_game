@@ -41,6 +41,8 @@ pub enum Refusal {
     WrongSlot,
     /// The hip with no belt to hang from.
     NoBelt,
+    /// The strap slot with no pack worn that has a weapon strap.
+    NoStrap,
     /// A quickslot has nothing to do with it.
     NotUsable,
     /// Not carried: a quickslot only takes what the delver has with them.
@@ -66,6 +68,7 @@ impl Refusal {
             Refusal::NotWearable => "That is not something you can wear.",
             Refusal::WrongSlot => "That does not go there.",
             Refusal::NoBelt => "It hangs from a belt. Wear one first.",
+            Refusal::NoStrap => "It needs a pack with a weapon strap.",
             Refusal::NotUsable => "A quickslot cannot use that.",
             Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
@@ -263,7 +266,9 @@ impl Inventory {
 
     /// Everything worn or held, with its slot, in the slots' order.
     pub fn equipped(&self) -> Vec<(Slot, &Item)> {
-        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
+        // A weapon on the pack's strap is carried, not held: it gives none of its stats, only its
+        // weight ([`Inventory::strapped`]).
+        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter(|(slot, _)| **slot != Slot::Strap).filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
         worn.sort_by_key(|(slot, _)| *slot as u8);
         worn
     }
@@ -609,6 +614,13 @@ impl Inventory {
     pub fn check_wear(&self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
         let item = self.item(id).ok_or(Refusal::Unknown)?;
         item.profile.slot.ok_or(Refusal::NotWearable)?;
+        // The weapon strap holds one long weapon, and is the worn pack's own.
+        if slot == Slot::Strap {
+            if !item.strappable() {
+                return Err(Refusal::WrongSlot);
+            }
+            return if self.has_strap() { Ok(()) } else { Err(Refusal::NoStrap) };
+        }
         if !item.fits(slot) {
             return Err(Refusal::WrongSlot);
         }
@@ -636,6 +648,36 @@ impl Inventory {
             Err(_) => Displaced::Underfoot,
         };
         Some((id, went))
+    }
+
+    /// Whether the pack worn on the back was rolled with a weapon strap
+    /// ([`fb_items::Accessory::WeaponStrap`]).
+    pub fn has_strap(&self) -> bool {
+        self.worn(Slot::Back).and_then(|id| self.item(id)).is_some_and(|pack| pack.has_accessory(fb_items::Accessory::WeaponStrap))
+    }
+
+    /// With no pack that has a weapon strap worn, the weapon strapped on comes off: into the first
+    /// carried bag with room ([`Inventory::stow`]), or else loose, to be set down underfoot (a long
+    /// one often cannot be packed). Returns it and where it went.
+    pub fn unstrap(&mut self) -> Option<(ItemId, Displaced)> {
+        if self.has_strap() {
+            return None;
+        }
+        let id = self.worn(Slot::Strap)?;
+        self.take_out(id);
+        let went = match self.stow(id) {
+            Ok(container) => match self.location(id) {
+                Some(Location::In { at, .. }) => Displaced::In { container, at },
+                _ => Displaced::Underfoot,
+            },
+            Err(_) => Displaced::Underfoot,
+        };
+        Some((id, went))
+    }
+
+    /// The weapon strapped to the worn pack.
+    pub fn strapped(&self) -> Option<ItemId> {
+        self.worn(Slot::Strap)
     }
 
     /// The slot `id` goes in when worn without saying where: the first of its slots
@@ -946,6 +988,47 @@ mod tests {
         assert_eq!(inventory.check_wear(shield, Slot::Mainhand), Err(Refusal::WrongSlot));
         let helm = inventory.add(rolled("Helm", 2));
         assert_eq!(inventory.check_wear(helm, Slot::Offhand), Err(Refusal::WrongSlot));
+    }
+
+    /// A pack rolled with (or without) a weapon strap.
+    fn pack_strapped(strap: bool) -> Item {
+        (1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap) == strap).expect("a pack of that kind")
+    }
+
+    #[test]
+    fn a_weapon_strap_holds_one_long_weapon_outside_the_grid() {
+        let mut inventory = Inventory::default();
+        let staff = inventory.add(rolled("Staff", 3));
+        let dagger = inventory.add(rolled("Dagger", 3));
+        assert_eq!(inventory.check_wear(staff, Slot::Strap), Err(Refusal::NoStrap), "no pack");
+        let bare = inventory.add(pack_strapped(false));
+        inventory.wear(bare, Slot::Back).unwrap();
+        assert_eq!(inventory.check_wear(staff, Slot::Strap), Err(Refusal::NoStrap), "a pack with no strap");
+        let pack = inventory.add(pack_strapped(true));
+        inventory.equip(pack, Slot::Back).unwrap();
+        assert_eq!(inventory.check_wear(dagger, Slot::Strap), Err(Refusal::WrongSlot), "not a long weapon");
+        assert_eq!(inventory.equip(staff, Slot::Strap), Ok(None));
+        assert_eq!(inventory.strapped(), Some(staff));
+        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's grid");
+        assert!(inventory.is_carried(staff));
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot != Slot::Strap), "it gives no stats, only weight");
+        // One only: another long weapon swaps it out.
+        let spear = inventory.add(rolled("Spear", 3));
+        assert_eq!(inventory.equip(spear, Slot::Strap).map(|d| d.map(|(old, _)| old)), Ok(Some(staff)));
+    }
+
+    #[test]
+    fn a_strapped_weapon_comes_off_with_its_pack() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(pack_strapped(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let staff = inventory.add(rolled("Staff", 3));
+        inventory.wear(staff, Slot::Strap).unwrap();
+        assert_eq!(inventory.unstrap(), None, "the pack is still on");
+        let bare = inventory.add(pack_strapped(false));
+        inventory.equip(bare, Slot::Back).unwrap();
+        let (id, _) = inventory.unstrap().expect("the strap is gone");
+        assert_eq!((id, inventory.strapped()), (staff, None));
     }
 
     #[test]

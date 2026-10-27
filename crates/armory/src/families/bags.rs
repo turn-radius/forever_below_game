@@ -85,8 +85,12 @@ pub struct Bag {
     pub coins: bool,
     /// A front pocket (backpacks).
     pub pocket: bool,
-    /// A rolled blanket strapped on top (backpacks).
+    /// A rolled blanket strapped on top (backpacks). One of the pack's [`Accessory`]s.
     pub bedroll: bool,
+    /// Bands down one side to hold a long weapon outside the pack's grid (backpacks). One of the
+    /// pack's [`Accessory`]s.
+    #[serde(default)]
+    pub weapon_strap: bool,
     /// A sewn-on patch.
     pub patch: bool,
 }
@@ -111,8 +115,44 @@ impl Default for Bag {
             coins: false,
             pocket: true,
             bedroll: true,
+            weapon_strap: false,
             patch: false,
         }
+    }
+}
+
+/// Something a bag or belt comes with, attached when it is rolled. Accessories are variants of the
+/// Armory's roll: they are never found loose or fitted by the delver, and they are fixed for the
+/// item's life. A belt's frogs and pouches will be the same kind of thing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Accessory {
+    /// A blanket rolled under the flap, which the delver can sleep on.
+    Bedroll,
+    /// Bands that hold one long weapon alongside the pack.
+    WeaponStrap,
+}
+
+impl Accessory {
+    /// What a card calls it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Accessory::Bedroll => "Bedroll",
+            Accessory::WeaponStrap => "Weapon strap",
+        }
+    }
+}
+
+impl Bag {
+    /// The accessories it was rolled with, in a fixed order.
+    pub fn accessories(&self) -> Vec<Accessory> {
+        let mut found = Vec::new();
+        if self.bedroll {
+            found.push(Accessory::Bedroll);
+        }
+        if self.weapon_strap {
+            found.push(Accessory::WeaponStrap);
+        }
+        found
     }
 }
 
@@ -310,6 +350,8 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     };
     let odds = if b.fabric == Textile::Burlap { 0.0 } else { 0.2 };
     s.etch = Etching::roll(rng, odds, targets, 1);
+    // Last, so that adding this accessory shifted nothing else a seed rolls.
+    b.weapon_strap = style == Backpack && rng.chance(0.35);
     s.fit(&LIMITS);
     s
 }
@@ -860,6 +902,9 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
             if b.bedroll {
                 add_bedroll(f, &body, looks, strap_t, &mut straps, &mut fittings, parts);
             }
+            if b.weapon_strap {
+                add_weapon_strap(f, &body, looks, strap_t, &mut fittings, parts);
+            }
         }
         _ => {}
     }
@@ -885,6 +930,31 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
             .collect();
         add_patch(parts, rows, t * 0.8, looks.flap);
     }
+}
+
+/// Two bands round the pack's left side, buckled at the front, and a keeper strap down the side
+/// between them: where a long weapon is lashed, its butt in the lower band.
+fn add_weapon_strap(f: &Flapped, body: &BoxBody, looks: &Looks, strap_t: f32, fittings: &mut MeshBuilder, parts: &mut Parts) {
+    let sz = f.size;
+    let (w, d) = (f.width * 0.5, f.depth * 0.5);
+    let lift = strap_t * 2.2;
+    // Out along the body's outline at plan angle `a` and height `v`.
+    let on = |a: f32, v: f32| {
+        let (p, n) = (body.point(a, v), vec3::normalize_or([a.cos() / w, 0.0, a.sin() / d], vec3::X));
+        (vec3::add(p, vec3::scale(n, lift)), n)
+    };
+    let mut straps = MeshBuilder::new();
+    for v in [0.24, 0.7] {
+        straps.append(&strap_along(24, 0.3 * sz, strap_t * 1.4, |u| on(PI - 1.3 + 2.6 * u, v)));
+        // Buckled on the front of the band, with the strap running round the pack.
+        let (tip, n) = on(PI - 1.3, v);
+        let along = vec3::sub(on(PI - 1.4, v).0, on(PI - 1.2, v).0);
+        let mut b = buckle(0.3 * sz, 0.025 * sz);
+        b.place_basis(vec3::add(tip, vec3::scale(n, strap_t)), along, n);
+        fittings.append(&b);
+    }
+    straps.append(&strap_along(12, 0.2 * sz, strap_t * 1.4, |u| on(PI, 0.24 + 0.46 * u)));
+    parts.add_look("weapon_strap", straps, looks.strap);
 }
 
 /// A blanket rolled and strapped across the top of a pack, its spiral showing at each end.

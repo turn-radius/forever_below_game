@@ -59,6 +59,7 @@ fn every_enabled_section_has_a_part() {
             ("coins", b.coins),
             ("pocket", b.pocket),
             ("bedroll", b.bedroll),
+            ("weapon_strap", b.weapon_strap),
             ("patch", b.patch),
         ];
         for (name, on) in expected {

@@ -371,6 +371,22 @@ pub fn hold_spec(spec: &str) -> (Option<Option<String>>, Option<Option<String>>)
 fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
     let (base, holder) = if base == "Chamberstick" { ("Candle", true) } else { (base, false) };
     let rolled = |s: u32| fb_items::roll_item(base, s);
+    // `FB_PACK=strap|bedroll|both|plain` picks a pack with those accessories, for captures.
+    if base == "Pack"
+        && let Ok(want) = std::env::var("FB_PACK")
+    {
+        let has = |i: &fb_items::Item, a| i.has_accessory(a);
+        let (strap, bedroll) = (fb_items::Accessory::WeaponStrap, fb_items::Accessory::Bedroll);
+        let found = (0..2000).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| match want.as_str() {
+            "strap" => has(i, strap) && !has(i, bedroll),
+            "bedroll" => has(i, bedroll) && !has(i, strap),
+            "both" => has(i, strap) && has(i, bedroll),
+            _ => i.accessories().is_empty(),
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
     let wanted = |i: &fb_items::Item| crate::carry::item_light(&i.shape).is_some() && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder));
     let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(wanted);
     lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle")).or_else(|| rolled(seed))
@@ -1547,6 +1563,13 @@ fn drag_items(
 /// with room, or else set down underfoot. Every way of taking a belt off (a double-click, a drag
 /// to a grid or the floor, swapping in something that is not a belt) ends here.
 fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>) {
+    // Likewise a strapped weapon, once the pack with the strap is off ([`Inventory::unstrap`]).
+    if inventory.worn(Slot::Strap).is_some()
+        && !inventory.has_strap()
+        && let Some((id, Displaced::Underfoot)) = inventory.unstrap()
+    {
+        floor_changes.0.push(FloorChange::SetDown(id, 0.0));
+    }
     if inventory.worn(Slot::Hip).is_none() || inventory.worn(Slot::Belt).is_some() {
         return;
     }
