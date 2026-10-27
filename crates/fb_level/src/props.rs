@@ -327,8 +327,9 @@ fn furnish_roles(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<Prop
                             placed.push(spot);
                         }
                     }
-                    RoomRole::Market | RoomRole::Store => {
-                        let market = role == RoomRole::Market;
+                    RoomRole::Market | RoomRole::Workshop(_) | RoomRole::Store => {
+                        // A workshop is set out as a market is, with stalls to sell from.
+                        let market = role.is_trade_room();
                         let (styles, base) = if market { (MARKET_STYLES, 3) } else { (STORE_STYLES, 2) };
                         let count = (base + room.area() / 12).min(base + 2);
                         for _ in 0..count {
@@ -432,7 +433,7 @@ fn furnish_purposes(level: &Level, keep_clear: &[(i32, i32)], placed: &mut Vec<P
                     put_in_nook(level, &nooks, prop, placed, occupied, rng);
                 }
                 // A market's stalls stay empty, so no strongbox stands among them.
-                if !level.roles_of(r).contains(&crate::RoomRole::Market) {
+                if !level.roles_of(r).iter().any(|role| role.is_trade_room()) {
                     let strongbox = roll_container(placed, &[(ChestStyle::Strongbox, 2), (ChestStyle::Chest, 1)], false, rng);
                     put_in_nook(level, &nooks, strongbox, placed, occupied, rng);
                 }
@@ -1003,7 +1004,7 @@ mod tests {
             let level = generate(seed, depth);
             for claim in &level.claims {
                 let containers = |room: usize| level.props.iter().filter(|p| p.prop.is_container() && level.room_at(p.x as i32, p.y as i32) == Some(room)).collect::<Vec<_>>();
-                if let Some(room) = level.room_with_role(claim, crate::RoomRole::Market) {
+                if let Some(room) = level.trade_room(claim) {
                     markets += 1;
                     // Set dressing: traders sell from their own shelves. A market doubled up in
                     // a small hall may have no wall left to set a stall against.
@@ -1036,12 +1037,13 @@ mod tests {
                 let held: Vec<_> = level.props.iter().filter(|p| p.prop.is_container() && level.room_at(p.x as i32, p.y as i32) == Some(room)).collect();
                 // A market's stalls are empty, and a hearth has one empty keg; all else holds loot.
                 let empty = held.iter().filter(|p| !p.prop.holds_loot()).count();
-                let allowed = if roles.contains(&RoomRole::Market) { held.len() } else if roles.contains(&RoomRole::Hearth) { 1 } else { 0 };
+                let sells = roles.iter().any(|r| r.is_trade_room());
+                let allowed = if sells { held.len() } else if roles.contains(&RoomRole::Hearth) { 1 } else { 0 };
                 assert!(empty <= allowed, "seed {seed} depth {depth}: {empty} empty containers in a held room");
-                if !roles.contains(&RoomRole::Market) {
+                if !sells {
                     kept += held.iter().filter(|p| p.prop.holds_loot()).count();
                 }
-                if level.purpose_of(room) == Some(crate::Purpose::Guardroom) && !roles.contains(&RoomRole::Market) {
+                if level.purpose_of(room) == Some(crate::Purpose::Guardroom) && !sells {
                     guard_boxes += held.iter().filter(|p| p.prop.holds_loot() && matches!(p.prop, Prop::Container { style: ChestStyle::Strongbox | ChestStyle::Chest, .. })).count();
                 }
             }

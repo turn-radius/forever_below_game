@@ -232,7 +232,8 @@ mod tests {
                     let Some(item) = level.floor_item(spot, fb_items::Odds::default(), &lore) else { continue };
                     let ground = level.denizen_ground_near(spot.x, spot.y);
                     if let Some(kind) = item.tongue() {
-                        assert!(lore.tongues.contains(&kind) || ground == Some(kind), "world {world} depth {depth}");
+                        // A level with no denizen faction rolls a tongue from all of them.
+                        assert!(lore.tongues.is_empty() || lore.tongues.contains(&kind) || ground == Some(kind), "world {world} depth {depth}");
                         if let Some(g) = ground {
                             assert_eq!(kind, g, "by a faction's ground, in its tongue");
                         }

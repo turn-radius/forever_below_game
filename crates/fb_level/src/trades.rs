@@ -30,7 +30,7 @@ fn held(level: &Level) -> Vec<fb_faction::Faction> {
 /// Costs a level, so a caller asks once and keeps the answer.
 pub fn master_faction(world_seed: u32, depth: u32, profession: Profession) -> Option<fb_faction::Faction> {
     let master = *masters_of(world_seed, &TradeRules::DEFAULT).on(depth).find(|m| m.profession == profession)?;
-    let level = crate::generate_in(world_seed, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth)));
+    let level = crate::generate_in(world_seed, depth, &crate::LevelParams::for_depth(depth));
     level.folk.iter().find(|f| f.trade == Some(master.trade())).map(|f| f.faction)
 }
 
@@ -41,7 +41,7 @@ pub fn master_faction(world_seed: u32, depth: u32, profession: Profession) -> Op
 pub(crate) fn plan(level: &Level, strengths: &[usize], layout_seed: u32) -> Vec<Vec<Option<Trade>>> {
     let rules = TradeRules::DEFAULT;
     let mut rng = Mulberry32::new(layout_seed ^ TRADE_SALT);
-    level.claims.iter().zip(strengths).map(|(claim, &size)| camp_trades(level.faction(claim.faction), size, level.depth, &rules, &mut rng)).collect()
+    level.claims.iter().zip(strengths).map(|(claim, &size)| camp_trades(level.faction(claim.faction), size, claim.rooms.len(), level.depth, &rules, &mut rng)).collect()
 }
 
 /// Puts each master the world places on this level among the folk, once they stand.
@@ -49,8 +49,10 @@ pub(crate) fn assign(level: &mut Level, world_seed: u32) {
     place_masters(level, &masters_of(world_seed, &TradeRules::DEFAULT));
 }
 
-/// The trades of a camp of `size` folk, in order: guards first, then traders, then nobody.
-fn camp_trades(faction: &FactionSpec, size: usize, depth: u32, rules: &TradeRules, rng: &mut Mulberry32) -> Vec<Option<Trade>> {
+/// The trades of a camp of `size` folk holding `rooms` rooms, in order: guards first, then
+/// traders, then nobody. A claim of [`crate::roles::WORKSHOP_ROOMS`] rooms or more gives each
+/// trade a workshop, so its camp keeps no more trades than it has rooms.
+fn camp_trades(faction: &FactionSpec, size: usize, rooms: usize, depth: u32, rules: &TradeRules, rng: &mut Mulberry32) -> Vec<Option<Trade>> {
     if size == 0 {
         return Vec::new();
     }
@@ -58,10 +60,12 @@ fn camp_trades(faction: &FactionSpec, size: usize, depth: u32, rules: &TradeRule
     // About half of the camp works: always a guard, and a trader for sure once the camp is four
     // strong. Claims make most camps small, and a trader in every camp of three would leave far
     // fewer than half the folk plain.
-    let wanted = (size as f64 * rules.trade_share + extra + rng.next_f64()).floor() as usize;
+    let share = if size >= rules.large_camp { rules.large_camp_share } else { rules.trade_share };
+    let wanted = (size as f64 * share + extra + rng.next_f64()).floor() as usize;
     let least = if size >= 4 { 2 } else { 1 };
     let working = wanted.clamp(least.min(size), size);
     let guards = 1 + (size >= 4 && working >= 3 && rng.chance(rules.second_guard_odds)) as usize;
+    let working = if rooms >= crate::roles::WORKSHOP_ROOMS { working.min(guards + rooms) } else { working };
 
     let tiers = rules.tiers_at(depth);
     let mut offered: Vec<(Profession, u32)> = TRADER_WEIGHTS.to_vec();
@@ -116,14 +120,29 @@ fn place_masters(level: &mut Level, masters: &Masters) {
         let camp_of = |faction| -> Vec<usize> { (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction && !taken.contains(&i)).collect() };
         let Some(camp) = (0..held.len()).map(|k| camp_of(held[(master.slot as usize + k) % held.len()])).find(|c| !c.is_empty()) else { continue };
         let guards = camp.iter().filter(|&&i| is_guard(&level.folk[i])).count();
+        // A trader of the master's own trade first, then any trader.
         let rank = |i: usize| match level.folk[i].trade {
-            Some(t) if t.profession != Profession::Guard => 0,
-            None => 1,
-            Some(_) if guards > 1 => 2,
-            Some(_) => 3,
+            Some(t) if t.profession == master.profession => 0,
+            Some(t) if t.profession != Profession::Guard => 1,
+            None => 2,
+            Some(_) if guards > 1 => 3,
+            Some(_) => 4,
         };
         let Some(i) = camp.iter().copied().min_by_key(|&i| rank(i)) else { continue };
+        let was = level.folk[i].trade.map(|t| t.profession);
         level.folk[i].trade = Some(master.trade());
+        // A master who took the last trader of a trade into their workshop makes it their own.
+        if let (Some(old), Some(room)) = (was, level.room_at(level.folk[i].x as i32, level.folk[i].y as i32)) {
+            let faction = level.folk[i].faction;
+            let still = level.folk.iter().any(|f| f.faction == faction && f.trade.is_some_and(|t| t.profession == old));
+            let claim = level.claims.iter().find(|c| c.faction == faction).cloned();
+            let taken = claim.as_ref().is_some_and(|c| level.workshop_of(c, master.profession).is_some());
+            if !still && !taken {
+                if let Some(role) = level.roles.get_mut(room).and_then(|r| r.iter_mut().find(|r| **r == crate::RoomRole::Workshop(old))) {
+                    *role = crate::RoomRole::Workshop(master.profession);
+                }
+            }
+        }
         taken.push(i);
     }
 }
@@ -144,13 +163,13 @@ pub fn tier_open(tier: Tier, depth: u32, rules: &TradeRules) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LevelParams, LevelStyle, generate_in};
+    use crate::{LevelParams, generate_in};
     use std::collections::HashSet;
 
     const WORLDS: std::ops::RangeInclusive<u32> = 1..=32;
 
     fn level(world: u32, depth: u32) -> Level {
-        generate_in(world, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)))
+        generate_in(world, depth, &LevelParams::for_depth(depth))
     }
 
     #[test]
