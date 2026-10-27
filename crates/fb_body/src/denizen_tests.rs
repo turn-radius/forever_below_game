@@ -497,3 +497,17 @@ fn curly_hair_builds_under_a_hood_and_a_helm() {
         }
     }
 }
+
+#[test]
+fn a_minotaurs_belt_hangs_no_pouch_and_its_tail_is_a_thin_cord() {
+    let belt = roll(Family::Belt, 3);
+    let pouch = |folk: Folk| {
+        let body = Body::new(&BodySpec::roll(folk, 5));
+        let fit = fit_worn(&body, &[(Slot::Belt, belt.clone())]);
+        fit.layer(Slot::Belt).unwrap().mesh.parts.iter().any(|p| p.name == "pouch")
+    };
+    assert!(!pouch(Folk::Minotaur));
+    let body = minotaur(5);
+    let (_, radius) = body.jointed_tail().unwrap();
+    assert!(radius(0.0) < 0.25, "tail root radius {} units", radius(0.0));
+}

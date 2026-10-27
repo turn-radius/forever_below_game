@@ -320,12 +320,12 @@ const GNOME_HAT: f64 = 0.6;
 /// How many arrows or bolts a bowman starts with: a full quiver.
 pub const AMMUNITION_CARRIED: usize = 20;
 
-/// What a minotaur does not wear: a shirt, tunic or robe, a cloak, a hood, hat or helm, trousers or
-/// gloves. It goes bare, its coat showing, in a belt, a kilt (breeches, which a denizen's legwear
+/// What a minotaur does not wear: a shirt, tunic or robe, a cloak, a hood, hat or helm, a pack, trousers
+/// or gloves. It goes bare, its coat showing, in a belt, a kilt (breeches, which a denizen's legwear
 /// draws as one), body armour, gauntlets and what it holds.
 fn bare_on_a_minotaur(slot: Slot, base: &str) -> bool {
     match slot {
-        Slot::Shirt | Slot::Cloak | Slot::Head => true,
+        Slot::Shirt | Slot::Cloak | Slot::Head | Slot::Back => true,
         Slot::Legs => base != "Breeches",
         Slot::Hands => base == "Gloves",
         _ => false,
@@ -736,8 +736,8 @@ mod tests {
                 for livery in [None, Some(&livery)] {
                     let set = outfit.roll_in(seed, "minotaur", Odds::default(), livery);
                     for (slot, item) in &set.worn {
-                        assert!(!matches!(slot, Slot::Shirt | Slot::Cloak | Slot::Head), "{} {seed}: {slot:?} {}", outfit.key, item.base);
-                        assert!(!matches!(item.base.as_str(), "Gloves" | "Robe" | "Trousers" | "Tunic" | "Shirt" | "Hood" | "Helm"), "{} {seed}: {}", outfit.key, item.base);
+                        assert!(!matches!(slot, Slot::Shirt | Slot::Cloak | Slot::Head | Slot::Back), "{} {seed}: {slot:?} {}", outfit.key, item.base);
+                        assert!(!matches!(item.base.as_str(), "Gloves" | "Robe" | "Pack" | "Satchel" | "Sack" | "Trousers" | "Tunic" | "Shirt" | "Hood" | "Helm"), "{} {seed}: {}", outfit.key, item.base);
                     }
                     assert!(set.item(Slot::Belt).is_some(), "{} {seed}: no belt", outfit.key);
                 }
