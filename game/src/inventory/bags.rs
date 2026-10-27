@@ -99,24 +99,59 @@ pub fn ui_size(window: &Window, scale: Option<&UiScale>) -> Vec2 {
     Vec2::new(window.width(), window.height()) / scale.map_or(1.0, |s| s.0.max(f32::EPSILON))
 }
 
-/// A free place for a window of `size` among `placed`, scanning rows from the top left; the
-/// first fit, else the top left.
-fn free_place(size: Vec2, placed: &[Rect], screen: Vec2) -> Vec2 {
-    let mut y = FIRST_AT.y;
+/// Space kept between a new window and what it must not cover.
+const MARGIN_PX: f32 = 8.0;
+/// How far a window is offset from the one before when there is no free space left.
+const CASCADE_PX: f32 = 36.0;
+
+/// A free place for a window of `size`, clear of the `obstacles` (the fixed panels, the docked
+/// grids and the windows already placed), scanning from the top left; the first fit. With none,
+/// the `n`th window cascades from the top left so every title bar stays showing.
+pub fn free_place(size: Vec2, obstacles: &[Rect], screen: Vec2, n: usize) -> Vec2 {
+    let mut y = 0.0;
     while y + size.y <= screen.y {
-        let mut x = FIRST_AT.x;
+        let mut x = 0.0;
         while x + size.x <= screen.x {
             let at = Vec2::new(x, y);
             let rect = Rect::from_corners(at, at + size);
-            if placed.iter().all(|p| p.intersect(rect).is_empty()) {
+            if obstacles.iter().all(|o| o.inflate(MARGIN_PX).intersect(rect).is_empty()) {
                 return at;
             }
             x += SEARCH_STEP_PX;
         }
         y += SEARCH_STEP_PX;
     }
-    clamp_window(FIRST_AT, size, screen)
+    clamp_window(FIRST_AT + Vec2::splat(CASCADE_PX) * n as f32, size, screen)
 }
+
+/// Where the fixed panels of the inventory page are, in logical pixels: the header, the
+/// doll with its quickslots, and every grid docked in the column.
+pub fn fixed_rects(
+    leaf: &Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
+    column: &Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
+    dolls: &Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
+    grids: &Query<(&super::GridView, &ComputedNode, &UiGlobalTransform)>,
+    frames: &[Rect],
+) -> Option<Vec<Rect>> {
+    let leaf = leaf.iter().next().map(|(n, t)| node_rect(n, t))?;
+    let column = column.iter().next().map(|(n, t)| node_rect(n, t))?;
+    let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t))?;
+    if leaf.width() <= 0.0 || doll.width() <= 0.0 {
+        return None;
+    }
+    let mut rects = vec![Rect::from_corners(leaf.min, Vec2::new(leaf.max.x, column.min.y)), doll];
+    for (_, n, t) in grids {
+        let rect = node_rect(n, t);
+        if !frames.iter().any(|f| f.contains(rect.center())) {
+            rects.push(rect);
+        }
+    }
+    Some(rects)
+}
+
+/// The doll, quickslots and help column of the page, which windows keep off.
+#[derive(Component, Debug)]
+pub struct DollColumn;
 
 /// Drops windows whose container is gone, places new ones where nothing sits, and keeps every
 /// window inside the screen, whatever size it becomes.
@@ -126,6 +161,11 @@ pub fn place_windows(
     tuning: Res<Tuning>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
+    leaf: Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
+    column: Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
+    dolls: Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
+    grids: Query<(&super::GridView, &ComputedNode, &UiGlobalTransform)>,
+    frames: Query<(&BagWindow, &ComputedNode, &UiGlobalTransform)>,
 ) {
     let cell = tuning.interface.cell_size;
     let gone: Vec<ItemId> = windows.order.iter().copied().filter(|&id| inventory.grid(id).is_none()).collect();
@@ -137,15 +177,25 @@ pub fn place_windows(
     if screen.x < 1.0 || screen.y < 1.0 {
         return;
     }
+    let frame_rects: Vec<Rect> = frames.iter().map(|(_, n, t)| node_rect(n, t)).collect();
+    let fixed = fixed_rects(&leaf, &column, &dolls, &grids, &frame_rects);
     let size_of = |id: ItemId| inventory.grid(id).map(|g| window_size(g, cell));
-    let mut placed: Vec<Rect> = windows.order.iter().filter_map(|id| Some(Rect::from_corners(*windows.at.get(id)?, *windows.at.get(id)? + size_of(*id)?))).collect();
+    // New windows wait for the page to be laid out, to know where its panels are.
+    let waiting = windows.order.iter().any(|id| !windows.at.contains_key(id));
+    if waiting && fixed.is_none() {
+        return;
+    }
+    let mut placed: Vec<Rect> = fixed.unwrap_or_default();
+    placed.extend(windows.order.iter().filter_map(|id| Some(Rect::from_corners(*windows.at.get(id)?, *windows.at.get(id)? + size_of(*id)?))));
     let mut fixes: Vec<(ItemId, Vec2)> = Vec::new();
+    let mut fresh = 0;
     for &id in &windows.order {
         let Some(size) = size_of(id) else { continue };
         let want = match windows.at.get(&id) {
             Some(&at) => clamp_window(at, size, screen),
             None => {
-                let at = free_place(size, &placed, screen);
+                let at = free_place(size, &placed, screen, fresh);
+                fresh += 1;
                 placed.push(Rect::from_corners(at, at + size));
                 at
             }
@@ -260,12 +310,35 @@ mod tests {
         assert_eq!(windows.order, vec![a]);
     }
 
+    /// What the page occupies: the header, the doll column and the docked grids.
+    fn layout(screen: Vec2) -> Vec<Rect> {
+        let r = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_corners(Vec2::new(x0, y0), Vec2::new(x1, y1));
+        if screen.x > 1500.0 {
+            vec![r(336.0, 60.0, 956.0, 230.0), r(984.0, 90.0, 1580.0, 920.0), r(336.0, 285.0, 770.0, 500.0), r(336.0, 560.0, 626.0, 850.0)]
+        } else {
+            vec![r(20.0, 20.0, 400.0, 130.0), r(800.0, 30.0, 1260.0, 690.0), r(20.0, 150.0, 330.0, 300.0)]
+        }
+    }
+
     #[test]
-    fn new_windows_are_placed_side_by_side() {
-        let screen = Vec2::new(1280.0, 720.0);
-        let size = Vec2::new(300.0, 200.0);
-        let first = free_place(size, &[], screen);
-        let second = free_place(size, &[Rect::from_corners(first, first + size)], screen);
-        assert!(Rect::from_corners(first, first + size).intersect(Rect::from_corners(second, second + size)).is_empty());
+    fn new_windows_keep_off_the_panels_and_each_other() {
+        let sizes = [Vec2::new(312.0, 300.0), Vec2::new(312.0, 220.0), Vec2::new(250.0, 200.0)];
+        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(1280.0, 720.0)] {
+            let fixed = layout(screen);
+            for count in [2, 3] {
+                let mut placed: Vec<Rect> = Vec::new();
+                for (n, &size) in sizes.iter().take(count).enumerate() {
+                    let mut obstacles = fixed.clone();
+                    obstacles.extend(placed.iter().copied());
+                    let at = free_place(size, &obstacles, screen, n);
+                    let rect = Rect::from_corners(at, at + size);
+                    assert!(Rect::from_corners(Vec2::ZERO, screen).contains(rect.min) && Rect::from_corners(Vec2::ZERO, screen).contains(rect.max), "{screen} #{n} on screen");
+                    for o in &obstacles {
+                        assert!(o.intersect(rect).is_empty(), "{screen} {count} windows: #{n} at {at} covers {o:?}");
+                    }
+                    placed.push(rect);
+                }
+            }
+        }
     }
 }

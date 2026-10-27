@@ -1101,7 +1101,7 @@ pub(crate) fn build_screen(
                 // The doll, with the quickslots and the help under it, leaving the left leaf's
                 // height to the grids.
                 ledger
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() })
+                    .spawn((bags::DollColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() }))
                     .with_children(|leaf| {
                         doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
                         if *tab != SheetTab::Inventory {
