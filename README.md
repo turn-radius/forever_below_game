@@ -228,6 +228,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_CONDITION_HOVER=<n>` | shows the card of the `n`th status badge (0 the first, worst first) as if hovered |
 | `FB_PROVOKE=<n>` | a second in, gives the level's `n`th folk (0 the first, in `print_level`'s order) cause to fight: they and the kin who see it turn hostile, for captures of folk fighting (with `FB_DEBUG_POSE`) |
 | `FB_DOORS=open` | a few frames in, swings open every claim door that is not locked to the delver at their standing (with `FB_STANDING`), for captures of the doors |
+| `FB_TALK_BAND=<band>` | with `FB_TALK=1`, holds the faction of the folk it talks to at the middle of the band (`hostile`, `wary`, `neutral`, `friendly`, `allied`) a few frames in, to capture a parley (`FB_TALK_BAND=hostile FB_TALK=1 FB_TALK_TOPIC=persuade`) |
 | `FB_STANDING=<faction index>:<band>` | holds the delver's standing with that faction at the middle of the band (`hostile`, `wary`, `neutral`, `friendly`, `allied`), for captures of folk watching, greeting, attacking or helping (`FB_STANDING=2:wary`) |
 | `FB_SLAY=<n>` | two seconds in, strikes the level's `n`th folk down, for captures of a body and the gear it drops |
 | `FB_PLAYER_HP=<n>` | starts the delver on `n` hit points (at least 1, at most their full), to check a fall quickly (`FB_PLAYER_HP=1`) |

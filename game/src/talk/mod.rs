@@ -41,11 +41,14 @@
 //!   raise the folk's faction's standing with the delver. A success raises it by an amount scaled
 //!   by the roll, a failure costs a little, and a folk gets one try per rest. Any folk can be
 //!   persuaded, whatever their faction's band: the worse it stands, the harder the roll, through
-//!   the standing modifier.
+//!   the standing modifier. A denizen is persuaded in its tongue: its persuasion line needs the
+//!   words `peace` and `friend` and the greeting's ([`lines::line_needs`]), and until the delver
+//!   knows them it does not follow, shows glyphs, and nothing is rolled.
 //!
 //! `FB_LEARN=<kind>:<topic>[+<topic>...]` (`minotaur:greeting+trade`) teaches those words at
-//! once, for captures. `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
-//! `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1; `strange` or `denizens` choose a
+//! once, for captures (`minotaur:greeting` covers the words of the Persuade topic). `FB_TALK=1` opens the panel on the folk nearest the delver a few dozen frames in, and
+//! `FB_TALK_BAND=<band>` first holds that folk's faction at the middle of the band (`hostile`, `wary`, ...)
+//! so a parley can be captured, and `FB_TALK_TOPIC=<n>` then chooses the nth topic (counting from 1; `strange`, `denizens` or `persuade` choose a
 //! folk's topic of the denizens), for captures; `FB_TALK=folk` skips the denizens.
 
 pub mod lines;
@@ -194,7 +197,7 @@ fn talk_for_capture(
     folk: Query<(Entity, &Denizen, &Transform), Without<Corpse>>,
     mut request: ResMut<TalkRequest>,
     talk: Res<Talk>,
-    record: Option<Res<WorldRecord>>,
+    mut record: Option<ResMut<WorldRecord>>,
     mut frames: Local<u32>,
     mut chosen: Local<bool>,
 ) {
@@ -204,6 +207,19 @@ fn talk_for_capture(
         let Some(at) = player.iter().next().map(|t| t.translation) else { return };
         // `FB_TALK=folk` skips the denizens, for the folk who speak of them.
         let only_folk = std::env::var("FB_TALK").is_ok_and(|v| v == "folk");
+        // `FB_TALK_BAND=<band>` holds the nearest folk's faction at the middle of that band first.
+        let nearest = folk.iter().filter(|(_, d, _)| d.person.faction.denizen.is_none() || !only_folk).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at)));
+        if let (Some(band), Some((_, d, _)), Some(record)) = (std::env::var("FB_TALK_BAND").ok().and_then(|v| Band::ALL.into_iter().find(|b| b.label().eq_ignore_ascii_case(v.trim()))), nearest, record.as_deref_mut()) {
+            let middle = match band {
+                Band::Hostile => -75,
+                Band::Wary => -30,
+                Band::Neutral => 0,
+                Band::Friendly => 30,
+                Band::Allied => 75,
+            };
+            let now = record.standings.get(d.person.faction.id).value();
+            record.standings.shift(d.person.faction.id, middle - now);
+        }
         request.folk = folk.iter().filter(|(_, d, _)| !only_folk || (d.person.faction.denizen.is_none() && record.as_ref().is_none_or(|r| r.standings.band(d.person.faction.id) > Band::Wary))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))).map(|(e, ..)| e);
     }
     if *frames == OPEN_AT + 8 && !*chosen && talk.folk.is_some() {
@@ -268,7 +284,16 @@ fn choose(talk: &mut Talk, topic: Topic, run_seed: Option<u32>, lexicon: &Lexico
     if talk.waiting {
         return;
     }
-    if topic == Topic::Persuade && speaker.denizen.is_none() {
+    if topic == Topic::Persuade {
+        // A denizen is persuaded in its tongue: without the words its persuasion line needs it does
+        // not follow, and nothing is rolled.
+        if let Some(kind) = speaker.denizen
+            && !lexicon.readable(kind, &lines::line_needs(speaker, Some(topic)))
+        {
+            let said = lines::answer(speaker, topic, None);
+            talk.say(topic, said);
+            return;
+        }
         talk.persuade_asked = true;
         return;
     }
@@ -698,7 +723,8 @@ fn build_talk_screen(
                 panel.spawn((Text::new(heading), UiFonts::style(&fonts.mono, 13.0, MUTED)));
             }
             // A denizen's line the delver cannot read yet is its script, dimmed and in italics.
-            let (text, readable) = shown(speaker, topic, &said, lexicon);
+            // A denizen's opening in a parley is what it does (a snort, a spit), plain to see.
+            let (text, readable) = if talk.parley && topic.is_none() { (said.clone(), true) } else { shown(speaker, topic, &said, lexicon) };
             if readable {
                 panel.spawn((Text::new(format!("\u{201c}{text}\u{201d}")), UiFonts::style(&fonts.body, 22.0, colour)));
             } else {
@@ -726,7 +752,7 @@ fn build_talk_screen(
                         row.spawn((Text::new(topic.label_for(speaker)), UiFonts::style(&fonts.body, 21.0, INK)));
                     });
             }
-            panel.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(format!("1-{} choose \u{b7} {leave} leave", talk.topics.len().max(1))), UiFonts::style(&fonts.mono, 13.0, MUTED)));
+            panel.spawn((Node { margin: UiRect::top(px(4)), ..default() }, Text::new(if talk.topics.len() > 1 { format!("1-{} choose \u{b7} {leave} leave", talk.topics.len()) } else { format!("1 to choose \u{b7} {leave} leave") }), UiFonts::style(&fonts.mono, 13.0, MUTED)));
         });
     });
 }

@@ -341,7 +341,7 @@ fn a_neutral_minotaur_opens_the_panel_and_every_line_is_glyphs_until_words_are_l
     assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk), "denizens open the panel like folk");
     assert_eq!(app.world().resource::<Talk>().tongue, Some(DenizenKind::Minotaur));
     let labels: Vec<_> = app.world().resource::<Talk>().topics.iter().map(|t| t.label()).collect();
-    assert_eq!(labels, ["Who are you?", "This level", "Dangers", "Your trade", "Barter", "Work"]);
+    assert_eq!(labels, ["Who are you?", "This level", "Dangers", "Your trade", "Barter", "Work", "Persuade"]);
     for (topic, text, readable) in panel_lines(&app) {
         if topic != Some(Topic::Service(Service::Barter)) {
             assert!(!readable, "{topic:?}: {text}");
@@ -360,7 +360,8 @@ fn learning_greetings_and_trade_makes_those_lines_readable_and_the_rest_not() {
     let lines = panel_lines(&app);
     for (topic, text, readable) in &lines {
         match topic {
-            None | Some(Topic::Trade) => assert!(readable, "{topic:?}: {text}"),
+            // Persuasion is spoken in the greeting's words.
+            None | Some(Topic::Trade | Topic::Persuade) => assert!(readable, "{topic:?}: {text}"),
             Some(Topic::Service(Service::Barter)) => {}
             Some(other) => assert!(!readable, "{other:?}: {text}"),
         }
@@ -647,11 +648,62 @@ fn the_talk_cannot_be_left_while_the_dice_show() {
     assert!(!app.world().resource::<ScreenOpen>().is(Screen::Talk));
 }
 
-#[test]
-fn denizens_are_not_offered_persuasion_and_the_state_resets_with_the_delve() {
+/// Opens a talk with a neutral minotaur and chooses Persuade.
+fn minotaur_persuade(words: bool) -> (App, Entity) {
     let (mut app, folk) = minotaur_app();
+    app.init_resource::<crate::inventory::Inventory>();
+    if words {
+        record_of(&mut app).lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Greeting]));
+    }
     talk_to(&mut app, folk);
-    assert!(!app.world().resource::<Talk>().topics.contains(&Topic::Persuade));
+    let at = app.world().resource::<Talk>().topics.iter().position(|t| *t == Topic::Persuade).expect("a Persuade topic");
+    press(&mut app, DIGITS[at]);
+    (app, folk)
+}
+
+#[test]
+fn a_denizen_does_not_follow_a_persuasion_without_its_words_and_nothing_is_rolled() {
+    let (app, folk) = minotaur_persuade(false);
+    assert!(!app.world().resource::<Talk>().waiting && app.world().resource::<Persuading>().0.is_none());
+    let speaker = app.world().resource::<Talk>().speaker.clone().unwrap();
+    assert_eq!(app.world().resource::<WorldRecord>().persuasion_tries((speaker.depth, speaker.seed)), 0, "no try noted");
+    let persuade = panel_lines(&app).into_iter().find(|l| l.0 == Some(Topic::Persuade)).expect("the denizen answered");
+    assert!(!persuade.2, "in glyphs: {}", persuade.1);
+    let _ = folk;
+}
+
+#[test]
+fn a_denizen_is_persuaded_in_its_tongue_once_the_words_are_known() {
+    let (mut app, folk) = minotaur_persuade(true);
+    assert!(app.world().resource::<Talk>().waiting && app.world().resource::<Persuading>().0.is_some(), "the dice roll");
+    let faction = faction_of(&app, folk);
+    let before = app.world().resource::<WorldRecord>().standings.get(faction).value();
+    dice_close(&mut app, folk, 20);
+    assert!(app.world().resource::<WorldRecord>().standings.get(faction).value() > before);
+    let talk = app.world().resource::<Talk>();
+    let (topic, said) = talk.answer.clone().expect("the minotaur answered");
+    let (text, readable) = shown(talk.speaker.as_ref().unwrap(), Some(topic), &said, app.world().resource::<WorldRecord>().lexicon());
+    assert!(readable && text.contains("minotaur"), "readable once the words are known: {text}");
+}
+
+#[test]
+fn a_hostile_denizen_persuaded_in_its_tongue_stands_down_with_its_group() {
+    let (mut app, folk) = minotaur_app();
+    app.init_resource::<crate::inventory::Inventory>();
+    record_of(&mut app).lexicon.learn_teaching(&Teaching::of_topics(DenizenKind::Minotaur, &[tongue::Topic::Greeting]));
+    standing(&mut app, folk, -100);
+    talk_to(&mut app, folk);
+    assert!(app.world().resource::<Talk>().parley);
+    press(&mut app, DIGITS[0]);
+    assert!(app.world().resource::<Talk>().waiting);
+    dice_close(&mut app, folk, 20);
+    let faction = faction_of(&app, folk);
+    let depth = app.world().resource::<CurrentLevel>().0.depth;
+    assert!(app.world().resource::<WorldRecord>().truce_holds(depth, faction));
+}
+
+#[test]
+fn the_persuasion_state_resets_with_the_delve() {
     let (mut app, _) = persuade_app();
     assert!(app.world().resource::<Persuading>().0.is_some());
     app.world_mut().resource_mut::<NextState<crate::launch::AppState>>().set(crate::launch::AppState::Title);

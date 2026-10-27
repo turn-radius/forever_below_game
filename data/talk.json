@@ -199,6 +199,30 @@
   "The #folk# bares its teeth, #sound# in its throat, and spits at your feet.",
   "The #folk# #sound#, glares, and spits at your feet."
  ],
+ "dn_persuade_hear": [
+  "The #folk# #sound# and lets you speak, hard eyes on you.",
+  "The #folk# #sound#, and waits for your words.",
+  "The #folk# lowers its head a little, #sound#, and listens."
+ ],
+ "dn_persuade_pass": [
+  "The #folk# #sound# and eases back. Peace, friend. #faction.capitalize# will not forget this.",
+  "The #folk# #sound#, and lowers its guard. Peace, stranger.",
+  "The #folk# regards you a long moment, then #sound#. Friend, it seems."
+ ],
+ "dn_persuade_fail": [
+  "The #folk# #sound# and bares its teeth. No peace for you.",
+  "The #folk# shakes its head, #sound#. Your words are wind.",
+  "The #folk# #sound#, and turns away from your words."
+ ],
+ "dn_persuade_not_now": [
+  "The #folk# #sound# and shakes its head. It has heard you. Come back after you have slept.",
+  "The #folk# #sound#, and will not hear you again so soon."
+ ],
+ "dn_persuade_lost": [
+  "The #folk# #sound#, watching you, but your words mean nothing to it. It does not follow.",
+  "The #folk# tilts its head, #sound#. It cannot make out what you are saying.",
+  "The #folk# waits, #sound#, then shrugs. Your speech is lost on it."
+ ],
  "dn_wary": [
   "The #folk# gives #sound#, a warning, and turns its back on you.",
   "The #folk# watches you with hard eyes, #sound#, and waves you off.",
@@ -258,5 +282,6 @@
  "needs_dn_place": ["dark"],
  "needs_dn_threat": ["flee"],
  "needs_dn_trade": ["coin"],
- "needs_dn_quest": ["reward"]
+ "needs_dn_quest": ["reward"],
+ "needs_dn_persuade": ["peace", "friend"]
 }

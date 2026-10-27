@@ -124,6 +124,7 @@ impl Topic {
             Topic::Who => Some(tongue::Topic::Kin),
             Topic::Trade | Topic::Service(Service::Barter) => Some(tongue::Topic::Trade),
             Topic::Level | Topic::WayOut => Some(tongue::Topic::Place),
+            Topic::Persuade => Some(tongue::Topic::Greeting),
             Topic::Threats => Some(tongue::Topic::Threat),
             Topic::Quest => Some(tongue::Topic::Quest),
             _ => None,
@@ -194,7 +195,7 @@ pub struct MasterRumour {
 /// beyond talk; the level; the way out.
 pub fn topics(speaker: &Speaker) -> Vec<Topic> {
     if speaker.denizen.is_some() {
-        return vec![Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest];
+        return vec![Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest, Topic::Persuade];
     }
     let mut list = vec![Topic::Who];
     if let Some(trade) = speaker.trade {
@@ -262,6 +263,7 @@ pub fn line_needs(speaker: &Speaker, topic: Option<Topic>) -> Vec<Word> {
             (Some(tt), Topic::Threats) => (tt, "dn_threat"),
             (Some(tt), Topic::Trade | Topic::Service(Service::Barter)) => (tt, "dn_trade"),
             (Some(tt), Topic::Quest) => (tt, "dn_quest"),
+            (Some(tt), Topic::Persuade) => (tt, "dn_persuade"),
             _ => return Vec::new(),
         },
     };
@@ -309,6 +311,7 @@ fn denizen_answer(speaker: &Speaker, topic: Topic) -> String {
         Topic::Trade => "dn_trade",
         Topic::Service(Service::Barter) => return barter_refusal(speaker),
         Topic::Quest => "dn_quest",
+        Topic::Persuade => "dn_persuade_lost",
         _ => "not_yet",
     };
     say(speaker, symbol, 0x30 + topic.salt(), &denizen_extras(speaker))
@@ -561,7 +564,7 @@ mod tests {
             s.folk = "Minotaur".into();
             s.denizen = Some(DenizenKind::Minotaur);
             s.seed = seed;
-            for line in [parley_greeting(&s, true), parley_greeting(&s, false), barter_refusal(&s)] {
+            for line in [parley_greeting(&s, true), parley_greeting(&s, false), persuade_line(&s, "hear", 1), persuade_line(&s, "pass", 2), persuade_line(&s, "fail", 3), persuade_line(&s, "not_now", 4), answer(&s, Topic::Persuade, None), barter_refusal(&s)] {
                 assert!(line.contains("minotaur") && !line.contains('#') && !line.contains("..."), "{line}");
                 assert!(line.starts_with("The minotaur"), "{line}");
             }
@@ -583,7 +586,7 @@ mod tests {
             for band in [Band::Neutral, Band::Friendly, Band::Allied] {
                 let s = Speaker { denizen: Some(kind), folk: kind.label().into(), band, ..speaker(None, band) };
                 let topics = topics(&s);
-                assert_eq!(topics, [Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest]);
+                assert_eq!(topics, [Topic::Who, Topic::Level, Topic::Threats, Topic::Trade, Topic::Service(Service::Barter), Topic::Quest, Topic::Persuade]);
                 let mut lines = vec![greeting(&s)];
                 lines.extend(topics.iter().map(|t| answer(&s, *t, None)));
                 for line in lines {
@@ -593,6 +596,9 @@ mod tests {
                 assert!(line_needs(&s, None).len() >= tongue::CORE_WORDS);
                 assert!(line_needs(&s, Some(Topic::Who)).len() > tongue::CORE_WORDS);
                 assert!(line_needs(&s, Some(Topic::Quest)).iter().any(|w| w.key == "reward"));
+                // Persuasion is spoken in the greeting's words, with peace and friend among them.
+                let persuade = line_needs(&s, Some(Topic::Persuade));
+                assert!(persuade.iter().any(|w| w.key == "peace") && persuade.iter().any(|w| w.key == "friend"));
             }
         }
     }
