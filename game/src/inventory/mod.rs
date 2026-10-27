@@ -155,7 +155,7 @@ impl Plugin for InventoryPlugin {
                         underfoot::track_underfoot,
                         close_container_with_screen,
                         (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
-                        (bags::open_for_capture.run_if(|| env_flag("FB_OPEN_BAGS")), bags::place_windows).chain(),
+                        (bags::settle_click, bags::open_for_capture.run_if(|| env_flag("FB_OPEN_BAGS")), bags::place_windows).chain(),
                         build_screen,
                         (bags::drag_windows, scroll_column, scroll_shelf).chain(),
                         drag_items,
@@ -1397,14 +1397,8 @@ fn target_under(
     windows: &[Rect],
     cell: f32,
 ) -> Target {
-    if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
-        return Target::Quickslot(slot.0);
-    }
-    if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
-        return Target::Slot(slot.0);
-    }
-    // A window floats over the page: under the mouse it takes the drop (a grid in it, else
-    // the page), and the grids behind it do not count. `windows` is front first.
+    // A window floats over everything, the doll and the quickslots too: under the mouse it takes
+    // the drop (a grid in it, else the page), and what lies behind it does not count. `windows` is front first.
     if let Some(window) = windows.iter().find(|w| w.contains(point)) {
         for (view, node, transform) in grids {
             let rect = node_rect(node, transform);
@@ -1413,6 +1407,12 @@ fn target_under(
             }
         }
         return Target::Page;
+    }
+    if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+        return Target::Quickslot(slot.0);
+    }
+    if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
+        return Target::Slot(slot.0);
     }
     // The grids' rectangles follow the scroll (`UiGlobalTransform` includes it), but a grid
     // scrolled out of the column is clipped, so only the visible part of the column counts.
@@ -1643,16 +1643,15 @@ fn drag_items(
         let outcome = if drag.active {
             (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
-            // The first click opened or closed the bag's window; a double-click is not that.
-            if inventory.grid(drag.id).is_some() && !barter.active() {
-                bag_windows.toggle(drag.id);
-            }
+            // A double-click is not a click on a bag's window.
+            bag_windows.bypass_change_detection().pending = None;
             (if barter.active() { barter.quick(&mut inventory, drag.id) } else { None }).unwrap_or_else(|| quick(&mut inventory, drag.id))
         } else {
             *last_click = Some((drag.id, now));
-            // A click on a bag opens its grid as a window, or closes it.
+            // A click on a bag opens its grid as a window, or closes it, once the interval for a
+            // second click has passed ([`bags::settle_click`]).
             if inventory.grid(drag.id).is_some() && !barter.active() {
-                bag_windows.toggle(drag.id);
+                bag_windows.bypass_change_detection().pending = Some((drag.id, now));
             }
             return;
         };
@@ -3228,5 +3227,90 @@ mod tests {
         assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
         // The column starts below this point: the grid is under the header, clipped away.
         assert_eq!(at(Some(Rect::new(0.0, 80.0, 200.0, 200.0))), Target::Page);
+    }
+
+    #[test]
+    fn a_window_over_the_doll_or_quickslots_takes_the_drop() {
+        let mut world = World::new();
+        let rect_at = |at: Vec2, size: Vec2| (ComputedNode { size, inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(at)));
+        world.spawn((QuickslotDrop(1), rect_at(Vec2::new(300.0, 300.0), Vec2::splat(44.0))));
+        world.spawn((SlotView(Slot::Back), rect_at(Vec2::new(300.0, 300.0), Vec2::splat(44.0))));
+        // A grid in a window over them.
+        world.spawn((GridView::Underfoot, rect_at(Vec2::new(300.0, 300.0), Vec2::new(100.0, 100.0))));
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+        )>::new(&mut world);
+        let (drops, grids, slots) = state.get(&world).unwrap();
+        let page = Some(Rect::new(0.0, 0.0, 600.0, 600.0));
+        let window = [Rect::new(200.0, 250.0, 400.0, 400.0)];
+        let at = |point: Vec2, windows: &[Rect]| target_under(point, &drops, &grids, &slots, None, page, None, None, windows, 72.0);
+        assert!(matches!(at(Vec2::new(300.0, 300.0), &[]), Target::Quickslot(1)), "bare, the strip takes it");
+        assert!(matches!(at(Vec2::new(300.0, 300.0), &window), Target::Cell { view: GridView::Underfoot, .. }), "the window's grid takes it");
+        assert_eq!(at(Vec2::new(210.0, 260.0), &window), Target::Page, "its title bar is the page, not the level");
+    }
+
+    #[test]
+    fn a_click_on_a_bag_opens_its_window_and_a_press_on_a_window_rebuilds_nothing() {
+        let mut app = screen_app();
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.add_systems(Update, bags::settle_click.after(drag_items));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let size = app.world().resource::<Inventory>().footprint(pack).unwrap();
+        // The press went down a few pixels from where it comes up: under the threshold, so a click.
+        let press = Vec2::new(100.0 - DRAG_START_PX / 2.0, 100.0);
+        app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id: pack, grab: IVec2::ZERO, size, turned: false, press, active: false, target: None });
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.press(MouseButton::Left);
+        mouse.release(MouseButton::Left);
+        app.update();
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.pending.is_some_and(|(id, _)| id == pack), "a click, not a drag");
+        assert!(!windows.is_open(pack), "opens once the double-click interval has passed");
+        app.world_mut().resource_mut::<bags::BagWindows>().pending = Some((pack, -10.0));
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().is_open(pack));
+    }
+
+    #[test]
+    fn pressing_the_front_window_does_not_mark_the_windows_changed() {
+        #[derive(Resource, Default)]
+        struct Seen(bool);
+        fn probe(windows: Res<bags::BagWindows>, mut seen: ResMut<Seen>) {
+            seen.0 |= windows.is_changed();
+        }
+        let mut app = screen_app();
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.init_resource::<Seen>().add_systems(Update, (bags::drag_windows, probe).chain());
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(150.0, 150.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.world_mut().spawn((
+            bags::BagWindow(pack),
+            Node::default(),
+            ComputedNode { size: Vec2::new(200.0, 200.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(150.0, 150.0))),
+        ));
+        app.update();
+        app.world_mut().resource_mut::<Seen>().0 = false;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!(!app.world().resource::<Seen>().0, "a press on the window already in front changes nothing");
     }
 }

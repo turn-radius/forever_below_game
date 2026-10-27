@@ -28,9 +28,14 @@ pub const BORDER_PX: f32 = 2.0;
 pub const GAP_PX: f32 = 4.0;
 /// The narrowest a window's contents are, so the name and the cross fit over a small pouch.
 const MIN_CONTENT_PX: f32 = 200.0;
-/// Where the first window goes, and the steps to look for a free place from there.
+/// Where a cascade of windows starts when no free place is left.
 const FIRST_AT: Vec2 = Vec2::new(24.0, 70.0);
+/// The step the search for a free place moves by.
 const SEARCH_STEP_PX: f32 = 24.0;
+/// Space kept between a new window and what it must not cover.
+const MARGIN_PX: f32 = 8.0;
+/// How far a window is offset from the one before when there is no free space left.
+const CASCADE_PX: f32 = 36.0;
 
 /// Which containers are open as windows, and where each sits.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
@@ -39,6 +44,10 @@ pub struct BagWindows {
     pub order: Vec<ItemId>,
     /// Each window's top left, in the interface's logical pixels.
     pub at: HashMap<ItemId, Vec2>,
+    /// A click on a bag that has not yet been told from the first half of a double-click: the
+    /// bag and when it was clicked. It opens or closes its window once the interval is over
+    /// ([`settle_click`]).
+    pub pending: Option<(ItemId, f32)>,
 }
 
 impl BagWindows {
@@ -83,7 +92,7 @@ pub struct BagTitle(pub ItemId);
 pub struct BagClose(pub ItemId);
 
 /// How big a window is for a grid, logical pixels.
-pub fn window_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
+pub(crate) fn window_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
     let grid = grid_size(grid, cell);
     let edge = 2.0 * (PAD_PX + BORDER_PX);
     Vec2::new(grid.x.max(MIN_CONTENT_PX) + edge, grid.y + TITLE_PX + GAP_PX + edge)
@@ -95,14 +104,9 @@ pub fn clamp_window(at: Vec2, size: Vec2, screen: Vec2) -> Vec2 {
 }
 
 /// The size of the interface in its logical pixels: the window's, under `UiScale`.
-pub fn ui_size(window: &Window, scale: Option<&UiScale>) -> Vec2 {
+pub(crate) fn ui_size(window: &Window, scale: Option<&UiScale>) -> Vec2 {
     Vec2::new(window.width(), window.height()) / scale.map_or(1.0, |s| s.0.max(f32::EPSILON))
 }
-
-/// Space kept between a new window and what it must not cover.
-const MARGIN_PX: f32 = 8.0;
-/// How far a window is offset from the one before when there is no free space left.
-const CASCADE_PX: f32 = 36.0;
 
 /// A free place for a window of `size`, clear of the `obstacles` (the fixed panels, the docked
 /// grids and the windows already placed), scanning from the top left; the first fit. With none,
@@ -153,7 +157,28 @@ pub fn fixed_rects(
 #[derive(Component, Debug)]
 pub struct DollColumn;
 
-/// Drops windows whose container is gone, places new ones where nothing sits, and keeps every
+/// Whether `id` is within the delver's reach: carried (worn, or inside something worn), or one of
+/// the bags set down underfoot, or the container opened in the level, or inside one of those at
+/// any depth. A bag that was set down and left, given away, or on the trader's shelf is not.
+pub fn reachable(inventory: &Inventory, underfoot: &[ItemId], opened: Option<ItemId>, id: ItemId) -> bool {
+    inventory.is_carried(id) || underfoot.iter().chain(opened.iter()).any(|&root| inventory.holds(root, id))
+}
+
+/// Opens or closes the window of a bag clicked once, when the double-click interval has passed
+/// without a second click, so a double-click (wear, take off) never toggles a window and
+/// reflows the column under the second click.
+pub fn settle_click(time: Res<Time<Real>>, mut windows: ResMut<BagWindows>, inventory: Res<Inventory>, barter: Res<crate::barter::Barter>) {
+    let Some((id, at)) = windows.pending else { return };
+    if time.elapsed_secs() - at <= super::DOUBLE_CLICK_SECONDS {
+        return;
+    }
+    windows.bypass_change_detection().pending = None;
+    if inventory.grid(id).is_some() && !barter.active() {
+        windows.toggle(id);
+    }
+}
+
+/// Drops windows whose container is out of reach, places new ones where nothing sits, and keeps every
 /// window inside the screen, whatever size it becomes.
 pub fn place_windows(
     mut windows: ResMut<BagWindows>,
@@ -161,6 +186,7 @@ pub fn place_windows(
     tuning: Res<Tuning>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
+    (underfoot, showing, barter): (Res<super::Underfoot>, Res<super::OpenContainer>, Res<crate::barter::Barter>),
     leaf: Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
     column: Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
     dolls: Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
@@ -168,7 +194,9 @@ pub fn place_windows(
     frames: Query<(&BagWindow, &ComputedNode, &UiGlobalTransform)>,
 ) {
     let cell = tuning.interface.cell_size;
-    let gone: Vec<ItemId> = windows.order.iter().copied().filter(|&id| inventory.grid(id).is_none()).collect();
+    // The trader's shelf is not the delver's to reach into.
+    let opened = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c));
+    let gone: Vec<ItemId> = windows.order.iter().copied().filter(|&id| inventory.grid(id).is_none() || !reachable(&inventory, &underfoot.bags, opened, id)).collect();
     for id in gone {
         windows.close(id);
     }
@@ -243,7 +271,10 @@ pub fn drag_windows(
             if let Some((_, n, t)) = titles.iter().find(|(b, n, t)| b.0 == id && node_rect(n, t).contains(point)) {
                 *held = Some((id, point - node_rect(n, t).min));
             }
-            windows.raise(id);
+            // Only a change of order marks the windows changed, which rebuilds the screen.
+            if windows.order.last() != Some(&id) {
+                windows.raise(id);
+            }
         }
     }
     let Some((id, grab)) = *held else { return };
@@ -340,5 +371,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    use crate::inventory::{OpenContainer, Placement, Underfoot};
+    use fb_items::Slot;
+
+    /// A worn pack with a sack inside it, and a sack lying loose.
+    fn bags() -> (Inventory, ItemId, ItemId, ItemId) {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let inner = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
+        inventory.put(inner, pack, Placement::new(0, 0, false)).unwrap();
+        let loose = inventory.add(fb_items::roll_item("Sack", 4).unwrap());
+        (inventory, pack, inner, loose)
+    }
+
+    #[test]
+    fn a_bag_is_in_reach_only_carried_underfoot_or_in_the_opened_container() {
+        let (inventory, pack, inner, loose) = bags();
+        assert!(reachable(&inventory, &[], None, pack), "worn");
+        assert!(reachable(&inventory, &[], None, inner), "nested in a carried bag");
+        assert!(!reachable(&inventory, &[], None, loose), "set down and left, or given away");
+        assert!(reachable(&inventory, &[loose], None, loose), "set down underfoot");
+        assert!(reachable(&inventory, &[], Some(loose), loose), "an opened chest");
+    }
+
+    fn place_app(inventory: Inventory) -> App {
+        let mut app = App::new();
+        app.init_resource::<BagWindows>()
+            .init_resource::<Tuning>()
+            .init_resource::<Underfoot>()
+            .init_resource::<OpenContainer>()
+            .init_resource::<crate::barter::Barter>()
+            .insert_resource(inventory)
+            .add_systems(Update, place_windows);
+        app
+    }
+
+    #[test]
+    fn windows_close_when_their_bag_is_out_of_reach() {
+        let (inventory, pack, inner, loose) = bags();
+        let mut app = place_app(inventory);
+        app.world_mut().resource_mut::<BagWindows>().order = vec![pack, inner, loose];
+        app.update();
+        assert_eq!(app.world().resource::<BagWindows>().order, vec![pack, inner], "the loose sack closed, the nested one stayed");
+        // Set it down underfoot and it can be opened.
+        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
+        app.world_mut().resource_mut::<BagWindows>().order.push(loose);
+        app.update();
+        assert!(app.world().resource::<BagWindows>().is_open(loose));
+        // Walk away from it.
+        app.world_mut().resource_mut::<Underfoot>().bags.clear();
+        app.update();
+        assert!(!app.world().resource::<BagWindows>().is_open(loose));
+    }
+
+    #[test]
+    fn a_window_is_pulled_back_in_when_the_screen_shrinks_or_the_scale_grows() {
+        let (inventory, pack, ..) = bags();
+        let mut app = place_app(inventory);
+        let mut window = Window::default();
+        window.resolution.set(1920.0, 1080.0);
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let size = window_size(app.world().resource::<Inventory>().grid(pack).unwrap(), app.world().resource::<Tuning>().interface.cell_size);
+        {
+            let mut windows = app.world_mut().resource_mut::<BagWindows>();
+            windows.order = vec![pack];
+            windows.at.insert(pack, Vec2::new(900.0, 300.0));
+        }
+        app.update();
+        assert_eq!(app.world().resource::<BagWindows>().at[&pack], Vec2::new(900.0, 300.0), "fits, stays put");
+        app.world_mut().get_mut::<Window>(window).unwrap().resolution.set(1000.0, 600.0);
+        app.update();
+        assert_eq!(app.world().resource::<BagWindows>().at[&pack], clamp_window(Vec2::new(900.0, 300.0), size, Vec2::new(1000.0, 600.0)));
+        assert_ne!(app.world().resource::<BagWindows>().at[&pack], Vec2::new(900.0, 300.0), "it had to move");
+        app.world_mut().insert_resource(UiScale(2.0));
+        app.update();
+        let at = app.world().resource::<BagWindows>().at[&pack];
+        assert!(at.x + size.x <= 500.0 + 0.01 || at == Vec2::ZERO, "{at}: inside a 500 by 300 interface, or in its corner");
+    }
+
+    #[test]
+    fn a_click_settles_into_a_toggle_after_the_double_click_interval() {
+        let (inventory, pack, ..) = bags();
+        let mut app = place_app(inventory);
+        app.init_resource::<Time<Real>>().add_systems(Update, settle_click.before(place_windows));
+        app.world_mut().resource_mut::<BagWindows>().pending = Some((pack, 0.0));
+        app.update();
+        assert!(!app.world().resource::<BagWindows>().is_open(pack), "waiting for a second click");
+        app.world_mut().resource_mut::<Time<Real>>().advance_to(std::time::Duration::from_secs(2));
+        app.update();
+        assert!(app.world().resource::<BagWindows>().is_open(pack));
+        assert_eq!(app.world().resource::<BagWindows>().pending, None);
+        app.world_mut().resource_mut::<BagWindows>().pending = Some((pack, 0.0));
+        app.update();
+        assert!(!app.world().resource::<BagWindows>().is_open(pack), "clicked again, closed");
     }
 }
