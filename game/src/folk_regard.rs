@@ -4,7 +4,9 @@
 //!
 //! - **Hostile**: a folk who sees the delver attacks ([`hostile_on_sight`] turns them
 //!   [`Hostility::Hostile`], and `crate::folk_combat::fight` does the rest), though they were never
-//!   provoked themselves. A folk of a Hostile faction does not calm down.
+//!   provoked themselves. A folk of a Hostile faction does not calm down, unless they were won over
+//!   by persuasion, which holds the faction's folk on the level still until the delver strikes one
+//!   of them or rests (`WorldRecord::truces`).
 //! - **Wary**: while the delver stands in a room the folk's faction holds ([`Level::claim_of`]) and
 //!   is seen, the folk stops their routine and turns to watch ([`Attending`]), carrying on when
 //!   the delver leaves sight or the claim ([`regard`]).
@@ -37,7 +39,7 @@ use crate::folk::{Denizen, Stride};
 use crate::folk_combat::{COOLDOWN, Combatant, DASH, Fight, LANDS, TURN_RATE};
 use crate::folk_pose::ArmSwing;
 use crate::folk_routine::{Routine, pace};
-use crate::hostility::Hostility;
+use crate::hostility::{Hostility, Parleying};
 use crate::inventory::Toasts;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles, Player};
 use crate::player::slide_around;
@@ -157,10 +159,14 @@ fn hostile_on_sight(
     doors: Option<Res<crate::doors::Doors>>,
     record: Res<WorldRecord>,
     player: Query<&Transform, (With<Player>, Without<Denizen>)>,
-    mut folk: Query<(&Denizen, &Transform, &mut Hostility), Without<Corpse>>,
+    mut folk: Query<(&Denizen, &Transform, &mut Hostility), (Without<Corpse>, Without<Parleying>)>,
 ) {
     let Some(player) = player.iter().next().map(|t| t.translation.xz()) else { return };
     for (denizen, at, mut hostility) in &mut folk {
+        // A group won over stands down until the delver strikes one of them or rests.
+        if record.truce_holds(level.0.depth, denizen.person.faction.id) {
+            continue;
+        }
         let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), Some(denizen.person.faction.id));
         if hostility.is_hostile() || record.standings.band(denizen.person.faction.id) != Band::Hostile {
             continue;
@@ -410,6 +416,70 @@ mod tests {
         place(&mut app, player, Vec2::new(far.x, far.z));
         step(&mut app, 240);
         assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile(), "calmed down");
+    }
+
+    /// Makes a truce with `folk`'s faction on the level, as a persuaded hostile group has.
+    fn make_truce(app: &mut App, folk: Entity) {
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        let depth = app.world().resource::<CurrentLevel>().0.depth;
+        app.world_mut().resource_mut::<WorldRecord>().make_truce(depth, faction);
+    }
+
+    fn blows_from(app: &App, folk: Entity) -> usize {
+        app.world().resource::<Messages<AttackOnDelver>>().iter_current_update_messages().filter(|a| a.attacker == folk).count() + app.world().resource::<Messages<crate::creatures::behaviour::MissedDelver>>().len()
+    }
+
+    #[test]
+    fn a_persuaded_hostile_guard_does_not_attack_a_delver_in_reach() {
+        let (mut app, player, folk) = folk_fight(30.0);
+        app.world_mut().entity_mut(player).insert(Health::full(500));
+        set_band(&mut app, folk, Band::Hostile);
+        make_truce(&mut app, folk);
+        let mut blows = 0;
+        for _ in 0..600 {
+            app.update();
+            blows += blows_from(&app, folk);
+        }
+        assert!(!app.world().get::<Hostility>(folk).unwrap().is_hostile(), "stood down");
+        assert_eq!(blows, 0, "no blows");
+    }
+
+    #[test]
+    fn a_hostile_folk_already_fighting_stands_down_when_the_truce_is_made() {
+        let (mut app, player, folk) = folk_fight(30.0);
+        app.world_mut().entity_mut(player).insert(Health::full(500));
+        set_band(&mut app, folk, Band::Hostile);
+        step(&mut app, 10);
+        assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile());
+        make_truce(&mut app, folk);
+        step(&mut app, 5);
+        assert!(!app.world().get::<Hostility>(folk).unwrap().is_hostile());
+    }
+
+    #[test]
+    fn a_blow_at_the_group_ends_the_truce_and_a_rest_does_too() {
+        let (mut app, player, folk) = folk_fight(30.0);
+        app.world_mut().entity_mut(player).insert(Health::full(500));
+        set_band(&mut app, folk, Band::Hostile);
+        make_truce(&mut app, folk);
+        step(&mut app, 30);
+        assert!(!app.world().get::<Hostility>(folk).unwrap().is_hostile());
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.id;
+        let depth = app.world().resource::<CurrentLevel>().0.depth;
+        assert!(app.world().resource::<WorldRecord>().truce_holds(depth, faction));
+        // The delver strikes at them: the truce is over and they come for the delver.
+        app.world_mut().write_message(crate::hostility::Provoked { folk });
+        step(&mut app, 5);
+        assert!(!app.world().resource::<WorldRecord>().truce_holds(depth, faction));
+        assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile());
+        // Another truce, and a rest ends it: they attack on sight again.
+        make_truce(&mut app, folk);
+        step(&mut app, 5);
+        assert!(!app.world().get::<Hostility>(folk).unwrap().is_hostile());
+        app.world_mut().resource_mut::<WorldRecord>().rests += 1;
+        assert!(!app.world().resource::<WorldRecord>().truce_holds(depth, faction));
+        step(&mut app, 5);
+        assert!(app.world().get::<Hostility>(folk).unwrap().is_hostile());
     }
 
     /// A cell of the folk's own room, between `min` and `max` world units from them, in sight.

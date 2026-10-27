@@ -84,6 +84,11 @@ pub struct WorldRecord {
     /// again until the delver has rested.
     #[serde(default)]
     pub refused: BTreeMap<(u32, u32), u32>,
+    /// The hostile groups won over by persuasion, by (depth, faction), with the rests then: the
+    /// faction's folk on that level do not attack the delver until a blow ends the truce or the
+    /// delver rests ([`WorldRecord::truce_holds`]).
+    #[serde(default)]
+    pub truces: BTreeMap<(u32, fb_faction::Faction), u32>,
 }
 
 impl WorldRecord {
@@ -106,6 +111,22 @@ impl WorldRecord {
     /// Whether `who` still refuses to be persuaded: they refused and the delver has not rested since.
     pub fn refuses(&self, who: (u32, u32)) -> bool {
         self.refused.get(&who).is_some_and(|&at| self.rests <= at)
+    }
+
+    /// Whether `faction`'s folk on level `depth` stand down: they were won over and the delver has
+    /// neither struck one of them nor rested since.
+    pub fn truce_holds(&self, depth: u32, faction: fb_faction::Faction) -> bool {
+        self.truces.get(&(depth, faction)).is_some_and(|&at| self.rests <= at)
+    }
+
+    /// Has `faction`'s folk on level `depth` stand down until the delver strikes one of them or rests.
+    pub fn make_truce(&mut self, depth: u32, faction: fb_faction::Faction) {
+        self.truces.insert((depth, faction), self.rests);
+    }
+
+    /// Ends the truce with `faction` on level `depth`, as a blow from the delver does.
+    pub fn end_truce(&mut self, depth: u32, faction: fb_faction::Faction) {
+        self.truces.remove(&(depth, faction));
     }
 
     /// Notes one more try at persuading `who`.
@@ -280,13 +301,13 @@ impl WorldRecord {
     /// The record of a new delve in the world of `run_seed`: no level visited, and standing with
     /// every faction at the start a delver of `alignment` has.
     pub fn new_delve(alignment: fb_faction::Alignment, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_from_alignment(alignment, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default(), truces: Default::default() }
     }
 
     /// The record of a new delve as `delver`: alignment sets the start, and a faction that likes or
     /// hates the delver's class or folk starts apart from it (`Standings::start_as`, #547).
     pub fn new_delve_as(delver: &fb_faction::Delver, run_seed: u32) -> WorldRecord {
-        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default() }
+        WorldRecord { levels: BTreeMap::new(), standings: fb_faction::Standings::start_as(&fb_faction::StandingRules::default(), delver, &fb_faction::World::new(run_seed)), orders: Vec::new(), keys_given: Vec::new(), met_on: BTreeMap::new(), lexicon: fb_denizens::tongue::Lexicon::new(), persuasions: Default::default(), rests: 0, insights: 0, refused: Default::default(), truces: Default::default() }
     }
 
     /// The record of the level at `depth`, if it has been visited.
