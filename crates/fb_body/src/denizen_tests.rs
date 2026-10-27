@@ -43,7 +43,7 @@ fn height_and_hooves_check(seeds: std::ops::Range<u32>) {
     for seed in seeds {
         let body = minotaur(seed);
         let k = body.height / human;
-        assert!((1.3..1.6).contains(&k), "seed {seed}: {k} times a human");
+        assert!((1.25..1.5).contains(&k), "seed {seed}: {k} times a human");
         let skin = body.skin_mesh();
         assert!(min_y(&skin, "hooves").abs() < 0.05, "seed {seed}: hooves at {}", min_y(&skin, "hooves"));
         for part in body.mesh().parts.iter() {
@@ -55,13 +55,13 @@ fn height_and_hooves_check(seeds: std::ops::Range<u32>) {
 }
 
 #[test]
-fn a_minotaur_is_half_again_a_mans_height_with_hooves_on_the_floor_smoke() {
+fn a_minotaur_is_a_third_again_a_mans_height_with_hooves_on_the_floor_smoke() {
     height_and_hooves_check(0..4);
 }
 
 #[test]
 #[ignore = "slow sweep: twenty seeds; run before merging fitting changes"]
-fn a_minotaur_is_half_again_a_mans_height_with_hooves_on_the_floor() {
+fn a_minotaur_is_a_third_again_a_mans_height_with_hooves_on_the_floor() {
     height_and_hooves_check(0..20);
 }
 
@@ -496,4 +496,18 @@ fn curly_hair_builds_under_a_hood_and_a_helm() {
             assert!(count(&covered) > 0 && count(&covered) < count(&open), "{family:?}: fewer curls under it");
         }
     }
+}
+
+#[test]
+fn a_minotaurs_belt_hangs_no_pouch_and_its_tail_is_a_thin_cord() {
+    let belt = roll(Family::Belt, 3);
+    let pouch = |folk: Folk| {
+        let body = Body::new(&BodySpec::roll(folk, 5));
+        let fit = fit_worn(&body, &[(Slot::Belt, belt.clone())]);
+        fit.layer(Slot::Belt).unwrap().mesh.parts.iter().any(|p| p.name == "pouch")
+    };
+    assert!(!pouch(Folk::Minotaur));
+    let body = minotaur(5);
+    let (_, radius) = body.jointed_tail().unwrap();
+    assert!(radius(0.0) < 0.25, "tail root radius {} units", radius(0.0));
 }
