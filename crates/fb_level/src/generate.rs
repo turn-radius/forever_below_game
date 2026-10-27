@@ -28,6 +28,10 @@ const FURNISH_SALT: u32 = 0x5EED_17E5;
 /// Salt for the stream that draws a level's main corridor width, so the layout stream is the
 /// same whatever width is drawn.
 const WIDTH_SALT: u32 = 0x31D7_4A11;
+/// Salt for the stream that wears a crystal cavern's chambers into natural shapes.
+const ERODE_SALT: u32 = 0x3A07_E70D;
+/// Salt for the stream that stands rock pillars in a crystal cavern's chambers.
+const PILLAR_SALT: u32 = 0x9111_a475;
 
 /// What the abyss leaves lying about, by weight. Families not yet ported are skipped. No
 /// chests: every container stands as a prop (`crate::props`).
@@ -71,7 +75,7 @@ const LOOT: &[(Family, u32)] = &[
 /// `generate(seed, 1)` is the first level of the delve `seed`; for the level at any depth of a
 /// delve use [`generate_in`].
 pub fn generate(seed: u32, depth: u32) -> Level {
-    generate_with(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)))
+    generate_with(seed, depth, &LevelParams::for_depth(depth))
 }
 
 /// The level at `depth` of the delve for `world_seed`: a pure function of the two. Its seed is
@@ -99,6 +103,12 @@ pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams
     let (creatures, webs) = crate::wild::place_wild(&mut level);
     level.creatures.extend(creatures);
     level.webs = webs;
+    // The crystals last of all, after the stairs and everything else they keep clear of.
+    level.crystals = crate::crystals::place_crystals(&level, &mut Mulberry32::new(layout_seed ^ crate::crystals::CRYSTAL_SALT));
+    let lit = crate::crystals::lit_crystals(&level.crystals);
+    level.lights.extend(lit);
+    let gems = crate::crystals::place_rough_gems(&level, &mut Mulberry32::new(layout_seed ^ crate::crystals::GEM_SALT));
+    level.items.extend(gems);
     level
 }
 
@@ -183,6 +193,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         roles: Vec::new(),
         props: Vec::new(),
         banners: Vec::new(),
+        crystals: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),
@@ -199,6 +210,10 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         if colonnaded == 0 && attempt < RELAX_EVERY {
             return None;
         }
+    }
+    if style == LevelStyle::CrystalCavern {
+        erode_chambers(&mut level, &mut Mulberry32::new(layout_seed ^ ERODE_SALT));
+        rock_pillars(&mut level, &mut Mulberry32::new(layout_seed ^ PILLAR_SALT));
     }
     let (sx, sy, _) = level.start();
     if !reachable_from(&level, sx as i32, sy as i32).iter().zip(&level.cells).all(|(&seen, c)| seen || !c.is_open()) {
@@ -794,6 +809,94 @@ fn colonnade_halls(level: &mut Level) -> usize {
     }
     halls.len()
 }
+
+/// A crystal cavern's chambers are worn out of their rectangles: the corners round off and the
+/// edge is eaten into bays and inlets, deeper where it has already been eaten, so each chamber
+/// has a blobby, natural outline. Nothing near a doorway or the way in is touched, so every way
+/// into a chamber stays open, and any floor the wear cuts off is filled in. Room rectangles are
+/// unchanged (the eroded cells are rock inside them, as a pillar's is).
+fn erode_chambers(level: &mut Level, rng: &mut Mulberry32) {
+    let near_way = |level: &Level, x: i32, y: i32| {
+        (-2..=2).any(|dy| (-2..=2).any(|dx| level.cell(x + dx, y + dy).is_doorway() || (level.is_open(x + dx, y + dy) && level.room_at(x + dx, y + dy).is_none())))
+    };
+    let (sx, sy, _) = level.start();
+    for room in level.rooms.clone() {
+        if room.w < 6 || room.h < 6 {
+            continue;
+        }
+        let (rx, ry, rw, rh) = (room.x as i32, room.y as i32, room.w as i32, room.h as i32);
+        let depth = |x: i32, y: i32| (x - rx).min(rx + rw - 1 - x).min(y - ry).min(ry + rh - 1 - y);
+        let mut cells: Vec<(i32, i32)> = (ry..ry + rh).flat_map(|y| (rx..rx + rw).map(move |x| (x, y))).filter(|&(x, y)| depth(x, y) <= 2).collect();
+        cells.sort_by_key(|&(x, y)| (depth(x, y), y, x));
+        let mut gone: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+        for (x, y) in cells {
+            if level.cell(x, y) != Cell::Floor || near_way(level, x, y) || (x - sx as i32).abs() <= 3 && (y - sy as i32).abs() <= 3 {
+                continue;
+            }
+            let d = depth(x, y);
+            let corner = d == 0 && (x == rx || x == rx + rw - 1) && (y == ry || y == ry + rh - 1);
+            let eaten = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().filter(|&&(dx, dy)| gone.contains(&(x + dx, y + dy))).count();
+            let chance = match (d, eaten) {
+                (0, 0) => 0.3,
+                (0, _) => 0.55,
+                (1, 0) => 0.03,
+                (1, _) => 0.38,
+                (_, 0) => 0.0,
+                (_, _) => 0.22,
+            };
+            // The corner cell and the one diagonally in from it always go, rounding the corner.
+            let round = corner || (d == 1 && [(1, 1), (-1, 1), (1, -1), (-1, -1)].iter().any(|&(dx, dy)| gone.contains(&(x + dx, y + dy)) && depth(x + dx, y + dy) == 0 && (x + dx == rx || x + dx == rx + rw - 1) && (y + dy == ry || y + dy == ry + rh - 1)));
+            if round || rng.chance(chance) {
+                gone.insert((x, y));
+            }
+        }
+        // Each cell goes only if every other open cell can still be walked to without it.
+        let mut gone: Vec<(i32, i32)> = gone.into_iter().collect();
+        gone.sort_by_key(|&(x, y)| (depth(x, y), y, x));
+        for (x, y) in gone {
+            let i = (y as u32 * level.width + x as u32) as usize;
+            let open = level.cells.iter().filter(|c| c.is_open()).count();
+            level.cells[i] = Cell::Rock;
+            let reached = reachable_from(level, sx as i32, sy as i32).iter().filter(|&&b| b).count();
+            if reached != open - 1 {
+                level.cells[i] = Cell::Floor;
+            }
+        }
+    }
+}
+
+/// Chambers of a crystal cavern are too big to read as rooms, so rock stands up in them: single
+/// pillars scattered about, never in the starting room, never beside a wall, a door or another
+/// pillar, so every cell round them stays open and the chamber stays whole.
+fn rock_pillars(level: &mut Level, rng: &mut Mulberry32) {
+    let start_room = level.start_room();
+    let mut pillars = Vec::new();
+    for (i, room) in level.rooms.clone().iter().enumerate() {
+        if Some(i) == start_room || room.w < 6 || room.h < 6 {
+            continue;
+        }
+        let want = room.area() / PILLAR_AREA;
+        for _ in 0..want * 4 {
+            if pillars.len() >= 1000 {
+                break;
+            }
+            let x = rng.int(room.x + 2, room.x + room.w - 3) as i32;
+            let y = rng.int(room.y + 2, room.y + room.h - 3) as i32;
+            let crowded = (-1..=1).any(|dy| (-1..=1).any(|dx| level.cell(x + dx, y + dy) != Cell::Floor));
+            if crowded || straight_in_from_a_door(level, x, y) {
+                continue;
+            }
+            level.cells[(y as u32 * level.width + x as u32) as usize] = Cell::Column;
+            pillars.push((x, y));
+            if pillars.iter().filter(|&&(px, py)| room.contains(px, py)).count() as u32 >= want {
+                break;
+            }
+        }
+    }
+}
+
+/// Cells of a cavern chamber for each pillar of rock standing in it.
+const PILLAR_AREA: u32 = 18;
 
 /// Whether `(x, y)` is one of the two cells straight in from a door.
 pub(crate) fn straight_in_from_a_door(level: &Level, x: i32, y: i32) -> bool {
@@ -1406,11 +1509,11 @@ mod tests {
         // folk left half the rooms to the creatures, which no longer share a room with them, and again
         // when the factions came from the world's pool (a level draws two to four, which changes the
         // shuffle that sets the groups), and again when folk moved into their factions' claims (#541), and again when claimed rooms
-        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618). Then seed 1207 again when the wild groups were placed among the rats and each took a room of its own (#662), and seeds 1 and 4242 again when faction names were rolled before their members (#663), and all eight when folk gained a sex (#663), and seeds 1 and 4242 again when a name that says a class was rolled over with that class given (#663), and seed 1 again when faction names took words that say how members look (#682).
+        // took roles: halls and hearths are lit, folk stand by role and props furnish the rooms (#546), and again when folk gained a trade (#544), and again when guards took their posts at the hall door and traders stood in the market (#550), and again when posts cleared the door leaves' real sweep, and again when hearths were lit by a campfire standing on its own light and braziers stood alone (#569), and again when a room that is hall and hearth got only the campfire (lights, props and folk move, not the layout or items), and again when the door sweep followed door kinds and the doorway's real hinge (seeds 1 and 4242: a guard's post moved), and again when corridors took widths by rank (#581: seeds 1, 7, 1207 and 4242 drew a main width of two, so their corridors and all that follows moved), and again when rough rock's main width became two to three, like the halls', so every level has a wide main way. Then the same again when levels took a past (#587: seed 64's first level is a hold with a cell block) and rooms were furnished by their purpose (#588), and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618). Then seed 1207 again when the wild groups were placed among the rats and each took a room of its own (#662), and seeds 1 and 4242 again when faction names were rolled before their members (#663), and all eight when folk gained a sex (#663), and seeds 1 and 4242 again when a name that says a class was rolled over with that class given (#663), and seed 1 again when faction names took words that say how members look (#682). Then all eight when folk and claims grew with depth (#773): a claim also holds the corridors between its own rooms, so claims of several rooms grow where they could not, and the lights, items and folk moved with them. And then again from depth 3 when levels grew rooms with depth, claims took the pockets they cut off and trades took workshops (#775); the first levels are as they were.
         let before = [
-            (0u32, 0xf6aedcf09a11efeu64),
-            (1, 0x5d74d1ce689616a1),
-            (2, 0x3a098b31f7bedf36),
+            (0u32, 0x70631fc008f0d63u64),
+            (1, 0x3fc1bc9c7f5905cd),
+            (2, 0x642628b83a5e4945),
             (7, 0xd4799adb07d0e04a),
             (64, 0xf4d90e47ab648078),
             (1207, 0x46ee98a53fedc3a7),
@@ -1430,6 +1533,7 @@ mod tests {
         assert_eq!(LevelStyle::for_depth(2), LevelStyle::StoneHalls);
         assert_eq!(LevelStyle::for_depth(3), LevelStyle::RoughRock);
         assert_eq!(LevelStyle::for_depth(4), LevelStyle::StoneHalls);
+        assert_eq!(LevelStyle::for_depth(7), LevelStyle::RoughRock);
         let level = generate(5, 2);
         assert_eq!((level.style, level.depth), (LevelStyle::StoneHalls, 2));
         assert_eq!(LevelParams::for_style(LevelStyle::RoughRock), LevelParams::default());
@@ -1437,6 +1541,60 @@ mod tests {
         let fitted = halls;
         halls.fit();
         assert_eq!(halls, fitted, "the stone halls defaults already fit");
+    }
+
+    #[test]
+    fn caverns_lie_deep_and_in_place_of_some_rough_rock() {
+        // Shallower levels never roll one, and below depth 5 every second rough rock level is one.
+        for depth in 0..LevelStyle::FIRST_CAVERN_DEPTH {
+            assert_ne!(LevelStyle::for_depth(depth), LevelStyle::CrystalCavern, "depth {depth}");
+        }
+        let cavern: Vec<u32> = (1..=24).filter(|&d| LevelStyle::for_depth(d) == LevelStyle::CrystalCavern).collect();
+        assert_eq!(cavern, [5, 9, 13, 17, 21]);
+        for depth in (1..=24).filter(|d| d % 2 == 0) {
+            assert_eq!(LevelStyle::for_depth(depth), LevelStyle::StoneHalls);
+        }
+        assert!((1..=24).any(|d| d >= 5 && d % 2 == 1 && LevelStyle::for_depth(d) == LevelStyle::RoughRock), "some rough rock remains");
+        let params = LevelParams::for_style(LevelStyle::CrystalCavern);
+        let mut fitted = params;
+        fitted.fit();
+        assert_eq!(fitted, params, "the cavern defaults already fit");
+        assert!(LevelStyle::CrystalCavern.is_rock() && LevelStyle::RoughRock.is_rock() && !LevelStyle::StoneHalls.is_rock());
+    }
+
+    #[test]
+    fn a_cavern_is_a_few_large_chambers_with_wide_passages_and_pillars() {
+        let mut folk = 0;
+        for seed in 1..=8 {
+            for depth in [5, 9] {
+                let level = generate_in(seed, depth, &LevelParams::for_style(LevelStyle::CrystalCavern));
+                let what = format!("seed {seed} depth {depth}");
+                assert_eq!(level.style, LevelStyle::CrystalCavern, "{what}");
+                assert!(level.rooms.len() <= 5 && level.rooms.len() >= 2, "{what}: {} rooms", level.rooms.len());
+                let biggest = level.rooms.iter().map(|r| r.area()).max().unwrap();
+                assert!(biggest >= 80, "{what}: biggest chamber is {biggest} cells");
+                assert!(level.ceiling >= 60.0, "{what}");
+                // Rock stands up in the chambers, and every open cell can still be reached.
+                assert!(level.cells.iter().any(|&c| c == Cell::Column), "{what}: no pillars");
+                let (sx, sy, _) = level.start();
+                let seen = reachable_from(&level, sx as i32, sy as i32);
+                assert!(seen.iter().zip(&level.cells).all(|(&seen, c)| seen || !c.is_open()), "{what}: an open cell is cut off");
+                // Stairs, factions and creatures place as on any level.
+                assert!(level.stairs.iter().any(|s| s.kind == StairKind::Down), "{what}: no way down");
+                assert!(level.stairs.iter().any(|s| s.kind == StairKind::Up), "{what}: no way up");
+                assert!(!level.factions.is_empty(), "{what}: no factions");
+                folk += level.folk.len();
+                assert!(!level.creatures.is_empty() || level.rooms.len() < 3, "{what}: no creatures");
+            }
+        }
+        assert!(folk > 0, "no folk in any cavern");
+    }
+
+    #[test]
+    fn a_cavern_is_the_same_every_time() {
+        let params = LevelParams::for_style(LevelStyle::CrystalCavern);
+        assert_eq!(generate_in(7, 5, &params), generate_in(7, 5, &params));
+        assert_ne!(generate_in(7, 5, &params), generate_in(8, 5, &params));
     }
 
     fn columns_in(level: &Level, room: &Room) -> usize {
@@ -1642,7 +1800,7 @@ mod tests {
                 // At least `FAR_SHARE` as far as the furthest cell it could have stood on: free
                 // floor against a wall of a room, clear of doors, with free floor in front.
                 // The cells of the creatures the stair was placed among, including rats and snakes later dropped to make room for the wild species (#662).
-                let (bare, layout_seed) = generate_without_creatures(seed, depth, &LevelParams::for_style(LevelStyle::for_depth(depth)));
+                let (bare, layout_seed) = generate_without_creatures(seed, depth, &LevelParams::for_depth(depth));
                 let mut taken = spot_cells(&level);
                 taken.extend(place_creatures(&bare, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT)).iter().map(|s| (s.x.floor() as i32, s.y.floor() as i32)));
                 // And in wild ground: a stair never stands in a claim or behind its doors.

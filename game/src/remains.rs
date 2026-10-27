@@ -260,7 +260,7 @@ pub fn keep_bodies_dressed(
         // too, after it falls or is brought back).
         let mark = signature(&inventory, stock.container);
         match dressed {
-            Some(mut seen) if *seen == Dressed(mark) => continue,
+            Some(seen) if *seen == Dressed(mark) => continue,
             Some(mut seen) => *seen = Dressed(mark),
             None => {
                 commands.entity(entity).try_insert(Dressed(mark));

@@ -70,7 +70,7 @@ pub struct WorldRecord {
     #[serde(default)]
     pub lexicon: fb_denizens::tongue::Lexicon,
     /// How many times each folk, by (depth, seed), has been persuaded at, so each try rolls afresh.
-    #[serde(default)]
+    #[serde(default, with = "crate::map_pairs")]
     pub persuasions: BTreeMap<(u32, u32), u32>,
     /// How many times the delver has woken from a sleep in a camp. Failed identifying and
     /// persuading wait for the next one.
@@ -82,12 +82,12 @@ pub struct WorldRecord {
     pub insights: u32,
     /// The folk who refused to be persuaded, by (depth, seed), with the rests then: they refuse
     /// again until the delver has rested.
-    #[serde(default)]
+    #[serde(default, with = "crate::map_pairs")]
     pub refused: BTreeMap<(u32, u32), u32>,
     /// The hostile groups won over by persuasion, by (depth, faction), with the rests then: the
     /// faction's folk on that level do not attack the delver until a blow ends the truce or the
     /// delver rests ([`WorldRecord::truce_holds`]).
-    #[serde(default)]
+    #[serde(default, with = "crate::map_pairs")]
     pub truces: BTreeMap<(u32, fb_faction::Faction), u32>,
 }
 
@@ -326,6 +326,9 @@ pub struct CreatureRecord {
     /// What is left on the body ([`FolkRecord::body`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<BodyRecord>,
+    /// How charred a troll's skin is, 0 to 1 (`crate::creatures::scorch`); 0 for the rest.
+    #[serde(default)]
+    pub charred: f32,
 }
 
 impl CreatureRecord {
@@ -498,7 +501,7 @@ pub fn record_level_left(
     mut record: ResMut<WorldRecord>,
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
-    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::remains::BodyStock>)>,
+    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::creatures::scorch::Scorch>, Option<&crate::remains::BodyStock>)>,
     folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>, Option<&crate::remains::BodyStock>)>,
     doors: Option<Res<crate::doors::Doors>>,
 ) {
@@ -510,7 +513,7 @@ pub fn record_level_left(
     for (piece, container) in &containers {
         left.containers.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
     }
-    for (critter, transform, health, corpse, body) in &creatures {
+    for (critter, transform, health, corpse, scorch, body) in &creatures {
         let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
         let Some(health) = health else { continue };
@@ -524,6 +527,7 @@ pub fn record_level_left(
                 scale: stood.scale.x,
                 dead: corpse.is_some(),
                 body: body.and_then(|b| crate::remains::record_body(&inventory, b)),
+                charred: scorch.map_or(0.0, |s| s.level),
             },
         );
     }
@@ -588,6 +592,31 @@ mod tests {
         let back: WorldRecord = serde_json::from_str(&text).unwrap();
         assert_eq!(back.met_on, record.met_on);
         assert_eq!(back.met_on[&a].iter().copied().collect::<Vec<_>>(), vec![2, 5]);
+    }
+
+    #[test]
+    fn folk_persuaded_refused_and_at_truce_survive_a_save() {
+        let mut record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        record.note_persuasion((2, 77));
+        record.note_persuasion((2, 77));
+        record.refused.insert((3, 9), 1);
+        record.make_truce(3, fb_faction::Faction(2));
+        let text = serde_json::to_string(&record).unwrap();
+        let back: WorldRecord = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.persuasion_tries((2, 77)), 2);
+        assert_eq!(back.refused, record.refused);
+        assert!(back.truce_holds(3, fb_faction::Faction(2)));
+    }
+
+    #[test]
+    fn a_record_saved_with_empty_persuasions_as_objects_still_loads() {
+        let record = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 4);
+        let mut value = serde_json::to_value(&record).unwrap();
+        value["persuasions"] = serde_json::json!({});
+        value["refused"] = serde_json::json!({});
+        value["truces"] = serde_json::json!({});
+        let back: WorldRecord = serde_json::from_value(value).unwrap();
+        assert!(back.persuasions.is_empty() && back.refused.is_empty() && back.truces.is_empty());
     }
 
     #[test]
@@ -965,7 +994,7 @@ mod tests {
             item: ItemRecord { coins: Some([1, 2, 3]), odds: fb_items::Odds::kit(4), ..record_of(&item) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
-        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false, body: None });
+        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false, body: None, charred: 0.0 });
         level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false, body: None });
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());

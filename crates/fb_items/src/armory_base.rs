@@ -17,6 +17,8 @@ use armory::families::bags::{BagStyle, Bags};
 use armory::families::feet::Feet;
 use armory::families::food::{Brew, Food, FoodStyle, GLOWCAP, PotionSize};
 use armory::families::campfire::FireForm;
+use armory::families::crystal::Growth;
+use armory::gem::Gemstone;
 use armory::families::garment::Garment;
 use armory::families::hands::Hands;
 use armory::families::hat::Hats;
@@ -317,7 +319,85 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     // Camp goods: carried packed; the pitched and set forms are the same items put down (SRD 5.1 p. 68-70).
     ("Tent", ArmoryBase::of(A::Any(Family::Tent)).tweaked(packed_tent)),
     ("Campfire kit", ArmoryBase::of(A::Any(Family::Campfire)).tweaked(packed_fire)),
+    // Rough gems: a crystal from the same generator that grows in the caverns, pocket sized, of
+    // the one stone the base names. Our own.
+    ("Rough garnet", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_garnet).named()),
+    ("Rough amethyst", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_amethyst).named()),
+    ("Rough citrine", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_citrine).named()),
+    ("Rough sapphire", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_sapphire).named()),
+    ("Rough emerald", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_emerald).named()),
+    ("Rough ruby", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_ruby).named()),
+    ("Rough diamond", ArmoryBase::of(A::Any(Family::Crystal)).tweaked(rough_diamond).named()),
 ];
+
+/// The stones that come as rough gems, and the base of each: the clear and coloured ones the
+/// Armory cuts, never the opaque turquoise and moonstone (which are polished smooth, not
+/// grown as crystals).
+pub const ROUGH_GEMS: [(Gemstone, &str); 7] = [
+    (Gemstone::Garnet, "Rough garnet"),
+    (Gemstone::Amethyst, "Rough amethyst"),
+    (Gemstone::Citrine, "Rough citrine"),
+    (Gemstone::Sapphire, "Rough sapphire"),
+    (Gemstone::Emerald, "Rough emerald"),
+    (Gemstone::Ruby, "Rough ruby"),
+    (Gemstone::Diamond, "Rough diamond"),
+];
+
+/// The base of the rough gem of `stone`, if it comes rough.
+pub fn rough_base(stone: Gemstone) -> Option<&'static str> {
+    ROUGH_GEMS.iter().find(|(s, _)| *s == stone).map(|(_, base)| *base)
+}
+
+/// The stone a rough gem base names.
+pub fn rough_stone(base: &str) -> Option<Gemstone> {
+    ROUGH_GEMS.iter().find(|(_, b)| *b == base).map(|(stone, _)| *stone)
+}
+
+/// A rough gem: one crystal of `stone`, between 7 and 15 cm, never glowing, with the flaws a
+/// stone out of the ground has. Its habit and proportions are the seed's.
+fn rough_gem(item: &mut Item, r: &mut Mulberry32, stone: Gemstone) {
+    if let Item::Crystal(s) = item {
+        let c = &mut s.crystal;
+        c.stone = stone;
+        c.growth = Growth::Single;
+        c.size = r.range_f32(0.7, 1.5);
+        // A little inner light, so a stone on the floor catches the eye under a torch.
+        c.glow = 0.6;
+        c.scepter = false;
+        c.double_ended = false;
+        c.cloud = c.cloud.max(r.range_f32(0.1, 0.5));
+        c.cracks = c.cracks.max(r.range_f32(0.0, 0.4));
+        s.fit(&armory::families::crystal::LIMITS);
+    }
+}
+
+fn rough_garnet(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Garnet);
+}
+
+fn rough_amethyst(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Amethyst);
+}
+
+fn rough_citrine(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Citrine);
+}
+
+fn rough_sapphire(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Sapphire);
+}
+
+fn rough_emerald(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Emerald);
+}
+
+fn rough_ruby(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Ruby);
+}
+
+fn rough_diamond(item: &mut Item, r: &mut Mulberry32) {
+    rough_gem(item, r, Gemstone::Diamond);
+}
 
 // ── Tweaks ───────────────────────────────────────────────────────────────────────────────
 
@@ -690,5 +770,53 @@ mod tests {
             }
             assert!(armory_base("Waterskin").unwrap().roll(seed).noun() == "Waterskin");
         }
+    }
+
+    #[test]
+    fn a_rough_gem_is_a_small_crystal_of_the_stone_its_base_names() {
+        use crate::{Kind, roll_item};
+        use armory::families::crystal::Growth;
+        for (stone, base) in ROUGH_GEMS {
+            assert_eq!((rough_base(stone), rough_stone(base)), (Some(base), Some(stone)));
+            for seed in [1, 2, 3, 1207] {
+                let gem = roll_item(base, seed).unwrap();
+                assert_eq!(roll_item(base, seed), Some(gem.clone()), "{base} {seed}");
+                let Item::Crystal(state) = &gem.shape else { panic!("{base} is not a crystal") };
+                // The stone is the one the Armory sets into items.
+                assert_eq!(state.crystal.stone, stone, "{base}");
+                assert_eq!(state.crystal.growth, Growth::Single);
+                assert!(state.crystal.glow > 0.0 && state.crystal.glow < 1.0);
+                // Pocketable: a good, one cell, under 20 cm, light.
+                assert_eq!(gem.profile.kind, Kind::Good);
+                assert!(gem.profile.packable && gem.profile.footprint.cols == 1 && gem.profile.footprint.rows == 1, "{base}");
+                let (lo, hi) = gem.shape.build().bounds().unwrap();
+                assert!((0..3).all(|k| hi[k] - lo[k] < 2.0 * 1.6), "{base} {seed}: {:?}", [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]);
+                assert!(gem.name.to_lowercase().contains(&stone.name().to_lowercase()), "{}", gem.name);
+            }
+        }
+        // Turquoise and moonstone are polished, never rough.
+        assert_eq!((rough_base(Gemstone::Turquoise), rough_base(Gemstone::Moonstone)), (None, None));
+    }
+
+    #[test]
+    fn rough_gems_have_prices_that_rise_with_the_stone_and_sell_for_coin() {
+        use crate::roll_item;
+        let price = |stone| roll_item(rough_base(stone).unwrap(), 5).unwrap().value_copper();
+        assert!(price(Gemstone::Citrine) < price(Gemstone::Garnet));
+        assert!(price(Gemstone::Garnet) < price(Gemstone::Emerald));
+        assert!(price(Gemstone::Emerald) < price(Gemstone::Diamond));
+        assert!(ROUGH_GEMS.iter().all(|(stone, _)| price(*stone) >= 100));
+    }
+
+    #[test]
+    fn rough_gems_lie_loose_as_crystal_loot_of_every_stone() {
+        use crate::{Odds, roll_loot};
+        let mut stones = std::collections::HashSet::new();
+        for seed in 0..200 {
+            let gem = roll_loot(Family::Crystal, seed, Odds::loot(5)).unwrap();
+            assert!(rough_stone(&gem.base).is_some(), "{}", gem.base);
+            stones.insert(rough_stone(&gem.base));
+        }
+        assert_eq!(stones.len(), ROUGH_GEMS.len());
     }
 }

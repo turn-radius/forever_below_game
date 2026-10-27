@@ -4,7 +4,7 @@ use super::*;
 use crate::creatures::{CREATURE_SALT, TROLLS_FROM_DEPTH, place_creatures};
 use crate::generate::{generate, generate_without_creatures};
 use crate::stairs::{STAIR_SALT, place_stairs};
-use crate::{LevelParams, LevelStyle};
+use crate::LevelParams;
 
 fn count(level: &Level, species: Species) -> usize {
     level.creatures.iter().filter(|c| c.species == species).count()
@@ -17,7 +17,7 @@ fn room_of(level: &Level, c: &CreatureSpot) -> Option<usize> {
 /// The level as the generator laid it out before the newer species: creatures from the creature
 /// stream, then the stairs.
 fn before(seed: u32, depth: u32) -> Level {
-    let params = LevelParams::for_style(LevelStyle::for_depth(depth));
+    let params = LevelParams::for_depth(depth);
     let (mut level, layout_seed) = generate_without_creatures(seed, depth, &params);
     level.creatures = place_creatures(&level, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT));
     place_stairs(&mut level, &mut Mulberry32::new(layout_seed ^ STAIR_SALT));
@@ -50,7 +50,15 @@ fn nothing_that_was_there_before_moves() {
             assert!(kept.iter().all(|k| rest.any(|o| o == k)), "seed {seed} depth {depth}: creatures moved");
             let trolls = |l: &[CreatureSpot]| l.iter().filter(|c| c.species == Species::Troll).count();
             assert_eq!(trolls(&kept), trolls(&old.creatures), "seed {seed} depth {depth}: a troll made way");
-            assert_eq!(Level { creatures: Vec::new(), webs: Vec::new(), ..new }, Level { creatures: Vec::new(), ..old }, "seed {seed} depth {depth}: the level moved");
+            // The crystals of a cavern and the lights of its largest come after everything else.
+            let bare = |mut l: Level| {
+                l.creatures.clear();
+                l.crystals.clear();
+                l.items.retain(|i| i.family != armory::Family::Crystal);
+                l.lights.retain(|light| light.kind != crate::LightKind::Crystal);
+                l
+            };
+            assert_eq!(Level { webs: Vec::new(), ..bare(new) }, bare(old), "seed {seed} depth {depth}: the level moved");
         }
     }
 }
@@ -84,7 +92,10 @@ fn each_species_appears_only_from_its_depth() {
 fn the_newcomers_keep_to_their_rules() {
     for depth in 1..=8 {
         for seed in 1..=40 {
-            let level = generate(seed, depth);
+            let mut level = generate(seed, depth);
+            // The crystals' lights come after the creatures and stand at the crystals, which keep clear of them.
+            level.lights.retain(|l| l.kind != crate::LightKind::Crystal);
+            level.items.retain(|i| i.family != armory::Family::Crystal);
             let start_room = level.start_room();
             for (i, c) in level.creatures.iter().enumerate().filter(|(_, c)| newcomer(c.species)) {
                 let (x, y) = (c.x.floor() as i32, c.y.floor() as i32);

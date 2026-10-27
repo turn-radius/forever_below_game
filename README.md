@@ -53,7 +53,7 @@ The game opens on the title screen, to Forever Below's theme. New delve (or Ente
 
 **Saving.** The delve is saved when the delver lies down in a set bedroll or tent (set one down from the pack with F, then F on it to sleep): "Your delve is saved." shows, and there is no other way to save. The title then offers "Resume <name>, depth N" above New delve, which rebuilds the world from its seed, every level as it was left, and the delver lying in the same camp with their gear, needs, hit points, clock, standings, commissions and lessons. Quitting without sleeping loses the progress since the last camp. Dying deletes the save. Resume is the highlighted choice and Enter resumes. New delve and Continue as ask "Replace your saved delve?" first. The save is `delve.json` beside `settings.json`, written to a temporary file and renamed, so a crash cannot leave half of one; a save the game cannot read is renamed `delve.unreadable.json` and the title says so in one line. A delve begun with `--seed`, `FB_NEW_DELVE` or a debug switch never writes or deletes the save. The design is in the header of `game/src/save.rs`.
 
-Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`, `FB_READ`, `FB_TEACH`, `FB_TEACH_READ`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
+Giving `--seed`, or any debug switch that looks at the level (`FB_DEBUG_POSE`, `FB_DEBUG_CAMERA`, `FB_DEBUG_HOVER`, `FB_DEBUG_KIT`, `FB_DROP`, `FB_OPEN_INVENTORY`, `FB_OPEN_CONTAINER`, `FB_OPEN_MENU`, `FB_OPEN_MAP`, `FB_COMMISSION`, `FB_READ`, `FB_TEACH`, `FB_TEACH_READ`, `FB_BURN_TROLL`), skips the title and opens straight into the level, 1207 unless `--seed` says otherwise. `--title` keeps the title whatever else is given; `FB_SCREENSHOT=title.png cargo run -p forever_below -- --title` captures it, and adding `FB_OPEN_MENU=settings` captures its settings page, or `FB_OPEN_MENU=creator` the character creator (drafting from `--seed`, or 1).
 
 ### Play a level
 
@@ -210,6 +210,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_CLOSEUP=<0–11>` | turntable opens on a close-up of that grid slot |
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps\|denizen` | a lit camera at a fixed view of the level |
+| `FB_BURN_TROLL=1\|scorch` | with `FB_SPAWN=troll`, fells the troll in front of you and burns it where it lies (`1`), or burns it standing (`scorch`), a couple of seconds in, for captures of its flames and char; try `FB_DEBUG_LIGHT=lantern` |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_OPEN_MAP=<frame>` | opens the map that many frames into the delve, once the start has been looked round (`FB_OPEN_MAP=120`) |
@@ -320,6 +321,8 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[light]` | `brazier_reach` | 150.0 | How far a brazier's light reaches, in world units. |
 | `[light]` | `glowcap_peak` | 0.5 | A patch of glowcaps' strength close up (1 = full). |
 | `[light]` | `glowcap_reach` | 30.0 | How far glowcaps' light reaches, in world units. |
+| `[light]` | `crystal_peak` | 0.3 | A lit crystal's strength close up (1 = full). |
+| `[light]` | `crystal_reach` | 60.0 | How far a lit crystal's light reaches, in world units, for a crystal 3 m tall. |
 | `[light]` | `flicker_depth` | 1.0 | How deeply flames flicker (0 = steady, 1 = usual). |
 | `[light]` | `ambient_lux` | 4.0 | The abyss's own light where no flame reaches, in lux. |
 | `[light]` | `fog_start` | 40.0 | Where the dark starts to swallow far stone, in world units. |

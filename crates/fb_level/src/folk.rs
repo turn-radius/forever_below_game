@@ -154,7 +154,7 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
         // gather at the light.
         let rank = |i: &usize| {
             let roles = level.roles_of(*i);
-            [RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping, RoomRole::Market].iter().position(|r| roles.contains(r)).unwrap_or(4)
+            [RoomRole::Hearth, RoomRole::Hall, RoomRole::Sleeping].iter().position(|r| roles.contains(r)).unwrap_or(if roles.iter().any(|r| r.is_trade_room()) { 3 } else { 4 })
         };
         if level.style == crate::LevelStyle::StoneHalls {
             // Folk of the halls stand among the columns first.
@@ -164,6 +164,7 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
         }
         let groups: Vec<(usize, Gathering)> = rooms.iter().map(|&i| (i, Gathering::in_room(level, &level.rooms[i], rng))).collect();
         let markets: Vec<(usize, Gathering)> = groups.iter().copied().filter(|&(i, _)| level.roles_of(i).contains(&RoomRole::Market)).collect();
+        let workshop_of = |p: Profession| groups.iter().copied().find(|&(i, _)| level.roles_of(i).contains(&RoomRole::Workshop(p)));
 
         // Guards a claim had no post for gather with the rest.
         let spare_guards = guards.len() - at_post;
@@ -172,11 +173,25 @@ pub(crate) fn place_folk(level: &Level, strengths: &[usize], plans: &[Vec<Option
         for f in &mut folk[start..] {
             f.trade = Some(Trade::guard());
         }
-        // Traders in the market, then wherever there is room.
+        // Each trader in the workshop of their trade, where the claim has one.
+        let mut elsewhere: Vec<Option<Trade>> = Vec::new();
+        for t in &traders {
+            let Some(group) = t.and_then(|t| workshop_of(t.profession)) else {
+                elsewhere.push(*t);
+                continue;
+            };
+            let at = folk.len();
+            if fill(level, faction, 1, &[group], &mut folk, rng) == 1 {
+                folk[at].trade = *t;
+            } else {
+                elsewhere.push(*t);
+            }
+        }
+        // The rest in the market, then wherever there is room.
         let start = folk.len();
-        let first = fill(level, faction, traders.len(), &markets, &mut folk, rng);
-        fill(level, faction, traders.len() - first, &groups, &mut folk, rng);
-        for (f, t) in folk[start..].iter_mut().zip(&traders) {
+        let first = fill(level, faction, elsewhere.len(), &markets, &mut folk, rng);
+        fill(level, faction, elsewhere.len() - first, &groups, &mut folk, rng);
+        for (f, t) in folk[start..].iter_mut().zip(&elsewhere) {
             f.trade = *t;
         }
         fill(level, faction, plain.len(), &groups, &mut folk, rng);
@@ -418,7 +433,7 @@ mod tests {
         let world = 1207;
         let mut seen = HashMap::new();
         for depth in 1..=12 {
-            for spec in generate_in(world, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth))).factions {
+            for spec in generate_in(world, depth, &crate::LevelParams::for_depth(depth)).factions {
                 assert_eq!(*seen.entry(spec.id).or_insert_with(|| spec.clone()), spec);
             }
         }
@@ -430,7 +445,7 @@ mod tests {
         let mut insular = 0;
         for world in 1..=48 {
             for depth in 1..=3 {
-                let level = generate_in(world, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth)));
+                let level = generate_in(world, depth, &crate::LevelParams::for_depth(depth));
                 for f in &level.folk {
                     let spec = level.faction(f.faction);
                     if spec.insular {
@@ -448,7 +463,7 @@ mod tests {
         let (mut women, mut men, mut free) = (0, 0, [0, 0]);
         for world in 1..=60 {
             for depth in 1..=3 {
-                let level = generate_in(world, depth, &crate::LevelParams::for_style(crate::LevelStyle::for_depth(depth)));
+                let level = generate_in(world, depth, &crate::LevelParams::for_depth(depth));
                 for f in &level.folk {
                     let spec = level.faction(f.faction);
                     assert_eq!(f.sex, spec.member_sex(f.seed), "{}", spec.name);
@@ -695,6 +710,9 @@ mod tests {
             let level = generate(seed, depth);
             for claim in &level.claims {
                 let market = level.room_with_role(claim, RoomRole::Market);
+                if market.is_none() {
+                    continue;
+                }
                 if market.is_some() {
                     markets += 1;
                     staffed += level.folk.iter().any(|f| f.faction == claim.faction && f.trade.is_some_and(|t| t.profession != Profession::Guard) && level.room_at(f.x as i32, f.y as i32) == market) as u32;

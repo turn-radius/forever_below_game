@@ -18,6 +18,9 @@
 //! - **Burn.** Looking at a troll lying down with a lit torch in either hand, the delver is
 //!   offered Burn on the Primary key ([`crate::interact::Verb::Burn`], [`prompt_burn`]); using
 //!   it sends a [`Burned`] with no swing ([`burn_aimed`]).
+//! - **Flames and char.** A burned troll has flames on its body until its turn, and its skin
+//!   chars, further with each burn, fading as it regains hit points and black for good once it
+//!   dies ([`super::scorch`]).
 //! - **Callouts.** Each turn of its story is written over the troll ([`Outcome::Note`]): "Its
 //!   wounds begin to knit" when it falls, "It burns" when fire catches it, "It rises" and
 //!   "Dead for good".
@@ -33,6 +36,7 @@ use fb_creatures::{Creature, Dice, SkeletonGear};
 use fb_items::Item;
 
 use super::behaviour::brain_for;
+use super::scorch::{self, Scorch};
 use super::{Critter, Intent};
 use crate::combat::Health;
 use crate::character::Character;
@@ -61,6 +65,9 @@ impl Plugin for TrollsPlugin {
         .add_systems(
             Update,
             (
+                (scorch::light_flames, scorch::douse_flames).chain().after(regenerate),
+                scorch::char_trolls.after(regenerate).before(crate::combat::feedback::flash),
+                scorch::dev_burn.before(take_blows),
                 burn_aimed.run_if(level_has_focus).before(burn).after(crate::carry::pick_up),
                 prompt_burn.after(crate::travel::prompt_stair).before(crate::interact::show_prompt),
             )
@@ -95,13 +102,17 @@ const DIES: Outcome = Outcome::Note { words: "Dead for good", tone: Tone::Final 
 
 /// Fire on a troll stops its next regeneration. A troll already dead for good, or already
 /// burning, has nothing to say.
-fn burn(mut burned: MessageReader<Burned>, mut trolls: Query<&mut Troll>, mut callouts: MessageWriter<Callout>) {
+fn burn(mut burned: MessageReader<Burned>, mut trolls: Query<(&mut Troll, Option<&mut Scorch>)>, mut callouts: MessageWriter<Callout>) {
     for blow in burned.read() {
-        if let Ok(mut troll) = trolls.get_mut(blow.target)
+        if let Ok((mut troll, scorch)) = trolls.get_mut(blow.target)
             && !troll.spent
         {
+            // One burn a turn: the flames already on it chars it no further.
             if !troll.regeneration.is_stopped() {
                 callouts.write(Callout { target: blow.target, outcome: BURNS });
+                if let Some(mut scorch) = scorch {
+                    scorch.burn();
+                }
             }
             troll.regeneration.burn();
             info!("The troll burns: it will not regenerate");
@@ -145,14 +156,20 @@ pub(crate) fn regenerate(
     mut commands: Commands,
     time: Res<Time>,
     level: Res<CurrentLevel>,
-    mut trolls: Query<(Entity, &Critter, &mut Troll, &mut Health, &mut Transform, &mut Intent, Option<&Corpse>)>,
+    mut trolls: Query<(Entity, &Critter, &mut Troll, &mut Health, &mut Transform, &mut Intent, Option<&Corpse>, Option<&mut Scorch>)>,
     mut callouts: MessageWriter<Callout>,
 ) {
-    for (entity, critter, mut troll, mut health, mut transform, mut intent, corpse) in &mut trolls {
+    for (entity, critter, mut troll, mut health, mut transform, mut intent, corpse, mut scorch) in &mut trolls {
         if troll.spent || !matches!(critter.creature, Creature::Troll(_)) {
             continue;
         }
-        match take_turn(&mut troll, &mut health, time.delta_secs()) {
+        let max = health.max.max(0) as u32;
+        let turn = take_turn(&mut troll, &mut health, time.delta_secs());
+        // What it regains takes the char off its skin.
+        if let (Some(scorch), Some(Turn::Regained(n) | Turn::Rose(n))) = (scorch.as_mut(), turn) {
+            scorch.heal(n, max);
+        }
+        match turn {
             Some(Turn::Rose(hp)) => {
                 let Some(corpse) = corpse else { continue };
                 // On its feet where it lay, collapse undone, with a mind again.
@@ -163,6 +180,9 @@ pub(crate) fn regenerate(
                 info!("The troll rises with {hp} hit points");
             }
             Some(Turn::Died) => {
+                if let Some(mut scorch) = scorch {
+                    scorch.die();
+                }
                 callouts.write(Callout { target: entity, outcome: DIES });
                 info!("The troll, burned, does not rise");
             }
@@ -583,5 +603,214 @@ mod tests {
             note(&mut app);
         }
         assert_eq!(said, ["Its wounds begin to knit", "It burns", "Dead for good"]);
+    }
+
+    // Fire on the body: flames and char.
+
+    use crate::creatures::scorch::{Aflame, CHAR, Fire, Scorch};
+    use crate::creatures::Bones;
+    use crate::render::ToonMaterial;
+
+    /// The green a dressed troll's parts start as.
+    const SKIN: Color = Color::srgb(0.30, 0.45, 0.20);
+
+    /// Gives `troll` a toon material of its own on each of its first bones, as spawning gives
+    /// every part, and returns their handles.
+    fn dress(app: &mut App, troll: Entity) -> Vec<Handle<ToonMaterial>> {
+        let bones: Vec<Entity> = app.world().get::<Bones>(troll).unwrap().0.iter().take(4).copied().collect();
+        bones
+            .into_iter()
+            .map(|bone| {
+                let material = ToonMaterial { base: StandardMaterial { base_color: SKIN, ..default() }, extension: default() };
+                let handle = app.world_mut().resource_mut::<Assets<ToonMaterial>>().add(material);
+                app.world_mut().spawn((MeshMaterial3d(handle.clone()), ChildOf(bone)));
+                handle
+            })
+            .collect()
+    }
+
+    fn colour_of(app: &App, handle: &Handle<ToonMaterial>) -> Srgba {
+        app.world().resource::<Assets<ToonMaterial>>().get(handle).unwrap().base.base_color.to_srgba()
+    }
+
+    fn glow_of(app: &App, handle: &Handle<ToonMaterial>) -> f32 {
+        app.world().resource::<Assets<ToonMaterial>>().get(handle).unwrap().extension.glow
+    }
+
+    fn luma(colour: Srgba) -> f32 {
+        colour.red + colour.green + colour.blue
+    }
+
+    fn flames(app: &mut App) -> usize {
+        app.world_mut().query::<&Fire>().iter(app.world()).count()
+    }
+
+    fn scorch_of(app: &App, troll: Entity) -> Scorch {
+        app.world().get::<Scorch>(troll).unwrap().clone()
+    }
+
+    #[test]
+    fn charring_darkens_only_the_troll_that_burned() {
+        let (mut app, _, burnt) = troll_fight(unarmed_seed(), false, FAR);
+        let burnt_skin = dress(&mut app, burnt);
+        let other = another_troll(&mut app, unarmed_seed() + 1, Vec3::new(0.0, 0.0, 300.0));
+        let other_skin = dress(&mut app, other);
+        app.world_mut().write_message(Burned { target: burnt });
+        run(&mut app, 2.0);
+        for handle in &burnt_skin {
+            assert!(luma(colour_of(&app, handle)) < 0.7 * luma(SKIN.to_srgba()), "the burned troll's skin is charred");
+        }
+        for handle in &other_skin {
+            assert_eq!(colour_of(&app, handle), SKIN.to_srgba(), "the other troll is untouched");
+        }
+    }
+
+    #[test]
+    fn each_burn_takes_the_char_further_but_one_burn_a_turn() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        dress(&mut app, troll);
+        let mut levels = Vec::new();
+        for _ in 0..3 {
+            app.world_mut().write_message(Burned { target: troll });
+            app.update();
+            levels.push(scorch_of(&app, troll).level);
+            // Its turn comes and goes, the fire out, before the next burn.
+            run(&mut app, 6.5);
+        }
+        assert!(levels[0] > 0.4 && levels[0] < levels[1] && levels[1] < levels[2], "{levels:?}");
+        // Burned again while it already burns: no further.
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        dress(&mut app, troll);
+        for _ in 0..3 {
+            app.world_mut().write_message(Burned { target: troll });
+            app.update();
+        }
+        assert_eq!(scorch_of(&app, troll).level, levels[0], "one burn a turn");
+    }
+
+    #[test]
+    fn a_flash_on_a_charred_troll_comes_back_to_the_char() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        let skin = dress(&mut app, troll);
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 2.0);
+        let charred = colour_of(&app, &skin[0]);
+        assert!(luma(charred) < luma(SKIN.to_srgba()));
+        let struck = Struck { target: troll, damage: 1, from: Vec2::new(0.0, 50.0), bludgeoning: true, critical: false, by_ally: false, graze: false };
+        app.world_mut().write_message(struck);
+        app.update();
+        assert!(luma(colour_of(&app, &skin[0])) > luma(charred) + 0.2, "it flashes");
+        run(&mut app, 1.5);
+        assert!(app.world().get::<crate::combat::feedback::Flinch>(troll).is_none(), "the flash is over");
+        assert_eq!(colour_of(&app, &skin[0]), charred, "back to the char, not the green");
+        // Burned again in the middle of a flash (after its turn), it comes back to the new char.
+        run(&mut app, 5.0);
+        app.world_mut().write_message(struck);
+        app.update();
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 1.5);
+        let darker = colour_of(&app, &skin[0]);
+        assert!(luma(darker) < luma(charred), "the second burn went further: {darker:?} against {charred:?}");
+    }
+
+    #[test]
+    fn flames_stand_on_a_burning_troll_and_are_gone_after_its_turn() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        assert_eq!(flames(&mut app), 0);
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 0.5);
+        let lit = flames(&mut app);
+        assert!((1..=crate::creatures::scorch::FLAMES).contains(&lit), "flames on the body: {lit}");
+        assert!(app.world().get::<Aflame>(troll).is_some());
+        // Each is an Armory flame, animated as a torch's: a veil and a core.
+        let animated = app.world_mut().query::<&crate::render::flame::Flame>().iter(app.world()).count();
+        assert_eq!(animated, 2 * lit);
+        // Still burning until its turn.
+        run(&mut app, 4.0);
+        assert_eq!(flames(&mut app), lit);
+        // Its turn comes: they gutter out over a second.
+        run(&mut app, 1.5);
+        let sizes: Vec<f32> = app.world_mut().query::<&Fire>().iter(app.world()).map(Fire::size).collect();
+        assert!(!sizes.is_empty() && sizes.iter().all(|&size| size < 1.0), "guttering: {sizes:?}");
+        run(&mut app, 1.5);
+        assert_eq!(flames(&mut app), 0, "gone");
+        assert!(app.world().get::<Aflame>(troll).is_none());
+    }
+
+    #[test]
+    fn a_troll_dead_for_good_is_fully_charred_glows_and_stays_charred() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        let skin = dress(&mut app, troll);
+        strike_down(&mut app, troll);
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 7.0);
+        assert!(app.world().get::<Troll>(troll).unwrap().spent);
+        let scorch = scorch_of(&app, troll);
+        assert_eq!(scorch.level, 1.0);
+        assert!(scorch.ember > 0.5, "glowing: {}", scorch.ember);
+        assert!(glow_of(&app, &skin[0]) > 0.1, "a dull glow in the skin");
+        // The ember dies down over some seconds.
+        run(&mut app, 9.0);
+        assert_eq!(scorch_of(&app, troll).ember, 0.0);
+        assert_eq!(glow_of(&app, &skin[0]), 0.0);
+        assert_eq!(colour_of(&app, &skin[0]), CHAR.to_srgba(), "charred through");
+        run(&mut app, 20.0);
+        assert_eq!(colour_of(&app, &skin[0]), CHAR.to_srgba(), "and it stays so");
+        assert_eq!(flames(&mut app), 0, "the flames are out");
+    }
+
+    #[test]
+    fn a_living_trolls_scorch_fades_as_it_regains_hit_points() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        let skin = dress(&mut app, troll);
+        app.world_mut().get_mut::<Health>(troll).unwrap().hp = 20;
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 1.0);
+        let burnt = scorch_of(&app, troll).level;
+        assert!(burnt > 0.4);
+        // The burned turn regains nothing; the next regains 10 and takes some of the char off.
+        run(&mut app, 5.5);
+        assert_eq!(scorch_of(&app, troll).level, burnt, "burned, it regains nothing");
+        run(&mut app, 6.0);
+        let after = scorch_of(&app, troll).level;
+        assert!(after < burnt && after > 0.0, "{after} against {burnt}");
+        // Hit points all back, the scorch is gone and the skin its own again.
+        run(&mut app, 30.0);
+        assert_eq!(scorch_of(&app, troll).level, 0.0);
+        run(&mut app, 1.0);
+        assert_eq!(colour_of(&app, &skin[0]), SKIN.to_srgba());
+    }
+
+    #[test]
+    fn a_charred_body_from_the_record_is_charred_and_not_glowing() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        let skin = dress(&mut app, troll);
+        // As the level spawns it: the record's char, and the long-fallen body.
+        let at = *app.world().get::<Transform>(troll).unwrap();
+        app.world_mut().entity_mut(troll).insert((Scorch::restored(1.0), Corpse { since: 60.0, fell: at }));
+        run(&mut app, 0.5);
+        assert_eq!(colour_of(&app, &skin[0]), CHAR.to_srgba());
+        assert_eq!(glow_of(&app, &skin[0]), 0.0, "long cold");
+        assert!(app.world().get::<Troll>(troll).unwrap().spent);
+        assert_eq!(flames(&mut app), 0);
+    }
+
+    #[test]
+    fn a_trolls_char_is_written_to_the_record() {
+        let (mut app, _, troll) = troll_fight(unarmed_seed(), false, FAR);
+        strike_down(&mut app, troll);
+        app.world_mut().write_message(Burned { target: troll });
+        run(&mut app, 7.0);
+        let spot = app.world().get::<Critter>(troll).unwrap().spot;
+        app.world_mut().resource_mut::<CurrentLevel>().0.creatures.push(spot);
+        app.init_resource::<crate::record::WorldRecord>();
+        bevy::ecs::system::RunSystemOnce::run_system_once(app.world_mut(), crate::record::record_level_left).unwrap();
+        let depth = app.world().resource::<CurrentLevel>().0.depth;
+        let record = app.world().resource::<crate::record::WorldRecord>().level(depth).unwrap().creatures.values().next().cloned().unwrap();
+        assert!(record.dead);
+        assert_eq!(record.charred, 1.0);
+        // An older record has no char.
+        let old: crate::record::CreatureRecord = serde_json::from_str(r#"{"hp":0,"max":84,"at":[0,0,0],"turn":[0,0,0,1],"scale":1.0,"dead":true}"#).unwrap();
+        assert_eq!(old.charred, 0.0);
     }
 }

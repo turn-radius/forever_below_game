@@ -58,6 +58,7 @@ pub mod launch;
 pub mod level;
 pub mod level_view;
 pub mod map;
+pub mod map_pairs;
 pub mod light;
 pub mod menu;
 pub mod play;

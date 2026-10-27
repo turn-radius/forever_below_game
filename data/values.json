@@ -83,5 +83,12 @@
  "Arrow": 5,
  "Bolt": 5,
  "Quiver": 100,
- "Bolt case": 100
+ "Bolt case": 100,
+ "Rough garnet": 500,
+ "Rough amethyst": 500,
+ "Rough citrine": 300,
+ "Rough sapphire": 5000,
+ "Rough emerald": 5000,
+ "Rough ruby": 25000,
+ "Rough diamond": 25000
 }

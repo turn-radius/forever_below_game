@@ -135,7 +135,7 @@ impl DoorSpec {
     /// variations rolled from `seed`.
     pub fn rolled(kind: DoorKind, style: DoorStyle, level_style: LevelStyle, seed: u32) -> Self {
         let mut rng = Mulberry32::new(seed ^ 0x5bec_d007);
-        let timber = level_style == LevelStyle::RoughRock;
+        let timber = level_style.is_rock();
         DoorSpec {
             kind,
             style,
@@ -561,7 +561,7 @@ pub fn switch_aim(kind: SwitchKind) -> ([f32; 2], [f32; 2]) {
 /// whether the wall is bare rock or stands proud in dressed blocks.
 pub fn switch_proud(level_style: LevelStyle) -> f32 {
     match level_style {
-        LevelStyle::RoughRock => 0.0,
+        LevelStyle::RoughRock | LevelStyle::CrystalCavern => 0.0,
         LevelStyle::StoneHalls => 0.5,
     }
 }

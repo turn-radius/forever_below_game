@@ -58,13 +58,13 @@ level_params! {
     grid {
         width: u32 = 48, 32.0, 96.0, 1.0; "Cells east to west."
         height: u32 = 40, 28.0, 80.0, 1.0; "Cells north to south."
-        ceiling: f32 = 30.0, 20.0, 60.0, 1.0; "Ceiling height, world units (3 m by default)."
+        ceiling: f32 = 30.0, 20.0, 80.0, 1.0; "Ceiling height, world units (3 m by default)."
     }
     rooms {
         rooms_min: u32 = 6, 2.0, 20.0, 1.0; "Fewest rooms a level has; a layout with fewer is tried again."
         rooms_max: u32 = 12, 2.0, 30.0, 1.0; "Most rooms a level has."
-        side_min: u32 = 3, 2.0, 6.0, 1.0; "Shortest side of an ordinary room, in cells."
-        side_max: u32 = 7, 3.0, 14.0, 1.0; "Longest side of an ordinary room, in cells."
+        side_min: u32 = 3, 2.0, 12.0, 1.0; "Shortest side of an ordinary room, in cells."
+        side_max: u32 = 7, 3.0, 20.0, 1.0; "Longest side of an ordinary room, in cells."
         hall_chance: f64 = 0.2, 0.0, 1.0, 0.01; "Chance a room is a hall, grown on both sides."
         hall_grow_min: u32 = 3, 0.0, 8.0, 1.0; "Least a hall grows."
         hall_grow_max: u32 = 5, 0.0, 12.0, 1.0; "Most a hall grows."
@@ -103,6 +103,11 @@ level_params! {
     }
 }
 
+/// The most rooms a level gains from depth ([`LevelParams::for_depth`]).
+pub const DEEPEST_EXTRA_ROOMS: u32 = 6;
+/// Cells a level's grid grows by, east to west and north to south, for each room it gains.
+const ROOM_GRID: (u32, u32) = (4, 3);
+
 impl LevelParams {
     /// The defaults of `style`: rough rock's are [`LevelParams::default`], the values the
     /// generator has always used; stone halls lay out wider, more regular rooms, more halls,
@@ -110,6 +115,36 @@ impl LevelParams {
     pub fn for_style(style: LevelStyle) -> Self {
         match style {
             LevelStyle::RoughRock => Self::default(),
+            // A few vast chambers, each far bigger than a room, with passages three cells wide
+            // between them that wander rather than run straight, under a ceiling that lets
+            // crystals three times a delver's height stand. Few rooms, so loot and the rooms'
+            // folk are spread thinner per cell.
+            LevelStyle::CrystalCavern => Self {
+                width: 72,
+                height: 60,
+                ceiling: 64.0,
+                rooms_min: 3,
+                rooms_max: 5,
+                side_min: 9,
+                side_max: 14,
+                hall_chance: 0.3,
+                hall_grow_min: 1,
+                hall_grow_max: 3,
+                regular_chance: 0.0,
+                turn_cost: 2,
+                loop_chance: 0.6,
+                corridor_width_min: 3,
+                corridor_width_max: 3,
+                cells_per_item: 20,
+                items_per_room_max: 7,
+                brazier_min_area: 60,
+                past_chance: 0.1,
+                purpose_share: 0.3,
+                // Pale clean stone: no moss, no grottos.
+                moss_amount: 0.0,
+                grotto_chance: 0.0,
+                ..Self::default()
+            },
             LevelStyle::StoneHalls => Self {
                 width: 64,
                 height: 52,
@@ -132,6 +167,24 @@ impl LevelParams {
                 ..Self::default()
             },
         }
+    }
+
+    /// The defaults of the level at `depth`: its style's, with more rooms in a bigger grid as the
+    /// delve goes deeper (two more rooms for every three levels past the first, up to
+    /// [`DEEPEST_EXTRA_ROOMS`]), so the settled factions below have halls to hold. The first two
+    /// levels are as their style's. A crystal cavern keeps its own few vast chambers.
+    pub fn for_depth(depth: u32) -> Self {
+        let style = LevelStyle::for_depth(depth);
+        let mut p = Self::for_style(style);
+        if style == LevelStyle::CrystalCavern {
+            return p;
+        }
+        let extra = (depth.max(1).saturating_sub(1) * 2 / 3).min(DEEPEST_EXTRA_ROOMS);
+        p.rooms_min += extra;
+        p.rooms_max += extra;
+        p.width += ROOM_GRID.0 * extra;
+        p.height += ROOM_GRID.1 * extra;
+        p
     }
 
     /// Every parameter as a slider [`Field`], in declaration order.

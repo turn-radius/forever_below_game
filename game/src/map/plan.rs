@@ -360,6 +360,9 @@ pub fn draw_plan_with(level: &Level, explored: &Explored, px: f32, under: impl F
                 canvas.ring(c, px * 0.14, ink, GLOW, 0.95);
                 canvas.disc(c, px * 0.08, GLOW, 1.0);
             }
+            LightKind::Crystal => {
+                canvas.disc(c, px * 0.07, CAP, 0.95);
+            }
             LightKind::Glowcaps => {
                 for k in 0..3 {
                     let (wx, wy) = wobble(light.x, light.y + k as f32, 11);

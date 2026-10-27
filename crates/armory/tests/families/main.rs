@@ -19,6 +19,7 @@ mod club_build;
 mod club_roll;
 mod crossbow_build;
 mod crossbow_roll;
+mod crystal_build;
 mod dagger_build;
 mod dagger_roll;
 mod feet_build;

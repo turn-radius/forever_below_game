@@ -320,6 +320,18 @@ const GNOME_HAT: f64 = 0.6;
 /// How many arrows or bolts a bowman starts with: a full quiver.
 pub const AMMUNITION_CARRIED: usize = 20;
 
+/// What a minotaur does not wear: a shirt, tunic or robe, a cloak, a hood, hat or helm, a pack, trousers
+/// or gloves. It goes bare, its coat showing, in a belt, a kilt (breeches, which a denizen's legwear
+/// draws as one), body armour, gauntlets and what it holds.
+fn bare_on_a_minotaur(slot: Slot, base: &str) -> bool {
+    match slot {
+        Slot::Shirt | Slot::Cloak | Slot::Head | Slot::Back => true,
+        Slot::Legs => base != "Breeches",
+        Slot::Hands => base == "Gloves",
+        _ => false,
+    }
+}
+
 impl Outfit {
     /// Rolls this outfit for a character of `folk` (a key of `data/races.json`) from `seed`.
     ///
@@ -348,6 +360,8 @@ impl Outfit {
         let mut rng = Mulberry32::new(seed.wrapping_mul(13).wrapping_add(self.key.len() as u32 * 977).wrapping_add(first));
         let draw = |rng: &mut Mulberry32, base: &str| roll_item_with(base, (rng.next_f64() * 4_294_967_296.0) as u32, odds);
         let mut worn: Vec<(Slot, Item)> = Vec::new();
+        let minotaur = folk == "minotaur";
+        let free = |worn: &[(Slot, Item)], slot: Slot| worn.iter().all(|(s, _)| *s != slot);
         for (slot, choice) in &self.slots {
             if choice.bases.is_empty() || (choice.chance < 1.0 && rng.next_f64() > choice.chance as f64) {
                 continue;
@@ -359,6 +373,9 @@ impl Outfit {
                     base = (*lrng.pick(&favoured)).clone();
                 }
             }
+            if minotaur && bare_on_a_minotaur(*slot, &base) {
+                continue;
+            }
             if let Some(mut item) = draw(&mut rng, &base) {
                 if let Some(livery) = livery {
                     livery.dress(&mut item, &mut lrng, false);
@@ -366,10 +383,12 @@ impl Outfit {
                 worn.push((*slot, item));
             }
         }
-        if let Some((livery, garment)) = livery.and_then(|l| l.garment.map(|g| (l, g))) {
+        if minotaur && free(&worn, Slot::Belt) {
+            worn.extend(draw(&mut rng, "Belt").map(|belt| (Slot::Belt, belt)));
+        }
+        if let Some((livery, garment)) = livery.filter(|_| !minotaur).and_then(|l| l.garment.map(|g| (l, g))) {
             livery.robe(garment, &mut worn, odds, &mut lrng);
         }
-        let free = |worn: &[(Slot, Item)], slot: Slot| worn.iter().all(|(s, _)| *s != slot);
         let extras = [(Slot::Head, "Pointed hat", GNOME_HAT, folk == "gnome"), (Slot::Ring1, "Ring", EXTRA_RING, true), (Slot::Neck, "Amulet", EXTRA_AMULET, true), (Slot::Charm, "Charm", EXTRA_CHARM, true)];
         for (slot, base, chance, allowed) in extras {
             if allowed && free(&worn, slot) && rng.chance(chance)
@@ -738,5 +757,33 @@ mod tests {
                 assert_eq!(outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)), outfit.roll_in(9, "dwarf", Odds::default(), Some(&livery)), "{}", outfit.key);
             }
         }
+    }
+
+    #[test]
+    fn a_minotaur_wears_a_belt_and_armour_never_cloth_or_headgear() {
+        let livery = sisters(ArmourLean::Scale);
+        for outfit in outfits() {
+            for seed in 0..60 {
+                for livery in [None, Some(&livery)] {
+                    let set = outfit.roll_in(seed, "minotaur", Odds::default(), livery);
+                    for (slot, item) in &set.worn {
+                        assert!(!matches!(slot, Slot::Shirt | Slot::Cloak | Slot::Head | Slot::Back), "{} {seed}: {slot:?} {}", outfit.key, item.base);
+                        assert!(!matches!(item.base.as_str(), "Gloves" | "Robe" | "Pack" | "Satchel" | "Sack" | "Trousers" | "Tunic" | "Shirt" | "Hood" | "Helm"), "{} {seed}: {}", outfit.key, item.base);
+                    }
+                    assert!(set.item(Slot::Belt).is_some(), "{} {seed}: no belt", outfit.key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn other_folk_are_dressed_as_before() {
+        // Cloth and headgear still roll for the folk: the fighter's tunic and helm, a mage's robe.
+        let any = |key: &str, folk: &str, slot: Slot| (0..60).any(|s| outfit(key).unwrap().roll(s, folk).item(slot).is_some());
+        assert!(any("fighter", "human", Slot::Head) && any("fighter", "human", Slot::Shirt) && any("fighter", "human", Slot::Legs));
+        assert!(any("fighter", "dwarf", Slot::Head) && any("mage", "human", Slot::Shirt) && any("cleric", "human", Slot::Head));
+        // A non-minotaur's roll is the same as the plain rolling the outfit table gave it.
+        let a = outfit("fighter").unwrap().roll(5, "human");
+        assert_eq!(a, outfit("fighter").unwrap().roll(5, "human"));
     }
 }

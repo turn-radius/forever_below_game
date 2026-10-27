@@ -430,7 +430,7 @@ fn orbit_and_zoom(
 /// The doorway's ceiling in the level style, for the masonry over it.
 fn ceiling_of(level: LevelStyle) -> f32 {
     match level {
-        LevelStyle::RoughRock => 28.0,
+        LevelStyle::RoughRock | LevelStyle::CrystalCavern => 28.0,
         LevelStyle::StoneHalls => 34.0,
     }
 }

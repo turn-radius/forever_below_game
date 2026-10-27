@@ -908,7 +908,7 @@ fn muzzle(face: &Face, row: &crate::folk::MuzzleRow, tr: &crate::parts::Traits, 
         p.mouth.append(&tube(&line, 6, &SweepOptions::default(), |_| 0.03 * hh));
     }
     if tr.ring.is_some() {
-        p.ring.append(&ring([tip[0], tip[1] - 0.1 * hh, tip[2] + 0.2 * hd], vec3::Z, vec3::neg(vec3::Y), 0.42 * hh, 0.06 * hh));
+        p.ring.append(&ring([tip[0], tip[1] - 0.1 * hh, tip[2] + 0.2 * hd], vec3::X, vec3::neg(vec3::Y), 0.42 * hh, 0.06 * hh));
     }
 }
 

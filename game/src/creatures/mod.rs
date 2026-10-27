@@ -42,6 +42,7 @@ use crate::render::{ItemAppearance, ItemSpawner};
 use crate::tuning::Tuning;
 
 pub mod behaviour;
+pub mod scorch;
 pub mod skeletons;
 pub mod trolls;
 
@@ -460,6 +461,10 @@ fn spawn_creatures(
                     }
                 }
             }
+            // A troll is as burned as it was left.
+            if left.charred > 0.0 && spot.species.is_troll() {
+                commands.entity(root).insert(scorch::Scorch::restored(left.charred));
+            }
         }
     }
     let dev = dev_spots(&level.0);
@@ -788,7 +793,7 @@ pub fn spawn_creature_with(commands: &mut Commands, level: &Level, spot: &Creatu
         commands.entity(root).insert(Rattle::new(spot.seed));
     }
     if let Creature::Troll(troll) = &creature {
-        commands.entity(root).insert(trolls::Troll::new(troll));
+        commands.entity(root).insert((trolls::Troll::new(troll), scorch::Scorch::default()));
     }
     (root, bones)
 }

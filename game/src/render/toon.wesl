@@ -30,7 +30,7 @@ import bevy_pbr::render::{
     shadows,
 };
 import bevy_render::maths::PI;
-import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, DECAY_ROCK, DECAY_STRATA};
+import super::decay::{apply_decay, apply_lichen, RockShade, rock_shade, strata_shade, marble_shade, quartz_shade, limestone_shade, DECAY_ROCK, DECAY_STRATA, DECAY_MARBLE, DECAY_QUARTZ, DECAY_LIMESTONE};
 import super::pattern::{Wrap, apply_pattern};
 import super::etch::{Etch, apply_etch};
 import super::screen::reference_pixel;
@@ -423,10 +423,16 @@ fn fragment(
     // is level stone, drawn in world space with no transform of its own, so item space is world
     // space and a change of the normal there is a change of the world normal.
 @if(!SKINNED) {
-    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA {
+    if toon.decay_type == DECAY_ROCK || toon.decay_type == DECAY_STRATA || toon.decay_type == DECAY_MARBLE || toon.decay_type == DECAY_QUARTZ || toon.decay_type == DECAY_LIMESTONE {
         var rock: RockShade;
         if toon.decay_type == DECAY_STRATA {
             rock = strata_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else if toon.decay_type == DECAY_LIMESTONE {
+            rock = limestone_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else if toon.decay_type == DECAY_MARBLE {
+            rock = marble_shade(item_position, item_normal, pixel, toon.decay_seed);
+        } else if toon.decay_type == DECAY_QUARTZ {
+            rock = quartz_shade(item_position, item_normal, pixel, toon.decay_seed);
         } else {
             rock = rock_shade(item_position, item_normal, pixel, toon.decay_seed);
         }
@@ -469,7 +475,27 @@ fn fragment(
     let light = toon_direct_light(toon, pbr_input) * openness + ambient * view_bindings::view.exposure;
     let lit = srgb_to_linear(tone * light);
     // Glow fades as the stone clouds over (`gemMat`).
-    let glow = srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0));
+    // A crystal's glow (`toon.glow` of 2 and over, the strength above 2) is light inside the stone:
+    // it gathers toward the rim, where the stone is thickest to the eye, in three steps so it
+    // bands like the rest, and is added after the fog so a far crystal still shows in the dark,
+    // fading out only as it nears the edge of what is drawn.
+    let is_crystal = toon.glow >= 1.5;
+    var crystal_glow = vec3<f32>(0.0);
+    if is_crystal {
+        let to_eye_c = view_bindings::view.world_position - pbr_input.world_position.xyz;
+        // The glow follows the crystal's own form: each facet has its own level from the way it
+        // faces (facets turned up to the sky hold more of the light inside, those turned down
+        // less), and the whole stone is deeper toward its base and fainter toward the tip, a
+        // smooth fall with height in the crystal's own space. Nothing of it is drawn in screen
+        // space or as a circle.
+        let facing = 0.55 + 0.45 * smoothstep(-0.6, 0.8, item_normal.y);
+        let base_ward = mix(0.55, 1.0, exp(-max(item_position.y, 0.0) / 30.0));
+        let far = 1.0 - smoothstep(180.0, 290.0, length(to_eye_c));
+        // Toward the point the stone is thinner and lit: a lighter, brighter tip.
+        let tip = 0.35 * smoothstep(8.0, 40.0, item_position.y);
+        crystal_glow = srgb_to_linear(mix(tone, vec3<f32>(1.0), tip)) * (toon.glow - 2.0) * 2.6 * facing * mix(base_ward, 1.0, 0.5) * far;
+    }
+    let glow = select(srgb_to_linear(tone) * toon.glow * (1.0 - 0.8 * clamp(toon.decay_amount, 0.0, 1.0)), vec3<f32>(0.0), is_crystal);
 
     var out: FragmentOutput;
     // See-through glass (alpha below 1) stops more light where it is seen edge on, as a
@@ -499,5 +525,6 @@ fn fragment(
         out.color = vec4<f32>(out.color.rgb * alpha, alpha);
     }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    out.color = vec4<f32>(out.color.rgb + crystal_glow, out.color.a);
     return out;
 }
