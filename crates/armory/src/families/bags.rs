@@ -5,7 +5,7 @@
 //! `buildBag()` and `forgeNoun()`).
 //!
 //! The roll departs from the prototype on purpose. The prototype rolls the front pocket,
-//! bedroll and patch for every style although only backpacks draw the first two and only
+//! lashing and patch for every style although only backpacks draw the first two and only
 //! sacks the patch; here they roll only where they show, and a sewn patch can go on any bag.
 //! Cloth bags can take any woven pattern and leather ones can be studded.
 //!
@@ -20,7 +20,6 @@ use crate::build::container::{ContainerSpace, Opening, stacked_volume};
 use crate::build::hafted::smoothstep;
 use crate::build::hoard::coin_scatter;
 use crate::build::parts::{Look, Parts};
-use crate::build::roll::{roll_straps, rolled_sheet};
 use crate::build::strap::{buckle, d_ring, strap, strap_along};
 use crate::cond::{Condition, ConditionLimits};
 use crate::etch::{EtchTarget, Etching, EtchingLimits};
@@ -77,7 +76,7 @@ pub struct Bag {
     pub shape: f32,
     pub fabric: Textile,
     /// The body's colour and pattern. Its second colour is the pattern's and also the
-    /// flap's, the bedroll's and the patch's, as in the prototype's `color2`.
+    /// flap's and the patch's, as in the prototype's `color2`.
     pub cloth: Fabric,
     /// Buckles, toggles and rings.
     pub fittings: MaterialKind,
@@ -85,8 +84,12 @@ pub struct Bag {
     pub coins: bool,
     /// A front pocket (backpacks).
     pub pocket: bool,
-    /// A rolled blanket strapped on top (backpacks). One of the pack's [`Accessory`]s.
-    pub bedroll: bool,
+    /// Straps under the flap that hold one large item, a bedroll or a tent, on top of the pack
+    /// (backpacks). One of the pack's [`Accessory`]s: the lashing is the attachment point, and
+    /// what is tied there is the delver's choice. Saved bags from before it was a lashing called
+    /// it `bedroll`.
+    #[serde(alias = "bedroll")]
+    pub lashing: bool,
     /// Bands down one side to hold a long weapon outside the pack's grid (backpacks). One of the
     /// pack's [`Accessory`]s.
     #[serde(default)]
@@ -114,7 +117,7 @@ impl Default for Bag {
             fittings: MaterialKind::Iron,
             coins: false,
             pocket: true,
-            bedroll: true,
+            lashing: true,
             weapon_strap: false,
             patch: false,
         }
@@ -126,8 +129,9 @@ impl Default for Bag {
 /// item's life. A belt's frogs, potion pouch and sack are the same kind of thing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Accessory {
-    /// A blanket rolled under the flap, which the delver can sleep on.
-    Bedroll,
+    /// Straps across the top, under the flap, that hold one large item outside the grid: a
+    /// bedroll or a tent.
+    Lashing,
     /// Bands that hold one long weapon alongside the pack.
     WeaponStrap,
     /// A belt's frog at the left hip, which holds one short weapon.
@@ -144,7 +148,7 @@ impl Accessory {
     /// What a card calls it.
     pub fn name(self) -> &'static str {
         match self {
-            Accessory::Bedroll => "Bedroll",
+            Accessory::Lashing => "Lashing",
             Accessory::WeaponStrap => "Weapon strap",
             Accessory::LeftFrog => "Left frog",
             Accessory::RightFrog => "Right frog",
@@ -158,8 +162,8 @@ impl Bag {
     /// The accessories it was rolled with, in a fixed order.
     pub fn accessories(&self) -> Vec<Accessory> {
         let mut found = Vec::new();
-        if self.bedroll {
-            found.push(Accessory::Bedroll);
+        if self.lashing {
+            found.push(Accessory::Lashing);
         }
         if self.weapon_strap {
             found.push(Accessory::WeaponStrap);
@@ -279,7 +283,7 @@ impl Generator for Bags {
             BagStyle::Purse => "Coin Purse",
             BagStyle::BeltPouch => "Belt Pouch",
             BagStyle::Satchel => "Satchel",
-            BagStyle::Backpack if b.bedroll => "Adventurer's Pack",
+            BagStyle::Backpack if b.lashing => "Adventurer's Pack",
             BagStyle::Backpack => "Rucksack",
             BagStyle::Sack if b.fabric == Textile::Burlap => "Grain Sack",
             BagStyle::Sack => "Sack",
@@ -349,7 +353,7 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     b.fittings = *rng.weighted(if style == Purse { &[(Brass, 2), (Gold, 2), (Silver, 1)][..] } else { &[(Iron, 3), (Brass, 3), (Gold, 1)] });
     b.coins = matches!(style, Pouch | Purse) && rng.chance(if style == Purse { 0.6 } else { 0.4 });
     b.pocket = style == Backpack && rng.chance(0.6);
-    b.bedroll = style == Backpack && rng.chance(0.6);
+    b.lashing = style == Backpack && rng.chance(0.6);
     b.patch = rng.chance(match (style, b.fabric) {
         (Sack, _) => 0.5,
         (_, Textile::Leather) => 0.1,
@@ -368,14 +372,11 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BagStyle) -> BagState {
     s
 }
 
-/// The bag's materials: the body in its patterned cloth, the flap, patch and bedroll plain in
+/// The bag's materials: the body in its patterned cloth, the flap and patch plain in
 /// the second colour, straps a darker cut of the same hide (or plain leather on a cloth bag).
 struct Looks {
     body: Look,
     flap: Look,
-    bedroll: Look,
-    /// The bedroll's spiralled ends, a shade darker.
-    bedroll_edge: Look,
     strap: Look,
 }
 
@@ -387,8 +388,6 @@ impl Looks {
         Looks {
             body: Look::cloth(&b.cloth).made_of(m),
             flap: Look::cloth(&second).made_of(m),
-            bedroll: Look::cloth(&second),
-            bedroll_edge: Look::cloth(&Fabric::plain(b.cloth.color2.scaled(0.7))),
             strap: Look::of(MaterialKind::Leather).tinted(strap),
         }
     }
@@ -911,8 +910,8 @@ fn build_flapped(b: &Bag, f: &Flapped, looks: &Looks, parts: &mut Parts) {
                 straps.append(&s);
                 fittings.append(&bk);
             }
-            if b.bedroll {
-                add_bedroll(f, &body, looks, strap_t, &mut straps, &mut fittings, parts);
+            if b.lashing {
+                add_lashing(f, &body, looks, strap_t, &mut fittings, parts);
             }
             if b.weapon_strap {
                 add_weapon_strap(f, &body, looks, strap_t, &mut fittings, parts);
@@ -969,18 +968,30 @@ fn add_weapon_strap(f: &Flapped, body: &BoxBody, looks: &Looks, strap_t: f32, fi
     parts.add_look("weapon_strap", straps, looks.strap);
 }
 
-/// A blanket rolled and strapped across the top of a pack, its spiral showing at each end.
-fn add_bedroll(f: &Flapped, body: &BoxBody, looks: &Looks, strap_t: f32, straps: &mut MeshBuilder, fittings: &mut MeshBuilder, parts: &mut Parts) {
+/// Two strap hoops standing on top of the pack, under the flap, buckled at the front: where
+/// a bedroll or a tent is tied. The hoops are modest when empty
+/// ([`LASHING_RADIUS`]); a bundle tied there (`fb_body::fit_lashed`) sits in them. Nothing but the
+/// straps is drawn here; the bundle is the item tied on.
+fn add_lashing(f: &Flapped, body: &BoxBody, looks: &Looks, strap_t: f32, fittings: &mut MeshBuilder, parts: &mut Parts) {
     let sz = f.size;
-    let r = 0.5 * sz;
-    let len = f.width * 1.06;
+    let r = LASHING_RADIUS * sz;
     let centre = [0.0, body.height + 0.1 * sz + r * 0.9, 0.0];
-    let (roll, spirals) = rolled_sheet(centre, r, len, 0.018 * sz, 3.0);
-    parts.add_look("bedroll", roll, looks.bedroll);
-    parts.add_look("bedroll_edge", spirals, looks.bedroll_edge);
-
-    // Two straps round the roll, buckled at the front.
-    let (s, bk) = roll_straps(centre, r, &[-0.28 * f.width, 0.28 * f.width], 0.12 * sz, strap_t, 0.014 * sz);
-    straps.append(&s);
-    fittings.append(&bk);
+    let mut straps = MeshBuilder::new();
+    for x in [-0.28 * f.width, 0.28 * f.width] {
+        // A hoop round where the roll lies, its foot on the pack (the loop closes at the front, under the buckle).
+        let at = |u: f32| {
+            let a = TAU * u;
+            let n = [0.0, a.sin(), a.cos()];
+            (vec3::add(vec3::add(centre, [x, 0.0, 0.0]), vec3::scale(n, r * 0.98)), n)
+        };
+        straps.append(&strap_along(40, 0.12 * sz, strap_t, at));
+        let mut bk = buckle(0.12 * sz, 0.014 * sz);
+        bk.place_basis(vec3::add(centre, [x, 0.0, r * 0.98 + strap_t]), vec3::Y, vec3::Z);
+        fittings.append(&bk);
+    }
+    parts.add_look("lashing", straps, looks.strap);
 }
+
+/// How far the lashing's hoops stand from their centre, in pack units at size 1: under the girth of
+/// a packed bedroll.
+pub const LASHING_RADIUS: f32 = 0.7;

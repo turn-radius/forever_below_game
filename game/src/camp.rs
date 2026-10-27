@@ -47,7 +47,6 @@ use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles,
 use crate::player::Locomotion;
 use crate::rules::GameRules;
 use crate::ui::{BG, BRIGHT, MUTED, UiFonts};
-use bevy::window::{CursorOptions, PrimaryWindow};
 
 pub struct CampPlugin;
 
@@ -66,7 +65,6 @@ impl Plugin for CampPlugin {
                 (
                     debug_lie_down.run_if(|| std::env::var_os("FB_LIE_DOWN").is_some()),
                     go_to_sleep.run_if(level_has_focus),
-                    sleep_on_pack.run_if(inventory_open).run_if(crate::barter::not_bartering),
                     resume_in_bed.run_if(resource_exists::<PendingBed>),
                     wake_up,
                     spawn_veil,
@@ -368,9 +366,13 @@ pub fn lay_out(
         check_passage(&canvas, level, blocked_cells, obstacles, body_radius).map_err(CampRefusal::reason)?;
     }
     let line = set_down_line(&set);
-    // Out of its pack and into its new form in one step, or not at all.
+    // Out of its pack (or off its lashing) and into its new form in one step, or not at all.
+    let lashed = inventory.location(id) == Some(crate::inventory::Location::Worn(fb_items::Slot::Lash));
     if !inventory.set_form_out(id, set) {
         return Err("That cannot be set down.");
+    }
+    if lashed {
+        inventory.lashed_out = Some(id);
     }
     changes.0.push(FloorChange::SetDownAt(id, site.centre / CELL, site.yaw));
     Ok(line)
@@ -422,9 +424,8 @@ pub struct Asleep(pub Option<Sleeping>);
 pub struct Sleeping {
     /// What they sleep in, which sets how well they sleep.
     pub camp: Camp,
-    /// The set camp's entity: if it goes, they wake. None when they sleep on the bedroll their
-    /// worn pack was rolled with ([`sleep_on_pack`]), which cannot go.
-    pub bed: Option<Entity>,
+    /// The set camp's entity: if it goes, they wake.
+    pub bed: Entity,
     /// Their hit points as last seen; any fewer wakes them.
     pub hit_points: i32,
     /// The game hour they lay down.
@@ -536,106 +537,29 @@ fn go_to_sleep(
         toast.say(reason, now);
         return;
     }
-    begin_sleep(&mut inventory, &mut locomotion);
-    asleep.0 = Some(Sleeping { camp: camp.camp, bed: Some(bed), hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
-    toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
-    // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
-    // goes on; it says so, or that it could not, over the line above.
-    commands.queue(crate::save::save_in_camp(Some(bed)));
-}
-
-/// What the pack's bedroll is laid on: the level ahead of the delver, checked as a bedroll set
-/// down there would be ([`check_site`]).
-#[derive(SystemParam)]
-struct Ground<'w, 's> {
-    level: Option<Res<'w, CurrentLevel>>,
-    blocked_cells: Option<Res<'w, BlockedCells>>,
-    obstacles: Option<Res<'w, Obstacles>>,
-    camps: Query<'w, 's, &'static SetCamp>,
-    eyes: Query<'w, 's, &'static GlobalTransform, With<PlayerCamera>>,
-}
-
-impl Ground<'_, '_> {
-    /// Why the delver may not lie down where they stand, if so: the bedroll's own footprint, as a
-    /// laid-out one has, ahead of the feet. Nothing is checked with no level (a test).
-    fn refuses(&self, feet: Vec2, pack: &fb_items::Item) -> Option<&'static str> {
-        let (level, blocked, obstacles) = (self.level.as_ref()?, self.blocked_cells.as_ref()?, self.obstacles.as_ref()?);
-        let bedroll = fb_items::roll_item("Bedroll", pack.seed).and_then(|b| fb_items::camp::set_up(&b))?;
-        let (half, _) = footprint(&bedroll)?;
-        let forward = self.eyes.iter().next().map_or(Vec2::NEG_Y, facing);
-        let site = site_ahead(feet, forward, half, gap_for(Camp::Bedroll));
-        let sites: Vec<Site> = self.camps.iter().map(|c| c.site).collect();
-        check_site(&site, &level.0, blocked, &obstacles.0, &sites).err().map(CampRefusal::reason)
-    }
-}
-
-/// F in the inventory on the worn pack rolled with a bedroll ("Sleep"): lies down on it where the
-/// delver stands, without setting anything down or carrying a bedroll of its own. The screen
-/// closes, lights are put out and the delve is saved as it is for any camp
-/// ([`begin_sleep`]); [`cannot_sleep`] says if they cannot.
-#[allow(clippy::too_many_arguments)]
-fn sleep_on_pack(
-    input: ActionInput,
-    hovered: Res<Hovered>,
-    rules: Res<GameRules>,
-    clock: Res<GameClock>,
-    watchers: Watchers,
-    mut asleep: ResMut<Asleep>,
-    mut screen: ResMut<ScreenOpen>,
-    mut inventory: ResMut<Inventory>,
-    mut toast: ResMut<Toast>,
-    mut players: Query<(&Transform, &DelverNeeds, &mut Locomotion, Option<&Health>), With<Player>>,
-    mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
-    ground: Ground,
-    time: Option<Res<Time<Real>>>,
-    mut commands: Commands,
-) {
-    if asleep.0.is_some() || !input.just_pressed(Action::Primary) {
-        return;
-    }
-    let Some((id, _)) = hovered.0 else { return };
-    let Some(target) = interact::item_target(&inventory, id) else { return };
-    if interact::verbs_for(&target, &interact::Delver::default()).get(Slot::Primary) != Some(Verb::Sleep) {
-        return;
-    }
-    let Ok((body, needs, mut locomotion, health)) = players.single_mut() else { return };
-    let now = time.map_or(0.0, |t| t.elapsed_secs());
-    let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
-    if let Some(reason) = cannot_sleep(&rules, &needs.0, watched) {
-        toast.say(reason, now);
-        return;
-    }
-    // Not across a doorway, a stair, rock or a prop, as a laid-out bedroll would not be.
-    if let Some(reason) = inventory.item(id).and_then(|pack| ground.refuses(body.translation.xz(), pack)) {
-        toast.say(reason, now);
-        return;
-    }
-    begin_sleep(&mut inventory, &mut locomotion);
-    asleep.0 = Some(Sleeping { camp: Camp::Bedroll, bed: None, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
-    // The screen closes behind them and the mouse goes back to the level.
-    crate::play::show_screen(&mut screen, None, cursor.as_deref_mut().map(|c| &mut **c));
-    toast.say("You lie down on the bedroll from your pack", now);
-    commands.queue(crate::save::save_in_camp(None));
-}
-
-/// What lying down does to the delver: any light they carry is put out (a night would burn it
-/// down), and they stop moving.
-fn begin_sleep(inventory: &mut Inventory, locomotion: &mut Locomotion) {
-    let lit: Vec<ItemId> = crate::carry::carried_lights(inventory).into_iter().map(|(_, id)| id).collect();
+    // Any light they carry is put out; the inventory is only touched if one burns.
+    let lit: Vec<ItemId> = crate::carry::carried_lights(&inventory).into_iter().map(|(_, id)| id).collect();
     for id in lit {
         if inventory.item(id).is_some_and(|item| item.shape.lit() == Some(true)) {
             let _ = inventory.toggle_light(id);
         }
     }
     locomotion.velocity = Vec2::ZERO;
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
+    // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
+    // goes on; it says so, or that it could not, over the line above.
+    commands.queue(crate::save::save_in_camp(bed));
 }
 
 /// Where the delver of a delve resumed lies down, until the level has laid its camp out: the spot
-/// of the set camp they saved in, or none when they slept on their pack's bedroll.
+/// of the set camp they saved in.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct PendingBed {
-    pub spot: Option<fb_level::ItemSpot>,
+    pub spot: fb_level::ItemSpot,
     /// Frames spent looking for the camp.
+    /// Whether it was laid out from the pack's lashing ([`Inventory::lashed_out`]).
+    pub lashed: bool,
     pub waited: u32,
 }
 
@@ -649,6 +573,7 @@ fn resume_in_bed(
     mut commands: Commands,
     pending: Option<ResMut<PendingBed>>,
     beds: Query<(Entity, &FloorItem, &SetCamp)>,
+    mut inventory: ResMut<Inventory>,
     clock: Res<GameClock>,
     mut asleep: ResMut<Asleep>,
     mut toast: ResMut<Toast>,
@@ -657,25 +582,22 @@ fn resume_in_bed(
 ) {
     let Some(mut pending) = pending else { return };
     let now = time.map_or(0.0, |t| t.elapsed_secs());
-    // On the pack's bedroll there is no camp to wait for.
-    let found = match pending.spot {
-        Some(spot) => {
-            let Some((bed, _, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == spot) else {
-                pending.waited += 1;
-                if pending.waited >= BED_PATIENCE {
-                    commands.remove_resource::<PendingBed>();
-                    toast.say("Your camp is gone.", now);
-                }
-                return;
-            };
-            (camp.camp, Some(bed))
+    let Some((bed, floor, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == pending.spot) else {
+        pending.waited += 1;
+        if pending.waited >= BED_PATIENCE {
+            commands.remove_resource::<PendingBed>();
+            toast.say("Your camp is gone.", now);
         }
-        None => (Camp::Bedroll, None),
+        return;
     };
     commands.remove_resource::<PendingBed>();
+    // A camp that was laid out from the lashing goes back on it when packed up.
+    if pending.lashed {
+        inventory.lashed_out = Some(floor.id);
+    }
     let Ok((mut locomotion, health)) = players.single_mut() else { return };
     locomotion.velocity = Vec2::ZERO;
-    asleep.0 = Some(Sleeping { camp: found.0, bed: found.1, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
 }
 
 /// For captures (`FB_LIE_DOWN`): a while after a camp is laid out (`FB_LAY_OUT`), tires the delver
@@ -717,7 +639,6 @@ fn wake_up(
     clock: Res<GameClock>,
     watchers: Watchers,
     beds: Query<(), With<SetCamp>>,
-    inventory: Res<Inventory>,
     mut asleep: ResMut<Asleep>,
     mut toast: ResMut<Toast>,
     players: Query<(&Transform, &DelverNeeds, Option<&Health>), With<Player>>,
@@ -734,11 +655,7 @@ fn wake_up(
     let keyed = now - sleep.began > KEY_GRACE && (screen.0.is_some() || pressed);
     let hit_points = health.map_or(sleep.hit_points, |h| h.hp);
     let reason = reason_to_wake(&rules, &needs.0, hit_points, sleep.hit_points, watched)
-        .or_else(|| sleep.bed.filter(|&bed| !beds.contains(bed)).map(|_| "Your bed is gone, and you wake."))
-        .or_else(|| {
-            let on_pack = inventory.worn(fb_items::Slot::Back).and_then(|id| inventory.item(id)).is_some_and(|pack| pack.has_accessory(fb_items::Accessory::Bedroll));
-            (sleep.bed.is_none() && !on_pack).then_some("Your bedroll is gone, and you wake.")
-        })
+        .or_else(|| (!beds.contains(sleep.bed)).then_some("Your bed is gone, and you wake."))
         .or_else(|| keyed.then_some("You wake."));
     let Some(reason) = reason else {
         // Healed in their sleep: the next blow is measured from here.
@@ -849,11 +766,16 @@ pub fn pack(inventory: &mut Inventory, changes: &mut FloorChanges, id: ItemId) -
     if !inventory.replace_form(id, packed) {
         return Err("That cannot be packed.");
     }
-    if inventory.stow(id).is_err() {
+    // It goes back on the lashing it came off, if the pack still has one free, else into a bag.
+    let relash = inventory.lashed_out == Some(id) && inventory.lashed().is_none() && inventory.wear(id, fb_items::Slot::Lash).is_ok();
+    if relash {
+        inventory.lashed_out = None;
+    } else if inventory.stow(id).is_err() {
         // Nowhere to put it: it is still lying loose, and goes back as it was.
         inventory.replace_form(id, before);
         return Err(PACK_FULL);
     }
+    inventory.lashed_out = inventory.lashed_out.filter(|&out| out != id);
     changes.0.push(FloorChange::Lifted(id));
     Ok(line)
 }
@@ -1053,6 +975,60 @@ mod tests {
         let [FloorChange::SetDownAt(id, at, _)] = changes.0.as_slice() else { panic!("{:?}", changes.0) };
         assert_eq!(*id, bedroll);
         assert!(at.y * CELL < feet.y, "ahead is north: {at}");
+    }
+
+    #[test]
+    fn a_lashed_bedroll_is_laid_out_from_the_lash_and_packed_back_to_it() {
+        use crate::inventory::Location;
+        let level = room();
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let bedroll = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
+        inventory.wear(bedroll, fb_items::Slot::Lash).unwrap();
+        // It is offered to be laid out where it hangs.
+        let target = interact::item_target(&inventory, bedroll).unwrap();
+        assert_eq!(interact::verbs_for(&target, &interact::Delver::default()).primary, Some(Verb::LayOut));
+        let mut changes = FloorChanges::default();
+        let line = lay_out(&mut inventory, &mut changes, bedroll, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
+        assert!(line.starts_with("You lay out the"), "{line}");
+        assert_eq!((inventory.location(bedroll), inventory.lashed()), (Some(Location::Loose), None));
+        assert!(inventory.item(bedroll).unwrap().is_set_camp());
+        // Packed up again, it goes back on the lashing, not into the grid.
+        pack_up_test(&mut inventory, bedroll);
+        assert_eq!((inventory.lashed(), inventory.contents_count(pack)), (Some(bedroll), 0));
+        assert!(!inventory.item(bedroll).unwrap().is_set_camp());
+        // One that came from a bag goes back to a bag, even with the lashing free.
+        inventory.take_out(bedroll);
+        inventory.stow(bedroll).unwrap();
+        lay_out(&mut inventory, &mut changes, bedroll, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
+        pack_up_test(&mut inventory, bedroll);
+        assert_eq!((inventory.lashed(), inventory.contents_count(pack)), (None, 1));
+    }
+
+    fn pack_up_test(inventory: &mut Inventory, id: ItemId) {
+        let mut changes = FloorChanges::default();
+        pack(inventory, &mut changes, id).unwrap();
+    }
+
+    #[test]
+    fn a_lashed_tent_is_pitched_from_the_lash() {
+        let level = room();
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+        inventory.wear(tent, fb_items::Slot::Lash).unwrap();
+        let target = interact::item_target(&inventory, tent).unwrap();
+        assert_eq!(interact::verbs_for(&target, &interact::Delver::default()).primary, Some(Verb::Pitch));
+        let mut changes = FloorChanges::default();
+        let line = lay_out(&mut inventory, &mut changes, tent, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
+        assert!(line.starts_with("You pitch the"), "{line}");
+        assert_eq!(inventory.lashed(), None);
+        pack_up_test(&mut inventory, tent);
+        assert_eq!(inventory.lashed(), Some(tent));
     }
 
     #[test]
@@ -1257,66 +1233,9 @@ mod tests {
         let (mut app, delver, bed) = sleeper("Tent");
         press(&mut app, KeyCode::KeyF);
         let sleep = app.world().resource::<Asleep>().0.expect("asleep");
-        assert_eq!((sleep.camp, sleep.bed, sleep.hit_points), (Camp::Tent, Some(bed), 10));
+        assert_eq!((sleep.camp, sleep.bed, sleep.hit_points), (Camp::Tent, bed, 10));
         assert_eq!(app.world().get::<Locomotion>(delver).unwrap().velocity, Vec2::ZERO);
         assert!(app.world().resource::<Toast>().text.starts_with("You lie down in the tent"));
-    }
-
-    /// A tired delver wearing a pack that has a bedroll (or not), the pack hovered in the open inventory.
-    fn pack_sleeper(bedroll: bool) -> (App, Entity) {
-        use crate::inventory::Hovered;
-        use crate::keymap::Keymap;
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Keymap>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<Inventory>()
-            .init_resource::<Toast>()
-            .init_resource::<GameClock>()
-            .init_resource::<GameRules>()
-            .init_resource::<Asleep>()
-            .insert_resource(ScreenOpen(Some(crate::play::Screen::Inventory)))
-            .add_systems(Update, (sleep_on_pack, wake_up).chain());
-        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Bedroll) == bedroll).unwrap();
-        let id = {
-            let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let id = inventory.add(pack);
-            inventory.wear(id, fb_items::Slot::Back).unwrap();
-            id
-        };
-        app.insert_resource(Hovered(Some((id, Rect::default()))));
-        let mut tired = DelverNeeds::default();
-        tired.0.sleepiness.value = 0.8;
-        let delver = app.world_mut().spawn((Player, Transform::default(), tired, Locomotion { velocity: Vec2::new(4.0, 0.0), ..default() }, Health::full(10))).id();
-        (app, delver)
-    }
-
-    #[test]
-    fn f_on_a_worn_pack_with_a_bedroll_sleeps_on_it_with_no_bedroll_of_its_own() {
-        let (mut app, delver) = pack_sleeper(true);
-        assert!(app.world().resource::<Inventory>().ids().count() == 1, "no separate bedroll is carried");
-        press(&mut app, KeyCode::KeyF);
-        let sleep = app.world().resource::<Asleep>().0.expect("asleep");
-        assert_eq!((sleep.camp, sleep.bed), (Camp::Bedroll, None));
-        assert_eq!(app.world().get::<Locomotion>(delver).unwrap().velocity, Vec2::ZERO);
-        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "the screen closes");
-        // It wakes as any sleeper does: rested.
-        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.0;
-        app.update();
-        assert_eq!(app.world().resource::<Asleep>().0, None);
-        assert!(app.world().resource::<Toast>().text.starts_with("You wake rested."));
-    }
-
-    #[test]
-    fn a_pack_with_no_bedroll_is_not_slept_on_and_a_rested_delver_cannot() {
-        let (mut app, _) = pack_sleeper(false);
-        press(&mut app, KeyCode::KeyF);
-        assert_eq!(app.world().resource::<Asleep>().0, None);
-        let (mut app, delver) = pack_sleeper(true);
-        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.05;
-        press(&mut app, KeyCode::KeyF);
-        assert_eq!(app.world().resource::<Asleep>().0, None);
-        assert_eq!(app.world().resource::<Toast>().text, "You are not tired enough to sleep.");
     }
 
     #[test]

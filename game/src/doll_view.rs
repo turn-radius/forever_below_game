@@ -131,7 +131,10 @@ impl DollChoice {
                     for pair in text.split(',') {
                         let (slot, base) = pair.split_once('=').ok_or(format!("--wear: {pair:?} is not slot=Base"))?;
                         serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")).map_err(|_| format!("--wear: unknown slot {slot:?}"))?;
-                        fb_items::roll_item(base, 1).ok_or(format!("--wear: unknown item {base:?}"))?;
+                        // `lash=empty` asks for a pack with a lashing and ties nothing on it.
+                        if base != "empty" {
+                            fb_items::roll_item(base, 1).ok_or(format!("--wear: unknown item {base:?}"))?;
+                        }
                     }
                     choice.wear = Some(Box::leak(text.into_boxed_str()));
                 }

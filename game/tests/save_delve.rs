@@ -448,7 +448,7 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     }
     let sleep = app.world().resource::<Asleep>().0.expect("lying in their camp");
     assert_eq!(sleep.camp, fb_items::camp::Camp::Tent);
-    assert!(app.world().get::<SetCamp>(sleep.bed.unwrap()).is_some());
+    assert!(app.world().get::<SetCamp>(sleep.bed).is_some());
     assert!(app.world().get_resource::<forever_below::camp::PendingBed>().is_none());
     let now = standing(&mut app);
     assert_eq!(now.floor.len(), lying.floor.len(), "the floor holds as many things");

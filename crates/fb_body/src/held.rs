@@ -909,6 +909,65 @@ pub fn fit_frogged(item: &Item, belt: &ItemMesh, left: bool) -> Option<FrogFit> 
     Some(FrogFit { item: item.clone(), mesh: drawn, placement })
 }
 
+// ── Tied to a pack's lashing ──
+
+/// How far past the lashing's hoops (a share of their radius) the tied bundle's girth reaches: the hoops sit snug round a thin roll and a stout one rides above them. Our own.
+const LASH_FILL: f32 = 1.4;
+/// The longest a bundle may be, as a share of the pack's width. Our own.
+const LASH_REACH: f32 = 1.7;
+
+/// A bedroll or tent tied to a worn pack's lashing ([`fit_lashed`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LashFit {
+    pub item: Item,
+    /// The bundle in body space.
+    pub mesh: ItemMesh,
+    pub placement: Placement,
+}
+
+/// Ties `item` (a bedroll or tent in its packed form, as the Armory draws it) in `pack`'s
+/// lashing, the worn pack's mesh in body space ([`crate::fit_worn`]): its long axis across the pack
+/// through the hoops of the "lashing" part, scaled until its girth fills them (a bedroll is near its own
+/// size, a tent bundle a little smaller) and its length keeps within [`LASH_REACH`] of the pack's width. `None` for a pack with no
+/// lashing, or an item with no mesh. Our own fit.
+pub fn fit_lashed(item: &Item, pack: &ItemMesh) -> Option<LashFit> {
+    let straps: Vec<V3> = pack.parts.iter().filter(|p| p.name == "lashing").flat_map(|p| p.positions.iter().copied()).collect();
+    if straps.is_empty() {
+        return None;
+    }
+    let bounds = |points: &[V3]| {
+        points.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])]))
+    };
+    let (slo, shi) = bounds(&straps);
+    // The hoops stand open in YZ: their middle and their radius.
+    let hoop = [(slo[0] + shi[0]) * 0.5, (slo[1] + shi[1]) * 0.5, (slo[2] + shi[2]) * 0.5];
+    let radius = ((shi[1] - slo[1]).min(shi[2] - slo[2])) * 0.5;
+    let (plo, phi) = pack.bounds()?;
+    let width = phi[0] - plo[0];
+
+    let mut drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    // Its long axis to item +X, across the pack.
+    let across = if ext[1] > ext[0] && ext[1] >= ext[2] {
+        Placement::new([0.0; 3], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    } else if ext[2] > ext[0] {
+        Placement::new([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])
+    } else {
+        Placement::IDENTITY
+    };
+    across.apply_to_item(&mut drawn);
+    let (lo, hi) = drawn.bounds()?;
+    let girth = ((hi[1] - lo[1]).max(hi[2] - lo[2]) * 0.5).max(1e-3);
+    let scale = (radius * LASH_FILL / girth).min(width * LASH_REACH / (hi[0] - lo[0]).max(1e-3));
+    scale_mesh(&mut drawn, scale);
+    let (lo, hi) = drawn.bounds()?;
+    let middle = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+    let placement = Placement { rotation: Mat3::IDENTITY, origin: vec3::sub(hoop, middle) };
+    placement.apply_to_item(&mut drawn);
+    Some(LashFit { item: item.clone(), mesh: drawn, placement })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1001,6 +1060,34 @@ mod tests {
             // No strap, no place for it.
             let bare = crate::fit_worn(&body, &[(Slot::Back, plain.clone())]);
             assert!(fit_strapped(&roll(Family::Spear, 5), &bare.layer(Slot::Back).unwrap().mesh).is_none(), "{folk:?}");
+        }
+    }
+
+    #[test]
+    fn a_bedroll_or_tent_is_tied_in_the_packs_lashing_and_fills_it() {
+        use armory::families::bags::{BagStyle, Bags};
+        use fb_items::Slot;
+        let pack = |lashing: bool| {
+            let mut state = Bags::roll_as(4, BagStyle::Backpack);
+            state.bag.lashing = lashing;
+            Item::Bags(state)
+        };
+        for folk in Folk::fitted() {
+            let body = body(folk);
+            let worn = crate::fit_worn(&body, &[(Slot::Back, pack(true))]);
+            let mesh = &worn.layer(Slot::Back).unwrap().mesh;
+            let (plo, phi) = mesh.bounds().unwrap();
+            for (name, item) in [("bedroll", fb_items::roll_item("Bedroll", 5).unwrap().shape), ("tent", fb_items::roll_item("Tent", 5).unwrap().shape)] {
+                let lashed = fit_lashed(&item, mesh).unwrap_or_else(|| panic!("{folk:?} {name}"));
+                let (lo, hi) = lashed.mesh.bounds().unwrap();
+                // Across the pack, inside the hoops' height, above the pack's body and no wider than the pack plus a little.
+                assert!(hi[0] - lo[0] >= hi[1] - lo[1] && hi[0] - lo[0] >= hi[2] - lo[2], "{folk:?} {name}: not across the pack {lo:?}..{hi:?}");
+                assert!(lo[1] > plo[1] + (phi[1] - plo[1]) * 0.4, "{folk:?} {name}: hangs down the pack");
+                assert!(hi[0] - lo[0] < (phi[0] - plo[0]) * 1.8, "{folk:?} {name}: much wider than the pack");
+            }
+            // No lashing, no place for it.
+            let bare = crate::fit_worn(&body, &[(Slot::Back, pack(false))]);
+            assert!(fit_lashed(&fb_items::roll_item("Bedroll", 5).unwrap().shape, &bare.layer(Slot::Back).unwrap().mesh).is_none(), "{folk:?}");
         }
     }
 

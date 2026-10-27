@@ -384,16 +384,16 @@ pub fn hold_spec(spec: &str) -> (Option<Option<String>>, Option<Option<String>>)
 fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
     let (base, holder) = if base == "Chamberstick" { ("Candle", true) } else { (base, false) };
     let rolled = |s: u32| fb_items::roll_item(base, s);
-    // `FB_PACK=strap|bedroll|both|plain` picks a pack with those accessories, for captures.
+    // `FB_PACK=strap|lashing|both|plain` picks a pack with those accessories, for captures.
     if base == "Pack"
         && let Ok(want) = std::env::var("FB_PACK")
     {
         let has = |i: &fb_items::Item, a| i.has_accessory(a);
-        let (strap, bedroll) = (fb_items::Accessory::WeaponStrap, fb_items::Accessory::Bedroll);
+        let (strap, lashing) = (fb_items::Accessory::WeaponStrap, fb_items::Accessory::Lashing);
         let found = (0..2000).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| match want.as_str() {
-            "strap" => has(i, strap) && !has(i, bedroll),
-            "bedroll" => has(i, bedroll) && !has(i, strap),
-            "both" => has(i, strap) && has(i, bedroll),
+            "strap" => has(i, strap) && !has(i, lashing),
+            "lashing" => has(i, lashing) && !has(i, strap),
+            "both" => has(i, strap) && has(i, lashing),
             _ => i.accessories().is_empty(),
         });
         if found.is_some() {

@@ -355,11 +355,7 @@ pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
         Location::In { .. } if inventory.is_carried(id) => Place::Carried,
         Location::In { .. } | Location::Loose => Place::Ground,
     };
-    let mut uses = use_of(item).filter(|&verb| verb != Verb::Refill || inventory.lantern_wants_oil());
-    // A worn pack rolled with a bedroll is slept on where the delver stands (`crate::camp`).
-    if uses.is_none() && place == Place::Worn && item.has_accessory(fb_items::Accessory::Bedroll) {
-        uses = Some(Verb::Sleep);
-    }
+    let uses = use_of(item).filter(|&verb| verb != Verb::Refill || inventory.lantern_wants_oil());
     let hangs = inventory.location(id) != Some(Location::Worn(fb_items::Slot::Hip)) && inventory.check_wear(id, fb_items::Slot::Hip).is_ok();
     Some(Target::Item { place, uses, equippable: !item.slots().is_empty(), hangs })
 }

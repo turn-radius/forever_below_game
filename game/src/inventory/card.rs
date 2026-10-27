@@ -225,8 +225,8 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
             }
             _ => format!("Empty \u{b7} {inside}"),
         };
-        // What the pack was rolled with: "with a bedroll, a weapon strap".
-        let accessories: Vec<String> = item.accessories().iter().map(|a| a.name().to_lowercase()).collect();
+        // What the pack was rolled with: "with a lashing, a weapon strap".
+        let accessories: Vec<String> = item.accessories().iter().map(|a| format!("a {}", a.name().to_lowercase())).collect();
         if accessories.is_empty() { line } else { format!("{line} \u{b7} with {}", accessories.join(", ")) }
     });
     CardText {
@@ -1017,6 +1017,10 @@ mod tests {
         // What the pack was rolled with is named after.
         let accessories = inventory.item(pack).unwrap().accessories();
         assert_eq!(empty.contains("with "), !accessories.is_empty(), "{empty}");
+        // Named as what the pack has: "with a lashing, a weapon strap".
+        let both = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing) && p.has_accessory(fb_items::Accessory::WeaponStrap)).unwrap();
+        let line = card_text(&both, None).contents.unwrap();
+        assert!(line.ends_with("with a lashing, a weapon strap"), "{line}");
         let bread = inventory.add(bread);
         inventory.put(bread, pack, super::super::grid::Placement::new(0, 0, false)).unwrap();
         let contents = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();

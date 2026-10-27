@@ -47,6 +47,8 @@ pub enum Refusal {
     NoFrog,
     /// A potion place with no belt worn that has a potion pouch.
     NoPouch,
+    /// The lash slot with no pack worn that has a lashing.
+    NoLashing,
     /// A potion from a stack, with every place of the pouch taken.
     PouchFull,
     /// A quickslot has nothing to do with it.
@@ -77,6 +79,7 @@ impl Refusal {
             Refusal::NoStrap => "It needs a pack with a weapon strap.",
             Refusal::NoFrog => "It needs a belt with a frog at that hip.",
             Refusal::NoPouch => "It needs a belt with a potion pouch.",
+            Refusal::NoLashing => "It needs a pack with a lashing.",
             Refusal::PouchFull => "The potion pouch is full.",
             Refusal::NotUsable => "A quickslot cannot use that.",
             Refusal::NotCarried => "Pick it up first.",
@@ -148,6 +151,9 @@ pub struct Inventory {
     /// arrow in a few stack places): still loose and kept, set down underfoot by
     /// [`crate::belongings::set_down_spill`].
     pub spill: Vec<ItemId>,
+    /// The bedroll or tent last laid out from the pack's lashing, so packing it up ties it there
+    /// again ([`crate::camp::pack`]). Saved with the camp it lies in.
+    pub lashed_out: Option<ItemId>,
 }
 
 impl Inventory {
@@ -656,6 +662,7 @@ impl Inventory {
             } else {
                 Err(match slot {
                     Slot::Strap => Refusal::NoStrap,
+                    Slot::Lash => Refusal::NoLashing,
                     Slot::Frog1 | Slot::Frog2 => Refusal::NoFrog,
                     _ => Refusal::NoPouch,
                 })
@@ -724,6 +731,17 @@ impl Inventory {
             gone.push((id, went));
         }
         gone
+    }
+
+    /// Whether the pack worn on the back was rolled with a lashing
+    /// ([`fb_items::Accessory::Lashing`]).
+    pub fn has_lashing(&self) -> bool {
+        self.has_fitting(Slot::Lash)
+    }
+
+    /// The bedroll or tent tied to the worn pack's lashing.
+    pub fn lashed(&self) -> Option<ItemId> {
+        self.worn(Slot::Lash)
     }
 
     /// The weapon strapped to the worn pack.
@@ -1072,6 +1090,51 @@ mod tests {
     /// A pack rolled with (or without) a weapon strap.
     fn pack_strapped(strap: bool) -> Item {
         (1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap) == strap).expect("a pack of that kind")
+    }
+
+    /// A pack rolled with (or without) a lashing.
+    pub(crate) fn pack_lashed(lashing: bool) -> Item {
+        (1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing) == lashing).expect("a pack of that kind")
+    }
+
+    #[test]
+    fn a_lashing_holds_one_bedroll_or_tent_outside_the_grid_and_nothing_else() {
+        let mut inventory = Inventory::default();
+        let bedroll = inventory.add(rolled("Bedroll", 3));
+        let tent = inventory.add(rolled("Tent", 3));
+        let sword = inventory.add(rolled("Sword", 3));
+        assert_eq!(inventory.check_wear(bedroll, Slot::Lash), Err(Refusal::NoLashing), "no pack");
+        let bare = inventory.add(pack_lashed(false));
+        inventory.wear(bare, Slot::Back).unwrap();
+        assert_eq!(inventory.check_wear(bedroll, Slot::Lash), Err(Refusal::NoLashing), "a pack with no lashing");
+        let pack = inventory.add(pack_lashed(true));
+        inventory.equip(pack, Slot::Back).unwrap();
+        assert_eq!(inventory.check_wear(sword, Slot::Lash), Err(Refusal::WrongSlot), "not a bundle");
+        assert_eq!(inventory.equip(bedroll, Slot::Lash), Ok(None));
+        assert_eq!(inventory.lashed(), Some(bedroll));
+        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's grid");
+        assert!(inventory.is_carried(bedroll));
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot != Slot::Lash), "it gives nothing, only weight");
+        // One only: another bundle swaps it out.
+        assert_eq!(inventory.equip(tent, Slot::Lash).map(|d| d.map(|(old, _)| old)), Ok(Some(bedroll)));
+        // A bundle laid out is no bundle.
+        let laid = fb_items::camp::set_up(&rolled("Bedroll", 4)).unwrap();
+        assert!(!laid.lashable());
+    }
+
+    #[test]
+    fn what_is_lashed_comes_off_with_its_pack() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(pack_lashed(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let tent = inventory.add(rolled("Tent", 3));
+        inventory.wear(tent, Slot::Lash).unwrap();
+        assert!(inventory.unfit().is_empty(), "the pack is still on");
+        let bare = inventory.add(pack_lashed(false));
+        inventory.equip(bare, Slot::Back).unwrap();
+        let off = inventory.unfit();
+        assert_eq!(off.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![tent]);
+        assert_eq!(inventory.lashed(), None);
     }
 
     #[test]

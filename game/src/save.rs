@@ -128,10 +128,12 @@ pub struct SavedDelve {
     /// What each recorded level was when it was recorded, so a game whose generators have changed
     /// since does not hang the record on the wrong things ([`SavedDelve::check_levels`]).
     pub signatures: Vec<LevelSignature>,
-    /// The camp they lay down in; none when they slept on their pack's bedroll, which has no
-    /// place in the level.
+    /// The camp they lay down in.
+    pub camp: fb_level::ItemSpot,
+    /// Whether that camp was laid out from the pack's lashing, so packing it up ties it there
+    /// again ([`Inventory::lashed_out`]).
     #[serde(default)]
-    pub camp: Option<fb_level::ItemSpot>,
+    pub lashed: bool,
 }
 
 /// What the delver wears and carries.
@@ -343,14 +345,11 @@ pub fn walk(inventory: &Inventory, id: Option<ItemId>, record: &ItemRecord, out:
 
 /// Everything about the delve that is not in the world record, from the live game; the world
 /// record is `record` (the current level just recorded). `bed` is the set camp they lie in.
-pub fn gather(world: &mut World, bed: Option<Entity>) -> Result<SavedDelve, SaveError> {
-    let camp = match bed {
-        Some(bed) => {
-            world.get::<SetCamp>(bed).ok_or(SaveError::Missing("set camp"))?;
-            Some(world.get::<FloorItem>(bed).map(|f| f.spot).ok_or(SaveError::Missing("camp on the floor"))?)
-        }
-        None => None,
-    };
+pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
+    world.get::<SetCamp>(bed).ok_or(SaveError::Missing("set camp"))?;
+    let floor = world.get::<FloorItem>(bed).ok_or(SaveError::Missing("camp on the floor"))?;
+    let (camp, bed_id) = (floor.spot, floor.id);
+    let lashed = world.resource::<Inventory>().lashed_out == Some(bed_id);
     // The current level is recorded as if just left. The record the game goes on with is the one
     // it had: leaving the level writes it again.
     let before = world.resource::<WorldRecord>().clone();
@@ -411,12 +410,13 @@ pub fn gather(world: &mut World, bed: Option<Entity>) -> Result<SavedDelve, Save
         explored,
         signatures,
         camp,
+        lashed,
     })
 }
 
 /// A command: saves the delve now that the delver has lain down in `bed`, if this delve may
 /// save, and says so in the toast (a failed write says that, and sleep goes on).
-pub fn save_in_camp(bed: Option<Entity>) -> impl FnOnce(&mut World) {
+pub fn save_in_camp(bed: Entity) -> impl FnOnce(&mut World) {
     move |world: &mut World| {
         if !may_touch(world.get_resource::<Saveable>()) {
             return;
@@ -607,7 +607,7 @@ pub fn restore_delve(world: &mut World) {
         }
     }
     world.insert_resource(SettleHitPoints(health));
-    world.insert_resource(PendingBed { spot: saved.camp, waited: 0 });
+    world.insert_resource(PendingBed { spot: saved.camp, lashed: saved.lashed, waited: 0 });
 }
 
 /// Puts the delver's hit points back once the fitting of their maximum to their Constitution has
@@ -706,7 +706,8 @@ pub(crate) fn sample_delve() -> SavedDelve {
         enchanting: EnchantingStock { essence: 4, materials: [("iron".to_string(), 2)].into() },
         signatures,
         explored: vec![SavedExplored { level_seed: 7, width: 8, height: 8, bits: to_hex(&[0xff, 0x00, 0x0f, 0, 0, 0, 0, 1]) }],
-        camp: Some(fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed }),
+        camp: fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed },
+        lashed: true,
     }
 }
 
@@ -776,6 +777,29 @@ mod tests {
         let kept: Vec<(Slot, String)> = back.fitted().into_iter().map(|(slot, id)| (slot, back.item(id).unwrap().base.clone())).collect();
         assert_eq!(kept, vec![(Slot::Frog1, "Sword".to_string()), (Slot::Frog2, "Mace".to_string()), (Slot::Potion3, "Vial".to_string())]);
         assert_eq!(back.item(back.worn(Slot::Belt).unwrap()).unwrap().accessories(), inventory.item(belt).unwrap().accessories());
+    }
+
+    #[test]
+    fn a_tent_tied_to_the_lashing_is_saved_and_tied_again_after_the_pack() {
+        use fb_items::Slot;
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, Slot::Back).unwrap();
+        let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+        inventory.wear(tent, Slot::Lash).unwrap();
+        // As `gather` saves it and `restore_delve` puts it back, worn items in the slots' order.
+        let saved: Vec<(Slot, ItemRecord)> = inventory.worn_ids().into_iter().map(|(slot, id)| (slot, record_item(&inventory, id).unwrap())).collect();
+        let text = serde_json::to_string(&saved).unwrap();
+        assert!(text.contains("\"lash\""), "{text}");
+        let saved: Vec<(Slot, ItemRecord)> = serde_json::from_str(&text).unwrap();
+        let mut back = Inventory::default();
+        for (slot, record) in &saved {
+            let id = crate::record::restore_item(&mut back, record).unwrap();
+            back.wear(id, current_slot(&back, id, *slot)).unwrap();
+        }
+        let tied = back.lashed().and_then(|id| back.item(id)).expect("tied again");
+        assert_eq!((tied.base.as_str(), tied.seed), ("Tent", 3));
     }
 
     #[test]

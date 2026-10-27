@@ -52,7 +52,7 @@ impl Default for BeltState {
             seed: 0,
             belt: Belt::default(),
             fittings: BeltFittings::default(),
-            pouch: Bag { style: BagStyle::BeltPouch, bedroll: false, pocket: false, ..Bag::default() },
+            pouch: Bag { style: BagStyle::BeltPouch, lashing: false, pocket: false, ..Bag::default() },
             etch: Etching::default(),
             cond: Condition::default(),
             palette: Palette::default(),

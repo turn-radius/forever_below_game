@@ -662,6 +662,27 @@ fn settling_folds_what_was_bought_into_the_stacks_carried() {
 }
 
 #[test]
+fn cancelling_a_deal_that_moved_a_lashed_pack_puts_pack_and_bundle_back() {
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(0));
+    // The tent has the lower id, so it is put back first unless the lashing waits for its pack.
+    let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+    let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+    let pack = inventory.add(pack);
+    let _ = inventory.equip(pack, fb_items::Slot::Back);
+    inventory.wear(tent, fb_items::Slot::Lash).unwrap();
+    let shelf = shelf_of(vec![], 6000);
+    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    for id in [tent, pack] {
+        session.note(&inventory, id);
+        inventory.shelve(id, session.shelf).unwrap();
+    }
+    assert_eq!(inventory.worn(Slot::Back), None);
+    end(&mut inventory, session);
+    assert_eq!((inventory.worn(Slot::Back), inventory.lashed()), (Some(pack), Some(tent)));
+}
+
+#[test]
 fn cancelling_a_deal_that_moved_a_strapped_pack_puts_pack_and_weapon_back() {
     let person = person(smith());
     let mut inventory = delver(Coins::from_copper(0));

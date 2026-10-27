@@ -158,6 +158,7 @@ impl Default for Character {
 fn fitting_place(slot: fb_items::Slot) -> &'static str {
     match slot {
         fb_items::Slot::Strap => "on the strap",
+        fb_items::Slot::Lash => "on the lashing",
         fb_items::Slot::Frog1 | fb_items::Slot::Frog2 => "in a frog",
         _ => "in the potion pouch",
     }
@@ -1163,6 +1164,24 @@ mod tests {
         assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
         assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));
         assert!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).iter().any(|l| l.contains("on the strap")));
+    }
+
+    #[test]
+    fn a_lashed_bundle_weighs_on_the_load_but_gives_nothing_else() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, Slot::Back).unwrap();
+        let before = delver.derive(&inventory);
+        let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+        let weight = inventory.item(tent).unwrap().profile.stats.weight;
+        inventory.wear(tent, Slot::Lash).unwrap();
+        let after = delver.derive(&inventory);
+        assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
+        assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));
+        assert!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).iter().any(|l| l.contains("on the lashing")));
     }
 
     #[test]

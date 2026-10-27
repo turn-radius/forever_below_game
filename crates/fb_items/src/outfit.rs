@@ -405,6 +405,26 @@ mod tests {
     use super::*;
     use crate::Rarity;
 
+    /// A pack's lashing and weapon strap are places, never contents: nothing rolled, worn by
+    /// folk or carried by a corpse comes tied to one.
+    #[test]
+    fn a_lashing_is_always_found_empty() {
+        let mut lashed_packs = 0;
+        for seed in 1..300 {
+            let pack = crate::roll_item("Pack", seed).unwrap();
+            lashed_packs += usize::from(pack.has_accessory(crate::Accessory::Lashing));
+            // A pack is a grid and a place; nothing is in its grid unless put there.
+            assert!(!pack.lashable(), "{seed}");
+            for outfit in outfits() {
+                for folk in ["human", "goblin"].into_iter().filter(|_| seed % 100 == 1) {
+                    let set = outfit.roll(seed, folk);
+                    assert!(set.worn.iter().all(|(slot, _)| !matches!(slot, Slot::Lash | Slot::Strap)), "{seed} {folk}");
+                }
+            }
+        }
+        assert!(lashed_packs > 0, "no pack rolled a lashing");
+    }
+
     #[test]
     fn the_first_levels_folk_wear_nothing_rare() {
         // 60 folk, the outfits taken in turn. The cap is what keeps rare gear off them; the

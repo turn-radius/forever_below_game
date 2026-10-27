@@ -181,6 +181,20 @@ impl Figure {
                 });
             }
         }
+        // A bedroll or tent tied in the pack's lashing, riding the trunk with the pack.
+        if let (Some((_, item)), Some(pack)) = (worn.iter().find(|(s, _)| *s == Slot::Lash), fit.layer(Slot::Back))
+            && let Some(tied) = fb_body::fit_lashed(&item.shape, &pack.mesh)
+        {
+            pieces.push(Piece {
+                name: item.title().to_string(),
+                appearance: appearance_of(&tied.item),
+                on_head: false,
+                lit: false,
+                skin: weights(&tied.mesh, &|_| SkinRegion::Trunk),
+                mesh: tied.mesh,
+                attach: None,
+            });
+        }
         let neck = Vec3::from_array(body.neck_base().origin);
         let rig = Rig::of_lifted(&body, fit.wing_lift);
         let gait = Gait::new(&body, &rig);

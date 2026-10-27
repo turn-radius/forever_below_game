@@ -25,6 +25,14 @@ fn state_round_trips_through_json() {
 }
 
 #[test]
+fn a_bag_saved_with_a_bedroll_loads_with_a_lashing() {
+    let s = (1..64).map(Bags::roll).find(|s| s.bag.lashing).expect("a lashing");
+    let old = serde_json::to_string(&s).unwrap().replace("\"lashing\"", "\"bedroll\"");
+    let back: BagState = serde_json::from_str(&old).unwrap();
+    assert_eq!(s, back);
+}
+
+#[test]
 fn roll_as_matches_roll() {
     for seed in [3, 42, 1207] {
         let s = Bags::roll(seed);
@@ -44,8 +52,8 @@ fn every_slider_within_range() {
 fn rolls_are_coherent() {
     for s in rolls(1..=1024) {
         let (b, seed) = (&s.bag, s.seed);
-        if b.pocket || b.bedroll || b.weapon_strap {
-            assert_eq!(b.style, BagStyle::Backpack, "seed {seed}: pocket or bedroll on a {:?}", b.style);
+        if b.pocket || b.lashing || b.weapon_strap {
+            assert_eq!(b.style, BagStyle::Backpack, "seed {seed}: pocket or lashing on a {:?}", b.style);
         }
         if b.coins {
             assert!(matches!(b.style, BagStyle::Pouch | BagStyle::Purse), "seed {seed}: coins spilled from a {:?}", b.style);
@@ -74,9 +82,9 @@ fn first_256_seeds_cover_the_variety() {
     assert!(any(&|s| s.bag.coins), "no coins");
     assert!(any(&|s| s.bag.pocket), "no pocket");
     assert!(any(&|s| s.bag.style == BagStyle::Backpack && !s.bag.pocket), "always a pocket");
-    assert!(any(&|s| s.bag.bedroll), "no bedroll");
+    assert!(any(&|s| s.bag.lashing), "no lashing");
     assert!(any(&|s| s.bag.weapon_strap), "no weapon strap");
-    assert!(any(&|s| s.bag.bedroll && !s.bag.weapon_strap) && any(&|s| s.bag.weapon_strap && !s.bag.bedroll), "accessories roll apart");
+    assert!(any(&|s| s.bag.lashing && !s.bag.weapon_strap) && any(&|s| s.bag.weapon_strap && !s.bag.lashing), "accessories roll apart");
     assert!(any(&|s| s.bag.patch), "no patch");
     assert!(any(&|s| s.etch.on), "no tooling or embroidery");
     for name in ["Drawstring Pouch", "Coin Purse", "Belt Pouch", "Satchel", "Adventurer's Pack", "Rucksack", "Grain Sack", "Sack"] {
@@ -106,9 +114,9 @@ fn nouns() {
         assert_eq!(Bags::noun(&s), noun);
     }
     s.bag.style = BagStyle::Backpack;
-    s.bag.bedroll = true;
+    s.bag.lashing = true;
     assert_eq!(Bags::noun(&s), "Adventurer's Pack");
-    s.bag.bedroll = false;
+    s.bag.lashing = false;
     assert_eq!(Bags::noun(&s), "Rucksack");
     s.bag.style = BagStyle::Sack;
     s.bag.fabric = Textile::Burlap;

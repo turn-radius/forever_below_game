@@ -349,7 +349,7 @@ impl Item {
         self.slots().contains(&slot)
     }
 
-    /// What a bag or belt was rolled with, in a fixed order: a pack's bedroll and weapon strap, or a
+    /// What a bag or belt was rolled with, in a fixed order: a pack's lashing and weapon strap, or a
     /// belt's frogs, potion pouch and sack. Accessories are part of the Armory's roll, so they are
     /// never found loose or fitted by the delver. Empty for anything but a bag or a belt.
     pub fn accessories(&self) -> Vec<Accessory> {
@@ -363,6 +363,14 @@ impl Item {
     /// Whether it was rolled with `accessory`.
     pub fn has_accessory(&self, accessory: Accessory) -> bool {
         self.accessories().contains(&accessory)
+    }
+
+    /// Whether a pack's lashing holds it: a large camp bundle, which is a bedroll or a tent
+    /// ([`crate::camp::Camp`]) in its carried form. The kind decides, not the size: every other
+    /// camp good (a campfire kit, a tinderbox) is small enough for a grid, and a bedroll or tent
+    /// that is set down is no bundle. Add a camp bundle's kind to `Camp` and it is lashable.
+    pub fn lashable(&self) -> bool {
+        self.camp().is_some() && !self.is_set_camp()
     }
 
     /// Whether a weapon strap holds it: a weapon at least [`STRAP_CELLS`] cells long by its
@@ -391,6 +399,7 @@ impl Item {
     pub fn fits_fitting(&self, slot: Slot) -> bool {
         match slot {
             Slot::Strap => self.strappable(),
+            Slot::Lash => self.lashable(),
             Slot::Frog1 | Slot::Frog2 => self.frogable(),
             Slot::Potion1 | Slot::Potion2 | Slot::Potion3 => fits_potion_pouch(self),
             _ => false,
@@ -481,7 +490,7 @@ mod tests {
     #[test]
     fn packs_roll_with_their_accessories_and_nothing_else_does() {
         let packs: Vec<Item> = (1..80).filter_map(|s| roll_item("Pack", s)).collect();
-        assert!(packs.iter().any(|p| p.has_accessory(Accessory::Bedroll)), "a bedroll");
+        assert!(packs.iter().any(|p| p.has_accessory(Accessory::Lashing)), "a lashing");
         assert!(packs.iter().any(|p| p.has_accessory(Accessory::WeaponStrap)), "a weapon strap");
         assert!(packs.iter().any(|p| p.accessories().is_empty()), "a plain pack");
         // The same seed rolls the same accessories.
@@ -504,7 +513,7 @@ mod tests {
         let plain = belts.iter().find(|b| !b.has_accessory(Accessory::BeltSack) && b.profile.stats.grid_rows == 0.0).unwrap();
         let sacked = belts.iter().find(|b| b.has_accessory(Accessory::BeltSack) && b.profile.stats.grid_rows == 0.0).unwrap();
         assert_eq!(rows(sacked), rows(plain) + 1);
-        assert!((1..20).all(|s| roll_item("Pack", s).unwrap().accessories().iter().all(|a| matches!(a, Accessory::Bedroll | Accessory::WeaponStrap))));
+        assert!((1..20).all(|s| roll_item("Pack", s).unwrap().accessories().iter().all(|a| matches!(a, Accessory::Lashing | Accessory::WeaponStrap))));
     }
 
     #[test]
