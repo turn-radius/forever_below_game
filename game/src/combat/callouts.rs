@@ -49,6 +49,22 @@ pub enum Outcome {
     /// It missed but grazed for `damage` ([`fb_character::combat::graze`]); a `fatal` one brought
     /// the target to 0.
     Graze { damage: u32, fatal: bool },
+    /// Something happened to the target that is not a blow: a troll's wounds knitting, a flame
+    /// catching, written as `words` in a `tone`.
+    Note { words: &'static str, tone: Tone },
+}
+
+/// How a [`Outcome::Note`] is coloured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    /// Quiet news: muted.
+    Quiet,
+    /// A flame: gold.
+    Fire,
+    /// A threat returning: cream.
+    Warning,
+    /// An end: red.
+    Final,
 }
 
 impl Outcome {
@@ -94,6 +110,15 @@ pub fn look(outcome: Outcome) -> Look {
         Outcome::Miss => Look { runs: vec![run("Miss", Face::Italic, 24.0, MUTED)], life: 0.9, pop: 1.0 },
         Outcome::Blocked => Look { runs: vec![run("Blocked", Face::Word, 26.0, STEEL)], life: 1.0, pop: 1.2 },
         Outcome::Graze { damage, fatal } => Look { runs: vec![run("Graze ", Face::Italic, 22.0, MUTED), run(&damage.to_string(), Face::Number, 26.0, if fatal { BAD } else { INK })], life: 1.0, pop: 1.1 },
+        Outcome::Note { words, tone } => {
+            let colour = match tone {
+                Tone::Quiet => MUTED,
+                Tone::Fire => FRAME_GOLD,
+                Tone::Warning => BRIGHT,
+                Tone::Final => BAD,
+            };
+            Look { runs: vec![run(words, Face::Italic, 26.0, colour)], life: 1.8, pop: 1.2 }
+        }
         Outcome::Hit { damage, critical, fatal } => {
             let number = |colour| run(&damage.to_string(), Face::Number, if critical { 42.0 } else { 32.0 }, if fatal { BAD } else { colour });
             if critical {
@@ -282,6 +307,7 @@ mod tests {
         assert_eq!(text(Outcome::Blocked), "Blocked");
         assert_eq!(text(Outcome::Graze { damage: 1, fatal: false }), "Graze 1");
         assert_eq!(text(Outcome::Hit { damage: 5, critical: false, fatal: false }), "Hit 5");
+        assert_eq!(text(Outcome::Note { words: "It burns", tone: Tone::Fire }), "It burns");
         assert_eq!(text(Outcome::Hit { damage: 14, critical: true, fatal: false }), "Critical 14");
     }
 
