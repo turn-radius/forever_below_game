@@ -124,6 +124,10 @@ impl Covered {
     }
 }
 
+/// How far below the hips, as a share of the trunk's length, what hangs in a belt's frogs counts toward
+/// what a cloak drapes over. Our own.
+const FROG_ENVELOPE_DEPTH: f32 = 0.7;
+
 /// Everything worn, fitted to one body.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WornFit {
@@ -219,6 +223,22 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             }
             fit.covered.tail |= body.folk() == Folk::Pigfolk && matches!(slot, Slot::Legs | Slot::Shirt | Slot::Body | Slot::Cloak);
             env.absorb(slot, matches!(item, Item::Hood(_)), &mesh);
+            // What hangs in the belt's frogs is part of what a cloak drapes over, as a pack is.
+            if slot == Slot::Belt {
+                for (frog, left) in [(Slot::Frog1, true), (Slot::Frog2, false)] {
+                    if let Some((_, hung)) = worn.iter().find(|(s, _)| *s == frog)
+                        && let Some(fitted) = crate::held::fit_frogged(hung, &mesh, left)
+                    {
+                        // Down to the upper thigh: a long weapon's lower end would balloon the cloak's hem
+                        // out for no more than the cloak's own fall.
+                        let cut = body.hip_y - FROG_ENVELOPE_DEPTH * body.trunk_length;
+                        for &p in fitted.mesh.parts.iter().flat_map(|part| part.positions.iter()).filter(|p| p[1] >= cut) {
+                            let q = env.torso(p);
+                            env.outline.add(q);
+                        }
+                    }
+                }
+            }
             fit.layers.push(WornLayer { slot, mesh });
         }
     }
@@ -1723,6 +1743,54 @@ mod tests {
                 assert!(worst > -0.02 * body.scale, "{folk:?} satchel in the arm by {worst}");
                 assert!(pts.iter().all(|p| p[0] > 0.0), "{folk:?} satchel on the wrong side of the body");
             }
+        }
+    }
+
+    /// A cloak drapes over a sword and a mace hung in a belt's frogs: where the cloak covers them,
+    /// nothing of either stands out through it, and the cloak's hem does not balloon for them.
+    #[test]
+    fn a_cloak_drapes_over_what_hangs_in_the_frogs() {
+        use crate::held::fit_frogged;
+        for folk in [Folk::Human, Folk::Gnome, Folk::Goblin, Folk::Dwarf] {
+            let body = folk_body(folk);
+            let belt = (0..4000).map(|s| Item::roll(Family::Belt, s).unwrap()).find(|b| matches!(b, Item::Belt(s) if s.fittings.frogs == 2)).unwrap();
+            let sword = Item::roll(Family::Sword, 5).unwrap();
+            let mace = Item::roll(Family::Mace, 5).unwrap();
+            let base = vec![(Slot::Belt, belt), (Slot::Cloak, Item::Garment(Garment::roll_as(2, GarmentStyle::Cloak)))];
+            let mut kit = base.clone();
+            kit.extend([(Slot::Frog1, sword.clone()), (Slot::Frog2, mace.clone())]);
+            let (bare, hung) = (fit_worn(&body, &base), fit_worn(&body, &kit));
+            let cloak_of = |fit: &WornFit| -> Vec<V3> { fit.layer(Slot::Cloak).unwrap().mesh.parts.iter().flat_map(|p| p.positions.iter().copied()).collect() };
+            let (plain, draped) = (cloak_of(&bare), cloak_of(&hung));
+            let belt_mesh = &hung.layer(Slot::Belt).unwrap().mesh;
+            let polar = |p: &V3| (p[2].atan2(p[0]), p[0].hypot(p[2]));
+            let mut worst = f32::MIN;
+            for (weapon, left) in [(&sword, true), (&mace, false)] {
+                let fitted = fit_frogged(weapon, belt_mesh, left).unwrap();
+                for p in fitted.mesh.parts.iter().flat_map(|part| part.positions.iter()) {
+                    let (phi, r) = polar(p);
+                    // The cloak's outermost reach about that direction and height, and where its hem is
+                    // there: a weapon's tip below or at the hem hangs out under it.
+                    let about = |c: &&V3| ((polar(c).0 - phi + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs() < 0.2;
+                    let hem = draped.iter().filter(about).map(|c| c[1]).fold(f32::MAX, f32::min);
+                    if p[1] < hem + 0.5 * body.scale {
+                        continue;
+                    }
+                    let reach = draped.iter().filter(about).filter(|c| (c[1] - p[1]).abs() < 0.35 * body.scale).map(|c| polar(c).1).fold(f32::MIN, f32::max);
+                    if reach > f32::MIN {
+                        worst = worst.max(r - reach);
+                    }
+                }
+            }
+            assert!(worst < 0.1 * body.scale, "{folk:?}: a weapon stands {worst} outside the cloak");
+            // The hem: the cloak's widest reach over its lowest tenth, against the same cloak with nothing hung.
+            let hem = |c: &[V3]| {
+                let low = c.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+                let high = c.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+                c.iter().filter(|p| p[1] < low + 0.1 * (high - low)).map(|p| polar(p).1).fold(0.0f32, f32::max)
+            };
+            let flare = hem(&draped) - hem(&plain);
+            assert!(flare < 0.5 * body.scale, "{folk:?}: the hem flares {flare} for the weapons");
         }
     }
 

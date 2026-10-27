@@ -771,7 +771,9 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
 pub fn equip(inventory: &mut Inventory, id: ItemId, slot: Slot) -> Result<Vec<FloorChange>, Refusal> {
     let lying = inventory.location(id) == Some(Location::Loose);
     let displaced = inventory.equip(id, slot)?;
-    let mut changes: Vec<FloorChange> = lying.then_some(FloorChange::Lifted(id)).into_iter().collect();
+    // A stack of potions left on the floor with a piece in the pouch is still lying there.
+    let lifted = lying && inventory.location(id) != Some(Location::Loose);
+    let mut changes: Vec<FloorChange> = lifted.then_some(FloorChange::Lifted(id)).into_iter().collect();
     if let Some((old, Displaced::Underfoot)) = displaced {
         changes.push(FloorChange::SetDown(old, 0.0));
     }

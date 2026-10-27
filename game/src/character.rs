@@ -1128,6 +1128,26 @@ mod tests {
     }
 
     #[test]
+    fn a_frogged_weapon_and_a_pouch_potion_weigh_on_the_load() {
+        use fb_items::{Accessory, Slot};
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::LeftFrog) && b.has_accessory(Accessory::PotionPouch)).unwrap();
+        let belt = inventory.add(belt);
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let before = delver.derive(&inventory);
+        let (mace, vial) = (inventory.add(fb_items::roll_item("Mace", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
+        inventory.wear(mace, Slot::Frog1).unwrap();
+        inventory.wear(vial, Slot::Potion1).unwrap();
+        let after = delver.derive(&inventory);
+        let weight = inventory.item(mace).unwrap().profile.stats.weight + inventory.item(vial).unwrap().profile.stats.weight;
+        assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "load {} to {} for {weight}", before.load, after.load);
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert!(lines.iter().any(|l| l.contains("in a frog")) && lines.iter().any(|l| l.contains("potion pouch")), "{lines:?}");
+        assert_eq!(after.armour_class, before.armour_class);
+    }
+
+    #[test]
     fn a_strapped_weapon_weighs_on_the_load_but_gives_nothing_else() {
         use fb_items::Slot;
         let delver = Character::roll(4);

@@ -830,6 +830,13 @@ const FROG_LEAN: f32 = 0.3;
 const FROG_SLEEVE: f32 = 0.28;
 /// The least a hanging weapon's tip stands off the floor, in body units. Our own.
 const FROG_FLOOR: f32 = 0.1;
+/// How much of the height from the floor to the sleeve a hanging weapon's lower part may take. Our own.
+const FROG_REACH: f32 = 0.9;
+/// The least a weapon is drawn at in a frog, as a share of its size. Our own.
+const FROG_MIN_SCALE: f32 = 0.7;
+/// How far the weapon's lower end tucks in toward the leg, as a share of its length: so a cloak
+/// over the hips takes it in without standing out at the knee. Our own.
+const FROG_TUCK: f32 = 0.12;
 /// How far the weapon stands out from the sleeve's middle, clear of the arm hanging beside it. Our own.
 const FROG_OUT: f32 = 0.15;
 
@@ -858,7 +865,15 @@ pub fn fit_frogged(item: &Item, belt: &ItemMesh, left: bool) -> Option<FrogFit> 
     let ring: Vec<&V3> = frog.iter().filter(|p| p[1] < low + 0.12).collect();
     let sleeve = vec3::scale(ring.iter().fold([0.0; 3], |a, p| vec3::add(a, **p)), 1.0 / ring.len() as f32);
 
-    let drawn = item.build();
+    let mut drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    // On a short body a full-length weapon would trail on the floor: it is drawn smaller, down to
+    // [`FROG_MIN_SCALE`], so that it hangs from the sleeve with its tip a little off the floor.
+    let below = (hi[1] - lo[1]) * (1.0 - FROG_SLEEVE);
+    let k = (FROG_REACH * sleeve[1] / below.max(1e-3)).clamp(FROG_MIN_SCALE, 1.0);
+    if k < 1.0 {
+        scale_mesh(&mut drawn, k);
+    }
     let (lo, hi) = drawn.bounds()?;
     let length = hi[1] - lo[1];
     let centre = [(lo[0] + hi[0]) * 0.5, 0.0, (lo[2] + hi[2]) * 0.5];
@@ -869,7 +884,7 @@ pub fn fit_frogged(item: &Item, belt: &ItemMesh, left: bool) -> Option<FrogFit> 
     let pivot_y = if blade { lo[1] + length * FROG_SLEEVE } else { hi[1] - length * FROG_SLEEVE };
     let pivot = [centre[0], pivot_y, centre[2]];
     let hung = |lean: f32| {
-        let down = vec3::normalize_or([sign * 0.05, -1.0, -lean], vec3::neg(vec3::Y));
+        let down = vec3::normalize_or([-sign * FROG_TUCK, -1.0, -lean], vec3::neg(vec3::Y));
         let axis = if blade { down } else { vec3::neg(down) };
         let rotation = frame_yz(axis, [sign, 0.0, 0.0], [0.0, 0.0, 1.0]);
         let mut mesh = drawn.clone();

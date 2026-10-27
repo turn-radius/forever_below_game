@@ -349,10 +349,9 @@ impl Item {
         self.slots().contains(&slot)
     }
 
-    /// What a bag or belt was rolled with: a pack's bedroll and weapon strap, or a belt's frogs,
-    /// potion pouch and sack, in a fixed order. Accessories
-    /// are part of the Armory's roll, so they are never found loose or fitted by the delver. Empty
-    /// for anything but a bag.
+    /// What a bag or belt was rolled with, in a fixed order: a pack's bedroll and weapon strap, or a
+    /// belt's frogs, potion pouch and sack. Accessories are part of the Armory's roll, so they are
+    /// never found loose or fitted by the delver. Empty for anything but a bag or a belt.
     pub fn accessories(&self) -> Vec<Accessory> {
         match &self.shape {
             armory::Item::Bags(s) => s.bag.accessories(),
@@ -387,13 +386,13 @@ impl Item {
     }
 
     /// Whether it goes in fitting slot `slot` ([`Slot::FITTINGS`]), whatever is worn: a long
-    /// weapon on the strap, a short one in a frog, a small potion in the pouch. A single piece
-    /// only, since a fitting holds one thing.
+    /// weapon on the strap, a short one in a frog, a small potion in the pouch. A stack of potions
+    /// fits too: the inventory takes one piece off it ([`Inventory::equip`]).
     pub fn fits_fitting(&self, slot: Slot) -> bool {
         match slot {
             Slot::Strap => self.strappable(),
             Slot::Frog1 | Slot::Frog2 => self.frogable(),
-            Slot::Potion1 | Slot::Potion2 | Slot::Potion3 => self.quantity <= 1 && fits_potion_pouch(self),
+            Slot::Potion1 | Slot::Potion2 | Slot::Potion3 => fits_potion_pouch(self),
             _ => false,
         }
     }
@@ -523,7 +522,7 @@ mod tests {
         assert!(vial.fits_fitting(Slot::Potion2) && !vial.fits_fitting(Slot::Frog1) && !vial.fits_fitting(Slot::Strap));
         let mut stack = vial;
         stack.quantity = 2;
-        assert!(!stack.fits_fitting(Slot::Potion1), "one piece to a place");
+        assert!(stack.fits_fitting(Slot::Potion1), "a stack gives one piece to a place");
     }
 
     #[test]

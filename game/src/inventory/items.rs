@@ -47,6 +47,8 @@ pub enum Refusal {
     NoFrog,
     /// A potion place with no belt worn that has a potion pouch.
     NoPouch,
+    /// A potion from a stack, with every place of the pouch taken.
+    PouchFull,
     /// A quickslot has nothing to do with it.
     NotUsable,
     /// Not carried: a quickslot only takes what the delver has with them.
@@ -75,6 +77,7 @@ impl Refusal {
             Refusal::NoStrap => "It needs a pack with a weapon strap.",
             Refusal::NoFrog => "It needs a belt with a frog at that hip.",
             Refusal::NoPouch => "It needs a belt with a potion pouch.",
+            Refusal::PouchFull => "The potion pouch is full.",
             Refusal::NotUsable => "A quickslot cannot use that.",
             Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
@@ -704,7 +707,7 @@ impl Inventory {
     /// With the pack or belt that carried them gone (or swapped for one without that fitting), what
     /// sat in its fittings comes off: into the first carried bag with room ([`Inventory::stow`]),
     /// or else loose, to be set down underfoot (a long weapon often cannot be packed). Returns
-    /// each and where it went.
+    /// each item that came off with where it went.
     pub fn unfit(&mut self) -> Vec<(ItemId, Displaced)> {
         let mut gone = vec![];
         for slot in Slot::FITTINGS {
@@ -783,6 +786,15 @@ impl Inventory {
     /// underfoot (the plate's `commitDrop`). Returns the displaced item and where it went.
     pub fn equip(&mut self, id: ItemId, slot: Slot) -> Result<Option<(ItemId, Displaced)>, Refusal> {
         self.check_wear(id, slot)?;
+        // A stack of potions gives the pouch one piece, in the place dropped on or else the next free
+        // one, and keeps the rest where it was; with every place taken it is refused.
+        if matches!(slot, Slot::Potion1 | Slot::Potion2 | Slot::Potion3) && self.item(id).is_some_and(|i| i.quantity > 1) {
+            let places = [slot, Slot::Potion1, Slot::Potion2, Slot::Potion3];
+            let free = places.into_iter().find(|&s| self.worn(s).is_none()).ok_or(Refusal::PouchFull)?;
+            let one = self.take_one(id).ok_or(Refusal::Unknown)?;
+            self.wear(one, free)?;
+            return Ok(None);
+        }
         let slot = self.ring_slot(id, slot);
         let from = self.location(id);
         let Some(old) = self.worn(slot).filter(|&old| old != id) else {
@@ -1447,5 +1459,29 @@ mod tests {
         inventory.pick_up(sack).unwrap();
         assert_eq!((inventory.worn(Slot::Back), inventory.worn(Slot::Satchel)), (Some(pack), Some(satchel)));
         assert!(!matches!(inventory.location(sack), Some(Location::Worn(_))));
+    }
+
+    #[test]
+    fn a_stack_of_potions_gives_the_pouch_one_piece_at_a_time() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(belt_with(|b| b.has_accessory(PotionPouch)));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let mut vials = rolled("Vial", 3);
+        vials.quantity = 3;
+        let stack = inventory.add(vials);
+        let count = |inventory: &Inventory| inventory.ids().filter_map(|id| inventory.item(id)).filter(|i| i.base == "Vial").map(|i| i.quantity).sum::<u32>();
+        assert_eq!(inventory.equip(stack, Slot::Potion2), Ok(None));
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.fitted().len(), count(&inventory)), (2, 1, 3), "one piece went in, none lost");
+        inventory.equip(stack, Slot::Potion2).unwrap();
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.fitted().len()), (1, 2));
+        // The last piece goes in whole, to the free place.
+        inventory.equip(stack, Slot::Potion2).unwrap();
+        assert_eq!((inventory.worn(Slot::Potion3), inventory.fitted().len(), count(&inventory)), (Some(stack), 3, 3));
+        let mut more = rolled("Vial", 4);
+        more.quantity = 2;
+        let more = inventory.add(more);
+        assert_eq!(inventory.equip(more, Slot::Potion1), Err(Refusal::PouchFull));
+        assert_eq!((inventory.item(more).unwrap().quantity, count(&inventory)), (2, 5), "a full pouch refuses and loses nothing");
     }
 }
