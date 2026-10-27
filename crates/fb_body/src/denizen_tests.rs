@@ -43,7 +43,7 @@ fn height_and_hooves_check(seeds: std::ops::Range<u32>) {
     for seed in seeds {
         let body = minotaur(seed);
         let k = body.height / human;
-        assert!((1.3..1.6).contains(&k), "seed {seed}: {k} times a human");
+        assert!((1.25..1.5).contains(&k), "seed {seed}: {k} times a human");
         let skin = body.skin_mesh();
         assert!(min_y(&skin, "hooves").abs() < 0.05, "seed {seed}: hooves at {}", min_y(&skin, "hooves"));
         for part in body.mesh().parts.iter() {
@@ -55,13 +55,13 @@ fn height_and_hooves_check(seeds: std::ops::Range<u32>) {
 }
 
 #[test]
-fn a_minotaur_is_half_again_a_mans_height_with_hooves_on_the_floor_smoke() {
+fn a_minotaur_is_a_third_again_a_mans_height_with_hooves_on_the_floor_smoke() {
     height_and_hooves_check(0..4);
 }
 
 #[test]
 #[ignore = "slow sweep: twenty seeds; run before merging fitting changes"]
-fn a_minotaur_is_half_again_a_mans_height_with_hooves_on_the_floor() {
+fn a_minotaur_is_a_third_again_a_mans_height_with_hooves_on_the_floor() {
     height_and_hooves_check(0..20);
 }
 
