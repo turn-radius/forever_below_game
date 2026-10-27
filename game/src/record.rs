@@ -288,6 +288,9 @@ pub struct CreatureRecord {
     pub scale: f32,
     /// Fallen: this is its body.
     pub dead: bool,
+    /// How charred a troll's skin is, 0 to 1 (`crate::creatures::scorch`); 0 for the rest.
+    #[serde(default)]
+    pub charred: f32,
 }
 
 impl CreatureRecord {
@@ -429,7 +432,7 @@ pub fn record_level_left(
     mut record: ResMut<WorldRecord>,
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
-    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>)>,
+    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::creatures::scorch::Scorch>)>,
     folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>)>,
     doors: Option<Res<crate::doors::Doors>>,
 ) {
@@ -441,7 +444,7 @@ pub fn record_level_left(
     for (piece, container) in &containers {
         left.containers.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
     }
-    for (critter, transform, health, corpse) in &creatures {
+    for (critter, transform, health, corpse, scorch) in &creatures {
         let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
         let Some(health) = health else { continue };
@@ -454,6 +457,7 @@ pub fn record_level_left(
                 turn: stood.rotation.to_array(),
                 scale: stood.scale.x,
                 dead: corpse.is_some(),
+                charred: scorch.map_or(0.0, |s| s.level),
             },
         );
     }
@@ -798,7 +802,7 @@ mod tests {
             item: ItemRecord { coins: Some([1, 2, 3]), odds: fb_items::Odds::kit(4), ..record_of(&item) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
-        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false });
+        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false, charred: 0.0 });
         level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false });
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());
