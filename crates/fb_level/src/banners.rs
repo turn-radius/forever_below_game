@@ -120,11 +120,12 @@ pub(crate) fn place_banners(level: &Level) -> Vec<BannerSpot> {
             }
         }
         // More inside the hall and the market, on bare walls clear of the doors.
-        for (role, site) in [(RoomRole::Hall, BannerSite::Hall), (RoomRole::Market, BannerSite::Market)] {
-            let Some(r) = level.room_with_role(claim, role) else { continue };
+        for (is_hall, site) in [(true, BannerSite::Hall), (false, BannerSite::Market)] {
+            // The market, or the first workshop of a claim that keeps them.
+            let Some(r) = (if is_hall { level.room_with_role(claim, RoomRole::Hall) } else { level.trade_room(claim) }) else { continue };
             let room = level.rooms[r];
             let mut want = rng.int(1, 2);
-            if role == RoomRole::Market && level.roles_of(r).contains(&RoomRole::Hall) {
+            if !is_hall && level.roles_of(r).contains(&RoomRole::Hall) {
                 want = 1;
             }
             let mut cells: Vec<((i32, i32), (i32, i32))> = Vec::new();
@@ -143,7 +144,7 @@ pub(crate) fn place_banners(level: &Level) -> Vec<BannerSpot> {
             }
             shuffle(&mut cells, &mut rng);
             // In the hall, the wall facing the door first, so the banners are seen on coming in.
-            if let (RoomRole::Hall, Some(door)) = (role, door) {
+            if let (true, Some(door)) = (is_hall, door) {
                 let back = (door.inside.0 - door.outside.0, door.inside.1 - door.outside.1);
                 cells.sort_by_key(|&(_, wall)| wall != back);
             }

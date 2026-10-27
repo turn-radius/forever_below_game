@@ -209,6 +209,10 @@ pub struct TradeRules {
     pub second_master_odds: f64,
     /// Share of a camp with a trade or a guard post, about half.
     pub trade_share: f64,
+    /// Folk a camp needs to be large: it then works more of its folk, so many trades have a trader.
+    pub large_camp: usize,
+    /// Share of a large camp with a trade or a guard post.
+    pub large_camp_share: f64,
     /// Extra folk with trades in a camp of a trade-intention faction.
     pub trade_faction_extra: f64,
     /// Chance that a camp of at least four has a second guard.
@@ -227,6 +231,8 @@ impl TradeRules {
         master_odds: 0.6,
         second_master_odds: 0.3,
         trade_share: 0.5,
+        large_camp: 8,
+        large_camp_share: 0.65,
         trade_faction_extra: 1.0,
         second_guard_odds: 0.3,
         style_lean: 0.75,

@@ -1122,11 +1122,17 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
                 Ok("hall") => fb_level::RoomRole::Hall,
                 Ok("sleeping") => fb_level::RoomRole::Sleeping,
                 Ok("market") => fb_level::RoomRole::Market,
+                Ok("workshop") => fb_level::RoomRole::Market,
                 Ok("store") => fb_level::RoomRole::Store,
                 _ => fb_level::RoomRole::Hearth,
             };
             let by_index = std::env::var("FB_DEBUG_ROOM").ok().and_then(|v| v.parse::<usize>().ok());
-            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| level.roles_of(r).contains(&want))) else { return };
+            // `workshop` finds the first room of any trade's workshop.
+            let is_want = |r: usize| match std::env::var("FB_DEBUG_ROLE").as_deref() {
+                Ok("workshop") => level.roles_of(r).iter().any(|role| matches!(role, fb_level::RoomRole::Workshop(_))),
+                _ => level.roles_of(r).contains(&want),
+            };
+            let Some(index) = by_index.or_else(|| (0..level.rooms.len()).find(|&r| is_want(r))) else { return };
             let room = level.rooms[index];
             // At the room's middle, or for a sleeping room at the middle of its bedrolls.
             let beds: Vec<(f32, f32)> = level

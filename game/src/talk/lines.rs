@@ -405,14 +405,15 @@ pub fn place_of(level: &fb_level::Level, from: &fb_level::FolkSpot, other: &fb_l
     let room_of = |s: &fb_level::FolkSpot| level.room_at(s.x as i32, s.y as i32);
     let Some(there) = room_of(other) else { return "somewhere on our ground".to_string() };
     let roles = level.roles_of(there);
+    let sells = if roles.contains(&RoomRole::Market) { "in the market" } else { "in the workshop" };
     let named = [
-        (RoomRole::Market, "in the market"),
-        (RoomRole::Hearth, "by the hearth"),
-        (RoomRole::Sleeping, "where we sleep"),
-        (RoomRole::Store, "among the stores"),
-        (RoomRole::Hall, "here in the hall"),
+        (roles.iter().any(|r| r.is_trade_room()), sells),
+        (roles.contains(&RoomRole::Hearth), "by the hearth"),
+        (roles.contains(&RoomRole::Sleeping), "where we sleep"),
+        (roles.contains(&RoomRole::Store), "among the stores"),
+        (roles.contains(&RoomRole::Hall), "here in the hall"),
     ];
-    let Some(&(_, text)) = named.iter().find(|(r, _)| roles.contains(r)) else { return "somewhere on our ground".to_string() };
+    let Some(&(_, text)) = named.iter().find(|(has, _)| *has) else { return "somewhere on our ground".to_string() };
     let at_hall = room_of(from).is_some_and(|h| level.roles_of(h).contains(&RoomRole::Hall));
     if at_hall && !roles.contains(&RoomRole::Hall) { format!("{text}, past the hall") } else { text.to_string() }
 }

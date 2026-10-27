@@ -22,6 +22,8 @@ pub(crate) const CLAIM_SALT: u32 = 0xC1A1_4D07;
 const MEMBERS_PER_ROOM: usize = 3;
 /// Smallest room a claim starts from or a group gathers in.
 pub(crate) const MIN_ROOM_AREA: u32 = 9;
+/// Seeds the holder tries, keeping the claim that grows biggest.
+const HOLDER_SEED_TRIES: usize = 12;
 /// Smallest room a trading faction's claim starts from, if it holds but the one.
 const TRADER_SEED_AREA: u32 = 16;
 
@@ -56,7 +58,7 @@ impl ClaimRules {
     pub const DEFAULT: ClaimRules = ClaimRules {
         folk_shallow: (6, 10), folk_deep: (16, 24), levels_off: 12,
         share_shallow: 0.5,
-        share_deep: 2.0 / 3.0,
+        share_deep: 0.8,
         holder_from: 4,
         holder_share_from: 0.43,
         holder_share_deep: 2.0 / 3.0,
@@ -174,6 +176,8 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
         }
     }
     let holder = holder.map(|(k, _)| k);
+    // Denizens claim before the holder does (a denizen holder stays first of them), so a deep level keeps the faction that is why it is deep.
+    order.sort_by_key(|&k| !level.factions[k].is_denizen());
     let halls = level.style == crate::LevelStyle::StoneHalls;
     let hall = |r: usize| halls && is_colonnaded(level, &level.rooms[r]);
     let graph = RoomGraph::new(level);
@@ -194,35 +198,83 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
             trial.push(Claim { faction: level.factions[k].id, rooms: rooms.to_vec() });
             wild_whole(&trial)
         };
-        let Some(&seed) = seeds.iter().find(|&&r| !avoid.contains(&r) && level.rooms[r].area() >= min_seed && fits(&[r], &claims)) else { continue };
+        let valid: Vec<usize> = seeds.iter().copied().filter(|&r| !avoid.contains(&r) && level.rooms[r].area() >= min_seed && fits(&[r], &claims)).collect();
+        if valid.is_empty() {
+            continue;
+        }
         let extra = rng.int(0, 1) as usize;
         // One room stays back for each faction still to place.
         let spare = budget.saturating_sub(m - j - 1).max(1);
         let per_room = if holder == Some(k) { rules.holder_folk_per_room } else { MEMBERS_PER_ROOM };
         let want = (strength[k].div_ceil(per_room) + extra).clamp(1, spare);
         budget = budget.saturating_sub(want);
-        let mut rooms = vec![seed];
-        owner[seed] = Some(k);
-        while rooms.len() < want {
-            let mut frontier: Vec<usize> = rooms
-                .iter()
-                .flat_map(|&r| graph.links(r).iter().copied())
-                .filter(|&r| r != start_room && owner[r].is_none() && level.rooms[r].area() >= MIN_ROOM_AREA)
-                .collect();
-            frontier.sort_unstable();
-            frontier.dedup();
-            // A room whose loss would cut wild rooms off from the start, or from each other, stays wild.
-            frontier.retain(|&r| fits(&[rooms.as_slice(), &[r]].concat(), &claims));
-            if frontier.iter().any(|&r| hall(r)) {
-                frontier.retain(|&r| hall(r));
+        // Grows a claim from `seed` over the rooms `owner` leaves free.
+        let grow = |seed: usize, owner: &mut Vec<Option<usize>>, rng: &mut Mulberry32| -> Vec<usize> {
+            let mut rooms = vec![seed];
+            owner[seed] = Some(k);
+            while rooms.len() < want {
+                let mut frontier: Vec<usize> = rooms
+                    .iter()
+                    .flat_map(|&r| graph.links(r).iter().copied())
+                    .filter(|&r| r != start_room && owner[r].is_none() && level.rooms[r].area() >= MIN_ROOM_AREA)
+                    .collect();
+                frontier.sort_unstable();
+                frontier.dedup();
+                let candidates = frontier.clone();
+                // A room whose loss would cut wild rooms off from the start, or from each other, stays wild.
+                frontier.retain(|&r| fits(&[rooms.as_slice(), &[r]].concat(), &claims));
+                if frontier.iter().any(|&r| hall(r)) {
+                    frontier.retain(|&r| hall(r));
+                }
+                if frontier.is_empty() {
+                    // A room that would cut off a pocket of rooms takes the pocket with it, when the
+                    // claim has room for all: a run of halls is held whole rather than left behind.
+                    let mut runs: Vec<Vec<usize>> = Vec::new();
+                    for &r in &candidates {
+                        let grown = [rooms.as_slice(), &[r]].concat();
+                        let mut trial = claims.clone();
+                        trial.push(Claim { faction: level.factions[k].id, rooms: grown.clone() });
+                        let cut = cut_off_rooms(level, &graph, &trial);
+                        if cut.is_empty() || grown.len() + cut.len() > want {
+                            continue;
+                        }
+                        if cut.iter().any(|&c| c == start_room || owner[c].is_some() || level.rooms[c].area() < MIN_ROOM_AREA) {
+                            continue;
+                        }
+                        let whole = [grown.as_slice(), cut.as_slice()].concat();
+                        if fits(&whole, &claims) {
+                            runs.push([&[r], cut.as_slice()].concat());
+                        }
+                    }
+                    if runs.is_empty() {
+                        break;
+                    }
+                    let run = runs.swap_remove(rng.int(0, runs.len() as u32 - 1) as usize);
+                    for r in run {
+                        owner[r] = Some(k);
+                        rooms.push(r);
+                    }
+                    continue;
+                }
+                let next = frontier[rng.int(0, frontier.len() as u32 - 1) as usize];
+                owner[next] = Some(k);
+                rooms.push(next);
             }
-            if frontier.is_empty() {
-                break;
+            rooms
+        };
+        // The holder sets its claim where it can grow furthest: it tries a few seeds and keeps the biggest.
+        let tries = if holder == Some(k) { HOLDER_SEED_TRIES } else { 1 };
+        let mut best: Option<(Vec<usize>, Vec<Option<usize>>, Mulberry32)> = None;
+        for &seed in valid.iter().take(tries) {
+            let (mut o, mut r) = (owner.clone(), rng.clone());
+            let rooms = grow(seed, &mut o, &mut r);
+            if best.as_ref().is_none_or(|(b, _, _)| rooms.len() > b.len()) {
+                best = Some((rooms, o, r));
             }
-            let next = frontier[rng.int(0, frontier.len() as u32 - 1) as usize];
-            owner[next] = Some(k);
-            rooms.push(next);
         }
+        let (rooms, grown_owner, grown_rng) = best.expect("a valid seed");
+        owner = grown_owner;
+        *rng = grown_rng;
         claims.push(Claim { faction: level.factions[k].id, rooms });
         strengths.push(strength[k]);
     }
@@ -234,6 +286,14 @@ pub(crate) fn grow_claims(level: &Level, start_room: usize, avoid: &[usize], rng
 /// The stairs lie in that ground, so the way down is never behind a faction.
 pub(crate) fn wild_stays_whole(level: &Level, graph: &RoomGraph, claims: &[Claim]) -> bool {
     let held = held_cells_in(level, graph, claims);
+    let (_, reached) = wild_reach_from_start(level, &held);
+    let wild = (0..level.cells.len()).filter(|&i| level.cells[i].is_open() && !held[i]).count();
+    reached == wild
+}
+
+/// The wild ground (open cells not in `held`) the start reaches, as a flag per cell, and how
+/// many cells that is.
+fn wild_reach_from_start(level: &Level, held: &[bool]) -> (Vec<bool>, usize) {
     let index = |x: i32, y: i32| (y as u32 * level.width + x as u32) as usize;
     let (sx, sy, _) = level.start();
     let mut seen = vec![false; level.cells.len()];
@@ -251,8 +311,21 @@ pub(crate) fn wild_stays_whole(level: &Level, graph: &RoomGraph, claims: &[Claim
             }
         }
     }
-    let wild = (0..level.cells.len()).filter(|&i| level.cells[i].is_open() && !held[i]).count();
-    reached == wild
+    (seen, reached)
+}
+
+/// The rooms `claims` would leave as wild ground the start cannot reach: the pocket a claim
+/// would cut off.
+fn cut_off_rooms(level: &Level, graph: &RoomGraph, claims: &[Claim]) -> Vec<usize> {
+    let held = held_cells_in(level, graph, claims);
+    let (seen, _) = wild_reach_from_start(level, &held);
+    let mut rooms: Vec<usize> = (0..level.cells.len())
+        .filter(|&i| level.cells[i].is_open() && !held[i] && !seen[i])
+        .filter_map(|i| level.room_at((i as u32 % level.width) as i32, (i as u32 / level.width) as i32))
+        .collect();
+    rooms.sort_unstable();
+    rooms.dedup();
+    rooms
 }
 
 /// Whether open cell `(x, y)` is ground of a claim over `rooms`: a cell of one of its rooms, or
@@ -368,7 +441,7 @@ mod tests {
             last = now;
         }
         assert_eq!(rules.claim_share(1), 0.5);
-        assert!((rules.claim_share(12) - 2.0 / 3.0).abs() < 1e-9);
+        assert!((rules.claim_share(12) - 0.8).abs() < 1e-9);
         assert_eq!(rules.claim_share(30), rules.claim_share(12));
     }
 

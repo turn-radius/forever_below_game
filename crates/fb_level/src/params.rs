@@ -103,6 +103,11 @@ level_params! {
     }
 }
 
+/// The most rooms a level gains from depth ([`LevelParams::for_depth`]).
+pub const DEEPEST_EXTRA_ROOMS: u32 = 6;
+/// Cells a level's grid grows by, east to west and north to south, for each room it gains.
+const ROOM_GRID: (u32, u32) = (4, 3);
+
 impl LevelParams {
     /// The defaults of `style`: rough rock's are [`LevelParams::default`], the values the
     /// generator has always used; stone halls lay out wider, more regular rooms, more halls,
@@ -132,6 +137,20 @@ impl LevelParams {
                 ..Self::default()
             },
         }
+    }
+
+    /// The defaults of the level at `depth`: its style's, with more rooms in a bigger grid as the
+    /// delve goes deeper (two more rooms for every three levels past the first, up to
+    /// [`DEEPEST_EXTRA_ROOMS`]), so the settled factions below have halls to hold. The first two
+    /// levels are as their style's.
+    pub fn for_depth(depth: u32) -> Self {
+        let mut p = Self::for_style(LevelStyle::for_depth(depth));
+        let extra = (depth.max(1).saturating_sub(1) * 2 / 3).min(DEEPEST_EXTRA_ROOMS);
+        p.rooms_min += extra;
+        p.rooms_max += extra;
+        p.width += ROOM_GRID.0 * extra;
+        p.height += ROOM_GRID.1 * extra;
+        p
     }
 
     /// Every parameter as a slider [`Field`], in declaration order.
