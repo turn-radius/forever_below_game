@@ -203,3 +203,23 @@ fn potions_of_one_seed_and_size_differ_only_in_their_liquid() {
         }
     }
 }
+
+#[test]
+fn small_potions_roll_skinny_bottles_and_big_ones_round() {
+    use armory::families::food::PotionSize;
+    for seed in 1..=200 {
+        for size in PotionSize::ALL {
+            let s = Food::roll_potion(seed, size, Brew::Healing);
+            let (lo, hi) = Food::build(&s).bounds().unwrap();
+            let (width, height) = ((hi[0] - lo[0]).max(hi[2] - lo[2]), hi[1] - lo[1]);
+            let skinny = matches!(size, PotionSize::Vial | PotionSize::Small);
+            assert_eq!(s.provision.skinny(), skinny, "seed {seed} {size:?}");
+            // A skinny bottle is about twice as tall as wide; a round one clearly squatter.
+            if skinny {
+                assert!(height / width > 1.9, "seed {seed} {size:?}: {height} by {width}");
+            } else {
+                assert!(height / width < 1.9, "seed {seed} {size:?}: {height} by {width}");
+            }
+        }
+    }
+}

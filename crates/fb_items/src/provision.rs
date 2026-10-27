@@ -365,14 +365,24 @@ mod tests {
     }
 
     #[test]
-    fn a_potion_is_priced_by_its_brew_and_size_and_a_large_flask_is_two_cells_tall() {
+    fn a_potion_is_priced_by_its_brew_and_size_and_a_large_flask_is_one_cell() {
         let find = |base, brew| (0..400).map(|seed| roll_item(base, seed).unwrap()).find(|p| p.brew() == Some(brew)).unwrap();
         let plain = find("Large potion", Brew::Healing);
         let named = roll_item("Large healing draught", 3).unwrap();
         assert_eq!(plain.value_copper(), named.value_copper());
         assert_eq!(find("Large potion", Brew::Mana).value_copper(), named.value_copper());
         assert!(find("Large potion", Brew::Antidote).value_copper() < named.value_copper());
-        assert_eq!((named.profile.footprint.cols, named.profile.footprint.rows), (1, 2));
+        assert_eq!((named.profile.footprint.cols, named.profile.footprint.rows), (1, 1));
         assert_eq!(roll_item("Potion", 3).unwrap().profile.footprint.rows, 1);
+    }
+
+    #[test]
+    fn every_potion_base_is_one_cell() {
+        for base in ["Vial", "Small potion", "Potion", "Large potion", "Healing vial", "Small healing draught", "Healing draught", "Large healing draught"] {
+            for seed in 0..40 {
+                let p = roll_item(base, seed).unwrap();
+                assert_eq!((p.profile.footprint.cols, p.profile.footprint.rows), (1, 1), "{base} {seed}");
+            }
+        }
     }
 }

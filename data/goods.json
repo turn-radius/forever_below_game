@@ -190,7 +190,7 @@
  "Large potion": {
   "fp": [
    1,
-   2
+   1
   ],
   "wt": 0.8,
   "desc": "A brew, known by its colour",
@@ -226,7 +226,7 @@
  "Large healing draught": {
   "fp": [
    1,
-   2
+   1
   ],
   "wt": 0.8,
   "desc": "Restores 4d4 + 4 health",

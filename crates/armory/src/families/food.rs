@@ -300,6 +300,12 @@ impl Provision {
         PotionSize::of(self.size)
     }
 
+    /// Whether this potion is poured into a tall, narrow bottle (a vial or a small draught)
+    /// rather than a round one. Chosen by size alone.
+    pub fn skinny(&self) -> bool {
+        matches!(self.potion_size(), PotionSize::Vial | PotionSize::Small)
+    }
+
     /// The same bottle at `size`: only its scale changes.
     pub fn sized(&mut self, size: PotionSize) {
         self.size = size.scale();
@@ -1475,8 +1481,9 @@ fn bottle(p: &Provision, a: &mut Parts) {
 fn potion(p: &Provision, rng: &mut Mulberry32, a: &mut Parts) {
     let s = p.size;
     let r = 0.62 * s * (0.8 + p.shape * 0.4);
-    // Tall vials for the narrowest, round-bellied flasks otherwise.
-    let vial = p.shape > 0.75;
+    // The size picks the shape, so a size always reads the same: skinny bottles for the vial
+    // and the small draught, round-bellied flasks for the medium and the large.
+    let vial = p.skinny();
     let (control, neck): (Vec<[f32; 2]>, f32) = if vial {
         (vec![[0.0, 0.0], [r * 0.48, 0.0], [r * 0.55, r * 0.12], [r * 0.55, r * 1.9], [r * 0.4, r * 2.1], [r * 0.3, r * 2.25], [r * 0.38, r * 2.4], [r * 0.33, r * 2.45]], r * 2.1)
     } else {

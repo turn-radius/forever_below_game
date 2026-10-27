@@ -228,7 +228,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     {
         grid.rows = grid.rows.saturating_add(BELT_SACK_ROWS);
     }
-    // A potion keeps its goods row's footprint: a large flask stands two cells tall.
+    // A potion keeps its goods row's footprint: every potion takes one cell, the large flask too.
     let potion = matches!(shape, Item::Food(s) if s.provision.style == armory::families::food::FoodStyle::Potion) && goods().contains_key(base);
     if !folds(family) && !potion {
         p.footprint = Footprint { cols: cells(wide), rows: cells(long) };
