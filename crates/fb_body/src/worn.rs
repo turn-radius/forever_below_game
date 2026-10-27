@@ -1615,55 +1615,81 @@ fn bag(body: &Body, env: &Envelope, state: &BagState) -> ItemMesh {
     mesh
 }
 
-/// A satchel slung at the wearer's hip (+x), its back against the side, hung from a strap over
-/// the other shoulder and across the chest. It has a slot of its own beside a pack on the back,
-/// so it hangs out at the side, clear of the pack, which stays within the shoulders' width.
+/// A satchel resting against the front of the wearer's near hip (+x), its back to the body,
+/// hung from a crossbody strap: one straight diagonal from the far shoulder down the chest to
+/// the bag's medial top corner, and another down the back, round the side to its lateral top
+/// corner. The bag stands out from the trunk by depth, so the hanging arm may sit beside it.
 /// `mesh` has had its back turned to +z already, as a pack's has.
 fn satchel(body: &Body, env: &Envelope, mut mesh: ItemMesh, tint: Option<armory::Rgb>) -> ItemMesh {
     let (sw, s, t, w) = (body.shoulder_half_width, body.scale, body.trunk_length, body.waist_y);
-    // Its back (+z so far) to the body's side (-x), its width along the side.
-    mesh.transform(&Mat3::from_axis_angle(vec3::Y, -PI / 2.0), [0.0; 3]);
+    // Its back (+z so far) to the body (-z), its width along x.
+    mesh.transform(&Mat3::from_axis_angle(vec3::Y, PI), [0.0; 3]);
     let Some((lo, hi)) = mesh.bounds() else { return mesh };
-    let k = (sw * 0.8 / (hi[2] - lo[2]).max(1e-3)).clamp(0.3, 3.0);
+    let k = (sw * 0.5 / (hi[0] - lo[0]).max(1e-3)).clamp(0.3, 3.0);
     scale_mesh(&mut mesh, k);
     let (lo, hi) = (vec3::scale(lo, k), vec3::scale(hi, k));
-    let height = hi[1] - lo[1];
-    let top = body.hip_y + 0.2 * t;
-    // Out from the side far enough to clear the body, the belt and a cloak's skirt over the
-    // bag's height, with a little air between.
-    let side = (0..=4).map(|i| env.worn_reach(0.0, top - height * i as f32 / 4.0 - w)).fold(0.0f32, f32::max) + 0.05;
-    let (cz, front) = (-0.05 * s, body.chest.half_depth * 0.5);
-    mesh.transform(&Mat3::IDENTITY, [side - lo[0], top - hi[1], cz - (lo[2] + hi[2]) * 0.5]);
-    // Further out if an arm hangs where it lies.
+    let (height, halfw, thick) = (hi[1] - lo[1], (hi[0] - lo[0]) * 0.5, hi[2] - lo[2]);
+    let top = body.hip_y + 0.05 * t;
+    // The reach from the trunk's axis: the trunk's own below the chest, the worn one (cloak,
+    // shoulders) from there up, or all the worn one when `m` is 1.
+    let blend = |y: f32| ((y - body.chest_y) / (0.15 * t) + 0.5).clamp(0.0, 1.0);
+    let reach = |phi: f32, y: f32, m: f32| env.reach.at(phi, y - w) * (1.0 - m) + env.worn_reach(phi, y - w) * m;
+    // How far in front (`sg` 1) or behind (-1) the axis the surface is at `x`, `y`.
+    let depth = |x: f32, y: f32, m: f32, sg: f32| {
+        let mut z = body.waist.half_depth * sg;
+        for _ in 0..4 {
+            let r = reach(z.atan2(x), y, m);
+            z = sg * (r * r - x * x).max(0.0).sqrt();
+        }
+        z
+    };
+    let xc = 0.9 * reach(0.0, top, 0.0);
+    let mut zb = 0.0f32;
+    for i in 0..=4 {
+        for j in 0..=4 {
+            zb = zb.max(depth(xc + halfw * (j as f32 / 2.0 - 1.0), top - height * i as f32 / 4.0, 0.0, 1.0));
+        }
+    }
+    zb += 0.02;
+    mesh.transform(&Mat3::IDENTITY, [xc - (lo[0] + hi[0]) * 0.5, top - hi[1], zb - lo[2]]);
+    // Further forward if an arm hangs where it lies (by depth, not by pushing it outward).
     let nearest = mesh.parts.iter().flat_map(|p| p.positions.iter()).map(|&p| env.nearest_arm(p).2).fold(f32::MAX, f32::min);
     let push = (0.02 * s - nearest).max(0.0);
-    mesh.transform(&Mat3::IDENTITY, [push, 0.0, 0.0]);
-    let side = side + push;
-    let half = (hi[2] - lo[2]) * 0.4;
-    let mid = top - height * 0.2;
+    mesh.transform(&Mat3::IDENTITY, [0.0, 0.0, push]);
+    let zc = zb + push + thick * 0.5;
+    let (xm, xl) = (xc - halfw * 0.85, xc + halfw * 0.85);
     let (width, thickness) = (0.24 * s.sqrt(), 0.05 * s.sqrt());
     let ty = body.shoulder_y + 0.08 * t;
-    let path: Vec<V3> = CatmullRom::centripetal(vec![
-        [side, mid, cz - half],
-        // Up the back on a diagonal from the bag's hip to the far shoulder...
-        [sw * 0.6, w, -body.waist.half_depth * 0.9],
-        [sw * 0.05, body.chest_y + 0.1 * t, -body.chest.half_depth * 0.9],
-        [-sw * 0.55, ty - 0.04 * t, -0.1 * s],
-        // ...over that shoulder, outside a pack's strap (at 0.46 of the half width), so the two
-        // lie side by side, and back down across the chest to the bag's front.
-        [-sw * 0.72, ty, 0.0],
-        [-sw * 0.5, body.shoulder_y - 0.12 * t, front],
-        [-sw * 0.05, body.chest_y - 0.1 * t, front],
-        [sw * 0.5, w - 0.05 * t, front],
-        [side, mid, cz + half],
-    ])
-    .sample_evenly(64)
-    .into_iter()
-    .map(|p| {
-        let q = env.lay_on([p[0], p[1] - w, p[2]], 0.01);
-        [q[0], q[1] + w, q[2]]
-    })
-    .collect();
+    // A point on the straight line (in x and y) from `a` to `b`, laid on the surface.
+    let on_line = |a: [f32; 2], b: [f32; 2], u: f32, sg: f32| -> V3 {
+        let (x, y) = (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u);
+        [x, y, depth(x, y, blend(y), sg) + 0.01 * sg]
+    };
+    let y_side = top + 0.25 * t;
+    let x_side = reach(0.0, y_side, 0.0) + 0.01;
+    let y_mid = (y_side + top + 0.1 * t) * 0.5;
+    let r_mid = reach(0.95, y_mid, 0.0) + 0.01;
+    let far = reach(PI, ty, blend(ty)) + 0.01;
+    let back_from = [-sw * 0.55, ty - 0.04 * t];
+    let front_from = [-sw * 0.5, body.shoulder_y - 0.12 * t];
+    let mut control = vec![
+        // The bag's lateral corner, round the side, then up the back...
+        [xl, top, zc],
+        [xl, top + 0.1 * t, zc],
+        [r_mid * 0.95f32.cos(), y_mid, r_mid * 0.95f32.sin()],
+        [x_side, y_side, 0.0],
+    ];
+    for u in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        control.push(on_line([x_side, y_side], back_from, u, -1.0));
+    }
+    // ...over the far shoulder, outside a pack's strap (at 0.46 of the half width), and down
+    // the chest to the bag's medial corner.
+    control.push([-far.max(sw * 0.72), ty, 0.0]);
+    for u in [0.0, 0.33, 0.66, 1.0] {
+        control.push(on_line(front_from, [xm, top + 0.1 * t], u, 1.0));
+    }
+    control.push([xm, top, zc]);
+    let path: Vec<V3> = CatmullRom::centripetal(control).sample_evenly(120);
     let faces: Vec<V3> = path.iter().map(|p| env.reach.normal(p[2].atan2(p[0]), p[1] - w)).collect();
     let mut straps = armory::geom::MeshBuilder::new();
     straps.append(&strap(&path, &faces, width, thickness, false));
@@ -1708,7 +1734,7 @@ mod tests {
         ]
     }
 
-    /// A satchel and a pack are worn at once, and the satchel hangs out at the hip beside the
+    /// A satchel and a pack are worn at once, and the satchel hangs in front of the hip, the
     /// pack, not through it.
     #[test]
     fn a_satchel_hangs_at_the_hip_beside_a_pack() {
@@ -1720,12 +1746,11 @@ mod tests {
                 let bounds = |slot| {
                     let layer = fit.layers.iter().find(|l| l.slot == slot).expect("worn");
                     let parts: Vec<&Part> = layer.mesh.parts.iter().filter(|p| p.name != "carry").collect();
-                    let xs = parts.iter().flat_map(|p| p.positions.iter().map(|q| q[0]));
+                    let xs = parts.iter().flat_map(|p| p.positions.iter().map(|q| q[2]));
                     (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max))
                 };
                 let (pack, satchel) = (bounds(Slot::Back), bounds(Slot::Satchel));
-                assert!(satchel.0 > pack.1, "satchel x {satchel:?} clear of pack {pack:?}");
-                assert!(satchel.0 > body.waist.half_width * 0.9, "satchel off the body: {satchel:?}");
+                assert!(satchel.0 > pack.1, "satchel z {satchel:?} clear of pack {pack:?}");
             }
         }
     }
@@ -1852,10 +1877,39 @@ mod tests {
             for (name, side) in [("chest", 1.0f32), ("back", -1.0)] {
                 let pts: Vec<V3> = strap.iter().copied().filter(|p| p[2] * side > 0.0 && p[0].abs() < body.shoulder_half_width * 1.2).collect();
                 let hi = pts.iter().filter(|p| p[1] > body.chest_y).map(|p| p[0]).fold(f32::MAX, f32::min);
-                let lo = pts.iter().filter(|p| p[1] < body.waist_y + 0.1 * body.trunk_length).map(|p| p[0]).fold(f32::MIN, f32::max);
+                let lo = strap.iter().filter(|p| p[1] < body.waist_y + 0.1 * body.trunk_length).map(|p| p[0]).fold(f32::MIN, f32::max);
                 assert!(hi < -body.shoulder_half_width * 0.4, "{folk:?} {name}: strap high on the far shoulder side only reaches x {hi}");
                 assert!(lo > body.shoulder_half_width * 0.2, "{folk:?} {name}: strap low reaches only x {lo}");
                 assert!(pts.iter().any(|p| p[0].abs() < body.shoulder_half_width * 0.15), "{folk:?} {name}: strap never crosses the midline");
+            }
+            let bag: Vec<V3> = fit.layers[0].mesh.parts.iter().filter(|p| p.name != "carry").flat_map(|p| p.positions.iter().copied()).collect();
+            let (bx0, bx1) = (bag.iter().map(|p| p[0]).fold(f32::MAX, f32::min), bag.iter().map(|p| p[0]).fold(f32::MIN, f32::max));
+            let (bz0, bz1) = (bag.iter().map(|p| p[2]).fold(f32::MAX, f32::min), bag.iter().map(|p| p[2]).fold(f32::MIN, f32::max));
+            // The bag sits against the front of the hip: its middle within the hip's width, its
+            // back forward of the trunk's middle.
+            let hip_top = bag.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+            let hip_width = Envelope::new(&body).reach.at(0.0, hip_top - body.waist_y);
+            assert!((bx0 + bx1).abs() * 0.5 < hip_width + (bz1 - bz0) * 0.5, "{folk:?}: bag at x {bx0}..{bx1}, hip {hip_width}");
+            assert!(bz0 > body.waist.half_depth * 0.5, "{folk:?}: bag not forward of the trunk, z {bz0}");
+            // Each run is close to a straight line seen from the front or the back.
+            let top = bag.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+            for (name, side) in [("chest", 1.0f32), ("back", -1.0)] {
+                let run: Vec<[f32; 2]> = strap.iter().filter(|p| p[2] * side > 0.0 && p[1] < body.shoulder_y - 0.2 * body.trunk_length && (side < 0.0 || p[0] < bx0) && p[1] > top + 0.4 * body.trunk_length).map(|p| [p[0], p[1]]).collect();
+                // The strap's centre line: the middle of each band of height, so the ribbon's
+                // width does not skew the chord.
+                let (ymin, ymax) = (run.iter().map(|p| p[1]).fold(f32::MAX, f32::min), run.iter().map(|p| p[1]).fold(f32::MIN, f32::max));
+                let centres: Vec<[f32; 2]> = (0..6)
+                    .filter_map(|i| {
+                        let (y0, y1) = (ymin + (ymax - ymin) * i as f32 / 6.0, ymin + (ymax - ymin) * (i + 1) as f32 / 6.0);
+                        let band: Vec<&[f32; 2]> = run.iter().filter(|p| p[1] >= y0 && p[1] <= y1).collect();
+                        (!band.is_empty()).then(|| [band.iter().map(|p| p[0]).sum::<f32>() / band.len() as f32, band.iter().map(|p| p[1]).sum::<f32>() / band.len() as f32])
+                    })
+                    .collect();
+                let (a, b) = (centres[0], *centres.last().unwrap());
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let len = dx.hypot(dy);
+                let worst = centres.iter().map(|p| ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len).fold(0.0f32, f32::max);
+                assert!(worst < 0.08 * body.scale, "{folk:?} {name}: strap bows {worst} off its chord");
             }
         }
     }
