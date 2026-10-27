@@ -154,6 +154,15 @@ impl Default for Character {
     }
 }
 
+/// Where a fitting holds what it holds, for the load's breakdown ("on the strap").
+fn fitting_place(slot: fb_items::Slot) -> &'static str {
+    match slot {
+        fb_items::Slot::Strap => "on the strap",
+        fb_items::Slot::Frog1 | fb_items::Slot::Frog2 => "in a frog",
+        _ => "in the potion pouch",
+    }
+}
+
 impl Character {
     /// A delver rolled from `seed`: the same seed always gives the same delver.
     ///
@@ -401,8 +410,10 @@ impl Character {
             }
         }
         // A weapon on the pack's strap is carried outside its grid, and weighs as it does.
-        if let Some(item) = inventory.strapped().and_then(|id| inventory.item(id)) {
-            e = add(e, format!("{} on the strap", item.name), item.profile.stats.weight as f64);
+        for (slot, id) in inventory.fitted() {
+            if let Some(item) = inventory.item(id) {
+                e = add(e, format!("{} {}", item.name, fitting_place(slot)), (item.profile.stats.weight * item.quantity as f32) as f64);
+            }
         }
         if e.terms().is_empty() { e.base("nothing worn", 0.0) } else { e }
     }
@@ -466,8 +477,10 @@ impl Character {
                 lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight * inside.quantity as f32 + inventory.contents_weight(entry.id)));
             }
         }
-        if let Some(item) = inventory.strapped().and_then(|id| inventory.item(id)) {
-            lines.push(format!("  {} (on the strap)  {:.1} lb", item.name, item.profile.stats.weight));
+        for (slot, id) in inventory.fitted() {
+            if let Some(item) = inventory.item(id) {
+                lines.push(format!("  {} ({})  {:.1} lb", item.name, fitting_place(slot), item.profile.stats.weight * item.quantity as f32));
+            }
         }
         let band = LoadBand::from_load_with(rules, carried.value(), capacity);
         lines.push(format!("{} now", band.word()));

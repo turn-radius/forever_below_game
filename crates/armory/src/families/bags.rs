@@ -123,13 +123,21 @@ impl Default for Bag {
 
 /// Something a bag or belt comes with, attached when it is rolled. Accessories are variants of the
 /// Armory's roll: they are never found loose or fitted by the delver, and they are fixed for the
-/// item's life. A belt's frogs and pouches will be the same kind of thing.
+/// item's life. A belt's frogs, potion pouch and sack are the same kind of thing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Accessory {
     /// A blanket rolled under the flap, which the delver can sleep on.
     Bedroll,
     /// Bands that hold one long weapon alongside the pack.
     WeaponStrap,
+    /// A belt's frog at the left hip, which holds one short weapon.
+    LeftFrog,
+    /// A belt's frog at the right hip, which holds one short weapon.
+    RightFrog,
+    /// Three loops on a belt, each holding a small potion.
+    PotionPouch,
+    /// A small sack hung from a belt, which adds cells to its grid.
+    BeltSack,
 }
 
 impl Accessory {
@@ -138,6 +146,10 @@ impl Accessory {
         match self {
             Accessory::Bedroll => "Bedroll",
             Accessory::WeaponStrap => "Weapon strap",
+            Accessory::LeftFrog => "Left frog",
+            Accessory::RightFrog => "Right frog",
+            Accessory::PotionPouch => "Potion pouch",
+            Accessory::BeltSack => "Belt sack",
         }
     }
 }

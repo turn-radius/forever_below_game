@@ -397,6 +397,23 @@ fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
             return found;
         }
     }
+    // `FB_BELT=frogs|potions|sack|all` picks a belt with those fittings, for captures.
+    if base == "Belt"
+        && let Ok(want) = std::env::var("FB_BELT")
+    {
+        use fb_items::Accessory::{BeltSack, LeftFrog, PotionPouch, RightFrog};
+        let needs: &[fb_items::Accessory] = match want.as_str() {
+            "frogs" => &[LeftFrog, RightFrog],
+            "potions" => &[PotionPouch],
+            "sack" => &[BeltSack],
+            "all" => &[LeftFrog, RightFrog, PotionPouch, BeltSack],
+            _ => &[],
+        };
+        let found = (0..6000).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| needs.iter().all(|a| i.has_accessory(*a)));
+        if found.is_some() {
+            return found;
+        }
+    }
     let wanted = |i: &fb_items::Item| crate::carry::item_light(&i.shape).is_some() && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder));
     let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(wanted);
     lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle")).or_else(|| rolled(seed))
@@ -1573,21 +1590,20 @@ fn drag_items(
 /// with room, or else set down underfoot. Every way of taking a belt off (a double-click, a drag
 /// to a grid or the floor, swapping in something that is not a belt) ends here.
 fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResMut<FloorChanges>, mut toast: ResMut<Toast>, barter: Option<Res<crate::barter::Barter>>, time: Option<Res<Time<Real>>>) {
-    // Likewise a strapped weapon, once the pack with the strap is off ([`Inventory::unstrap`]);
-    // not while a deal has the pack on the shelf, since cancelling puts it back.
-    if inventory.worn(Slot::Strap).is_some()
-        && !inventory.has_strap()
-        && !barter.is_some_and(|b| b.active())
-        && let Some((id, went)) = inventory.unstrap()
-    {
+    // Likewise what sat in a pack's strap or a belt's frogs and potion pouch, once that fitting is gone
+    // ([`Inventory::unfit`]); not while a deal has the pack or belt on the shelf, since cancelling
+    // puts it back.
+    if !barter.is_some_and(|b| b.active()) && Slot::FITTINGS.iter().any(|&slot| inventory.worn(slot).is_some() && !inventory.has_fitting(slot)) {
         let now = time.map_or(0.0, |t| t.elapsed_secs());
-        let name = inventory.item(id).map_or_else(String::new, |i| i.title().to_string());
-        match went {
-            Displaced::Underfoot => {
-                floor_changes.0.push(FloorChange::SetDown(id, 0.0));
-                toast.say(format!("{name} falls to the floor."), now);
+        for (id, went) in inventory.unfit() {
+            let name = inventory.item(id).map_or_else(String::new, |i| i.title().to_string());
+            match went {
+                Displaced::Underfoot => {
+                    floor_changes.0.push(FloorChange::SetDown(id, 0.0));
+                    toast.say(format!("{name} falls to the floor."), now);
+                }
+                _ => toast.say(format!("{name} slips from its fitting into your pack."), now),
             }
-            _ => toast.say(format!("{name} slips from the strap into your pack."), now),
         }
     }
     if inventory.worn(Slot::Hip).is_none() || inventory.worn(Slot::Belt).is_some() {
@@ -2760,9 +2776,9 @@ mod tests {
         let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
         let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
         // The strap shows only while the worn pack has one.
-        let places: Vec<_> = fb_items::tables::slot_places().iter().filter(|p| p.slot != Slot::Strap).collect();
+        let places: Vec<_> = fb_items::tables::slot_places().iter().filter(|p| !p.slot.is_fitting()).collect();
         assert_eq!(found.len(), places.len());
-        assert!(found.iter().all(|(s, ..)| *s != Slot::Strap));
+        assert!(found.iter().all(|(s, ..)| !s.is_fitting()));
         for place in places {
             let (_, node, children) = found.iter().find(|(s, ..)| *s == place.slot).unwrap();
             let x = px(doll::FRAME.x * place.x_percent / 100.0);

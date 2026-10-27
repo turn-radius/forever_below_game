@@ -338,8 +338,9 @@ pub fn start_doll_fitting(
     let spec = character.spec();
     let dirt = character.dirt;
     let mut worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
-    // A weapon on the pack's strap rides the pack, drawn with it ([`Figure::dress`]).
-    worn.extend(inventory.strapped().and_then(|id| inventory.item(id)).map(|item| (Slot::Strap, item.clone())));
+    // A weapon on the pack's strap rides the pack and one in a frog hangs at the hip, drawn with them
+    // ([`Figure::dress`]); the potions in the pouch are not drawn.
+    worn.extend(inventory.fitted().into_iter().filter(|(slot, _)| matches!(slot, Slot::Strap | Slot::Frog1 | Slot::Frog2)).filter_map(|(slot, id)| Some((slot, inventory.item(id)?.clone()))));
     let key = figure_key(&spec, &worn, dirt);
     if stage.dressed.as_ref() == Some(&key) {
         // Already dressed for this equipment; drop any in-flight fit
@@ -570,8 +571,8 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
             ImageNode::new(assets.doll.clone()),
         ));
         for place in slot_places() {
-            // The strap is the worn pack's own: it shows only while that pack has one.
-            if place.slot == fb_items::Slot::Strap && !inventory.has_strap() {
+            // A fitting is the worn pack's or belt's own: it shows only while that has it.
+            if place.slot.is_fitting() && !inventory.has_fitting(place.slot) {
                 continue;
             }
             let size = match place.size {

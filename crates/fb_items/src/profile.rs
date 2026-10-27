@@ -52,6 +52,9 @@ pub struct Profile {
     pub description: String,
 }
 
+/// The rows a belt's small sack adds to its grid.
+pub const BELT_SACK_ROWS: u8 = 1;
+
 /// How many arrows or bolts share one cell.
 pub const AMMUNITION_STACK: u8 = 10;
 
@@ -217,6 +220,14 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     } else {
         from_shape(base, shape)
     };
+    // A belt's small sack is four cells more in the belt's one grid (a 2 by 2 worth): `fb_items`
+    // keeps a single grid per container, so it widens that one by a row of its four columns.
+    if let Item::Belt(belt) = shape
+        && belt.fittings.sack
+        && let Some(grid) = p.holds.as_mut()
+    {
+        grid.rows = grid.rows.saturating_add(BELT_SACK_ROWS);
+    }
     // A potion keeps its goods row's footprint: a large flask stands two cells tall.
     let potion = matches!(shape, Item::Food(s) if s.provision.style == armory::families::food::FoodStyle::Potion) && goods().contains_key(base);
     if !folds(family) && !potion {
@@ -486,7 +497,8 @@ mod tests {
         assert_eq!(grid("Pack"), Some((8, 5)));
         assert_eq!(grid("Satchel"), Some((6, 3)));
         assert_eq!(grid("Sack"), Some((4, 4)));
-        assert_eq!(grid("Belt"), Some((4, 2)));
+        let plain_belt = (1..50).map(|s| rolled("Belt", s)).find(|(shape, _)| matches!(shape, Item::Belt(b) if !b.fittings.sack)).unwrap().1;
+        assert_eq!(plain_belt.holds.map(|g| (g.cols, g.rows)), Some((4, 2)));
         assert_eq!(grid("Purse"), None);
     }
 

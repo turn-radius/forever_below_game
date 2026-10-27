@@ -8,12 +8,12 @@
 //! own. Geometry is [`crate::build::belt`] on [`TorsoForm::MANNEQUIN`]; the pouch is the
 //! bags family's belt pouch, hung behind the right hip.
 
-use crate::build::belt::{belt_parts, belt_pouch_mount};
+use crate::build::belt::{belt_parts, belt_pouch_mount, belt_sack_mount};
 use crate::build::form::TorsoForm;
 use crate::cond::{Condition, ConditionLimits};
 use crate::etch::{EtchTarget, Etching, EtchingLimits};
 use crate::families::Generator;
-use crate::families::bags::{Bag, BagLimits, BagState, BagStyle, Bags};
+use crate::families::bags::{Accessory, Bag, BagLimits, BagState, BagStyle, Bags};
 use crate::geom::vec3::{self, Mat3};
 use crate::geom::ItemMesh;
 use crate::material::MaterialKind;
@@ -27,6 +27,9 @@ use MaterialKind::{Brass, Gold, Iron, Leather, Silver};
 
 /// The belt generator.
 pub struct Belts;
+
+/// How tall a belt's small sack is drawn, in world units. Our own.
+const SACK_HEIGHT: f32 = 1.5;
 
 /// Every parameter of one belt.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -139,6 +142,28 @@ impl Generator for Belts {
     }
 }
 
+impl BeltState {
+    /// What the belt was rolled with, in a fixed order: a frog at the left hip, a frog at the
+    /// right, a potion pouch, a sack. A belt's belt pouch is the base's grid and not listed.
+    pub fn accessories(&self) -> Vec<Accessory> {
+        let f = &self.fittings;
+        let mut found = Vec::new();
+        if f.frogs >= 1 {
+            found.push(Accessory::LeftFrog);
+        }
+        if f.frogs >= 2 {
+            found.push(Accessory::RightFrog);
+        }
+        if f.potion_pouch {
+            found.push(Accessory::PotionPouch);
+        }
+        if f.sack {
+            found.push(Accessory::BeltSack);
+        }
+        found
+    }
+}
+
 impl Belts {
     /// The belt and its pouch round `form`, in the form's space (the waist at y = 0):
     /// `fb_body` passes a folk's torso, eased over whatever is worn under the belt.
@@ -158,7 +183,33 @@ impl Belts {
             }
             mesh.parts.extend(pouch.parts);
         }
+        if s.fittings.sack {
+            let mut sack = Bags::build(&BagState { seed: s.seed, bag: Belts::sack_bag(s.seed), etch: Etching::default(), cond: s.cond, palette: s.palette });
+            if let Some((lo, hi)) = sack.bounds() {
+                // Small, and hung by its neck behind the left hip, its back on the belt.
+                let k = SACK_HEIGHT / (hi[1] - lo[1]).max(1e-3);
+                for p in sack.parts.iter_mut().flat_map(|part| &mut part.positions) {
+                    *p = vec3::scale(*p, k);
+                }
+            }
+            if let Some((lo, hi)) = sack.bounds() {
+                let (at, out) = belt_sack_mount(form, &s.belt, &s.fittings);
+                let rotation = Mat3::from_cols(vec3::cross(vec3::Y, out), vec3::Y, out);
+                let anchor = rotation.transform([0.0, lo[1] + (hi[1] - lo[1]) * 0.85, lo[2]]);
+                sack.transform(&rotation, vec3::sub(at, anchor));
+            }
+            for part in &mut sack.parts {
+                part.name = "sack";
+            }
+            mesh.parts.extend(sack.parts);
+        }
         mesh
+    }
+
+    /// The bag a belt's small sack is drawn as. It is not rolled from the belt's own stream, so
+    /// that adding the fitting moved no other seed's belt.
+    pub fn sack_bag(seed: u32) -> Bag {
+        Bags::roll_as(seed ^ 0x5ac4_b077, BagStyle::Sack).bag
     }
 
     /// "Forge new" forced to one style, for turntables and tests. Draws the same stream as
@@ -223,6 +274,14 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: BeltStyle) -> BeltState {
 
     let targets: &[(EtchTarget, u32)] = &[(EtchTarget::Leather, 2), (EtchTarget::Metals, 1)];
     s.etch = Etching::roll(rng, if style == S::Girdle { 0.35 } else { 0.15 }, targets, 1);
+    // Last, so that adding these fittings shifted nothing else a seed rolls. Both are always drawn,
+    // so every belt's stream is the same length.
+    f.potion_pouch = rng.chance(match style {
+        S::Pouch => 0.5,
+        S::Girdle => 0.1,
+        _ => 0.2,
+    });
+    f.sack = rng.chance(if style == S::Pouch { 0.4 } else { 0.15 });
     s.fit(&LIMITS);
     s
 }

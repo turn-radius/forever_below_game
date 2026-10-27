@@ -681,3 +681,27 @@ fn cancelling_a_deal_that_moved_a_strapped_pack_puts_pack_and_weapon_back() {
     end(&mut inventory, session);
     assert_eq!((inventory.worn(fb_items::Slot::Back), inventory.worn(fb_items::Slot::Strap)), (Some(pack), Some(spear)));
 }
+
+#[test]
+fn cancelling_a_deal_that_moved_a_belt_puts_belt_frogged_sword_and_potion_back() {
+    use fb_items::{Accessory, Slot};
+    let person = person(smith());
+    let mut inventory = delver(Coins::from_copper(0));
+    // The sword and vial have the lower ids, so they are put back first unless fittings wait for the belt.
+    let sword = inventory.add(fb_items::roll_item("Sword", 3).unwrap());
+    let vial = inventory.add(fb_items::roll_item("Vial", 3).unwrap());
+    let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::LeftFrog) && b.has_accessory(Accessory::PotionPouch)).unwrap();
+    let belt = inventory.add(belt);
+    let _ = inventory.equip(belt, Slot::Belt);
+    inventory.wear(sword, Slot::Frog1).unwrap();
+    inventory.wear(vial, Slot::Potion2).unwrap();
+    let shelf = shelf_of(vec![], 6000);
+    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    for id in [sword, vial, belt] {
+        session.note(&inventory, id);
+        inventory.shelve(id, session.shelf).unwrap();
+    }
+    assert_eq!(inventory.worn(Slot::Belt), None);
+    end(&mut inventory, session);
+    assert_eq!((inventory.worn(Slot::Belt), inventory.worn(Slot::Frog1), inventory.worn(Slot::Potion2)), (Some(belt), Some(sword), Some(vial)));
+}

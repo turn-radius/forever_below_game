@@ -17,6 +17,15 @@ use std::fmt;
 /// The fewest cells long (about 24 cm each) a weapon is to ride a pack's weapon strap.
 pub const STRAP_CELLS: u8 = 4;
 
+/// The most cells long (about 24 cm each) a weapon is to hang in a belt's frog: the one-handers.
+pub const FROG_CELLS: u8 = 5;
+
+/// Whether `item` goes in a belt's potion pouch: a vial or a small potion. Each place holds one
+/// piece, so three small potions are the most it holds.
+pub fn fits_potion_pouch(item: &Item) -> bool {
+    matches!(item.potion_size(), Some(armory::families::food::PotionSize::Vial | armory::families::food::PotionSize::Small))
+}
+
 /// D&D coinage in a purse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Coins {
@@ -340,12 +349,14 @@ impl Item {
         self.slots().contains(&slot)
     }
 
-    /// What a bag was rolled with: a pack's bedroll and weapon strap, in a fixed order. Accessories
+    /// What a bag or belt was rolled with: a pack's bedroll and weapon strap, or a belt's frogs,
+    /// potion pouch and sack, in a fixed order. Accessories
     /// are part of the Armory's roll, so they are never found loose or fitted by the delver. Empty
     /// for anything but a bag.
     pub fn accessories(&self) -> Vec<Accessory> {
         match &self.shape {
             armory::Item::Bags(s) => s.bag.accessories(),
+            armory::Item::Belt(s) => s.accessories(),
             _ => vec![],
         }
     }
@@ -361,6 +372,30 @@ impl Item {
     pub fn strappable(&self) -> bool {
         let fp = self.profile.footprint;
         self.profile.tags.contains(&Tag::Weapon) && fp.cols.max(fp.rows) >= STRAP_CELLS
+    }
+
+    /// Whether a belt's frog holds it: a one-handed weapon (a dagger, sword, mace, club or axe)
+    /// no more than [`FROG_CELLS`] cells long by its footprint. A bow or crossbow, a staff, a
+    /// spear and a polearm are left to the weapon strap.
+    pub fn frogable(&self) -> bool {
+        use armory::Family as F;
+        let fp = self.profile.footprint;
+        self.profile.tags.contains(&Tag::Weapon)
+            && !self.profile.tags.contains(&Tag::Ranged)
+            && matches!(self.shape.family(), F::Dagger | F::Sword | F::Mace | F::Club | F::Axe)
+            && fp.cols.max(fp.rows) <= FROG_CELLS
+    }
+
+    /// Whether it goes in fitting slot `slot` ([`Slot::FITTINGS`]), whatever is worn: a long
+    /// weapon on the strap, a short one in a frog, a small potion in the pouch. A single piece
+    /// only, since a fitting holds one thing.
+    pub fn fits_fitting(&self, slot: Slot) -> bool {
+        match slot {
+            Slot::Strap => self.strappable(),
+            Slot::Frog1 | Slot::Frog2 => self.frogable(),
+            Slot::Potion1 | Slot::Potion2 | Slot::Potion3 => self.quantity <= 1 && fits_potion_pouch(self),
+            _ => false,
+        }
     }
 }
 
@@ -455,6 +490,40 @@ mod tests {
         for base in ["Satchel", "Sack", "Purse", "Sword", "Bedroll"] {
             assert!((1..20).all(|s| roll_item(base, s).unwrap().accessories().is_empty()), "{base}");
         }
+    }
+
+    #[test]
+    fn belts_roll_with_their_fittings_and_nothing_else_does() {
+        let belts: Vec<Item> = (1..200).filter_map(|s| roll_item("Belt", s)).collect();
+        for want in [Accessory::LeftFrog, Accessory::RightFrog, Accessory::PotionPouch, Accessory::BeltSack] {
+            assert!(belts.iter().any(|b| b.has_accessory(want)), "{want:?}");
+        }
+        assert!(belts.iter().any(|b| b.accessories().is_empty()), "a plain belt");
+        assert!(belts.iter().all(|b| roll_item("Belt", b.seed).unwrap().accessories() == b.accessories()));
+        // The sack is a row more in the belt's grid.
+        let rows = |b: &Item| b.profile.holds.as_ref().unwrap().rows;
+        let plain = belts.iter().find(|b| !b.has_accessory(Accessory::BeltSack) && b.profile.stats.grid_rows == 0.0).unwrap();
+        let sacked = belts.iter().find(|b| b.has_accessory(Accessory::BeltSack) && b.profile.stats.grid_rows == 0.0).unwrap();
+        assert_eq!(rows(sacked), rows(plain) + 1);
+        assert!((1..20).all(|s| roll_item("Pack", s).unwrap().accessories().iter().all(|a| matches!(a, Accessory::Bedroll | Accessory::WeaponStrap))));
+    }
+
+    #[test]
+    fn frogs_take_one_handed_weapons_and_the_pouch_small_potions() {
+        for base in ["Dagger", "Sword", "Mace", "Club"] {
+            assert!((1..30).filter_map(|s| roll_item(base, s)).any(|w| w.frogable()), "some {base}");
+        }
+        for base in ["Staff", "Spear", "Bow", "Crossbow", "Shield", "Torch", "Lantern"] {
+            assert!((1..30).filter_map(|s| roll_item(base, s)).all(|w| !w.frogable()), "{base}");
+        }
+        for (base, fits) in [("Vial", true), ("Small potion", true), ("Healing vial", true), ("Small healing draught", true), ("Potion", false), ("Large potion", false), ("Healing draught", false), ("Bread", false), ("Sword", false)] {
+            assert_eq!(roll_item(base, 3).map(|i| fits_potion_pouch(&i)), Some(fits), "{base}");
+        }
+        let vial = roll_item("Vial", 3).unwrap();
+        assert!(vial.fits_fitting(Slot::Potion2) && !vial.fits_fitting(Slot::Frog1) && !vial.fits_fitting(Slot::Strap));
+        let mut stack = vial;
+        stack.quantity = 2;
+        assert!(!stack.fits_fitting(Slot::Potion1), "one piece to a place");
     }
 
     #[test]

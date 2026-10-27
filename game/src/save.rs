@@ -753,6 +753,32 @@ mod tests {
     }
 
     #[test]
+    fn what_a_belts_fittings_hold_is_saved_and_put_back_on_the_belt() {
+        use fb_items::{Accessory, Slot};
+        let mut inventory = Inventory::default();
+        let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::RightFrog) && b.has_accessory(Accessory::PotionPouch) && b.has_accessory(Accessory::BeltSack)).unwrap();
+        let belt = inventory.add(belt);
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let (sword, mace, vial) = (inventory.add(fb_items::roll_item("Sword", 3).unwrap()), inventory.add(fb_items::roll_item("Mace", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
+        let held = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
+        inventory.wear(held, Slot::Mainhand).unwrap();
+        for (id, slot) in [(sword, Slot::Frog1), (mace, Slot::Frog2), (vial, Slot::Potion3)] {
+            inventory.wear(id, slot).unwrap();
+        }
+        let records: Vec<_> = inventory.worn_ids().into_iter().map(|(slot, id)| (slot, record_item(&inventory, id).unwrap())).collect();
+        let json = serde_json::to_string(&records).unwrap();
+        let records: Vec<(Slot, ItemRecord)> = serde_json::from_str(&json).unwrap();
+        let mut back = Inventory::default();
+        for (slot, record) in &records {
+            let id = restore_item(&mut back, record).unwrap();
+            back.wear(id, *slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
+        }
+        let kept: Vec<(Slot, String)> = back.fitted().into_iter().map(|(slot, id)| (slot, back.item(id).unwrap().base.clone())).collect();
+        assert_eq!(kept, vec![(Slot::Frog1, "Sword".to_string()), (Slot::Frog2, "Mace".to_string()), (Slot::Potion3, "Vial".to_string())]);
+        assert_eq!(back.item(back.worn(Slot::Belt).unwrap()).unwrap().accessories(), inventory.item(belt).unwrap().accessories());
+    }
+
+    #[test]
     fn the_version_is_written_first() {
         let path = scratch("version");
         write(&path, &sample()).unwrap();

@@ -821,6 +821,79 @@ pub fn fit_strapped(item: &Item, pack: &ItemMesh) -> Option<StrapFit> {
     Some(StrapFit { item: item.clone(), mesh: drawn, placement })
 }
 
+// ── Hung in a belt's frog ──
+
+/// How far a weapon in a frog leans back from plumb, as a share of its length. Our own.
+const FROG_LEAN: f32 = 0.3;
+/// How far down a blade's length (from its hilt) the frog's sleeve takes it; a blunt weapon's
+/// sleeve sits this far below its head. Our own.
+const FROG_SLEEVE: f32 = 0.28;
+/// The least a hanging weapon's tip stands off the floor, in body units. Our own.
+const FROG_FLOOR: f32 = 0.1;
+/// How far the weapon stands out from the sleeve's middle, clear of the arm hanging beside it. Our own.
+const FROG_OUT: f32 = 0.15;
+
+/// A short weapon hung in one of a worn belt's frogs ([`fit_frogged`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrogFit {
+    pub item: Item,
+    /// The weapon in body space.
+    pub mesh: ItemMesh,
+    pub placement: Placement,
+}
+
+/// Hangs `item` (a one-handed weapon) in a frog of `belt`, the worn belt's mesh in body space
+/// ([`crate::fit_worn`]): the left hip's frog (at +X) when `left`, else the right hip's. A blade
+/// hangs hilt up, point down, through the frog's sleeve; a mace, club or axe head up, its haft
+/// through the sleeve. Either leans back a little, its flats facing out. `None` for a belt with
+/// no frog at that hip, or an item with no mesh. Our own fit.
+pub fn fit_frogged(item: &Item, belt: &ItemMesh, left: bool) -> Option<FrogFit> {
+    let sign = if left { 1.0 } else { -1.0 };
+    let frog: Vec<V3> = belt.parts.iter().filter(|p| p.name == "frogs").flat_map(|p| p.positions.iter().copied()).filter(|p| p[0] * sign > 0.0).collect();
+    if frog.is_empty() {
+        return None;
+    }
+    // The sleeve is the frog's lowest band: its centre is where the weapon passes.
+    let low = frog.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+    let ring: Vec<&V3> = frog.iter().filter(|p| p[1] < low + 0.12).collect();
+    let sleeve = vec3::scale(ring.iter().fold([0.0; 3], |a, p| vec3::add(a, **p)), 1.0 / ring.len() as f32);
+
+    let drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    let length = hi[1] - lo[1];
+    let centre = [(lo[0] + hi[0]) * 0.5, 0.0, (lo[2] + hi[2]) * 0.5];
+    // Plumb but for the lean back (body -Z) and a touch out; the weapon's own +Y along it, or
+    // against it for a blade, which hangs hilt up. A long weapon on a short body leans further
+    // until its tip clears the floor, and is lifted the rest of the way if it still does not.
+    let blade = matches!(item.family(), Family::Sword | Family::Dagger);
+    let pivot_y = if blade { lo[1] + length * FROG_SLEEVE } else { hi[1] - length * FROG_SLEEVE };
+    let pivot = [centre[0], pivot_y, centre[2]];
+    let hung = |lean: f32| {
+        let down = vec3::normalize_or([sign * 0.05, -1.0, -lean], vec3::neg(vec3::Y));
+        let axis = if blade { down } else { vec3::neg(down) };
+        let rotation = frame_yz(axis, [sign, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let mut mesh = drawn.clone();
+        let placement = Placement { rotation, origin: vec3::sub(vec3::add(sleeve, [sign * FROG_OUT, 0.0, 0.0]), rotation.transform(pivot)) };
+        placement.apply_to_item(&mut mesh);
+        let floor = mesh.bounds().map_or(0.0, |(lo, _)| lo[1]);
+        (placement, mesh, floor)
+    };
+    let (mut placement, mut mesh, mut floor) = hung(FROG_LEAN);
+    for lean in [0.5, 0.8, 1.2] {
+        if floor > FROG_FLOOR {
+            break;
+        }
+        (placement, mesh, floor) = hung(lean);
+    }
+    if floor < FROG_FLOOR {
+        placement.origin[1] += FROG_FLOOR - floor;
+        mesh = drawn.clone();
+        placement.apply_to_item(&mut mesh);
+    }
+    let drawn = mesh;
+    Some(FrogFit { item: item.clone(), mesh: drawn, placement })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,6 +914,43 @@ mod tests {
 
     fn fit(body: &Body, side: Side, item: &Item) -> HeldFit {
         fit_held(body, side, item).unwrap()
+    }
+
+    #[test]
+    fn a_short_weapon_hangs_in_each_of_the_belts_frogs() {
+        use armory::Item as Armory;
+        use fb_items::Slot;
+        let belt_with = |frogs: u32| {
+            (0..4000)
+                .map(|s| roll(Family::Belt, s))
+                .find(|b| matches!(b, Armory::Belt(s) if s.fittings.frogs == frogs))
+                .unwrap_or_else(|| panic!("no belt with {frogs} frogs"))
+        };
+        let (two, one, none) = (belt_with(2), belt_with(1), belt_with(0));
+        for folk in Folk::fitted() {
+            let body = body(folk);
+            let worn = |belt: &Item| crate::fit_worn(&body, &[(Slot::Belt, belt.clone())]).layer(Slot::Belt).unwrap().mesh.clone();
+            let (two_mesh, one_mesh, none_mesh) = (worn(&two), worn(&one), worn(&none));
+            for family in [Family::Sword, Family::Mace, Family::Dagger, Family::Club, Family::Axe] {
+                let weapon = roll(family, 5);
+                let mut sides = vec![];
+                for left in [true, false] {
+                    let hung = fit_frogged(&weapon, &two_mesh, left).unwrap_or_else(|| panic!("{folk:?} {family:?} {left}"));
+                    let (lo, hi) = hung.mesh.bounds().unwrap();
+                    assert!(lo[1] > 0.0, "{folk:?} {family:?}: through the floor");
+                    let (belt_lo, belt_hi) = two_mesh.bounds().unwrap();
+                    assert!(hi[1] < belt_hi[1] + 4.0 * body.scale, "{folk:?} {family:?}: hilt far above the belt");
+                    let x = (lo[0] + hi[0]) * 0.5;
+                    assert!(if left { x > 0.0 } else { x < 0.0 }, "{folk:?} {family:?}: on the wrong hip ({x})");
+                    assert!(lo[0].min(hi[0]).abs() <= belt_hi[0].max(-belt_lo[0]) + 2.0, "{folk:?} {family:?}: hangs far from the hip");
+                    sides.push(x);
+                }
+                assert!(sides[0] > 0.0 && sides[1] < 0.0);
+                // One frog is the left hip's; none is nobody's.
+                assert!(fit_frogged(&weapon, &one_mesh, true).is_some() && fit_frogged(&weapon, &one_mesh, false).is_none());
+                assert!(fit_frogged(&weapon, &none_mesh, true).is_none());
+            }
+        }
     }
 
     #[test]

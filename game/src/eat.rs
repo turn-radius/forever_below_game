@@ -266,12 +266,15 @@ impl Eating<'_, '_> {
 }
 
 /// The healing draught nearest to hand among what is carried, never one lying underfoot or in a
-/// container not carried: a quickslot's first, then the belt's grid, then the pack's, then the
+/// container not carried: a quickslot's first, then the belt's potion pouch, then the belt's grid, then the pack's, then the
 /// bags inside those, breadth first.
 pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::Quickslots>) -> Option<ItemId> {
     use fb_items::Slot;
     let is_draught = |id: ItemId| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.brew() == Some(Brew::Healing));
     if let Some(id) = slots.and_then(|s| s.0.iter().flatten().copied().find(|&id| is_draught(id))) {
+        return Some(id);
+    }
+    if let Some(id) = [Slot::Potion1, Slot::Potion2, Slot::Potion3].into_iter().filter_map(|slot| inventory.worn(slot)).find(|&id| is_draught(id)) {
         return Some(id);
     }
     let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Satchel, Slot::Quiver];

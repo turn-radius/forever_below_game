@@ -172,9 +172,18 @@ impl DollChoice {
         worn.retain(|(slot, _)| Some(*slot) != self.without);
         for pair in self.wear.into_iter().flat_map(|w| w.split(',')) {
             let Some((slot, base)) = pair.split_once('=') else { continue };
-            // A pack asked for beside a strapped weapon (`--wear back=Pack,strap=Spear`) is the first of the seed's on that has a strap to hold it.
-            let strapped = slot == "back" && self.wear.is_some_and(|w| w.contains("strap="));
-            let rolled = if strapped { (self.seed..self.seed + 2000).filter_map(|s| fb_items::roll_item(base, s)).find(|i| i.has_accessory(fb_items::Accessory::WeaponStrap)) } else { fb_items::roll_item(base, self.seed) };
+            // A pack or belt asked for beside what its fittings hold (`--wear back=Pack,strap=Spear` or
+            // `belt=Belt,frog1=Sword,frog2=Mace,potion1=Vial`) is the first of the seed's on that has
+            // every fitting asked for.
+            let needs: Vec<fb_items::Accessory> = self
+                .wear
+                .into_iter()
+                .flat_map(|w| w.split(','))
+                .filter_map(|p| serde_json::from_str::<fb_items::Slot>(&format!("{:?}", p.split_once('=')?.0)).ok())
+                .filter(|fit| fit.host().is_some_and(|host| format!("{host:?}").to_lowercase() == slot))
+                .filter_map(|fit| fit.needs())
+                .collect();
+            let rolled = if needs.is_empty() { fb_items::roll_item(base, self.seed) } else { (self.seed..self.seed + 4000).filter_map(|s| fb_items::roll_item(base, s)).find(|i| needs.iter().all(|a| i.has_accessory(*a))) };
             let (Ok(slot), Some(item)) = (serde_json::from_str::<fb_items::Slot>(&format!("{slot:?}")), rolled) else { continue };
             worn.retain(|(s, _)| *s != slot);
             worn.push((slot, item));

@@ -78,6 +78,38 @@ fn first_256_seeds_cover_the_variety() {
 }
 
 #[test]
+fn belts_roll_with_their_fittings_on() {
+    use armory::families::bags::Accessory;
+    let all = rolls(1..=2000);
+    let share = |f: &dyn Fn(&BeltState) -> bool| all.iter().filter(|s| f(s)).count() as f32 / all.len() as f32;
+    // About one belt in five has a frog (the sword belts), half of those two; a few in five a potion
+    // pouch; one in six a sack. Our own numbers (`docs/items.md`, "Belt accessories").
+    let (frogged, two, potions, sack) = (share(&|s| s.fittings.frogs > 0), share(&|s| s.fittings.frogs == 2), share(&|s| s.fittings.potion_pouch), share(&|s| s.fittings.sack));
+    assert!((0.15..0.25).contains(&frogged), "{frogged} of belts have a frog");
+    assert!((0.07..0.14).contains(&two), "{two} of belts have two");
+    assert!((0.15..0.30).contains(&potions), "{potions} of belts have a potion pouch");
+    assert!((0.12..0.25).contains(&sack), "{sack} of belts have a sack");
+    for s in &all {
+        let found = s.accessories();
+        assert_eq!(found.contains(&Accessory::LeftFrog), s.fittings.frogs >= 1);
+        assert_eq!(found.contains(&Accessory::RightFrog), s.fittings.frogs == 2);
+        assert_eq!(found.contains(&Accessory::PotionPouch), s.fittings.potion_pouch);
+        assert_eq!(found.contains(&Accessory::BeltSack), s.fittings.sack);
+    }
+    assert!(all.iter().any(|s| s.accessories().len() >= 3), "no belt with three");
+}
+
+#[test]
+fn an_old_belt_without_the_new_fittings_still_loads() {
+    let mut json = serde_json::to_value(Belts::roll(5)).unwrap();
+    let fittings = json["fittings"].as_object_mut().unwrap();
+    fittings.remove("potion_pouch");
+    fittings.remove("sack");
+    let old: BeltState = serde_json::from_value(json).unwrap();
+    assert!(!old.fittings.potion_pouch && !old.fittings.sack);
+}
+
+#[test]
 fn nouns() {
     let mut s = BeltState::default();
     assert_eq!(Belts::noun(&s), "Belt");

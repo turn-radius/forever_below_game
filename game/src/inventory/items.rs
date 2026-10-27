@@ -43,6 +43,10 @@ pub enum Refusal {
     NoBelt,
     /// The strap slot with no pack worn that has a weapon strap.
     NoStrap,
+    /// A frog slot with no belt worn that has a frog at that hip.
+    NoFrog,
+    /// A potion place with no belt worn that has a potion pouch.
+    NoPouch,
     /// A quickslot has nothing to do with it.
     NotUsable,
     /// Not carried: a quickslot only takes what the delver has with them.
@@ -69,6 +73,8 @@ impl Refusal {
             Refusal::WrongSlot => "That does not go there.",
             Refusal::NoBelt => "It hangs from a belt. Wear one first.",
             Refusal::NoStrap => "It needs a pack with a weapon strap.",
+            Refusal::NoFrog => "It needs a belt with a frog at that hip.",
+            Refusal::NoPouch => "It needs a belt with a potion pouch.",
             Refusal::NotUsable => "A quickslot cannot use that.",
             Refusal::NotCarried => "Pick it up first.",
             Refusal::Unknown => "That is not here.",
@@ -278,9 +284,9 @@ impl Inventory {
 
     /// Everything worn or held, with its slot, in the slots' order.
     pub fn equipped(&self) -> Vec<(Slot, &Item)> {
-        // A weapon on the pack's strap is carried, not held: it gives none of its stats, only its
-        // weight ([`Inventory::strapped`]).
-        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter(|(slot, _)| **slot != Slot::Strap).filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
+        // What sits in a pack's or belt's fitting is carried, not held: it gives none of its stats,
+        // only its weight ([`Inventory::fitted`]).
+        let mut worn: Vec<(Slot, &Item)> = self.worn.iter().filter(|(slot, _)| !slot.is_fitting()).filter_map(|(&slot, &id)| Some((slot, self.item(id)?))).collect();
         worn.sort_by_key(|(slot, _)| *slot as u8);
         worn
     }
@@ -636,14 +642,23 @@ impl Inventory {
     /// there is no bar: equipping swaps it out ([`Inventory::equip`]).
     pub fn check_wear(&self, id: ItemId, slot: Slot) -> Result<(), Refusal> {
         let item = self.item(id).ok_or(Refusal::Unknown)?;
-        item.profile.slot.ok_or(Refusal::NotWearable)?;
-        // The weapon strap holds one long weapon, and is the worn pack's own.
-        if slot == Slot::Strap {
-            if !item.strappable() {
+        // A fitting holds one thing, and is the worn pack's or belt's own: the weapon strap a long
+        // weapon, a frog a short one, the potion pouch three small potions (goods, not gear).
+        if slot.is_fitting() {
+            if !item.fits_fitting(slot) {
                 return Err(Refusal::WrongSlot);
             }
-            return if self.has_strap() { Ok(()) } else { Err(Refusal::NoStrap) };
+            return if self.has_fitting(slot) {
+                Ok(())
+            } else {
+                Err(match slot {
+                    Slot::Strap => Refusal::NoStrap,
+                    Slot::Frog1 | Slot::Frog2 => Refusal::NoFrog,
+                    _ => Refusal::NoPouch,
+                })
+            };
         }
+        item.profile.slot.ok_or(Refusal::NotWearable)?;
         if !item.fits(slot) {
             return Err(Refusal::WrongSlot);
         }
@@ -676,31 +691,47 @@ impl Inventory {
     /// Whether the pack worn on the back was rolled with a weapon strap
     /// ([`fb_items::Accessory::WeaponStrap`]).
     pub fn has_strap(&self) -> bool {
-        self.worn(Slot::Back).and_then(|id| self.item(id)).is_some_and(|pack| pack.has_accessory(fb_items::Accessory::WeaponStrap))
+        self.has_fitting(Slot::Strap)
     }
 
-    /// With no pack that has a weapon strap worn, the weapon strapped on comes off: into the first
-    /// carried bag with room ([`Inventory::stow`]), or else loose, to be set down underfoot (a long
-    /// one often cannot be packed). Returns it and where it went.
-    pub fn unstrap(&mut self) -> Option<(ItemId, Displaced)> {
-        if self.has_strap() {
-            return None;
+    /// Whether fitting slot `slot` ([`Slot::FITTINGS`]) exists: what is worn in its host slot (the
+    /// pack on the back, the belt) was rolled with the accessory it is. False for any other slot.
+    pub fn has_fitting(&self, slot: Slot) -> bool {
+        let (Some(host), Some(needs)) = (slot.host(), slot.needs()) else { return false };
+        self.worn(host).and_then(|id| self.item(id)).is_some_and(|item| item.has_accessory(needs))
+    }
+
+    /// With the pack or belt that carried them gone (or swapped for one without that fitting), what
+    /// sat in its fittings comes off: into the first carried bag with room ([`Inventory::stow`]),
+    /// or else loose, to be set down underfoot (a long weapon often cannot be packed). Returns
+    /// each and where it went.
+    pub fn unfit(&mut self) -> Vec<(ItemId, Displaced)> {
+        let mut gone = vec![];
+        for slot in Slot::FITTINGS {
+            let Some(id) = self.worn(slot).filter(|_| !self.has_fitting(slot)) else { continue };
+            self.take_out(id);
+            let went = match self.stow(id) {
+                Ok(container) => match self.location(id) {
+                    Some(Location::In { at, .. }) => Displaced::In { container, at },
+                    None => Displaced::Folded { container },
+                    _ => Displaced::Underfoot,
+                },
+                Err(_) => Displaced::Underfoot,
+            };
+            gone.push((id, went));
         }
-        let id = self.worn(Slot::Strap)?;
-        self.take_out(id);
-        let went = match self.stow(id) {
-            Ok(container) => match self.location(id) {
-                Some(Location::In { at, .. }) => Displaced::In { container, at },
-                _ => Displaced::Underfoot,
-            },
-            Err(_) => Displaced::Underfoot,
-        };
-        Some((id, went))
+        gone
     }
 
     /// The weapon strapped to the worn pack.
     pub fn strapped(&self) -> Option<ItemId> {
         self.worn(Slot::Strap)
+    }
+
+    /// Everything sitting in a fitting of the worn pack or belt, with its slot, in the slots'
+    /// order: the strapped weapon, the weapons in the frogs, the potions in the pouch.
+    pub fn fitted(&self) -> Vec<(Slot, ItemId)> {
+        Slot::FITTINGS.iter().filter_map(|&slot| Some((slot, self.worn(slot)?))).collect()
     }
 
     /// The slot `id` goes in when worn without saying where: the first of its slots
@@ -718,7 +749,11 @@ impl Inventory {
     /// ring fills whichever ring slot is free.
     fn ring_slot(&self, id: ItemId, slot: Slot) -> Slot {
         let free = |s| self.worn(s).is_none_or(|other| other == id);
+        // A frog or potion place taken: the other of its kind, if that is free.
+        let like = |kinds: &[Slot]| kinds.iter().copied().find(|&s| s != slot && free(s) && self.check_wear(id, s).is_ok());
         match slot {
+            Slot::Frog1 | Slot::Frog2 if !free(slot) => like(&[Slot::Frog1, Slot::Frog2]).unwrap_or(slot),
+            Slot::Potion1 | Slot::Potion2 | Slot::Potion3 if !free(slot) => like(&[Slot::Potion1, Slot::Potion2, Slot::Potion3]).unwrap_or(slot),
             Slot::Ring1 | Slot::Ring2 if !free(slot) => {
                 let other = if slot == Slot::Ring1 { Slot::Ring2 } else { Slot::Ring1 };
                 if self.worn(other).is_none() { other } else { slot }
@@ -758,9 +793,9 @@ impl Inventory {
         self.wear(id, slot)?;
         let back = match from {
             Some(Location::Worn(was)) if self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
-            // Drawn from the strap, the weapon it was swapped for (a mace, a torch) cannot go back on
-            // it: it is stowed if a bag has room.
-            Some(Location::Worn(Slot::Strap)) => match self.stow(old) {
+            // Drawn from a fitting, the weapon it was swapped for (a mace on the strap, a torch in a
+            // frog) cannot go back on it: it is stowed if a bag has room.
+            Some(Location::Worn(from)) if from.is_fitting() => match self.stow(old) {
                 Ok(container) => match self.location(old) {
                     Some(Location::In { at, .. }) => Displaced::In { container, at },
                     _ => Displaced::Underfoot,
@@ -1071,11 +1106,75 @@ mod tests {
         inventory.wear(pack, Slot::Back).unwrap();
         let staff = inventory.add(rolled("Staff", 3));
         inventory.wear(staff, Slot::Strap).unwrap();
-        assert_eq!(inventory.unstrap(), None, "the pack is still on");
+        assert_eq!(inventory.unfit(), vec![], "the pack is still on");
         let bare = inventory.add(pack_strapped(false));
         inventory.equip(bare, Slot::Back).unwrap();
-        let (id, _) = inventory.unstrap().expect("the strap is gone");
-        assert_eq!((id, inventory.strapped()), (staff, None));
+        let gone = inventory.unfit();
+        assert_eq!((gone.iter().map(|(id, _)| *id).collect::<Vec<_>>(), inventory.strapped()), (vec![staff], None));
+    }
+
+    /// A belt rolled with the given fittings.
+    fn belt_with(want: impl Fn(&Item) -> bool) -> Item {
+        (1..3000).map(|s| rolled("Belt", s)).find(|b| want(b)).expect("a belt of that kind")
+    }
+
+    #[test]
+    fn a_frog_holds_one_short_weapon_at_its_hip() {
+        use fb_items::Accessory::{LeftFrog, RightFrog};
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(rolled("Sword", 3));
+        let mace = inventory.add(rolled("Mace", 3));
+        let spear = inventory.add(rolled("Spear", 3));
+        assert_eq!(inventory.check_wear(sword, Slot::Frog1), Err(Refusal::NoFrog), "no belt");
+        let bare = inventory.add(belt_with(|b| !b.has_accessory(LeftFrog)));
+        inventory.wear(bare, Slot::Belt).unwrap();
+        assert_eq!(inventory.check_wear(sword, Slot::Frog1), Err(Refusal::NoFrog), "a belt with no frog");
+        let one = inventory.add(belt_with(|b| b.has_accessory(LeftFrog) && !b.has_accessory(RightFrog)));
+        inventory.equip(one, Slot::Belt).unwrap();
+        assert_eq!(inventory.check_wear(sword, Slot::Frog1), Ok(()));
+        assert_eq!(inventory.check_wear(sword, Slot::Frog2), Err(Refusal::NoFrog), "one frog");
+        assert_eq!(inventory.check_wear(spear, Slot::Frog1), Err(Refusal::WrongSlot), "not a short weapon");
+        let two = inventory.add(belt_with(|b| b.has_accessory(RightFrog)));
+        inventory.equip(two, Slot::Belt).unwrap();
+        inventory.equip(sword, Slot::Frog1).unwrap();
+        // A second weapon dropped on the taken frog goes in the other.
+        inventory.equip(mace, Slot::Frog1).unwrap();
+        assert_eq!((inventory.worn(Slot::Frog1), inventory.worn(Slot::Frog2)), (Some(sword), Some(mace)));
+        assert!(inventory.equipped().iter().all(|(slot, _)| !slot.is_fitting()), "a framed weapon gives no stats");
+        // Drawn into the hand; the hand's old weapon goes back in the frog it left.
+        inventory.equip(sword, Slot::Mainhand).unwrap();
+        assert_eq!((inventory.worn(Slot::Frog1), inventory.worn(Slot::Mainhand)), (None, Some(sword)));
+        // The belt off, whatever hung in its frogs comes off with it.
+        let plain = inventory.add(belt_with(|b| b.accessories().is_empty()));
+        inventory.equip(plain, Slot::Belt).unwrap();
+        let gone: Vec<ItemId> = inventory.unfit().into_iter().map(|(id, _)| id).collect();
+        assert_eq!((gone, inventory.fitted()), (vec![mace], vec![]));
+    }
+
+    #[test]
+    fn the_potion_pouch_holds_three_small_potions() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let potions: Vec<ItemId> = ["Vial", "Small potion", "Healing vial", "Small healing draught"].iter().map(|b| inventory.add(rolled(b, 2))).collect();
+        let large = inventory.add(rolled("Large potion", 2));
+        let medium = inventory.add(rolled("Potion", 2));
+        assert_eq!(inventory.check_wear(potions[0], Slot::Potion1), Err(Refusal::NoPouch), "no belt");
+        let belt = inventory.add(belt_with(|b| b.has_accessory(PotionPouch)));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        assert_eq!(inventory.check_wear(large, Slot::Potion1), Err(Refusal::WrongSlot));
+        assert_eq!(inventory.check_wear(medium, Slot::Potion1), Err(Refusal::WrongSlot));
+        for &potion in &potions[..3] {
+            inventory.equip(potion, Slot::Potion1).unwrap();
+        }
+        assert_eq!(inventory.fitted().iter().map(|(_, id)| *id).collect::<Vec<_>>(), potions[..3]);
+        assert_eq!(inventory.equip(potions[3], Slot::Potion2).map(|d| d.map(|(old, _)| old)), Ok(Some(potions[1])), "a full pouch swaps");
+        // A potion in the pouch is carried, and drunk from it frees its place.
+        assert!(inventory.is_carried(potions[0]));
+        inventory.use_one(potions[0]);
+        assert_eq!(inventory.worn(Slot::Potion1), None);
+        let plain = inventory.add(belt_with(|b| !b.has_accessory(PotionPouch)));
+        inventory.equip(plain, Slot::Belt).unwrap();
+        assert_eq!(inventory.unfit().len(), 2);
     }
 
     #[test]

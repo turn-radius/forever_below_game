@@ -516,8 +516,9 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
 pub fn end(inventory: &mut Inventory, session: Session) {
     let shelf = session.shelf;
     let mut moved: Vec<(ItemId, Location)> = session.moved.into_iter().collect();
-    // A strapped weapon goes back after the pack it hangs on.
-    moved.sort_by_key(|(_, was)| matches!(was, Location::Worn(fb_items::Slot::Strap)));
+    // What sat in a fitting (a strapped weapon, a framed sword, a potion in the pouch) goes back after
+    // the pack or belt it hangs on.
+    moved.sort_by_key(|(_, was)| matches!(was, Location::Worn(slot) if slot.is_fitting()));
     for &(id, _) in &moved {
         inventory.take_out(id);
     }

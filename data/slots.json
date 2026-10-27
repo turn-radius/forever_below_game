@@ -150,5 +150,45 @@
   "R",
   13,
   31
+ ],
+ [
+  "frog1",
+  "Left frog",
+  "small",
+  "R",
+  4,
+  36
+ ],
+ [
+  "frog2",
+  "Right frog",
+  "small",
+  "R",
+  4,
+  47
+ ],
+ [
+  "potion1",
+  "Potion",
+  "small",
+  "L",
+  13,
+  53.5
+ ],
+ [
+  "potion2",
+  "Potion",
+  "small",
+  "L",
+  22,
+  53.5
+ ],
+ [
+  "potion3",
+  "Potion",
+  "small",
+  "L",
+  31,
+  53.5
  ]
 ]

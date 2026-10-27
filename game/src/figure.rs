@@ -165,6 +165,22 @@ impl Figure {
                 attach: None,
             });
         }
+        // A weapon in each of the belt's frogs, riding the pelvis with the belt.
+        for (slot, left) in [(Slot::Frog1, true), (Slot::Frog2, false)] {
+            if let (Some((_, item)), Some(belt)) = (worn.iter().find(|(s, _)| *s == slot), fit.layer(Slot::Belt))
+                && let Some(hung) = fb_body::fit_frogged(&item.shape, &belt.mesh, left)
+            {
+                pieces.push(Piece {
+                    name: item.title().to_string(),
+                    appearance: appearance_of(&hung.item),
+                    on_head: false,
+                    lit: false,
+                    skin: None,
+                    mesh: hung.mesh,
+                    attach: Some(Joint::Pelvis),
+                });
+            }
+        }
         let neck = Vec3::from_array(body.neck_base().origin);
         let rig = Rig::of_lifted(&body, fit.wing_lift);
         let gait = Gait::new(&body, &rig);
