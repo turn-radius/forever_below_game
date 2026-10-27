@@ -39,7 +39,8 @@
 //!   the delver's hit points as a creature's blow does, and a miss whooshes past. A friendly
 //!   folk never attacks, however near the delver comes. One who has not seen the delver for
 //!   `folk.lose_interest_after` seconds gives up, friendly again, and heads home, unless their
-//!   faction is Hostile to the delver, which keeps its folk hostile (`crate::folk_regard`). A folk the
+//!   faction is Hostile to the delver, which keeps its folk hostile (`crate::folk_regard`). A
+//!   group won over by persuasion stands down at once (`WorldRecord::truces`), and a folk the
 //!   delver is parleying with holds their blows ([`Parleying`]).
 //!
 //! A folk's stance while lying is the one they had standing: the skinned figure is turned as a
@@ -463,7 +464,9 @@ pub fn fight(
         fight.unseen = unseen_after(fight.unseen, sees, direct, fight.path.is_empty(), dt);
         // A faction that is Hostile to the delver does not calm down (`crate::folk_regard`).
         let hated = record.standings.band(denizen.person.faction.id) == fb_faction::Band::Hostile;
-        if fight.unseen > tuning.folk.lose_interest_after && !hated {
+        // A group won over by persuasion stands down at once, however it stands in the delver's books.
+        let stood_down = record.truce_holds(level.depth, denizen.person.faction.id);
+        if stood_down || (fight.unseen > tuning.folk.lose_interest_after && !hated) {
             *hostility = Hostility::Friendly;
             fight.calm();
             stride.speed = 0.0;

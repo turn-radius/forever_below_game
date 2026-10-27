@@ -7,7 +7,9 @@
 //!   What do you want?") and Persuade as its one topic ([`lines::parley_topics`]). They hold
 //!   their blows while it lasts ([`crate::hostility::Parleying`]), and being hostile does not
 //!   end it. A failed roll against a Hostile folk, or one who has turned, closes the panel and
-//!   they fight on.
+//!   they fight on. A success against one makes a truce with their group: the faction's folk on
+//!   the level stand down until the delver strikes one of them or rests
+//!   ([`WorldRecord::make_truce`], `crate::hostility`).
 //! - The panel is on the right of the view, so the folk stays in sight to its left. It shows
 //!   their name, folk, trade and tier, faction and the band the faction stands in, a greeting
 //!   (warmer for Friendly and Allied, curt in a parley), and the topics ([`lines::topics`]). A topic is chosen
@@ -144,7 +146,7 @@ pub struct Talk {
     /// on the delver does not end it.
     pub parley: bool,
     /// The folk is Hostile, or has turned on the delver: a failed persuasion ends the parley and
-    /// they attack.
+    /// they attack, and a success makes a truce ([`WorldRecord::make_truce`]).
     hostile: bool,
     revision: u32,
 }
@@ -501,6 +503,12 @@ fn finish_persuasion(
         if finished.roll.succeeded {
             say(&mut talk, "pass", 0x64);
             toasts.say(format!("{} thinks better of you", capital_first(&faction)));
+            // A hostile folk won over stand down with their group, until the delver strikes one
+            // of them or rests.
+            if let (true, true, Some(record), Some(speaker)) = (here, talk.hostile, record.as_deref_mut(), &speaker) {
+                record.make_truce(speaker.depth, this.faction);
+                toasts.say(format!("{} stand down", capital_first(&faction)));
+            }
         } else if let (true, true, Some(speaker)) = (here, talk.hostile, &speaker) {
             // Failed, a hostile folk ends the parley and attacks: the panel closes and they are
             // let go to the fight ([`end_talk`]).

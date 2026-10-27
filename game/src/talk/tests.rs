@@ -563,14 +563,17 @@ fn parley_app(standing: i32) -> (App, Entity) {
 }
 
 #[test]
-fn a_hostile_folk_is_persuaded_on_a_harder_roll() {
+fn a_hostile_folk_is_persuaded_on_a_harder_roll_and_a_win_makes_a_truce() {
     let (mut app, folk) = parley_app(-80);
     assert!(app.world().resource::<Talk>().waiting, "the dice roll");
     let faction = faction_of(&app, folk);
+    let depth = app.world().resource::<CurrentLevel>().0.depth;
+    assert!(!app.world().resource::<WorldRecord>().truce_holds(depth, faction));
     let before = app.world().resource::<WorldRecord>().standings.get(faction).value();
     dice_close(&mut app, folk, 20);
     let record = app.world().resource::<WorldRecord>();
     assert!(record.standings.get(faction).value() > before);
+    assert!(record.truce_holds(depth, faction), "the group stands down");
     assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk), "the parley goes on");
 }
 
@@ -584,6 +587,7 @@ fn a_failed_roll_on_a_hostile_folk_ends_the_parley_and_they_attack() {
     assert!(app.world().get::<Parleying>(folk).is_none(), "released to the fight");
     let record = app.world().resource::<WorldRecord>();
     assert_eq!(before - record.standings.get(faction).value(), persuade::FAIL_COST);
+    assert!(!record.truce_holds(app.world().resource::<CurrentLevel>().0.depth, faction));
 }
 
 #[test]
@@ -595,12 +599,13 @@ fn a_failed_roll_on_a_wary_folk_keeps_the_parley_open() {
 }
 
 #[test]
-fn a_win_on_a_wary_folk_can_carry_them_to_neutral() {
+fn a_win_on_a_wary_folk_makes_no_truce_and_can_carry_them_to_neutral() {
     let (mut app, folk) = parley_app(-12);
     let faction = faction_of(&app, folk);
     dice_close(&mut app, folk, 20);
     let record = app.world().resource::<WorldRecord>();
     assert_eq!(record.standings.band(faction), Band::Neutral);
+    assert!(record.truces.is_empty());
 }
 
 #[test]

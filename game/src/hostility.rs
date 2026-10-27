@@ -18,6 +18,11 @@
 //!   again, unless its faction is Hostile, which never calms down. What folk do on sight by band
 //!   (attack, watch, greet, help) is `crate::folk_regard`.
 //!
+//! - A hostile faction's folk won over by persuasion stand down together: a truce with the faction on
+//!   that level (`WorldRecord::truces`) keeps them from turning on sight and calms those already
+//!   fighting (`crate::folk_regard`, `crate::folk_combat`). A blow from the delver at one of
+//!   them gives cause, which ends the truce ([`turn_on_the_delver`]); a rest ends it too.
+//!
 //! Who sees, and the reach of sight in a corridor, are our own.
 
 use bevy::prelude::*;
@@ -129,6 +134,10 @@ pub fn turn_on_the_delver(
     for cause in causes {
         let mut newly = false;
         let mut faction = None;
+        // A blow at one of a group that stood down ends the truce for all of them.
+        if let Ok((_, denizen, ..)) = folk.get(cause) {
+            record.end_truce(level.0.depth, denizen.person.faction.id);
+        }
         // Kin see each other across their own faction's shut doors, and no one else's.
         let blocked = crate::doors::opaque_for(&level.0, &blocked_cells, doors.as_deref(), everyone.iter().find(|k| k.entity == cause).map(|k| k.faction));
         for entity in who_turns(cause, &everyone, &level.0, &blocked) {
