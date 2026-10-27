@@ -38,8 +38,6 @@ pub fn set_down_around<'a>(
     obstacles: &[crate::play::Obstacle],
     floor_scale: f32,
 ) {
-    use fb_level::CELL;
-    let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
     let ids: Vec<ItemId> = items.map(|item| inventory.add(item.clone())).collect();
     // What goes in a holder set down with it (an archer's arrows in its quiver) stays in it.
     let holders: Vec<ItemId> = ids.iter().copied().filter(|&id| inventory.item(id).and_then(|i| i.profile.holds.as_ref()).is_some_and(|g| !g.accepts.is_empty())).collect();
@@ -59,9 +57,28 @@ pub fn set_down_around<'a>(
             inventory.item(id).is_some() && inventory.location(id) == Some(super::items::Location::Loose)
         })
         .collect();
-    let count = loose.len().max(1);
+    lay_round(centre, loose, seed, inventory, changes, blocked, obstacles, floor_scale);
+}
+
+/// Sets the loose items `ids`, already in `inventory`, down round `centre` (world `(x, z)`) as
+/// [`set_down_around`] does: a ring from an angle rolled from `seed`, each slid clear of `blocked`
+/// cells and `obstacles`, through [`FloorChange::SetDownAt`].
+#[allow(clippy::too_many_arguments)]
+pub fn lay_round(
+    centre: Vec2,
+    ids: Vec<ItemId>,
+    seed: u32,
+    inventory: &Inventory,
+    changes: &mut FloorChanges,
+    blocked: impl Fn(i32, i32) -> bool,
+    obstacles: &[crate::play::Obstacle],
+    floor_scale: f32,
+) {
+    use fb_level::CELL;
+    let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
+    let count = ids.len().max(1);
     let first = rng.range_f32(0.0, std::f32::consts::TAU);
-    for (i, id) in loose.into_iter().enumerate() {
+    for (i, id) in ids.into_iter().enumerate() {
         let Some(item) = inventory.item(id) else { continue };
         let radius = crate::carry::floor_radius(&crate::carry::item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), floor_scale).min(CELL * 0.5 - 0.5);
         let angle = first + i as f32 / count as f32 * std::f32::consts::TAU;

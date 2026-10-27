@@ -19,8 +19,8 @@ use crate::creatures::skeletons::{BoneSounds, WornGear, play_at};
 use crate::creatures::trolls::Troll;
 use crate::creatures::{Bones, Critter};
 use crate::folk_combat::{collapse_folk, take_folk_blows};
-use crate::inventory::Inventory;
-use crate::inventory::underfoot::{FloorChanges, apply_floor_changes, set_down_around};
+use crate::inventory::{Inventory, ItemId};
+use crate::inventory::underfoot::{FloorChanges, apply_floor_changes, lay_round, set_down_around};
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Obstacle, Obstacles};
 use crate::player::blocked_by;
 use crate::settings::GameSettings;
@@ -48,22 +48,28 @@ impl Plugin for BelongingsPlugin {
 
 /// Sets down at the delver's feet what a load found no room for in its container
 /// ([`Inventory::spill`]): an old quiver's twenty kinds of arrow in a few stack places. Each lies
-/// round them through [`FloorChange::SetDownAt`], so nothing a save held is lost.
-pub fn set_down_spill(mut inventory: ResMut<Inventory>, mut changes: ResMut<FloorChanges>, eye: Query<&Transform, With<crate::play::PlayerCamera>>) {
+/// round them, slid clear of walls and props as a body's things are ([`lay_round`]), through
+/// [`FloorChange::SetDownAt`], so nothing a save held is lost.
+#[allow(clippy::too_many_arguments)]
+pub fn set_down_spill(
+    mut inventory: ResMut<Inventory>,
+    mut changes: ResMut<FloorChanges>,
+    tuning: Res<Tuning>,
+    level: Res<CurrentLevel>,
+    blocked_cells: Res<BlockedCells>,
+    obstacles: Option<Res<Obstacles>>,
+    eye: Query<&GlobalTransform, With<crate::play::PlayerCamera>>,
+) {
     if inventory.spill.is_empty() {
         return;
     }
+    // The camera is a child of the delver, so only its global place is where they stand.
     let Ok(eye) = eye.single() else { return };
-    let spilled = std::mem::take(&mut inventory.spill);
-    let count = spilled.len().max(1) as f32;
-    for (i, id) in spilled.into_iter().enumerate() {
-        if inventory.item(id).is_none() {
-            continue;
-        }
-        let angle = i as f32 / count * std::f32::consts::TAU;
-        let spot = eye.translation.xz() + Vec2::from_angle(angle) * 3.0;
-        changes.0.push(crate::inventory::underfoot::FloorChange::SetDownAt(id, spot / fb_level::CELL, angle));
-    }
+    let spilled: Vec<ItemId> = std::mem::take(&mut inventory.spill).into_iter().filter(|&id| inventory.item(id).is_some()).collect();
+    let obstacles = obstacles.as_deref().cloned().unwrap_or_default();
+    let blocked = blocked_by(&level.0, &blocked_cells);
+    let feet = eye.translation().xz();
+    lay_round(feet, spilled, feet.x.to_bits() ^ feet.y.to_bits(), &inventory, &mut changes, &blocked, &obstacles.0, tuning.view.floor_item_scale);
 }
 
 /// What a character leaves on the floor when it is dead for good, filled when it appears.
@@ -191,6 +197,39 @@ mod tests {
             .insert_resource(CurrentLevel(fb_level::generate(1207, DEPTH)))
             .add_systems(Update, drop_belongings);
         app
+    }
+
+    #[test]
+    fn a_spill_lands_round_the_delver_not_round_their_eye_in_its_parent() {
+        let mut app = app();
+        app.add_systems(Update, set_down_spill);
+        // The delver stands at (60, 40); the camera rides them at eye height, so its own transform
+        // is near the origin and only its global one is where they are.
+        let delver = app.world_mut().spawn((Transform::from_xyz(60.0, 0.0, 40.0), GlobalTransform::from_xyz(60.0, 0.0, 40.0))).id();
+        let eye = app.world_mut().spawn((crate::play::PlayerCamera, Transform::from_xyz(0.0, 16.0, 0.0), GlobalTransform::from_xyz(60.0, 16.0, 40.0))).id();
+        app.world_mut().entity_mut(delver).add_child(eye);
+        let ids: Vec<ItemId> = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let ids: Vec<ItemId> = (1..4).map(|s| inventory.add(fb_items::roll_item("Arrow", s).unwrap())).collect();
+            inventory.spill = ids.clone();
+            ids
+        };
+        app.update();
+        assert!(app.world().resource::<Inventory>().spill.is_empty());
+        let spots: Vec<Vec2> = app
+            .world()
+            .resource::<FloorChanges>()
+            .0
+            .iter()
+            .filter_map(|change| match change {
+                FloorChange::SetDownAt(id, at, _) if ids.contains(id) => Some(*at * fb_level::CELL),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(spots.len(), ids.len());
+        for at in spots {
+            assert!(at.distance(Vec2::new(60.0, 40.0)) < fb_level::CELL, "{at} is not at the delver's feet");
+        }
     }
 
     fn spot(species: Species, seed: u32) -> CreatureSpot {
