@@ -878,6 +878,9 @@ pub struct ColumnSpot {
     pub variant: u32,
     /// Quarter turns about the shaft, so a repeated column does not wear the same way on the same face.
     pub turn: u32,
+    /// Whether the shaft is cut with flutes: set for every column of a hall the level
+    /// ([`Level::hall_is_fluted`]) chose to flute.
+    pub fluted: bool,
 }
 
 /// Every column of the level, with how tall each stands.
@@ -898,7 +901,7 @@ pub fn columns(level: &Level) -> Vec<ColumnSpot> {
             let seat = over.iter().copied().fold(f32::MAX, f32::min).floor();
             let top = (over.iter().copied().fold(0.0, f32::max) + 0.3).ceil();
             let h = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663) ^ level.seed;
-            out.push(ColumnSpot { cell: (x, y), seat, top, variant: (h >> 7) % COLUMN_VARIANTS, turn: (h >> 13) % 4 });
+            out.push(ColumnSpot { cell: (x, y), seat, top, variant: (h >> 7) % COLUMN_VARIANTS, turn: (h >> 13) % 4, fluted: level.room_at(x, y).is_some_and(|room| level.hall_is_fluted(room)) });
         }
     }
     out
@@ -908,8 +911,10 @@ pub fn columns(level: &Level) -> Vec<ColumnSpot> {
 /// swells a little a third of the way up and narrows toward the top (entasis), and a capital of
 /// an echinus under a square abacus whose top is at `seat`, with an impost block above it
 /// running up to `top`. The shaft is worn smooth and chipped: `variant` and `seed` choose
-/// where. In its own space the column stands on the origin.
-pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
+/// where. A `fluted` shaft is cut with shallow vertical grooves from the base to the necking
+/// ring, following its swell and taper, with the chips and wear still biting into them. In its
+/// own space the column stands on the origin.
+pub fn column(seat: f32, top: f32, variant: u32, seed: u32, fluted: bool) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ variant.wrapping_mul(0x85eb_ca6b) ^ 0xc010_0000);
     let (plinth, abacus, echinus) = (1.6, 1.4, 2.4);
     let shaft_bottom = plinth + 1.5;
@@ -948,8 +953,8 @@ pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
     profile.push([0.0, seat - abacus]);
     // Dense enough that chips and wear have vertices to move.
     let profile = densify(&profile, 1.0);
-    let mut body = lathe(&profile, &LatheOptions { facets: 28, shading: Shading::SMOOTH, ..Default::default() });
-    wear(&mut body, &mut rng, [shaft_bottom, shaft_top], r_bottom, seed ^ variant);
+    let mut body = lathe(&profile, &LatheOptions { facets: if fluted { FLUTES * FLUTE_FACETS } else { 28 }, shading: Shading::SMOOTH, ..Default::default() });
+    wear(&mut body, &mut rng, [shaft_bottom, shaft_top], r_bottom, seed ^ variant, fluted);
 
     let mut foot = plank(2.0 * COLUMN_HALF, plinth, 2.0 * COLUMN_HALF, 0.4);
     foot.translate([0.0, plinth * 0.5, 0.0]);
@@ -961,6 +966,21 @@ pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
     let mut parts = Parts::new();
     parts.add_look("column", body, Look::of(MaterialKind::Stone).tinted(COLUMN_STONE));
     parts.finish()
+}
+
+/// How many flutes run round a fluted shaft, and how many facets of the lathe cut each: enough
+/// that a groove has a flat bottom, steep sides and a crisp arris between neighbours.
+const FLUTES: usize = 16;
+const FLUTE_FACETS: usize = 8;
+/// How deep a flute cuts, in world units.
+const FLUTE_DEPTH: f32 = 0.5;
+
+/// The depth of a flute, 0 at the arris to 1 across its flat bottom, `s` of the way round it.
+fn flute_profile(s: f32) -> f32 {
+    const DEPTHS: [f32; FLUTE_FACETS + 1] = [0.0, 0.7, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 0.0];
+    let at = s * FLUTE_FACETS as f32;
+    let i = (at as usize).min(FLUTE_FACETS - 1);
+    DEPTHS[i] + (DEPTHS[i + 1] - DEPTHS[i]) * (at - i as f32)
 }
 
 /// `profile` with no step longer than `max`.
@@ -980,7 +1000,7 @@ fn densify(profile: &[[f32; 2]], max: f32) -> Vec<[f32; 2]> {
 
 /// Erodes the turned body: a slow wander of the surface, worse at the foot where the damp
 /// sits, and a few chips knocked out of the shaft and the capital.
-fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]: [f32; 2], radius: f32, seed: u32) {
+fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]: [f32; 2], radius: f32, seed: u32, fluted: bool) {
     let chips: Vec<(V3, f32, f32)> = (0..4 + (rng.range_f32(0.0, 3.0) as usize))
         .map(|_| {
             let (angle, y) = (rng.range_f32(0.0, std::f32::consts::TAU), rng.range_f32(shaft_bottom, shaft_top + 2.0));
@@ -998,6 +1018,12 @@ fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]:
         let (dx, dz) = (p[0] / r, p[2] / r);
         let foot = (-(p[1] - shaft_bottom).max(0.0) / 6.0).exp();
         let mut sink = (value_noise3([p[0] / 3.0, p[1] / 5.0, p[2] / 3.0], seed) - 0.5) * (0.3 + 0.5 * foot);
+        if fluted && p[1] >= shaft_bottom - 1e-3 && p[1] <= shaft_top + 1e-3 {
+            // The grooves run out over the first and last stretch of the shaft.
+            let ends = ((p[1] - shaft_bottom).min(shaft_top - p[1]) / 1.2).clamp(0.0, 1.0);
+            let s = ((-p[2]).atan2(p[0]) / std::f32::consts::TAU * FLUTES as f32).rem_euclid(1.0);
+            sink += FLUTE_DEPTH * ends * flute_profile(s);
+        }
         for &(centre, size, depth) in &chips {
             let d = vec3::distance(*p, centre);
             if d < size {
@@ -1406,7 +1432,7 @@ mod tests {
         assert!(counted > 0);
         let vaults = Vaults::new(&level);
         for spot in spots {
-            let column = column(spot.seat, spot.top, spot.variant, level.seed);
+            let column = column(spot.seat, spot.top, spot.variant, level.seed, spot.fluted);
             for p in &column.parts {
                 p.validate().unwrap();
                 assert!(p.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3));
@@ -1427,7 +1453,7 @@ mod tests {
 
     #[test]
     fn a_column_swells_then_narrows_and_is_chipped() {
-        let made = column(34.0, 36.0, 1, 1207);
+        let made = column(34.0, 36.0, 1, 1207, false);
         let body = &made.parts[0];
         let radius_near = |y: f32| {
             let r: Vec<f32> = body.positions.iter().filter(|p| (p[1] - y).abs() < 0.8 && p[0].hypot(p[2]) > 2.0 && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
@@ -1440,8 +1466,63 @@ mod tests {
         let (lo, hi) = ring.iter().fold((f32::MAX, f32::MIN), |(l, h), &r| (l.min(r), h.max(r)));
         assert!(hi - lo > 0.1, "{lo} {hi}");
         // The same column twice, and a different variant another.
-        assert_eq!(made, column(34.0, 36.0, 1, 1207));
-        assert_ne!(made, column(34.0, 36.0, 2, 1207));
+        assert_eq!(made, column(34.0, 36.0, 1, 1207, false));
+        assert_ne!(made, column(34.0, 36.0, 2, 1207, false));
+    }
+
+    #[test]
+    fn a_hall_flutes_all_its_columns_or_none() {
+        let mut fluted = 0;
+        for seed in 1..=20 {
+            let level = fb_level::generate(seed, 2);
+            let spots = columns(&level);
+            for spot in &spots {
+                let room = level.room_at(spot.cell.0, spot.cell.1).unwrap();
+                assert_eq!(spot.fluted, level.hall_is_fluted(room), "seed {seed}: column {:?}", spot.cell);
+                for other in spots.iter().filter(|o| level.room_at(o.cell.0, o.cell.1) == Some(room)) {
+                    assert_eq!(spot.fluted, other.fluted);
+                }
+            }
+            fluted += spots.iter().filter(|s| s.fluted).count();
+        }
+        assert!(fluted > 0, "no fluted column in 20 levels");
+    }
+
+    #[test]
+    fn flutes_run_out_at_the_ends_of_the_shaft() {
+        let radii = |fluted: bool, y: f32, tol: f32| {
+            let made = column(34.0, 36.0, 1, 1207, fluted);
+            let r: Vec<f32> = made.parts[0].positions.iter().filter(|p| (p[1] - y).abs() < tol && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
+            assert!(!r.is_empty(), "no ring at {y}");
+            r.iter().fold(0.0f32, |m, &r| m.max(r)) - r.iter().fold(f32::MAX, |m, &r| m.min(r))
+        };
+        let (bottom, top) = (3.1, 34.0 - 1.4 - 2.4 - 0.6);
+        for y in [bottom, top] {
+            assert!(radii(true, y, 0.01) < radii(false, y, 0.01) + 0.05, "grooves at {y}");
+        }
+        assert!(radii(true, 14.0, 0.3) > 0.3);
+    }
+
+    #[test]
+    fn a_fluted_shaft_is_grooved_round_and_a_plain_one_is_not() {
+        let ripple = |fluted: bool| {
+            let made = column(34.0, 36.0, 1, 1207, fluted);
+            let body = &made.parts[0];
+            // Radii of the vertices in a band of the shaft, by angle; the grooves make them swing.
+            let mut r: Vec<f32> = body.positions.iter().filter(|p| (p[1] - 14.0).abs() < 0.3).map(|p| p[0].hypot(p[2])).collect();
+            r.sort_by(f32::total_cmp);
+            for part in &made.parts {
+                part.validate().unwrap();
+                assert!(part.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3));
+            }
+            (r[r.len() - 1] - r[0], r.len())
+        };
+        let (plain, plain_n) = ripple(false);
+        let (cut, cut_n) = ripple(true);
+        assert!(cut > plain + 0.2, "plain swings {plain}, fluted {cut}");
+        assert!(cut_n >= 16 * 8 && cut_n > plain_n, "{cut_n} vertices a ring");
+        assert_eq!(column(34.0, 36.0, 1, 1207, true), column(34.0, 36.0, 1, 1207, true));
+        assert_ne!(column(34.0, 36.0, 1, 1207, true), column(34.0, 36.0, 1, 1207, false));
     }
 
     #[test]

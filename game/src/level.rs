@@ -549,14 +549,14 @@ fn spawn_columns(
     let stone = stone_appearance(level.seed);
     let finishes = geometry::level_finishes(level);
     let ink = outline_materials.add(stone.outline);
-    let mut shapes: std::collections::HashMap<(i32, i32, u32, u32), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
+    let mut shapes: std::collections::HashMap<(i32, i32, u32, u32, bool), Vec<(&'static str, Handle<Mesh>, Handle<ToonMaterial>, bool)>> = Default::default();
     // One material for every shape's part of a name: they differ only in their meshes.
     let mut materials: std::collections::HashMap<&'static str, Handle<ToonMaterial>> = Default::default();
     for spot in spots {
         // A column is one moss all over, in quarters, so columns of a shape still share a mesh.
         let [cx, _, cz] = geometry::cell_centre(spot.cell.0, spot.cell.1);
         let moss = (finishes.moss_at(cx, cz) * 4.0).round() as u32;
-        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant, moss)).or_insert_with(|| {
+        let parts = shapes.entry((spot.seat as i32, spot.top as i32, spot.variant, moss, spot.fluted)).or_insert_with(|| {
             mossy_column(&spot, level.seed, moss)
                 .parts
                 .iter()
@@ -694,7 +694,7 @@ fn spawn_corridor_arches(
 
 /// The column at `spot` with `quarters` quarters of full moss on every vertex.
 fn mossy_column(spot: &geometry::stone::ColumnSpot, seed: u32, quarters: u32) -> ItemMesh {
-    let mut column = geometry::stone::column(spot.seat, spot.top, spot.variant, seed);
+    let mut column = geometry::stone::column(spot.seat, spot.top, spot.variant, seed, spot.fluted);
     for part in &mut column.parts {
         part.uvs_b = vec![[quarters as f32 / 4.0, 0.0]; part.positions.len()];
     }
