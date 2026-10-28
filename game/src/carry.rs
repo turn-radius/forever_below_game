@@ -732,7 +732,7 @@ pub(crate) struct Equipped;
 pub struct Aimed(pub Option<Entity>);
 
 /// Where `FB_DEBUG_POSE` holds the player's view, for captures: `1` at the level's start,
-/// `x,y[,yaw[,pitch]]` at a grid point (cells), turned `yaw` degrees from north (positive turns
+/// `stair` or `stairup` before the first stair down or up, `x,y[,yaw[,pitch]]` at a grid point (cells), turned `yaw` degrees from north (positive turns
 /// west) and tilted `pitch` degrees (negative looks down). While it is set the view is held
 /// there every frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -751,6 +751,16 @@ impl DebugPose {
     /// The pose for `FB_DEBUG_POSE`'s value `spec` in `level`.
     pub fn parse(level: &Level, spec: &str) -> DebugPose {
         let (sx, sy, facing) = level.start();
+        // `stair` and `stairup`: in the cell before the first way down (or up), facing it, tilted
+        // to look down into it (or up the shaft).
+        if let Some(kind) = match spec { "stair" => Some(fb_level::StairKind::Down), "stairup" => Some(fb_level::StairKind::Up), _ => None }
+            && let Some(stair) = level.stairs.iter().find(|s| s.kind == kind)
+        {
+            let (dx, dy) = stair.facing.step();
+            let (x, y) = Self::standable(level, stair.x as f32 + 0.5 - dx as f32 * 0.8, stair.y as f32 + 0.5 - dy as f32 * 0.8);
+            let pitch = if kind == fb_level::StairKind::Down { -35.0f32 } else { 20.0 };
+            return DebugPose { at: Vec3::new(x * CELL, 0.0, y * CELL), yaw: stair.facing.yaw(), pitch: pitch.to_radians() };
+        }
         let mut values = spec.split(',').map(|v| v.trim().parse::<f32>().ok());
         let (x, y, yaw, pitch) = match (values.next().flatten(), values.next().flatten()) {
             (Some(x), Some(y)) if spec.contains(',') => {
