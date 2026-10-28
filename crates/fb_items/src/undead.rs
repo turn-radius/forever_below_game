@@ -241,6 +241,9 @@ mod tests {
                 let c = item.shape.condition();
                 assert!(c.wear >= 0.55, "{seed}: {} wear {}", item.base, c.wear);
                 assert!(c.damage >= 0.15, "{seed}: {} damage {}", item.base, c.damage);
+                if item.profile.tags.contains(&crate::Tag::Metal) {
+                    assert!(c.rust >= 1.0, "{seed}: {} rust {}", item.base, c.rust);
+                }
             }
         }
     }

@@ -568,6 +568,8 @@ mod tests {
         let clean = remove(&sword, rusted, &by(Tier::Expert)).unwrap();
         assert!(!clean.affixes.contains(&rusted));
         assert!(clean.shape.condition().rust < before.rust, "rust {} to {}", before.rust, clean.shape.condition().rust);
+        assert!(before.rust > 0.0);
+        assert_eq!(clean.shape.condition().rust, 0.0, "stripped, nothing rusts the iron");
         assert!(clean.history.last().unwrap().contains("Stripped by Ysolde, expert enchanter of the Ash Rite: Rusted."));
         assert!(!clean.name.contains("Rusted"));
         consistent(&clean);

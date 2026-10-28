@@ -115,6 +115,7 @@ fn apply_decay(
     pixel: f32,
     decay_type: u32,
     amount: f32,
+    rust_amount: f32,
     scale: f32,
     seed: f32,
 ) -> vec3<f32> {
@@ -142,13 +143,17 @@ fn apply_decay(
     let n2 = fbm(p * 3.3 + vec3(4.1), cell * 3.3);
 
     if decay_type == DECAY_IRON {
-        // Dulling, then rust blooms ringed with stain and pitted, with sound metal between.
-        // Even a grave find keeps about half its surface bare.
+        // Wear dulls and stains iron; only `rust_amount` brings rust blooms and pits. Even a
+        // grave find keeps about half its surface bare.
+        let tr = clamp(rust_amount, 0.0, 1.2) / 1.2;
         c = mix(c, c * vec3(0.8, 0.79, 0.78), t * 0.7);
         // Blooms come from a coarser sample than `n`, so they spread a few centimetres.
         let blooms = patch_field(fbm(p * 0.5 + vec3(5.2), cell * 0.5), n2);
-        let bloom = patches(blooms, t * 0.5, 0.12);
-        let stain = patches(blooms, t * 0.68, 0.5);
+        let bloom = patches(blooms, tr * 0.5, 0.12);
+        // Wear alone stains it grey; the warm stain ringing a bloom is rust's.
+        let grime = patches(blooms, t * 0.45, 0.5);
+        c = mix(c, c * vec3(0.78, 0.77, 0.76), grime * 0.45);
+        let stain = patches(blooms, tr * 0.68, 0.5);
         c = mix(c, c * vec3(0.8, 0.7, 0.62), stain * 0.55);
         // Rust in muted browns, laid over the iron rather than replacing it, so a rusted piece
         // still reads as iron under the toon bands.
@@ -156,8 +161,8 @@ fn apply_decay(
         let rust = mix(vec3(0.3, 0.18, 0.12), vec3(0.46, 0.29, 0.18), smoothstep(0.3, 0.75, crust * 0.6 + n2 * 0.4));
         c = mix(c, rust, bloom * 0.7);
         // Pits: dark specks, thickest in the blooms.
-        let pit = smoothstep(0.0, 0.03, filtered_noise(p * 15.0 + vec3(7.3), cell * 15.0) - mix(0.97, 0.88, t) + 0.1 * bloom);
-        c = mix(c, vec3(0.1, 0.06, 0.04), pit * smoothstep(0.1, 0.3, t) * 0.85);
+        let pit = smoothstep(0.0, 0.03, filtered_noise(p * 15.0 + vec3(7.3), cell * 15.0) - mix(0.97, 0.88, tr) + 0.1 * bloom);
+        c = mix(c, vec3(0.1, 0.06, 0.04), pit * smoothstep(0.1, 0.3, tr) * 0.85);
     } else if decay_type == DECAY_BRASS {
         // Tarnish darkening the whole surface, then crusts of verdigris in patches.
         c = mix(c, c * vec3(0.66, 0.56, 0.4), t * 0.8);

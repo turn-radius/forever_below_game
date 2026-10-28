@@ -193,8 +193,8 @@ impl Keep {
     pub fn condition(self) -> Condition {
         match self {
             Keep::Kept => Condition { wear: 0.1, rust: 0.5, ..Condition::of(ConditionState::Serviceable) },
-            Keep::Weathered => Condition { wear: 0.3, ..Condition::of(ConditionState::Serviceable) },
-            Keep::Rusted => Condition { wear: 0.5, ..Condition::of(ConditionState::BattleWorn) },
+            Keep::Weathered => Condition { wear: 0.3, rust: 1.0, ..Condition::of(ConditionState::Serviceable) },
+            Keep::Rusted => Condition { wear: 0.5, rust: 1.0, ..Condition::of(ConditionState::BattleWorn) },
         }
     }
 
