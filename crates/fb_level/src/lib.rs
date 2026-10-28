@@ -337,6 +337,20 @@ impl Level {
         self.rooms.iter().position(|r| r.contains(x, y))
     }
 
+    /// Whether the columns of room `room` are fluted: about a third of halls, all their columns
+    /// alike. A pure function of the level seed and the room's rectangle, drawn from no stream, so
+    /// it moves nothing else about a seed and is rebuilt the same each time, never saved.
+    pub fn hall_is_fluted(&self, room: usize) -> bool {
+        let Some(r) = self.rooms.get(room) else { return false };
+        let mut h = self.seed ^ 0xf1u32.wrapping_mul(0x9e37_79b1);
+        for v in [r.x, r.y, r.w, r.h] {
+            h = (h ^ v).wrapping_mul(0x85eb_ca6b);
+            h ^= h >> 15;
+        }
+        h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
+        (h ^ (h >> 16)) % 3 == 0
+    }
+
     /// Index into [`Level::rooms`] of the room the entrance leads to: the first room reached
     /// walking inward from the start.
     pub fn start_room(&self) -> Option<usize> {

@@ -1608,6 +1608,23 @@ mod tests {
     }
 
     #[test]
+    fn about_a_third_of_colonnaded_halls_are_fluted() {
+        let (mut halls, mut fluted) = (0, 0);
+        for seed in 1..=30 {
+            let level = generate(seed, 2);
+            for (i, room) in level.rooms.iter().enumerate() {
+                if columns_in(&level, room) > 0 {
+                    halls += 1;
+                    fluted += level.hall_is_fluted(i) as usize;
+                }
+            }
+        }
+        assert!(halls >= 30, "only {halls} colonnaded halls");
+        let share = fluted as f32 / halls as f32;
+        assert!((0.22..0.45).contains(&share), "{fluted} of {halls} halls fluted");
+    }
+
+    #[test]
     fn everything_placed_on_either_level_is_reachable_from_the_entrance() {
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
