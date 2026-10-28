@@ -361,7 +361,7 @@ pub(crate) fn place_rough_gems(level: &Level, rng: &mut Mulberry32) -> Vec<ItemS
     let keep = keep_clear(level);
     let feet: Vec<&CrystalSpot> = level.crystals.iter().filter(|c| matches!(c.surface, CrystalSurface::Floor | CrystalSurface::Foot)).collect();
     let mut gems: Vec<ItemSpot> = Vec::new();
-    let mut lay = |x: f32, y: f32, stone: Gemstone, gems: &mut Vec<ItemSpot>, rng: &mut Mulberry32| {
+    let lay = |x: f32, y: f32, stone: Gemstone, gems: &mut Vec<ItemSpot>, rng: &mut Mulberry32| {
         let (cx, cy) = (x.floor() as i32, y.floor() as i32);
         if level.cell(cx, cy) != Cell::Floor || level.room_at(cx, cy).is_some_and(|r| level.is_claimed(r)) {
             return;
