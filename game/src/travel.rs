@@ -28,8 +28,8 @@
 //! frames after the arrival so it does not compete with the new level's own spawning, and skips
 //! a level the delver has been to. A journey takes the prefetch if it is the stair down to a
 //! level not seen before, else starts its own job ([`start_level_load`]) when the screen is
-//! black, and the frames go on while it is made ([`Phase::Loading`], [`crate::loading::LoadingLevel`]).
-//! When it is ready [`swap_level`] swaps the level,
+//! black, and the frames go on while it is made ([`Phase::Loading`], with the loading screen
+//! drawn if it takes long, [`crate::loading`]). When it is ready [`swap_level`] swaps the level,
 //! and the level's systems lay it out over the next frames, a part a frame
 //! ([`crate::loading::LayoutTurn`]), before the screen fades in. A delve begun from the title
 //! or resumed from a save is made the same way ([`crate::loading::start_delve`]).
@@ -456,6 +456,7 @@ fn begin_journey(
     mut open: ResMut<ScreenOpen>,
     mut container: Option<ResMut<OpenContainer>>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
+    view: Query<Entity, With<crate::carry::ViewModelCamera>>,
 ) {
     let Some(UseStair(by)) = used.read().last().copied() else { return };
     if journey.is_some() || fallen.is_some() || dying.is_some() || level.0.stair(by).is_none() {
@@ -469,16 +470,19 @@ fn begin_journey(
     if let Some(container) = container.as_mut() {
         container.0 = None;
     }
-    let fade = commands
-        .spawn((
-            Name::new("travel fade"),
-            Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
-            BackgroundColor(Color::BLACK.with_alpha(0.0)),
-            GlobalZIndex(100),
-            Pickable::IGNORE,
-            DespawnOnExit(AppState::Delving),
-        ))
-        .id();
+    let mut fade = commands.spawn((
+        Name::new("travel fade"),
+        Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
+        BackgroundColor(Color::BLACK.with_alpha(0.0)),
+        GlobalZIndex(100),
+        Pickable::IGNORE,
+        DespawnOnExit(AppState::Delving),
+    ));
+    // Drawn by the camera the HUD is, so the black covers the HUD too.
+    if let Some(camera) = view.iter().next() {
+        fade.insert(UiTargetCamera(camera));
+    }
+    let fade = fade.id();
     commands.insert_resource(Journey { by, phase: Phase::FadingOut, seconds: 0.0, fade, job: None, ready: None, laid_after: None });
 }
 
@@ -526,7 +530,7 @@ fn journey_is_loading(journey: Option<Res<Journey>>) -> bool {
 }
 
 /// While the screen is black and the next level is being made, takes it when it is ready (and
-/// the load is not held up) without holding up a frame, and swaps the
+/// the loading screen is not held, `FB_HOLD_LOADING`) without holding up a frame, and swaps the
 /// level for it. The level's parts are laid out over the next frames ([`crate::loading::LayoutTurn`]).
 #[allow(clippy::too_many_arguments)]
 fn swap_level(
