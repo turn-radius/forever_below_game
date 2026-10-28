@@ -65,7 +65,6 @@ pub enum Service {
     /// with them.
     Order,
     Enchant,
-    Scrap,
 }
 
 /// Something to ask a folk about.
@@ -99,7 +98,6 @@ impl Topic {
             Topic::Service(Service::Commission) => "Commission",
             Topic::Service(Service::Order) => "Your order",
             Topic::Service(Service::Enchant) => "Enchant",
-            Topic::Service(Service::Scrap) => "Scrap",
             Topic::Level => "This level",
             Topic::WayOut => "The way out",
             Topic::Threats => "Dangers",
@@ -205,7 +203,7 @@ pub fn topics(speaker: &Speaker) -> Vec<Topic> {
         }
         match trade.profession {
             Profession::Armorer | Profession::Weaponsmith | Profession::Bowyer | Profession::Tentmaker => list.push(Topic::Service(Service::Commission)),
-            Profession::Enchanter => list.extend([Topic::Service(Service::Enchant), Topic::Service(Service::Scrap)]),
+            Profession::Enchanter => list.push(Topic::Service(Service::Enchant)),
             _ => {}
         }
     }
@@ -639,7 +637,7 @@ mod tests {
         let labels = |t| topics(&speaker(t, Band::Neutral)).into_iter().map(Topic::label).collect::<Vec<_>>();
         assert_eq!(labels(None), ["Who are you?", "This level", "Persuade", "The way out"]);
         assert_eq!(labels(Some(smith())), ["Who are you?", "Your trade", "Barter", "Commission", "This level", "Persuade", "The way out"]);
-        assert_eq!(labels(Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None })), ["Who are you?", "Your trade", "Enchant", "Scrap", "This level", "Persuade", "The way out"]);
+        assert_eq!(labels(Some(Trade { profession: Profession::Enchanter, tier: Tier::Expert, style: None })), ["Who are you?", "Your trade", "Enchant", "This level", "Persuade", "The way out"]);
         assert_eq!(labels(Some(Trade { profession: Profession::GeneralGoods, tier: Tier::Novice, style: None })), ["Who are you?", "Your trade", "Barter", "This level", "Persuade", "The way out"]);
         assert_eq!(labels(Some(Trade::guard())), ["Who are you?", "Your trade", "This level", "Persuade", "The way out"]);
     }
