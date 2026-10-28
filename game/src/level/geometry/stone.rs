@@ -808,11 +808,21 @@ fn split(total: f32, n: usize, rng: &mut Mulberry32, wander: f32) -> Vec<f32> {
     (0..=n).map(|i| if i == 0 || i == n { i as f32 * step } else { (i as f32 + rng.range_f32(-wander, wander)) * step }).collect()
 }
 
-/// Flagstones over cell `(x, y)`: two to four rows of two to four slabs of all sizes, the
-/// joints wandering. A slab is now and then sunk, or cracked in two with one half lower.
-fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
+/// One flagstone of a cell: the slab's extent along the cell's x and z (cell-local) and how far
+/// its face stands off the shell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Flag {
+    a: [f32; 2],
+    b: [f32; 2],
+    raise: f32,
+}
+
+/// The flagstones of cell `(x, y)`: two to four rows of two to four slabs of all sizes, the
+/// joints wandering. A slab is now and then sunk, or cracked in two with one half lower. The
+/// one layout both the drawn floor ([`flagstones`]) and what rests on it ([`flag_top`]) read.
+fn flag_layout(seed: u32, x: i32, y: i32) -> Vec<Flag> {
     let mut rng = Mulberry32::new(seed ^ (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca6b) ^ 0xf1a6_5700);
-    let frame = Frame { origin: [x as f32 * CELL, 0.0, y as f32 * CELL], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    let mut flags = Vec::new();
     let rows = 2 + (rng.range_f32(0.0, 1.0) * 2.6) as usize;
     let zs = split(CELL, rows, &mut rng, 0.34);
     for r in 0..rows {
@@ -824,22 +834,50 @@ fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
             let inset = JOINT * 0.5;
             let (a0, a1, b0, b1) = (xs[c] + inset, xs[c + 1] - inset, zs[r] + inset, zs[r + 1] - inset);
             if !cracked || a1 - a0 < 3.0 || b1 - b0 < 3.0 {
-                slab(mesh, &frame, [a0, a1], [b0, b1], raise, FLAG_CHAMFER.min(raise * 0.9), false);
+                flags.push(Flag { a: [a0, a1], b: [b0, b1], raise });
                 continue;
             }
             // The crack runs across the longer side, a hair wide, and one half has settled.
             let low = (raise - drop).max(0.03);
             if a1 - a0 >= b1 - b0 {
                 let m = a0 + (a1 - a0) * at;
-                slab(mesh, &frame, [a0, m - 0.12], [b0, b1], raise, FLAG_CHAMFER.min(raise * 0.9), false);
-                slab(mesh, &frame, [m + 0.12, a1], [b0, b1], low, FLAG_CHAMFER.min(low * 0.9), false);
+                flags.push(Flag { a: [a0, m - 0.12], b: [b0, b1], raise });
+                flags.push(Flag { a: [m + 0.12, a1], b: [b0, b1], raise: low });
             } else {
                 let m = b0 + (b1 - b0) * at;
-                slab(mesh, &frame, [a0, a1], [b0, m - 0.12], raise, FLAG_CHAMFER.min(raise * 0.9), false);
-                slab(mesh, &frame, [a0, a1], [m + 0.12, b1], low, FLAG_CHAMFER.min(low * 0.9), false);
+                flags.push(Flag { a: [a0, a1], b: [b0, m - 0.12], raise });
+                flags.push(Flag { a: [a0, a1], b: [m + 0.12, b1], raise: low });
             }
         }
     }
+    flags
+}
+
+/// Flagstones over cell `(x, y)`, drawn from [`flag_layout`].
+fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
+    let frame = Frame { origin: [x as f32 * CELL, 0.0, y as f32 * CELL], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    for flag in flag_layout(seed, x, y) {
+        slab(mesh, &frame, flag.a, flag.b, flag.raise, FLAG_CHAMFER.min(flag.raise * 0.9), false);
+    }
+}
+
+/// How high the flagstones that [`hall_mesh`] lays stand over the world rectangle `x` by `z`
+/// (min and max of each): the highest flag face under any part of it, 0 where it lies over
+/// the joints or off the flags. A thing across a joint rests on the higher flag.
+pub fn flag_top(seed: u32, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> f32 {
+    let cells = |lo: f32, hi: f32| (lo / CELL).floor() as i32..=(hi / CELL).floor() as i32;
+    let mut top = 0.0f32;
+    for cy in cells(z0, z1) {
+        for cx in cells(x0, x1) {
+            let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+            for flag in flag_layout(seed, cx, cy) {
+                if ox + flag.a[0] <= x1 && ox + flag.a[1] >= x0 && oz + flag.b[0] <= z1 && oz + flag.b[1] >= z0 {
+                    top = top.max(flag.raise);
+                }
+            }
+        }
+    }
+    top
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1041,6 +1079,52 @@ mod tests {
         let level = fb_level::generate(seed, 2);
         assert_eq!(level.style, LevelStyle::StoneHalls);
         Level { stairs: Vec::new(), ..level }
+    }
+
+    #[test]
+    fn flag_top_reads_the_flags_that_are_drawn() {
+        let level = halls(1207);
+        let mut mesh = MeshBuilder::new();
+        let (cx, cy) = (3, 4);
+        flagstones(level.seed, cx, cy, &mut mesh);
+        let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+        let flags = flag_layout(level.seed, cx, cy);
+        assert!(flags.len() >= 4);
+        for flag in &flags {
+            let (mx, mz) = (ox + (flag.a[0] + flag.a[1]) * 0.5, oz + (flag.b[0] + flag.b[1]) * 0.5);
+            // On a flag's middle, the flag's face.
+            assert!((flag_top(level.seed, [mx, mx], [mz, mz]) - flag.raise).abs() < 1e-6);
+        }
+        // Across a joint, the higher of the two flags it lies between.
+        let (first, second) = flags.iter().enumerate().flat_map(|(i, f)| flags[i + 1..].iter().map(move |g| (f, g))).find(|(f, g)| f.raise != g.raise && (f.a[1] - g.a[0]).abs() < 0.5 && f.b == g.b).expect("two neighbours of unequal height");
+        let joint = ox + (first.a[1] + second.a[0]) * 0.5;
+        let z = oz + (first.b[0] + first.b[1]) * 0.5;
+        let across = flag_top(level.seed, [joint - 0.4, joint + 0.4], [z, z]);
+        assert!((across - first.raise.max(second.raise)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn flag_top_matches_the_floor_mesh() {
+        let level = halls(1207);
+        let view = CellView::uncobbled(&level);
+        let mesh = level_mesh(&view, view.bounds());
+        let floor = part(&mesh, "floor");
+        let (x0, y0, x1, y1) = view.bounds();
+        let mut checked = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if view.cell(x, y) == Cell::Rock {
+                    continue;
+                }
+                // The highest vertex of the drawn floor over a cell is the highest flag in it.
+                let (ox, oz) = (x as f32 * CELL, y as f32 * CELL);
+                let drawn = floor.positions.iter().filter(|p| p[0] >= ox && p[0] <= ox + CELL && p[2] >= oz && p[2] <= oz + CELL).map(|p| p[1]).fold(0.0f32, f32::max);
+                let read = flag_top(level.seed, [ox + 0.01, ox + CELL - 0.01], [oz + 0.01, oz + CELL - 0.01]);
+                assert!((drawn - read).abs() < 1e-4, "cell {x},{y}: drawn {drawn}, read {read}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 20);
     }
 
     #[test]

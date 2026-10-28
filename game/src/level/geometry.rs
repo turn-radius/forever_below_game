@@ -258,6 +258,41 @@ impl Relief {
     }
 }
 
+/// The height of the floor as drawn under a footprint: the world rectangle `half` either side
+/// of `centre` (x, z). The highest point of it, so a thin thing rests on the highest part of the
+/// floor it touches. On a rock level that is the relief ([`Relief::floor_height`]), over the
+/// footprint; on dressed stone the flagstones' faces ([`stone::flag_top`]), where a cobbled
+/// cell lies at 0.
+pub fn floor_under(level: &Level, centre: [f32; 2], half: [f32; 2]) -> f32 {
+    let (x, z) = (centre[0], centre[1]);
+    let (hx, hz) = (half[0].abs(), half[1].abs());
+    if level.style.is_rock() {
+        let relief = Relief::new(level);
+        let mut top = f32::NEG_INFINITY;
+        for i in 0..3 {
+            for j in 0..3 {
+                top = top.max(relief.floor_height(x + hx * (i as f32 - 1.0), z + hz * (j as f32 - 1.0)));
+            }
+        }
+        return top;
+    }
+    let finishes = level_finishes(level);
+    let (cx0, cx1) = (((x - hx) / CELL).floor() as i32, ((x + hx) / CELL).floor() as i32);
+    let (cy0, cy1) = (((z - hz) / CELL).floor() as i32, ((z + hz) / CELL).floor() as i32);
+    let mut top = 0.0f32;
+    for cy in cy0..=cy1 {
+        for cx in cx0..=cx1 {
+            if finishes.at(cx, cy).is_some_and(|f| f.floor == FloorFinish::Cobble) {
+                continue;
+            }
+            let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+            let clip = |lo: f32, hi: f32, o: f32| [lo.max(o), hi.min(o + CELL)];
+            top = top.max(stone::flag_top(level.seed, clip(x - hx, x + hx, ox), clip(z - hz, z + hz, oz)));
+        }
+    }
+    top
+}
+
 /// A flat rectangle of the cell grid before relief: `origin` plus `u` and `v` (unit axes)
 /// times up to `size`, cut into `steps`, facing `facing`.
 #[derive(Clone, Copy, Debug)]
