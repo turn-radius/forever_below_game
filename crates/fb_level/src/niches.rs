@@ -21,7 +21,7 @@ use crate::banners::BannerSpot;
 use crate::folk::by_door;
 use crate::generate::{item_seed, shuffle};
 use crate::walls::{bare_wall_faces, near_light_or_prop};
-use crate::{CELL, Cell, Facing, Level, LevelStyle};
+use crate::{CELL, Cell, Facing, Finishes, Level, LevelParams, LevelStyle, WallFinish, finishes};
 
 /// Salt for the niche stream.
 pub(crate) const NICHE_SALT: u32 = 0x41C4_E5D3;
@@ -84,9 +84,9 @@ impl NicheSpot {
 }
 
 /// Whether the face of `cell` toward `wall` can take a niche: the wall runs on a cell to each
-/// side (so it is not a corner or a jamb), the cell and those beside it are open floor clear of
+/// side (so it is not a corner or a jamb), all of dressed stone, the cell and those beside it are open floor clear of
 /// doors and stairs, and the cell in front is open.
-fn takes_niche(level: &Level, cell: (i32, i32), wall: (i32, i32)) -> bool {
+fn takes_niche(level: &Level, finishes: &Finishes, cell: (i32, i32), wall: (i32, i32)) -> bool {
     let along = (wall.1.abs(), wall.0.abs());
     let floor_with_rock = |c: (i32, i32)| {
         level.cell(c.0, c.1) == Cell::Floor && level.cell(c.0 + wall.0, c.1 + wall.1) == Cell::Rock && !by_door(level, c.0, c.1) && level.stair_at(c.0, c.1).is_none()
@@ -94,7 +94,9 @@ fn takes_niche(level: &Level, cell: (i32, i32), wall: (i32, i32)) -> bool {
     let beside = |k: i32| (cell.0 + along.0 * k, cell.1 + along.1 * k);
     let front = (cell.0 - wall.0, cell.1 - wall.1);
     let by_stairs = level.stairs.iter().any(|s| (s.x as i32 - cell.0).abs().max((s.y as i32 - cell.1).abs()) <= 1);
-    !by_stairs && floor_with_rock(cell) && floor_with_rock(beside(-1)) && floor_with_rock(beside(1)) && level.cell(front.0, front.1) == Cell::Floor
+    // Ashlar only: rubble is laid in rough stones, which have no frame to give a niche.
+    let dressed = |c: (i32, i32)| finishes.at(c.0, c.1).is_some_and(|f| f.walls != WallFinish::Rubble);
+    !by_stairs && dressed(cell) && dressed(beside(-1)) && dressed(beside(1)) && floor_with_rock(cell) && floor_with_rock(beside(-1)) && floor_with_rock(beside(1)) && level.cell(front.0, front.1) == Cell::Floor
 }
 
 fn facing_of(wall: (i32, i32)) -> Facing {
@@ -112,6 +114,7 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
         return niches;
     }
     let mut rng = Mulberry32::new(level.seed ^ NICHE_SALT);
+    let finishes = finishes(level, &LevelParams::for_style(level.style));
     for room in &level.rooms {
         let mut faces = bare_wall_faces(level, room);
         shuffle(&mut faces, &mut rng);
@@ -126,7 +129,7 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
             if made == want {
                 break;
             }
-            if !takes_niche(level, cell, wall) {
+            if !takes_niche(level, &finishes, cell, wall) {
                 continue;
             }
             let spot = NicheSpot { x: cell.0, y: cell.1, facing: facing_of(wall), contents: contents_for(pick), seed };
@@ -187,7 +190,7 @@ mod tests {
                 assert!(level.niches.is_empty(), "seed {seed} depth {depth}: {:?}", level.style);
             }
         }
-        assert!(halls > 50 && with * 10 >= halls * 9, "{with} of {halls} halls have niches");
+        assert!(halls > 50 && with * 4 >= halls * 3, "{with} of {halls} halls have niches");
         assert!(total >= halls * 2, "{total} niches in {halls} halls");
         assert_eq!(contents.len(), 5, "{contents:?}");
     }
@@ -196,10 +199,11 @@ mod tests {
     fn a_niche_stands_on_a_bare_straight_wall_clear_of_everything() {
         for (seed, depth) in sweep() {
             let level = generate(seed, depth);
+            let finishes = finishes(&level, &LevelParams::for_style(level.style));
             for n in &level.niches {
                 let (wall, at) = (n.facing.step(), n.face());
                 let tag = format!("seed {seed} depth {depth}: {n:?}");
-                assert!(takes_niche(&level, (n.x, n.y), wall), "{tag}");
+                assert!(takes_niche(&level, &finishes, (n.x, n.y), wall), "{tag}");
                 assert!(!crowds_a_banner(&level.banners, at), "{tag}");
                 assert!(!near_light_or_prop(&level, at.0, at.1, CLEAR), "{tag}");
                                 assert!(level.niches.iter().all(|o| o == n || (o.x - n.x).abs().max((o.y - n.y).abs()) >= APART), "{tag}");

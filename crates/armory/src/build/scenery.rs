@@ -252,9 +252,9 @@ fn skull_upright(_rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
     }
     cranium.recompute_smooth_normals();
     let hollows = [
-        Hollow::bite([0.0, 0.0, 0.0], [0.38, 0.0, 1.0], 0.85, 0.2),
-        Hollow::bite([0.0, 0.0, 0.0], [-0.38, 0.0, 1.0], 0.85, 0.2),
-        Hollow::bite([0.0, 0.0, 0.0], [0.0, -0.32, 1.0], 0.85, 0.12),
+        Hollow::bite([0.0, 0.0, 0.0], [0.38, 0.0, 1.0], 0.85, 0.27),
+        Hollow::bite([0.0, 0.0, 0.0], [-0.38, 0.0, 1.0], 0.85, 0.27),
+        Hollow::bite([0.0, 0.0, 0.0], [0.0, -0.32, 1.0], 0.85, 0.17),
     ];
     let (mut bone, mut sockets) = carve_hollows(&cranium, &hollows);
     let jaw_path = CatmullRom::centripetal(vec![[-0.45, -0.45, 0.05], [-0.36, -0.68, 0.5], [0.0, -0.74, 0.74], [0.36, -0.68, 0.5], [0.45, -0.45, 0.05]]).sample(14);

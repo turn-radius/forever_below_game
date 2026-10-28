@@ -858,6 +858,13 @@ fn lay_blocks(
         list.get(k).copied().filter(|&(y0, _)| y0 + 1.4 < tallest)
     };
     let count = courses.len().max(rubble_courses.len());
+    // The blocks stand round each niche as a frame: ink along the edge of the frame, so the
+    // masonry above the arch reads as laid blocks and not as bare wall.
+    for cut in cuts.iter().filter(|c| owns((c.s[0] + c.s[1]) * 0.5)) {
+        let at = |s: f32, y: f32| vec3::add(run.point(s), [0.0, y, 0.0]);
+        let ring = [at(cut.s[0], cut.y[0]), at(cut.s[0], cut.y[1]), at(cut.s[1], cut.y[1]), at(cut.s[1], cut.y[0])];
+        joints.ribbon_lifted(&ring, &[run.n; 4], JOINT_INK_LIFT);
+    }
     let mut through: Vec<Through> = Vec::new();
     for k in 0..count {
         if course(false, k).is_none() && course(true, k).is_none() {
@@ -1382,6 +1389,52 @@ mod tests {
             open += 1;
         }
         assert!(solid > 100 && open >= 5);
+    }
+
+    #[test]
+    fn the_dressing_covers_the_wall_right_down_to_the_arch() {
+        let mut checked = 0;
+        for seed in [2, 36, 3, 11, 1, 4, 6, 12, 15, 20] {
+            let level = crate::travel::Abyss::new(seed).level_at(2);
+            let view = CellView::new(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            for spot in &level.niches {
+                let (centre, u, n) = opening(spot);
+                // Every block face standing proud of the wall's plane here, as (across, up) triangles.
+                let mut faces: Vec<[[f32; 2]; 3]> = Vec::new();
+                for name in ["walls", "damp"] {
+                    let part = part(&mesh, name);
+                    for t in part.indices.chunks(3) {
+                        let rel = [0, 1, 2].map(|k| vec3::sub(part.positions[t[k] as usize], centre));
+                        let level_with = rel.iter().all(|r| (vec3::dot(*r, n) - vec3::dot(rel[0], n)).abs() < 0.01);
+                        if level_with && vec3::dot(rel[0], n) > 0.2 && vec3::dot(rel[0], n) < 1.2 {
+                            faces.push(rel.map(|r| [vec3::dot(r, u), r[1]]));
+                        }
+                    }
+                }
+                let covered = |p: [f32; 2]| {
+                    faces.iter().any(|t| {
+                        let side = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+                        let (d0, d1, d2) = (side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0]));
+                        (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+                    })
+                };
+                let crown = niches::SPRING + niches::RISE;
+                // Joints and chamfers between blocks are narrow (even where four meet); a point is bare
+                // when it and the ring of points round it 1.3 off are all uncovered, so a joint is not a gap.
+                let bare = |p: [f32; 2]| !covered(p) && (0..8).all(|k| { let a = k as f32 * std::f32::consts::FRAC_PI_4; !covered([p[0] + 1.3 * a.cos(), p[1] + 1.3 * a.sin()]) });
+                let wall_top = (Vaults::new(&level).height(centre[0], centre[2]) - 3.0).min(crown + 7.0);
+                for i in 0..=10 {
+                    let across = (i as f32 / 10.0 - 0.5) * niches::WIDTH * 0.9;
+                    for k in 0..=8 {
+                        let up = crown + 0.8 + (wall_top - crown - 0.8) * k as f32 / 8.0;
+                        assert!(!bare([across, up]), "bare wall above the arch at seed {seed} {spot:?}: {across} across, {up} up");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 200);
     }
 
     #[test]
