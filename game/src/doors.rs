@@ -174,6 +174,8 @@ struct Pick {
     cell: (i32, i32),
     faction: Faction,
     heard: bool,
+    /// The level it was worked on, its seed and depth: a level left mid-roll drops the pick.
+    level: (u32, u32),
 }
 
 /// The pick whose dice are showing. While it is, the delver stands still ([`level_has_focus`])
@@ -646,16 +648,23 @@ fn use_door(
     } else {
         "The picks slip".to_string()
     };
-    *pending = PickInFlight(Some(Pick { cell, faction, heard }));
+    *pending = PickInFlight(Some(Pick { cell, faction, heard, level: (level.0.seed, level.0.depth) }));
+    // The dice show now: "Picking the lock..." has done its work.
+    toasts.clear();
     rolls.write(RollRequest { roll, purpose: RollPurpose::PickLock(cell), result: Some(result) });
 }
 
 /// Applies a pick once its dice have closed: a success unlocks the door, a heard miss costs the
 /// faction's standing, an unheard one costs only the hold.
-fn finish_pick(mut done: MessageReader<RollDone>, mut pending: ResMut<PickInFlight>, mut doors: ResMut<Doors>, mut record: Option<ResMut<WorldRecord>>) {
+fn finish_pick(mut done: MessageReader<RollDone>, mut pending: ResMut<PickInFlight>, mut doors: ResMut<Doors>, mut record: Option<ResMut<WorldRecord>>, level: Option<Res<CurrentLevel>>) {
     for finished in done.read() {
         let RollPurpose::PickLock(cell) = finished.purpose else { continue };
         let Some(pick) = pending.0.take().filter(|p| p.cell == cell) else { continue };
+        // The level may have changed mid-roll: the door in that cell must be the one picked.
+        let same_level = level.as_deref().is_none_or(|l| (l.0.seed, l.0.depth) == pick.level);
+        if !same_level || doors.0.get(&cell).is_none_or(|door| door.faction != pick.faction) {
+            continue;
+        }
         if finished.roll.succeeded {
             if let Some(door) = doors.0.get_mut(&cell) {
                 door.unlocked = true;
@@ -1352,6 +1361,35 @@ mod tests {
         assert_eq!(sent[0].result.as_deref(), Some("The picks slip"));
         close_the_panel(&mut app, &sent[0]);
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
+        assert_eq!(standing(&app, faction), -30);
+    }
+
+    #[test]
+    fn the_picking_toast_is_gone_once_the_dice_show() {
+        let (mut app, _, _) = picking(-30, seed_rolling(1), false, false);
+        app.init_resource::<crate::inventory::Toast>();
+        app.world_mut().insert_resource(Time::<Real>::default());
+        app.world_mut().resource_mut::<crate::inventory::Toast>().say("Picking the lock...", 0.0);
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        let now = app.world().resource::<Time<Real>>().elapsed_secs();
+        assert!(!app.world().resource::<crate::inventory::Toast>().showing(now));
+    }
+
+    #[test]
+    fn a_pick_whose_level_changed_mid_roll_unlocks_and_costs_nothing() {
+        let standing = |app: &App, f: Faction| app.world().resource::<WorldRecord>().standings.get(f).value();
+        // Success, but the door in that cell now belongs to another faction.
+        let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
+        let sent = hold_the_pick(&mut app);
+        app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().faction = Faction(250);
+        close_the_panel(&mut app, &sent[0]);
+        assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
+        // A heard miss, but the level is another one.
+        let (mut app, _, faction) = picking(-30, seed_rolling(1), true, false);
+        let sent = hold_the_pick(&mut app);
+        app.world_mut().resource_mut::<CurrentLevel>().0.depth += 1;
+        close_the_panel(&mut app, &sent[0]);
         assert_eq!(standing(&app, faction), -30);
     }
 
