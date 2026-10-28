@@ -25,7 +25,7 @@ pub struct WebsPlugin;
 
 impl Plugin for WebsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (hang_webs.run_if(resource_exists_and_changed::<CurrentLevel>), veil_webs).chain().in_set(DelveSystems));
+        app.add_systems(Update, (hang_webs.run_if(crate::loading::laid_out_at(6)), veil_webs).chain().in_set(DelveSystems));
     }
 }
 

@@ -14,7 +14,7 @@ use fb_level::Level;
 
 use crate::creatures::{Built, build_creatures};
 use crate::level::FixtureShapes;
-use crate::props::prop_mesh;
+use crate::props::{banner_piece, crystal_piece, prop_mesh};
 use crate::render::ItemAppearance;
 
 /// A prop's shut shape, and what a container holds.
@@ -26,6 +26,15 @@ pub struct StagedProp {
     pub contents: Vec<Item>,
 }
 
+/// A banner or crystal, shaped and set where it hangs or grows.
+#[derive(Debug)]
+pub struct StagedPiece {
+    pub mesh: ItemMesh,
+    pub appearance: ItemAppearance,
+    pub name: String,
+    pub transform: Transform,
+}
+
 /// The parts of a level made ahead of time.
 pub struct Staging {
     pub creatures: Vec<Built>,
@@ -34,6 +43,9 @@ pub struct Staging {
     /// Parallel to the level's props.
     pub props: Vec<StagedProp>,
     pub fixtures: FixtureShapes,
+    /// Parallel to the level's banners and crystals.
+    pub banners: Vec<StagedPiece>,
+    pub crystals: Vec<StagedPiece>,
     /// What the loot was rolled against: the level's odds with the delver's luck then.
     pub odds: Odds,
 }
@@ -60,7 +72,9 @@ impl Staging {
                 StagedProp { mesh, appearance, contents: level.container_contents(spot, odds, &lore) }
             })
             .collect();
-        Staging { creatures, items, props, fixtures: FixtureShapes::make(level), odds }
+        let banners = level.banners.iter().map(|spot| banner_piece(level, spot)).collect();
+        let crystals = level.crystals.iter().map(|spot| crystal_piece(level, spot)).collect();
+        Staging { creatures, items, props, fixtures: FixtureShapes::make(level), banners, crystals, odds }
     }
 }
 
@@ -74,6 +88,8 @@ pub struct Staged {
     items: Option<Vec<Option<(Item, ItemMesh)>>>,
     props: Option<Vec<StagedProp>>,
     fixtures: Option<FixtureShapes>,
+    banners: Option<Vec<StagedPiece>>,
+    crystals: Option<Vec<StagedPiece>>,
     /// How many parts have been taken, which tests read to see the staging was used.
     pub taken: u32,
 }
@@ -81,8 +97,18 @@ pub struct Staged {
 impl Staged {
     /// Keeps `staging` as the parts of `level`, in place of whatever was kept.
     pub fn set(&mut self, level: &Level, staging: Staging) {
-        let Staging { creatures, items, props, fixtures, odds } = staging;
-        *self = Staged { for_level: Some((level.seed, level.depth)), odds, creatures: Some(creatures), items: Some(items), props: Some(props), fixtures: Some(fixtures), taken: 0 };
+        let Staging { creatures, items, props, fixtures, banners, crystals, odds } = staging;
+        *self = Staged {
+            for_level: Some((level.seed, level.depth)),
+            odds,
+            creatures: Some(creatures),
+            items: Some(items),
+            props: Some(props),
+            fixtures: Some(fixtures),
+            banners: Some(banners),
+            crystals: Some(crystals),
+            taken: 0,
+        };
     }
 
     fn is_for(&self, level: &Level) -> bool {
@@ -125,6 +151,16 @@ impl Staged {
         Some(props)
     }
 
+    /// The banners made ahead for `level`, once.
+    pub fn take_banners(&mut self, level: &Level) -> Option<Vec<StagedPiece>> {
+        self.take_with(level, |s| &mut s.banners, |b| b.len() == level.banners.len())
+    }
+
+    /// The crystals made ahead for `level`, once.
+    pub fn take_crystals(&mut self, level: &Level) -> Option<Vec<StagedPiece>> {
+        self.take_with(level, |s| &mut s.crystals, |c| c.len() == level.crystals.len())
+    }
+
     /// The door and brazier shapes made ahead for `level`, once.
     pub fn take_fixtures(&mut self, level: &Level) -> Option<FixtureShapes> {
         self.take_with(level, |s| &mut s.fixtures, |f| f.braziers.len() == level.lights.len())
@@ -149,6 +185,9 @@ mod tests {
         assert_eq!(staged.take_props(&level, odds).map(|p| p.len()), Some(level.props.len()));
         assert_eq!(staged.take_creatures(&level).map(|c| c.len()), Some(level.creatures.len()));
         assert!(staged.take_fixtures(&level).is_some());
+        assert_eq!(staged.take_banners(&level).map(|b| b.len()), Some(level.banners.len()));
+        assert_eq!(staged.take_crystals(&level).map(|c| c.len()), Some(level.crystals.len()));
+        assert_eq!(staged.taken, 6, "every part was taken once: {}", staged.taken);
     }
 
     #[test]
@@ -171,7 +210,7 @@ mod tests {
         use crate::props::{stock_container, stock_container_with};
         use crate::record::record_contents;
 
-        let (mut items, mut creatures, mut containers) = (0, 0, 0);
+        let (mut items, mut creatures, mut containers, mut banners) = (0, 0, 0, 0);
         for depth in 1..=4 {
             let level = fb_level::generate(fb_level::depth_seed(1207, depth), depth);
             let staging = Staging::make(&level, Odds::loot(depth));
@@ -209,7 +248,17 @@ mod tests {
             }
 
             assert_eq!(staging.fixtures, FixtureShapes::make(&level), "depth {depth}: the fixtures");
+
+            assert_eq!(staging.banners.len(), level.banners.len());
+            for (spot, staged) in level.banners.iter().zip(&staging.banners) {
+                assert_eq!(format!("{staged:?}"), format!("{:?}", crate::props::banner_piece(&level, spot)), "depth {depth}: the banner");
+                banners += 1;
+            }
+            assert_eq!(staging.crystals.len(), level.crystals.len());
+            for (spot, staged) in level.crystals.iter().zip(&staging.crystals) {
+                assert_eq!(format!("{staged:?}"), format!("{:?}", crate::props::crystal_piece(&level, spot)), "depth {depth}: the crystal");
+            }
         }
-        assert!(items > 0 && creatures > 0 && containers > 0, "the comparison covered something: {items} items, {creatures} creatures, {containers} containers");
+        assert!(items > 0 && creatures > 0 && containers > 0 && banners > 0, "the comparison covered something: {items} items, {creatures} creatures, {containers} containers, {banners} banners");
     }
 }

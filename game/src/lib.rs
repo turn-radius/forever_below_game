@@ -55,6 +55,7 @@ pub mod lab_time;
 pub mod lab_timeline;
 pub mod lab_view;
 pub mod launch;
+pub mod loading;
 pub mod level;
 pub mod level_view;
 pub mod map;

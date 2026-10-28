@@ -29,6 +29,7 @@ use fb_level::{CELL, Level, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
+use crate::loading::laid_out_at;
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::audio::sound_effect;
 use crate::play::DelveSystems;
@@ -52,7 +53,11 @@ impl Plugin for LevelPlugin {
             // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
             .add_systems(
                 Update,
-                (clear_stone, spawn_stone, spawn_columns, spawn_bars, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+                (clear_stone, spawn_stone, spawn_columns, spawn_bars, spawn_corridor_arches, spawn_stairs, spawn_debug_camera).chain().run_if(laid_out_at(0)).in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                spawn_fixtures.run_if(laid_out_at(1)).in_set(DelveSystems),
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
@@ -60,7 +65,7 @@ impl Plugin for LevelPlugin {
             // After the render layers have propagated down, which `Update` does.
             .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems))
-            .add_systems(Update, lift_cavern_ambient.run_if(resource_exists_and_changed::<CurrentLevel>).after(apply_light_tuning).in_set(DelveSystems))
+            .add_systems(Update, lift_cavern_ambient.run_if(laid_out_at(0)).after(apply_light_tuning).in_set(DelveSystems))
             .add_systems(PostUpdate, put_out_carried_lights.run_if(|| std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "none")));
     }
 }

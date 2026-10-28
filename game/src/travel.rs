@@ -20,14 +20,19 @@
 //! mana; the character; the inventory with its equipped items and containers; the quickslots,
 //! the clock and the map's record of what was seen of each level.
 //!
-//! The level below is made ahead of time. Once a level is entered, [`prefetch_below`] starts
-//! [`Prepared::make`] for the next depth on the async compute pool: the level itself, its
-//! stone as plain mesh data (corner shading is most of that) and the figures of its folk, the
-//! costliest part, and what it is furnished with ([`crate::staged`]). It waits a few frames
-//! after an arrival, so it does not compete with the new level's own spawning, and it skips a
-//! level the delver has been to, which is rebuilt from the record. Taking the stair down uses
-//! the result, waiting for it if it is not done; any other journey makes its level in place, as
-//! before.
+//! No level is made on the main thread. [`Prepared::make_after`] makes a level on the async
+//! compute pool: the level itself (as its record left it, if it was visited before), its stone
+//! as plain mesh data (corner shading is most of that), the figures of its folk, the costliest
+//! part, and what it is furnished with ([`crate::staged`]). The level below is made ahead of
+//! time: once a level is entered, [`prefetch_below`] starts that for the next depth, a few
+//! frames after the arrival so it does not compete with the new level's own spawning, and skips
+//! a level the delver has been to. A journey takes the prefetch if it is the stair down to a
+//! level not seen before, else starts its own job ([`start_level_load`]) when the screen is
+//! black, and the frames go on while it is made ([`Phase::Loading`], [`crate::loading::LoadingLevel`]).
+//! When it is ready [`swap_level`] swaps the level,
+//! and the level's systems lay it out over the next frames, a part a frame
+//! ([`crate::loading::LayoutTurn`]), before the screen fades in. A delve begun from the title
+//! or resumed from a save is made the same way ([`crate::loading::start_delve`]).
 //!
 //! Persisting what happens on a level (#285) slots in at two places:
 //!
@@ -37,9 +42,9 @@
 //!   to come is [`depth_after`] of `Abyss.depth` and [`Journey::by`]), and the inventory still
 //!   holds the floor items and containers. Systems added to the set can read the live world
 //!   (floor items, container contents, creatures and corpses, folk, props) to record it. The
-//!   swap happens in [`step_journey`] on the next frame, which is ordered after the set, so
-//!   the order is: fade out, [`LeavingLevel`], swap, the level's systems lay out the new level
-//!   (and clear the old one's pieces), fade in.
+//!   level's job starts in [`start_level_load`] in the same frame, after the set, so the order
+//!   is: fade out, [`LeavingLevel`], make the level, swap, the level's systems lay out the new
+//!   level (and clear the old one's pieces) over a few frames, fade in.
 //! - [`Abyss::level_at`] is where a level is rebuilt from its seed, to which the recorded
 //!   changes are applied on arrival.
 
@@ -63,7 +68,8 @@ use crate::inventory::OpenContainer;
 use crate::play::{BlockedCells, CurrentLevel, DelveSystems, Player, PlayerCamera, ScreenOpen, level_has_focus, show_screen};
 use crate::player::Locomotion;
 use crate::inventory::underfoot::apply_floor_changes;
-use crate::record::{WorldRecord, record_level_left};
+use crate::record::{LevelRecord, WorldRecord, record_level_left};
+use crate::loading::LoadingLevel;
 use crate::ui::{BG, INK, UiFonts};
 
 /// Seconds the screen takes to fade to black, and to fade back in on the new level.
@@ -134,11 +140,30 @@ impl Prepared {
     /// The level at `depth` of the abyss of `run_seed`, with its stone and folk, its loot rolled
     /// against `odds`.
     pub fn make(run_seed: u32, depth: u32, odds: fb_items::Odds) -> Self {
-        let level = Abyss::new(run_seed).level_at(depth);
+        Prepared::make_after(run_seed, depth, odds, None)
+    }
+
+    /// [`Prepared::make`] for a level as `left` left it, if it was visited before: the same
+    /// level [`Abyss::level_at`] gives with the record applied to it.
+    pub fn make_after(run_seed: u32, depth: u32, odds: fb_items::Odds, left: Option<&LevelRecord>) -> Self {
+        let mut level = Abyss::new(run_seed).level_at(depth);
+        if let Some(left) = left {
+            left.apply_to(&mut level);
+        }
         let stone = stone_chunks(&level);
         let folk = build_figures(&level.folk, &level.factions, depth);
         let staging = Staging::make(&level, odds);
         Prepared { level, stone, folk, staging }
+    }
+
+    /// Hands the parts to where the systems that lay the level out take them, and gives the
+    /// level itself.
+    pub fn settle(self, staged: &mut Staged, stone: &mut PreparedStone, figures: &mut FolkFigures) -> Level {
+        let Prepared { level, stone: chunks, folk, staging } = self;
+        staged.set(&level, staging);
+        stone.set(level.seed, level.depth, chunks);
+        figures.keep(folk);
+        level
     }
 }
 
@@ -152,6 +177,11 @@ impl Below {
     pub fn key(&self) -> (u32, u32) {
         *self.0.key()
     }
+
+    /// Whether the level is made, ready to be taken.
+    pub fn is_ready(&self) -> bool {
+        self.0.is_ready()
+    }
 }
 
 /// Written when the delver takes a stair.
@@ -160,7 +190,7 @@ pub struct UseStair(pub StairKind);
 
 /// A journey between two levels, from the moment the screen starts to fade until it has faded
 /// back in. While it lasts the level has no focus ([`level_has_focus`]): the delver stands still.
-#[derive(Resource, Debug)]
+#[derive(Resource)]
 pub struct Journey {
     /// The stair taken.
     pub by: StairKind,
@@ -169,6 +199,12 @@ pub struct Journey {
     pub seconds: f32,
     /// The black the screen fades through.
     pub fade: Entity,
+    /// The level to come, being made while the screen is black ([`Phase::Loading`]).
+    job: Option<Fitting<(u32, u32), Prepared>>,
+    /// The level to come, made, until the loading screen lets it go.
+    ready: Option<Prepared>,
+    /// How many times the level had changed (`LayoutTurn::generation`) when the swap was made.
+    laid_after: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +212,11 @@ pub enum Phase {
     FadingOut,
     /// One frame at black, where [`LeavingLevel`] runs and the level is still the old one.
     Leaving,
+    /// Black, and the loading screen once it takes a while, until the next level is made. The
+    /// old level is still the level, and the frames go on.
+    Loading,
+    /// The level has changed and is being laid out, a part a frame, under black.
+    Settling,
     FadingIn,
 }
 
@@ -233,6 +274,9 @@ pub struct TravelPlugin;
 
 impl Plugin for TravelPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<crate::loading::LoadingPlugin>() {
+            app.add_plugins(crate::loading::LoadingPlugin);
+        }
         app.init_resource::<Abyss>()
             .init_resource::<FolkFigures>()
             .init_resource::<Staged>()
@@ -242,11 +286,11 @@ impl Plugin for TravelPlugin {
             .add_systems(OnExit(AppState::Delving), end_the_run)
             .init_resource::<WorldRecord>()
             .init_resource::<crate::enchanting::Enchanting>()
-            .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(step_journey).in_set(DelveSystems))
+            .configure_sets(Update, LeavingLevel.run_if(journey_is_leaving).before(start_level_load).in_set(DelveSystems))
             .add_systems(Update, record_level_left.after(apply_floor_changes).in_set(LeavingLevel))
             .add_systems(
                 Update,
-                (take_stair.run_if(level_has_focus), begin_journey, step_journey, fade_depth_title, prefetch_below.run_if(resource_exists::<CurrentLevel>)).chain().in_set(DelveSystems),
+                (take_stair.run_if(level_has_focus), take_stair_for_capture.run_if(|| crate::launch::env_set("FB_TAKE_STAIR")), begin_journey, start_level_load.run_if(journey_is_leaving), swap_level.run_if(journey_is_loading), step_journey, fade_depth_title, prefetch_below.run_if(resource_exists::<CurrentLevel>)).chain().in_set(DelveSystems),
             )
             .add_systems(Update, prompt_stair.after(crate::props::prompt_aimed_container).in_set(DelveSystems));
     }
@@ -294,10 +338,15 @@ fn prefetch_below(
     level: Res<CurrentLevel>,
     record: Res<WorldRecord>,
     below: Option<Res<Below>>,
+    journey: Option<Res<Journey>>,
     character: Option<Res<crate::character::Character>>,
     inventory: Option<Res<crate::inventory::Inventory>>,
     mut waited: Local<(u32, u32)>,
 ) {
+    // A journey makes its own level, or has taken the prefetch.
+    if journey.is_some() {
+        return;
+    }
     // The abyss follows the level a frame after the delve opens on it.
     if abyss.depth != level.0.depth {
         return;
@@ -344,6 +393,21 @@ fn take_stair(
     if let Some(stair) = stair_in_reach(&level.0, feet.translation.xz(), looking.xz()) {
         used.write(UseStair(stair.kind));
     }
+}
+
+/// `FB_TAKE_STAIR=<down|up>[,<seconds>]`: that many seconds into the delve (default 1), takes the
+/// stair as if F had been pressed at it, once, for captures of a journey and for timing one.
+fn take_stair_for_capture(time: Res<Time>, level: Res<CurrentLevel>, journey: Option<Res<Journey>>, mut used: MessageWriter<UseStair>, mut waited: Local<f32>, mut taken: Local<bool>) {
+    let Ok(value) = std::env::var("FB_TAKE_STAIR") else { return };
+    *waited += time.delta_secs();
+    let mut parts = value.split(',');
+    let kind = if parts.next().is_some_and(|k| k.trim() == "up") { StairKind::Up } else { StairKind::Down };
+    let after = parts.next().and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(1.0);
+    if *taken || journey.is_some() || *waited < after || level.0.stair(kind).is_none() {
+        return;
+    }
+    *taken = true;
+    used.write(UseStair(kind));
 }
 
 /// Says the stair's verb over the crosshair while [`take_stair`] would take it: close, faced,
@@ -415,84 +479,146 @@ fn begin_journey(
             DespawnOnExit(AppState::Delving),
         ))
         .id();
-    commands.insert_resource(Journey { by, phase: Phase::FadingOut, seconds: 0.0, fade });
+    commands.insert_resource(Journey { by, phase: Phase::FadingOut, seconds: 0.0, fade, job: None, ready: None, laid_after: None });
 }
 
-/// Fades out, holds a frame at black for [`LeavingLevel`], swaps the level for the next, and
-/// fades back in.
+/// In the frame at black, once [`LeavingLevel`] has recorded the old level, starts making the
+/// next one: the level the prefetch has under way if it is the stair down to a level not visited
+/// before, else a new job on the async compute pool, for a visited level as its record left it.
 #[allow(clippy::too_many_arguments)]
-fn step_journey(
+fn start_level_load(
     mut commands: Commands,
-    time: Res<Time>,
+    mut journey: ResMut<Journey>,
+    abyss: Res<Abyss>,
+    record: Res<WorldRecord>,
+    mut below: Option<ResMut<Below>>,
+    character: Option<Res<crate::character::Character>>,
+    inventory: Option<Res<crate::inventory::Inventory>>,
+) {
+    let to = depth_after(abyss.depth, journey.by);
+    let key = (abyss.run_seed, to);
+    // (A level with a record is never started ahead, and its record sets its floor: the loot
+    // rolled ahead is not laid out over it.)
+    let left = record.level(to).cloned();
+    let ahead = (journey.by == StairKind::Down && left.is_none()).then(|| below.as_mut().filter(|below| below.key() == key).map(|below| below.0.take())).flatten();
+    let job = match ahead {
+        Some(job) => {
+            commands.remove_resource::<Below>();
+            job
+        }
+        None => {
+            let odds = crate::character::loot_odds(character.as_deref(), inventory.as_deref(), to);
+            Fitting::start(key, move || Prepared::make_after(key.0, key.1, odds, left.as_ref()))
+        }
+    };
+    journey.job = Some(job);
+    journey.ready = None;
+    journey.phase = Phase::Loading;
+    journey.seconds = 0.0;
+    commands.insert_resource(LoadingLevel::after_black(to, abyss.run_seed));
+}
+
+/// The most a frame counts for in a journey's fades, so a frame that stalls does not eat them.
+const MAX_STEP: f32 = 0.05;
+
+fn journey_is_loading(journey: Option<Res<Journey>>) -> bool {
+    journey.is_some_and(|j| j.phase == Phase::Loading)
+}
+
+/// While the screen is black and the next level is being made, takes it when it is ready (and
+/// the load is not held up) without holding up a frame, and swaps the
+/// level for it. The level's parts are laid out over the next frames ([`crate::loading::LayoutTurn`]).
+#[allow(clippy::too_many_arguments)]
+fn swap_level(
+    mut commands: Commands,
     fonts: Option<Res<UiFonts>>,
-    journey: Option<ResMut<Journey>>,
+    mut journey: ResMut<Journey>,
     mut abyss: ResMut<Abyss>,
     record: Res<WorldRecord>,
     mut level: ResMut<CurrentLevel>,
-    mut below: Option<ResMut<Below>>,
+    mut loading: Option<ResMut<LoadingLevel>>,
+    turns: Res<crate::loading::LayoutTurn>,
     mut prepared: ResMut<PreparedStone>,
     mut figures: ResMut<FolkFigures>,
     mut staged: ResMut<Staged>,
     mut blocked: ResMut<BlockedCells>,
     mut aimed: ResMut<Aimed>,
     mut aimed_folk: Option<ResMut<AimedFolk>>,
-    mut fades: Query<&mut BackgroundColor>,
     mut players: Query<(&mut Transform, &mut Locomotion), With<Player>>,
 ) {
+    let journey = &mut *journey;
+    if journey.ready.is_none() {
+        journey.ready = journey.job.as_mut().and_then(Fitting::poll);
+    }
+    // Not made yet, or held for a capture of the loading screen.
+    if journey.ready.is_none() || loading.as_ref().is_some_and(|l| l.held()) {
+        return;
+    }
+    if let Some(loading) = loading.as_mut() {
+        loading.made();
+    }
+    let to = depth_after(abyss.depth, journey.by);
+    let made = journey.ready.take().expect("checked above");
+    let mut next = made.settle(&mut staged, &mut prepared, &mut figures);
+    // A level visited before is as it was left.
+    record.apply_to(&mut next);
+    // Down arrives at the level below's way up, which is where it starts; up arrives
+    // in front of the level above's way down.
+    let (x, y, facing) = match journey.by {
+        StairKind::Down => next.arrival(StairKind::Up),
+        StairKind::Up => next.arrival(StairKind::Down),
+    }
+    .unwrap_or_else(|| next.start());
+    abyss.depth = to;
+    abyss.arrival = if journey.by == StairKind::Down { Arrival::FromAbove } else { Arrival::FromBelow };
+    // Nothing blocked on the old level blocks the new, and nothing aimed at is still there.
+    *blocked = BlockedCells::default();
+    aimed.0 = None;
+    if let Some(aimed_folk) = aimed_folk.as_mut() {
+        aimed_folk.0 = None;
+    }
+    // The level's systems lay it out over the next frames, on the change.
+    level.0 = next;
+    for (mut body, mut locomotion) in &mut players {
+        let [wx, _, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
+        body.translation = Vec3::new(wx, 0.0, wz);
+        body.rotation = Quat::from_rotation_y(facing.yaw());
+        *locomotion = Locomotion { yaw: facing.yaw(), ..default() };
+    }
+    spawn_depth_title(&mut commands, fonts.as_deref(), to);
+    journey.job = None;
+    journey.laid_after = Some(turns.generation());
+    journey.phase = Phase::Settling;
+    journey.seconds = 0.0;
+}
+
+/// Fades out, holds a frame at black for [`LeavingLevel`] (and [`start_level_load`]), stays black
+/// while the level is made and laid out, and fades back in on it.
+#[allow(clippy::too_many_arguments)]
+fn step_journey(
+    mut commands: Commands,
+    time: Res<Time>,
+    journey: Option<ResMut<Journey>>,
+    turns: Res<crate::loading::LayoutTurn>,
+    mut fades: Query<&mut BackgroundColor>,
+) {
     let Some(mut journey) = journey else { return };
-    journey.seconds += time.delta_secs();
+    journey.seconds += time.delta_secs().min(MAX_STEP);
     let opacity = match journey.phase {
         Phase::FadingOut if journey.seconds >= FADE_OUT_SECONDS => {
             journey.phase = Phase::Leaving;
             1.0
         }
-        Phase::Leaving => {
-            let to = depth_after(abyss.depth, journey.by);
-            // The level below was started when this one was entered; wait for it if it is not
-            // done. Any other level (up, or one the prefetch missed) is made here, which the
-            // black hides.
-            // (A level with a record is never started ahead, and its record sets its floor: the
-            // loot rolled ahead is not laid out over it.)
-            let made = (journey.by == StairKind::Down && record.level(to).is_none())
-                .then(|| below.as_mut().filter(|below| *below.0.key() == (abyss.run_seed, to)).and_then(|below| below.0.wait()))
-                .flatten();
-            let mut next = match made {
-                Some(Prepared { level, stone, folk, staging }) => {
-                    staged.set(&level, staging);
-                    prepared.set(level.seed, level.depth, stone);
-                    figures.keep(folk);
-                    level
-                }
-                None => abyss.level_at(to),
-            };
-            // A level visited before is as it was left.
-            record.apply_to(&mut next);
-            // Down arrives at the level below's way up, which is where it starts; up arrives
-            // in front of the level above's way down.
-            let (x, y, facing) = match journey.by {
-                StairKind::Down => next.arrival(StairKind::Up),
-                StairKind::Up => next.arrival(StairKind::Down),
+        // [`start_level_load`] takes the frame at black, and [`swap_level`] the frames after it.
+        Phase::Leaving | Phase::Loading => 1.0,
+        // Laid out when the level has changed and every part has had its turn.
+        Phase::Settling => {
+            if journey.laid_after.is_some_and(|before| turns.generation() > before) && turns.done() {
+                // The loading screen, if it was drawn, fades away over the level as the black does.
+                commands.remove_resource::<LoadingLevel>();
+                journey.phase = Phase::FadingIn;
+                journey.seconds = 0.0;
             }
-            .unwrap_or_else(|| next.start());
-            abyss.depth = to;
-            abyss.arrival = if journey.by == StairKind::Down { Arrival::FromAbove } else { Arrival::FromBelow };
-            // Nothing blocked on the old level blocks the new, and nothing aimed at is still there.
-            *blocked = BlockedCells::default();
-            aimed.0 = None;
-            if let Some(aimed_folk) = aimed_folk.as_mut() {
-                aimed_folk.0 = None;
-            }
-            // The level's systems lay it out on the change.
-            level.0 = next;
-            for (mut body, mut locomotion) in &mut players {
-                let [wx, _, wz] = Level::world(x as f32 + 0.5, y as f32 + 0.5);
-                body.translation = Vec3::new(wx, 0.0, wz);
-                body.rotation = Quat::from_rotation_y(facing.yaw());
-                *locomotion = Locomotion { yaw: facing.yaw(), ..default() };
-            }
-            spawn_depth_title(&mut commands, fonts.as_deref(), to);
-            journey.phase = Phase::FadingIn;
-            journey.seconds = 0.0;
             1.0
         }
         Phase::FadingOut => journey.seconds / FADE_OUT_SECONDS,
@@ -520,7 +646,7 @@ pub fn spawn_depth_title(commands: &mut Commands, fonts: Option<&UiFonts>, depth
         TextColor(INK.with_alpha(0.0)),
         TextShadow { offset: Vec2::new(2.0, 2.0), color: BG.with_alpha(0.0) },
         Node { position_type: PositionType::Absolute, width: percent(100), top: percent(26), justify_content: JustifyContent::Center, ..default() },
-        GlobalZIndex(101),
+        GlobalZIndex(160),
         Pickable::IGNORE,
         DespawnOnExit(AppState::Delving),
     ));
@@ -570,6 +696,35 @@ mod tests {
             assert_eq!(made.0, person);
             assert_eq!(format!("{:?}", made.1), format!("{figure:?}"));
         }
+    }
+
+    #[test]
+    fn a_level_visited_before_is_made_ahead_as_it_was_left() {
+        let abyss = Abyss::new(1207);
+        // Left with nothing on its floor.
+        let left = LevelRecord::default();
+        let mut level = abyss.level_at(2);
+        assert!(!level.items.is_empty(), "the level generates floor items");
+        left.apply_to(&mut level);
+        assert!(level.items.is_empty());
+        let made = Prepared::make_after(1207, 2, fb_items::Odds::loot(2), Some(&left));
+        assert_eq!(made.level, level, "the record is applied to the level made off the thread");
+        assert_eq!(made.stone, stone_chunks(&level));
+        assert!(made.staging.items.is_empty(), "no loot is rolled for a floor the record sets");
+        // Without a record it is the level as generated.
+        assert_eq!(Prepared::make_after(1207, 2, fb_items::Odds::loot(2), None).level, abyss.level_at(2));
+    }
+
+    #[test]
+    fn settling_a_prepared_level_hands_its_parts_to_the_systems_that_lay_it_out() {
+        let made = Prepared::make(1207, 2, fb_items::Odds::loot(2));
+        let (mut staged, mut stone, mut figures) = (Staged::default(), PreparedStone::default(), FolkFigures::default());
+        let level = made.settle(&mut staged, &mut stone, &mut figures);
+        assert_eq!(level, Abyss::new(1207).level_at(2));
+        assert!(stone.is_kept() && staged.take_creatures(&level).is_some());
+        let built = figures.built_here;
+        assert_eq!(figures.for_spots(&level.folk, &level.factions, level.depth).len(), level.folk.iter().filter(|s| crate::folk::has_figure(s)).count());
+        assert_eq!(figures.built_here, built, "the folk were built off the thread");
     }
 
     #[test]

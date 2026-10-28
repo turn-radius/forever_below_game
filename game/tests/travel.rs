@@ -51,11 +51,8 @@ fn headless_game() -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 fn begin_delve(app: &mut App) {
     run(app, 30);
@@ -257,6 +254,8 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     let down = *first.stair(StairKind::Down).expect("a way down");
     assert_eq!(app.world().get_resource::<Below>().map(Below::key), Some((1207, 2)), "the level below is being made");
     let built_here = app.world().resource::<FolkFigures>().built_here;
+    // (The first level's stone came from the background too.)
+    let stone_used = app.world().resource::<PreparedStone>().used;
     stand(&mut app, down.approach(), down.facing.yaw());
     run(&mut app, 2);
     press_f(&mut app);
@@ -266,10 +265,10 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     assert_eq!(app.world().get_resource::<Below>().map(Below::key), Some((1207, 3)), "the one below this is started in turn");
 
     // Everything laid out came from the background: no folk figure was built here, and the
-    // stone, creatures, items, props and fixtures were each taken once.
+    // stone, creatures, items, props, fixtures, banners and crystals were each taken once.
     assert_eq!(app.world().resource::<FolkFigures>().built_here, built_here);
-    assert_eq!(app.world().resource::<PreparedStone>().used, 1);
-    assert_eq!(app.world().resource::<Staged>().taken, 4);
+    assert_eq!(app.world().resource::<PreparedStone>().used, stone_used + 1);
+    assert_eq!(app.world().resource::<Staged>().taken, 6);
 
     let second = level(&app).clone();
     assert_eq!(second, forever_below::travel::Abyss::new(1207).level_at(2), "the level made in the background is the one made in place");

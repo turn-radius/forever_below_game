@@ -59,7 +59,7 @@ impl Plugin for CreaturesPlugin {
         }
         app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
             .init_resource::<Tuning>()
-            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
+            .add_systems(Update, (spawn_creatures.run_if(crate::loading::laid_out_at(4)), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
 }
 

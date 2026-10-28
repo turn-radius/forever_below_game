@@ -346,7 +346,7 @@ impl Plugin for PlayPlugin {
             .init_resource::<ScreenOpen>()
             .init_resource::<SheetTab>()
             .init_resource::<Keymap>()
-            .add_systems(Update, (switch_screens, map_rooms.run_if(resource_exists_and_changed::<CurrentLevel>)).in_set(DelveSystems))
+            .add_systems(Update, (switch_screens, map_rooms.run_if(crate::loading::laid_out_at(0))).in_set(DelveSystems))
             .add_systems(PostUpdate, gather_obstacles.after(TransformSystems::Propagate).in_set(DelveSystems))
             .add_plugins((
             (crate::ambient::AmbientPlugin, crate::footsteps::FootstepsPlugin, crate::breath::BreathPlugin, crate::game_clock::GameClockPlugin),

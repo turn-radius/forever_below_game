@@ -3,9 +3,11 @@
 //! frame listed before it, and quits after the last, to measure
 //! a scene's frame rate in the window, vsync and all. Pair it with `FB_DEBUG_POSE` to hold the
 //! view still. `FB_NO_VSYNC=1` presents without waiting for the display, so a frame time under
-//! 16.7 ms (60 Hz) shows.
+//! 16.7 ms (60 Hz) shows. `FB_SLOW_FRAMES=<ms>` logs every frame that took longer than that, with
+//! its number, to find what stalls a load or a journey (try it with `FB_NO_VSYNC=1`).
 
 use std::any::TypeId;
+use std::time::Instant;
 
 use bevy::{
     camera::visibility::{CubemapVisibleEntities, VisibleEntities},
@@ -96,3 +98,31 @@ mod tests {
         assert_eq!(parse_frames("x"), None);
     }
 }
+
+/// `FB_SLOW_FRAMES=<ms>`: the threshold above which a frame is logged, if set.
+pub fn slow_frame_threshold() -> Option<f32> {
+    std::env::var("FB_SLOW_FRAMES").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|ms| *ms > 0.0)
+}
+
+/// Logs each frame longer than the threshold, by the wall clock between two frames' starts.
+pub struct SlowFrames(pub f32);
+
+#[derive(Resource)]
+struct SlowFrameLimit(f32);
+
+impl Plugin for SlowFrames {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(SlowFrameLimit(self.0)).add_systems(First, log_slow_frame);
+    }
+}
+
+fn log_slow_frame(frame: Res<FrameCount>, limit: Res<SlowFrameLimit>, mut last: Local<Option<Instant>>) {
+    let now = Instant::now();
+    if let Some(before) = last.replace(now) {
+        let ms = now.duration_since(before).as_secs_f32() * 1000.0;
+        if ms > limit.0 {
+            println!("slow frame {}: {ms:.0} ms", frame.0);
+        }
+    }
+}
+
