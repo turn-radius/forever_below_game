@@ -913,7 +913,8 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
     let item = inventory.item(id)?;
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    let (transform, rest_height) = rest_on_drawn_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, floor_scale_of(item, tuning), |centre, half| crate::level::geometry::floor_under(level, centre, half))?;
+    let drawn = spawner.drawn_floor(level);
+    let (transform, rest_height) = rest_on_drawn_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, floor_scale_of(item, tuning), |centre, half| drawn.height_under(level, centre, half))?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = rolled_light(item);
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
@@ -2480,15 +2481,27 @@ mod tests {
         for (style, seed) in [(fb_level::LevelStyle::StoneHalls, 1207u32), (fb_level::LevelStyle::RoughRock, 5)] {
             let level = (seed..seed + 200).map(|s| fb_level::generate(s, if style == fb_level::LevelStyle::StoneHalls { 2 } else { 1 })).find(|l| l.style == style).unwrap();
             let relief = crate::level::geometry::Relief::new(&level);
+            let view = crate::level::geometry::CellView::uncobbled(&level);
+            let drawn = crate::level::geometry::DrawnFloor::of_view(&view);
+            // Open cells only: where there is no floor drawn there is nothing to rest on.
+            let cells: Vec<(i32, i32)> = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| level.is_open(x, y)).collect();
             let mut raised = 0;
             for k in 0..40 {
-                let at = Vec3::new(3.0 + k as f32 * 1.7, 0.0, 4.0 + k as f32 * 2.3);
-                let (transform, height) = rest_on_drawn_floor(&sheet, false, at, 0.0, 1.0, |c, h| crate::level::geometry::floor_under(&level, c, h)).unwrap();
+                let (cx, cy) = cells[k * cells.len() / 40];
+                let at = Vec3::new((cx as f32 + 0.5) * CELL, 0.0, (cy as f32 + 0.5) * CELL);
+                let (transform, height) = rest_on_drawn_floor(&sheet, false, at, 0.0, 1.0, |c, h| drawn.height_under(&level, c, h)).unwrap();
                 assert!((transform.translation.y - height).abs() < 1e-6);
                 assert!(height >= relief.floor_height(at.x, at.z) - 1e-5, "rests at or above the floor under its middle");
                 raised += (height > 0.05) as i32;
             }
             assert!(raised > 5, "{style:?}: the floor under most items stands off y = 0 ({raised})");
+            // Cobbles stand 0.22 or more off the floor, so a thing set down on them rests there.
+            let cobbled = crate::level::geometry::CellView::new(&level);
+            let stones = crate::level::geometry::DrawnFloor::of_view(&cobbled);
+            for &(cx, cy) in cells.iter().filter(|&&(x, y)| cobbled.is_cobbled(x, y)).take(5) {
+                let at = [(cx as f32 + 0.5) * CELL, (cy as f32 + 0.5) * CELL];
+                assert!(stones.height_under(&level, at, [0.5, 0.5]) >= 0.22 - 1e-6);
+            }
         }
     }
 

@@ -458,7 +458,7 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
             // Where a stair goes through (`crate::level::stairs`), no floor under a way down and
             // no vault over a way up, as in the rough rock.
             let stair = level.stair_at(x, y);
-            if !crate::level::stairs::opens_floor(stair) {
+            if super::is_floored(level, view.passage(), x, y) {
                 Face {
                     origin: corner,
                     u: [1.0, 0.0, 0.0],
@@ -1125,6 +1125,44 @@ mod tests {
             }
         }
         assert!(checked > 20);
+    }
+
+    #[test]
+    fn an_item_against_a_wall_or_a_stair_opening_rests_on_the_open_cells_flags() {
+        let level = halls(1207);
+        let view = CellView::uncobbled(&level);
+        let drawn = super::super::DrawnFloor::of_view(&view);
+        let flags = |x0: f32, x1: f32, z0: f32, z1: f32| flag_top(level.seed, [x0, x1], [z0, z1]);
+        let (mut walls, mut openings, mut bit) = (0, 0, 0);
+        for y in 1..level.height as i32 - 1 {
+            for x in 1..level.width as i32 - 1 {
+                if view.cell(x, y) == Cell::Rock || view.is_cobbled(x, y) {
+                    continue;
+                }
+                let (z0, z1) = (y as f32 * CELL + 1.0, (y + 1) as f32 * CELL - 1.0);
+                let edge = (x + 1) as f32 * CELL;
+                // Rock to the east: the footprint reaches 1.5 into it, the floor is the open side's.
+                if view.cell(x + 1, y) == Cell::Rock {
+                    let height = drawn.height_under(&level, [edge, (z0 + z1) * 0.5], [1.5, (z1 - z0) * 0.5]);
+                    let (open, whole) = (flags(edge - 1.5, edge, z0, z1), flags(edge - 1.5, edge + 1.5, z0, z1));
+                    assert!((height - open).abs() < 1e-6, "cell {x},{y}: {height} against {open}");
+                    walls += 1;
+                    bit += (whole > open) as i32;
+                }
+                // A way down through the cell to the east: no floor there either.
+                if view.cell(x + 1, y) != Cell::Rock && !view.is_cobbled(x + 1, y) && level.stair_at(x + 1, y).is_none() {
+                    let mut stairs = level.clone();
+                    stairs.stairs.push(fb_level::Stair { x: (x + 1) as u32, y: y as u32, facing: Facing::East, kind: fb_level::StairKind::Down });
+                    let height = { let view = CellView::uncobbled(&stairs); super::super::DrawnFloor::of_view(&view).height_under(&stairs,  [edge, (z0 + z1) * 0.5], [1.5, (z1 - z0) * 0.5]) };
+                    let open = flags(edge - 1.5, edge, z0, z1);
+                    assert!((height - open).abs() < 1e-6, "stair at {},{y}: {height} against {open}", x + 1);
+                    openings += 1;
+                    bit += (flags(edge - 1.5, edge + 1.5, z0, z1) > open) as i32;
+                }
+            }
+        }
+        assert!(walls > 3 && openings > 3, "{walls} walls, {openings} openings");
+        assert!(bit > 0, "some footprint would have read a flag that is not drawn");
     }
 
     #[test]
