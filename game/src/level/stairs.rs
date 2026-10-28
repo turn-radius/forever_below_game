@@ -27,6 +27,10 @@ const PARAPET: f32 = 1.8;
 /// `STEPS_DOWN * RISE_DOWN` below the floor, out of the light's reach.
 const STEPS_DOWN: usize = 12;
 const RISE_DOWN: f32 = 1.7;
+/// How far down a way down stays fully lit by the delver's light: the first three steps. Below it
+/// the stone fades, and from [`DARK_DEPTH`] down it is black.
+const LIT_DEPTH: f32 = 3.0 * RISE_DOWN;
+const DARK_DEPTH: f32 = 9.0 * RISE_DOWN;
 /// How high a way up's steps climb past the ceiling, into the dark, and the height of one.
 const CLIMB_PAST_CEILING: f32 = 6.0;
 const RISE_UP: f32 = 2.0;
@@ -49,6 +53,15 @@ pub fn stair_transform(stair: &Stair) -> (V3, f32) {
     let [dx, _, dz] = facing_vector(stair.facing);
     // A turn about +Y by `yaw` takes +Z to `(sin yaw, 0, cos yaw)`.
     (cell_centre(stair.x as i32, stair.y as i32), dx.atan2(dz))
+}
+
+/// How much of its light the stone of a way down keeps at height `y` (the landing is at 0): all of
+/// it down to [`LIT_DEPTH`], none from [`DARK_DEPTH`], a smooth fade between. The mesh bakes it
+/// into each vertex's openness (`toon.wesl` scales the light and the ambient by it), so a way
+/// down falls into black without a light or a shader of its own.
+pub fn depth_light(y: f32) -> f32 {
+    let t = ((-y - LIT_DEPTH) / (DARK_DEPTH - LIT_DEPTH)).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
 }
 
 /// A block of `size` (x, y, z) centred at `at`.
@@ -77,7 +90,10 @@ pub fn stair_mesh(kind: StairKind, ceiling: f32, seed: u32) -> ItemMesh {
             for k in 0..STEPS_DOWN {
                 let tread = -(k as f32 + 1.0) * RISE_DOWN + (rng.range_f32(0.0, 1.0) - 0.5) * 0.12;
                 let (z0, z1) = (-half + k as f32 * run, -half + (k as f32 + 1.0) * run);
-                steps.append(&block([across, tread - bottom, z1 - z0], [0.0, (tread + bottom) * 0.5, (z0 + z1) * 0.5], 0.2));
+                // A slab a step or two thick, so a vertex's height says how dark it is; the last
+                // one goes to the foot, closing the shaft in black.
+                let base = if k + 1 == STEPS_DOWN { bottom } else { (tread - 2.0 * RISE_DOWN).max(bottom) };
+                steps.append(&block([across, tread - base, z1 - z0], [0.0, (tread + base) * 0.5, (z0 + z1) * 0.5], 0.2));
             }
         }
         StairKind::Up => {
@@ -92,10 +108,25 @@ pub fn stair_mesh(kind: StairKind, ceiling: f32, seed: u32) -> ItemMesh {
     }
     // The stringers either side and the wall behind, from the foot of the flight to the top.
     let tall = top - bottom;
-    for side in [-1.0f32, 1.0] {
-        walls.append(&block([SIDE, tall, CELL], [side * (half - SIDE * 0.5), (top + bottom) * 0.5, 0.0], 0.2));
+    if kind == StairKind::Down {
+        // In slices a step high below the landing, so each vertex can carry its own darkness.
+        let mut high = top;
+        while high > bottom + 0.01 {
+            let low = if high > 0.0 { 0.0 } else { (high - RISE_DOWN).max(bottom) };
+            let (height, mid) = (high - low, (high + low) * 0.5);
+            let bevel = if high > 0.0 { 0.2 } else { 0.0 };
+            for side in [-1.0f32, 1.0] {
+                walls.append(&block([SIDE, height, CELL], [side * (half - SIDE * 0.5), mid, 0.0], bevel));
+            }
+            walls.append(&block([across, height, BACK], [0.0, mid, half - BACK * 0.5], bevel));
+            high = low;
+        }
+    } else {
+        for side in [-1.0f32, 1.0] {
+            walls.append(&block([SIDE, tall, CELL], [side * (half - SIDE * 0.5), (top + bottom) * 0.5, 0.0], 0.2));
+        }
+        walls.append(&block([across, tall, BACK], [0.0, (top + bottom) * 0.5, half - BACK * 0.5], 0.2));
     }
-    walls.append(&block([across, tall, BACK], [0.0, (top + bottom) * 0.5, half - BACK * 0.5], 0.2));
 
     let mut parts = Parts::new();
     parts.add_look("steps", steps, Look::of(MaterialKind::Stone).tinted(FLOOR_STONE).without_outline());
@@ -105,7 +136,13 @@ pub fn stair_mesh(kind: StairKind, ceiling: f32, seed: u32) -> ItemMesh {
         let cap = block([CELL, 1.0, CELL], [0.0, top + 0.5, 0.0], 0.1);
         parts.add_look("cap", cap, Look::of(MaterialKind::Stone).tinted(CEILING_STONE).without_outline());
     }
-    parts.finish()
+    let mut mesh = parts.finish();
+    if kind == StairKind::Down {
+        for part in &mut mesh.parts {
+            part.occlusion = part.positions.iter().map(|p| depth_light(p[1])).collect();
+        }
+    }
+    mesh
 }
 
 #[cfg(test)]
@@ -145,6 +182,37 @@ mod tests {
             let steps = mesh.parts.iter().find(|p| p.name == "steps").unwrap();
             assert!(steps.positions.iter().any(|p| p[1] > ceiling + 2.0));
         }
+    }
+
+    #[test]
+    fn a_way_down_falls_away_into_black() {
+        assert_eq!(depth_light(0.0), 1.0);
+        assert_eq!(depth_light(PARAPET), 1.0);
+        assert_eq!(depth_light(-LIT_DEPTH), 1.0);
+        assert_eq!(depth_light(-DARK_DEPTH), 0.0);
+        assert_eq!(depth_light(-(STEPS_DOWN as f32 + 1.0) * RISE_DOWN), 0.0);
+        let mut last = 1.0;
+        for k in 0..40 {
+            let light = depth_light(-(k as f32) * 0.5);
+            assert!(light <= last + 1e-6, "{k}: {light} after {last}");
+            last = light;
+        }
+        let mesh = stair_mesh(StairKind::Down, 24.0, 1207);
+        for part in &mesh.parts {
+            assert_eq!(part.occlusion.len(), part.positions.len(), "{}", part.name);
+            for (p, &o) in part.positions.iter().zip(&part.occlusion) {
+                assert_eq!(o, depth_light(p[1]));
+            }
+            // The foot is black and the landing end lit.
+            assert!(part.occlusion.iter().any(|&o| o == 0.0), "{}", part.name);
+            assert!(part.occlusion.iter().any(|&o| o == 1.0), "{}", part.name);
+        }
+    }
+
+    #[test]
+    fn a_way_up_is_not_darkened() {
+        let mesh = stair_mesh(StairKind::Up, 24.0, 1207);
+        assert!(mesh.parts.iter().all(|p| p.occlusion.is_empty()));
     }
 
     #[test]
