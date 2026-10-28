@@ -14,11 +14,13 @@
 //!
 //! "Open" here is unlocked: the leaf is still shut until F swings it. A locked door is opened
 //! with a carried key of the faction (G, "Unlock with key"), or picked with lockpicks (R, held
-//! for [`PICK_SECONDS`]): a roll of d20 plus the Dexterity modifier, the lockpicking of worn
-//! gear and [`LOCKPICKS_BONUS`] for the picks, against a difficulty that rises as the faction
-//! likes the delver less ([`pick_dc`]). A miss is noise, which carries through a shut door: a
-//! folk of the faction within [`NOISE_RANGE`] hears it and the faction's standing drops by
-//! [`NOISE_COST`]; unheard, a miss costs only the hold. A door unlocked by key or picks stays unlocked.
+//! for [`PICK_SECONDS`]): a [`pick_check`] rolled on the dice panel ([`crate::dice`]), d20 plus
+//! the Dexterity modifier, the lockpicking of each worn item (a line named by the item) and
+//! [`LOCKPICKS_BONUS`] for the picks, against a difficulty that rises as the faction likes the
+//! delver less ([`pick_dc`]). The delver stands still while the dice show, and the door
+//! unlocks, or the noise is paid for, only when the panel closes ([`finish_pick`]). A miss is
+//! noise, which carries through a shut door: a folk of the faction within [`NOISE_RANGE`] hears
+//! it and the faction's standing drops by [`NOISE_COST`]; unheard, a miss costs only the hold. A door unlocked by key or picks stays unlocked.
 //!
 //! A shut door is a wall, and opaque to sight, for everyone but the folk of its own faction
 //! ([`solid_for`], read by the delver's walk, folk routines and combat, creatures, and every
@@ -41,6 +43,7 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use fb_character::check::Check;
 use fb_faction::{Band, Faction, FactionSpec};
 use fb_items::Item;
 use fb_level::{CELL, ClaimDoor, DoorKind, SwitchKind};
@@ -51,6 +54,7 @@ use crate::character::{Character, modifier};
 use crate::combat::RunDice;
 use crate::combat::feedback::Corpse;
 use crate::combat::vitals::{Dying, Fallen};
+use crate::dice::{RollDone, RollPurpose, RollRequest};
 use crate::folk::{AimedFolk, Denizen};
 use crate::folk_routine::Routine;
 use crate::hostility::Hostility;
@@ -107,11 +111,13 @@ pub struct DoorsPlugin;
 
 impl Plugin for DoorsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Doors>().init_resource::<AimedDoor>().init_resource::<AimedSwitch>().add_systems(
+        app.add_systems(OnExit(crate::launch::AppState::Delving), |mut pick: ResMut<PickInFlight>| pick.0 = None);
+        app.init_resource::<Doors>().init_resource::<AimedDoor>().init_resource::<AimedSwitch>().init_resource::<PickInFlight>().add_systems(
             Update,
             (
                 aim_door,
                 prompt_door.after(crate::travel::prompt_stair),
+                pick_for_capture,
                 use_door.run_if(level_has_focus),
                 use_switch.run_if(level_has_focus),
                 open_for_capture,
@@ -119,6 +125,7 @@ impl Plugin for DoorsPlugin {
                 throw_levers,
                 pull_chains,
                 give_keys.run_if(level_has_focus),
+                finish_pick,
             )
                 .chain()
                 .in_set(DelveSystems),
@@ -151,11 +158,30 @@ pub fn pick_dc(band: Band) -> i32 {
     }
 }
 
-/// Whether a pick succeeds: the die, the Dexterity modifier of the delver's score, the
-/// lockpicking of what they wear, and the picks, against `dc`.
-pub fn picks(d20: u32, dexterity: i32, worn_lockpicking: i32, dc: i32) -> bool {
-    d20 as i32 + modifier(dexterity) + worn_lockpicking + LOCKPICKS_BONUS >= dc
+/// The check that picks a lock of difficulty `dc`: a d20 with the Dexterity modifier of the
+/// delver's score, the lockpicking of each worn item named by the item, and the picks.
+pub fn pick_check(dc: i32, dexterity: i32, worn: &[(String, i32)]) -> Check {
+    let mut check = Check::d20("Pick the lock", dc).stat("DEX", modifier(dexterity));
+    for (name, amount) in worn {
+        check = check.affix(name.clone(), *amount);
+    }
+    check.affix("Lockpicks", LOCKPICKS_BONUS)
 }
+
+/// The pick being rolled on the dice panel: the door's cell, its faction, and whether a miss was heard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Pick {
+    cell: (i32, i32),
+    faction: Faction,
+    heard: bool,
+    /// The level it was worked on, its seed and depth: a level left mid-roll drops the pick.
+    level: (u32, u32),
+}
+
+/// The pick whose dice are showing. While it is, the delver stands still ([`level_has_focus`])
+/// and no second pick starts.
+#[derive(Resource, Default, Debug)]
+pub struct PickInFlight(Option<Pick>);
 
 /// One claim door as it stands.
 #[derive(Clone, Debug, PartialEq)]
@@ -391,10 +417,11 @@ pub fn carries_lockpicks(inventory: &Inventory) -> bool {
     carried(inventory).any(|(_, item)| item.base == "Lockpicks")
 }
 
-/// The lockpicking the delver's worn and held gear gives.
-pub fn worn_lockpicking(inventory: &Inventory) -> i32 {
-    inventory.equipped().iter().map(|(_, item)| item.profile.stats.lockpicking).sum::<f32>().round() as i32
+/// The lockpicking each worn or held item gives, named by the item, for the pick's modifiers.
+pub fn worn_lockpicking_by_item(inventory: &Inventory) -> Vec<(String, i32)> {
+    inventory.equipped().iter().map(|(_, item)| (item.title().to_string(), item.profile.stats.lockpicking.round() as i32)).filter(|(_, n)| *n != 0).collect()
 }
+
 
 /// Hands the delver the key of `faction`, if they do not carry one: into a bag if there is room,
 /// else loose underfoot. Returns whether a key was given.
@@ -515,7 +542,7 @@ fn use_door(
     level: Res<CurrentLevel>,
     mut doors: ResMut<Doors>,
     inventory: Option<Res<Inventory>>,
-    mut record: Option<ResMut<WorldRecord>>,
+    record: Option<ResMut<WorldRecord>>,
     character: Option<Res<Character>>,
     dice: Option<ResMut<RunDice>>,
     players: Query<&Transform, With<Player>>,
@@ -523,6 +550,8 @@ fn use_door(
     mut toasts: Toasts,
     mut picking: Local<Option<((i32, i32), f32)>>,
     mut spare_rolls: Local<u32>,
+    mut pending: ResMut<PickInFlight>,
+    mut rolls: MessageWriter<RollRequest>,
 ) {
     let Some(cell) = aimed.0 else {
         *picking = None;
@@ -577,7 +606,7 @@ fn use_door(
 
     // Picking: a press starts it, holding it runs the clock, the roll comes at the end.
     let locked = door.locked(band) && !inside;
-    if !(locked && lockpicks && !grate && !door.open && input.pressed(Action::Tertiary)) {
+    if pending.0.is_some() || !(locked && lockpicks && !grate && !door.open && input.pressed(Action::Tertiary)) {
         *picking = None;
         return;
     }
@@ -594,33 +623,57 @@ fn use_door(
         return;
     }
     *picking = None;
+    let Some(dc) = pick_dc_for(door.kind, band) else { return };
     // Without the run's dice (a bare app), a counter of its own keeps each roll different.
     *spare_rolls += 1;
     let mut fallback = Mulberry32::new(*spare_rolls ^ cell.0 as u32 ^ (cell.1 as u32) << 8);
     let mut dice = dice;
-    let roll = match dice.as_mut() {
-        Some(dice) => dice.0.int(1, 20),
-        None => fallback.int(1, 20),
-    };
     let dexterity = character.as_deref().map_or(10, Character::dexterity);
-    let worn = inventory.as_deref().map_or(0, worn_lockpicking);
-    if picks(roll, dexterity, worn, pick_dc_for(door.kind, band).unwrap_or(i32::MAX)) {
-        door.unlocked = true;
-        toasts.say("You pick the lock");
-        return;
-    }
+    let worn = inventory.as_deref().map_or_else(Vec::new, worn_lockpicking_by_item);
+    let check = pick_check(dc, dexterity, &worn);
+    let roll = match dice.as_mut() {
+        Some(dice) => check.roll(&mut dice.0),
+        None => check.roll(&mut fallback),
+    };
     // A miss is noise, and sound carries through a shut door: a folk of the faction within
-    // `NOISE_RANGE` hears it, whatever lies between.
+    // `NOISE_RANGE` hears it, whatever lies between. Who hears is settled as the picks are
+    // worked, so the verdict can say so; the standing drops when the panel closes.
     let faction = door.faction;
     let at = door.centre;
-    let heard = folk.iter().any(|(transform, denizen)| denizen.person.faction.id == faction && transform.translation.xz().distance(at) <= NOISE_RANGE);
-    if heard {
-        if let Some(record) = record.as_deref_mut() {
-            record.standings.shift(faction, -NOISE_COST);
-        }
-        toasts.say(format!("{} heard the picks", capital(&name)));
+    let heard = !roll.succeeded && folk.iter().any(|(transform, denizen)| denizen.person.faction.id == faction && transform.translation.xz().distance(at) <= NOISE_RANGE);
+    let result = if roll.succeeded {
+        "The lock gives".to_string()
+    } else if heard {
+        format!("{} heard the picks", capital(&name))
     } else {
-        toasts.say("The picks slip");
+        "The picks slip".to_string()
+    };
+    *pending = PickInFlight(Some(Pick { cell, faction, heard, level: (level.0.seed, level.0.depth) }));
+    // The dice show now: "Picking the lock..." has done its work.
+    toasts.clear();
+    rolls.write(RollRequest { roll, purpose: RollPurpose::PickLock(cell), result: Some(result) });
+}
+
+/// Applies a pick once its dice have closed: a success unlocks the door, a heard miss costs the
+/// faction's standing, an unheard one costs only the hold.
+fn finish_pick(mut done: MessageReader<RollDone>, mut pending: ResMut<PickInFlight>, mut doors: ResMut<Doors>, mut record: Option<ResMut<WorldRecord>>, level: Option<Res<CurrentLevel>>) {
+    for finished in done.read() {
+        let RollPurpose::PickLock(cell) = finished.purpose else { continue };
+        let Some(pick) = pending.0.take().filter(|p| p.cell == cell) else { continue };
+        // The level may have changed mid-roll: the door in that cell must be the one picked.
+        let same_level = level.as_deref().is_none_or(|l| (l.0.seed, l.0.depth) == pick.level);
+        if !same_level || doors.0.get(&cell).is_none_or(|door| door.faction != pick.faction) {
+            continue;
+        }
+        if finished.roll.succeeded {
+            if let Some(door) = doors.0.get_mut(&cell) {
+                door.unlocked = true;
+            }
+        } else if pick.heard {
+            if let Some(record) = record.as_deref_mut() {
+                record.standings.shift(pick.faction, -NOISE_COST);
+            }
+        }
     }
 }
 
@@ -807,6 +860,72 @@ fn open_for_capture(mut doors: ResMut<Doors>, record: Option<Res<WorldRecord>>, 
     }
 }
 
+/// For captures (`FB_PICK=<face>[:<band>]`): stands the delver at the first locked door they can
+/// pick, within reach outside and facing it, hands them lockpicks (a door with no folk within two cells, so none opens it), holds the faction at the middle
+/// of `band` (`hostile`, `wary` by default or `neutral`) and rolls `face` on the pick, which the
+/// next frames hold R for, so the dice panel shows over the door as in play.
+/// `FB_DEBUG_ROLL_AT=<seconds>` freezes the roll.
+fn pick_for_capture(
+    mut doors: ResMut<Doors>,
+    mut record: Option<ResMut<WorldRecord>>,
+    mut inventory: Option<ResMut<Inventory>>,
+    mut dice: Option<ResMut<RunDice>>,
+    mut keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    mut players: Query<(&mut Transform, &mut crate::player::Locomotion), With<Player>>,
+    folk: Query<&Transform, (With<Denizen>, Without<Player>)>,
+    pending: Res<PickInFlight>,
+    mut frames: Local<u32>,
+    mut target: Local<Option<(i32, i32)>>,
+    mut pressed_once: Local<bool>,
+) {
+    let Ok(spec) = std::env::var("FB_PICK") else { return };
+    if doors.0.is_empty() {
+        return;
+    }
+    *frames += 1;
+    let (face, band) = spec.split_once(':').map_or((spec.as_str(), "wary"), |(f, b)| (f, b));
+    let face = face.trim().parse::<u32>().unwrap_or(14).clamp(1, 20);
+    if *frames == 30 {
+        let (Some(record), Some(inventory), Some(dice)) = (record.as_deref_mut(), inventory.as_deref_mut(), dice.as_deref_mut()) else { return };
+        let (middle, band) = match band.trim() {
+            "hostile" => (-75, Band::Hostile),
+            "neutral" => (0, Band::Neutral),
+            _ => (-30, Band::Wary),
+        };
+        let Some((cell, door)) = doors.0.iter_mut().find(|(_, d)| d.kind != DoorKind::Portcullis && d.switched() && d.inward != Vec2::ZERO && (d.main || band != Band::Neutral) && !folk.iter().any(|t| t.translation.xz().distance(d.centre) < CELL * 2.0)) else { return };
+        let now = record.standings.get(door.faction).value();
+        record.standings.shift(door.faction, middle - now);
+        door.unlocked = false;
+        door.open = false;
+        let outward = -door.inward;
+        let stand = door.centre + outward * CELL * 0.85;
+        if let Ok((mut at, mut locomotion)) = players.single_mut() {
+            at.translation.x = stand.x;
+            at.translation.z = stand.y;
+            locomotion.yaw = (-door.inward.x).atan2(-door.inward.y);
+            locomotion.pitch = 0.0;
+        }
+        if carries_lockpicks(inventory) {
+            // Already carried.
+        } else if let Some(picks) = fb_items::roll_item("Lockpicks", 3) {
+            let id = inventory.add(picks);
+            let _ = inventory.pick_up(id);
+        }
+        // The seed whose first d20 is `face`: the pick's check draws one die.
+        if let Some(seed) = (1..100_000u32).find(|&s| Mulberry32::new(s).int(1, 20) == face) {
+            dice.0 = Mulberry32::new(seed);
+        }
+        *target = Some(*cell);
+    }
+    // The capture drops every key each frame, so R is pressed anew until the pick is under way.
+    *pressed_once |= pending.0.is_some();
+    if *frames >= 60 && target.is_some() && !*pressed_once {
+        if let Some(keys) = keys.as_deref_mut() {
+            keys.press(KeyCode::KeyR);
+        }
+    }
+}
+
 /// Whether the delver stands in the doorway of `door`.
 fn delver_in_doorway(door: &DoorState, feet: Option<Vec2>) -> bool {
     feet.is_some_and(|f| (f - door.centre).abs().max_element() < CELL * 0.5 + IN_THE_WAY)
@@ -880,6 +999,11 @@ fn give_keys(level: Res<CurrentLevel>, record: Option<ResMut<WorldRecord>>, inve
 
 #[cfg(test)]
 mod tests {
+    /// Whether a pick of this natural face succeeds, the worn lockpicking one line.
+    fn picks(d20: u32, dexterity: i32, worn: i32, dc: i32) -> bool {
+        pick_check(dc, dexterity, &[("Gloves of Thieves".to_string(), worn)]).with_natural(d20 as i32).succeeded
+    }
+
     use super::*;
     use crate::player::slide_around;
     use fb_level::path::line_of_sight;
@@ -1050,7 +1174,7 @@ mod tests {
         let state = doors.0.get_mut(&(door.x, door.y)).unwrap();
         assert!(state.locked(Band::Wary));
         // With the picks: some roll of the die gets through a Wary door, and some does not.
-        let rolls: Vec<bool> = (1..=20).map(|d| picks(d, 12, worn_lockpicking(&inventory), pick_dc(Band::Wary))).collect();
+        let rolls: Vec<bool> = (1..=20).map(|d| picks(d, 12, worn_lockpicking_by_item(&inventory).iter().map(|(_, n)| n).sum(), pick_dc(Band::Wary))).collect();
         assert!(rolls.iter().any(|&r| r) && rolls.iter().any(|&r| !r));
         state.unlocked = true;
         assert!(!state.locked(Band::Wary));
@@ -1151,7 +1275,10 @@ mod tests {
             .insert_resource(Keymap::default())
             .insert_resource(keys)
             .insert_resource(Time::<()>::default())
-            .add_systems(Update, use_door);
+            .init_resource::<PickInFlight>()
+            .add_message::<RollRequest>()
+            .add_message::<RollDone>()
+            .add_systems(Update, (use_door, finish_pick).chain());
         for (here, offset) in [(folk_near, 3.0 * CELL), (folk_far, NOISE_RANGE * 2.0)] {
             if here {
                 let denizen = Denizen { person: person.clone(), radius: 2.5, min: Vec3::ZERO, max: Vec3::ZERO };
@@ -1161,12 +1288,22 @@ mod tests {
         (app, (door.x, door.y), door.faction)
     }
 
-    /// Holds R for two seconds, the pick taking 1.5.
-    fn hold_the_pick(app: &mut App) {
+    /// Holds R for two seconds, the pick taking 1.5, and returns the rolls the pick sent to the
+    /// dice panel. Nothing has closed them yet.
+    fn hold_the_pick(app: &mut App) -> Vec<RollRequest> {
+        let mut sent = Vec::new();
         for _ in 0..4 {
             app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(500));
             app.update();
+            sent.extend(app.world_mut().resource_mut::<Messages<RollRequest>>().drain());
         }
+        sent
+    }
+
+    /// The panel closing on `request`.
+    fn close_the_panel(app: &mut App, request: &RollRequest) {
+        app.world_mut().write_message(RollDone { roll: request.roll.clone(), purpose: request.purpose });
+        app.update();
     }
 
     fn seed_rolling(first: u32) -> u32 {
@@ -1174,30 +1311,115 @@ mod tests {
     }
 
     #[test]
-    fn holding_the_pick_opens_a_lock_when_the_roll_succeeds() {
+    fn the_pick_is_a_check_with_a_line_for_each_helper_against_the_doors_difficulty() {
+        let check = pick_check(DC_WARY + 4, 16, &[("Gloves of Thieves".to_string(), 2)]);
+        assert_eq!((check.sides, check.target), (20, 19));
+        let lines: Vec<_> = check.modifiers.iter().map(|m| (m.name.as_str(), m.amount)).collect();
+        assert_eq!(lines, [("DEX", 3), ("Gloves of Thieves", 2), ("Lockpicks", 1)]);
+        // On a door, the target is the faction's mood and the kind's penalty.
+        let (mut app, cell, faction) = picking(-30, seed_rolling(7), false, false);
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        let band = band_of(app.world().get_resource::<WorldRecord>(), faction);
+        let kind = app.world().resource::<Doors>().0[&cell].kind;
+        assert_eq!((sent[0].roll.target, sent[0].roll.natural), (pick_dc_for(kind, band).unwrap(), 7));
+        assert!(sent[0].roll.modifiers.iter().any(|m| m.name == "Lockpicks" && m.amount == LOCKPICKS_BONUS));
+        assert_eq!(sent[0].purpose, RollPurpose::PickLock(cell));
+    }
+
+    #[test]
+    fn holding_the_pick_opens_a_lock_only_once_the_panel_closes_on_a_success() {
         // A natural 20 beats the hardest door (18 against 20 and the picks' 1).
         let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
         app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(500));
         app.update();
-        assert!(!app.world().resource::<Doors>().0[&cell].unlocked, "the roll waits for the hold");
-        hold_the_pick(&mut app);
+        assert!(app.world().resource::<Messages<RollRequest>>().is_empty(), "the roll waits for the hold");
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].result.as_deref(), Some("The lock gives"));
+        assert!(!app.world().resource::<Doors>().0[&cell].unlocked, "the dice are still showing");
+        close_the_panel(&mut app, &sent[0]);
         assert!(app.world().resource::<Doors>().0[&cell].unlocked);
     }
 
     #[test]
-    fn a_heard_miss_costs_standing_and_an_unheard_one_costs_nothing() {
+    fn a_heard_miss_costs_standing_when_the_panel_closes_and_an_unheard_one_costs_nothing() {
         let miss = seed_rolling(1);
         let standing = |app: &App, f: Faction| app.world().resource::<WorldRecord>().standings.get(f).value();
         // A folk of the faction at the door hears it, though the door is shut between them.
         let (mut app, cell, faction) = picking(-30, miss, true, false);
-        hold_the_pick(&mut app);
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].result.as_deref().is_some_and(|r| r.ends_with("heard the picks")), "{:?}", sent[0].result);
+        assert_eq!(standing(&app, faction), -30, "not before the panel closes");
+        close_the_panel(&mut app, &sent[0]);
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
         assert_eq!(standing(&app, faction), -30 - NOISE_COST);
         // One out of earshot does not.
         let (mut app, cell, faction) = picking(-30, miss, false, true);
-        hold_the_pick(&mut app);
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent[0].result.as_deref(), Some("The picks slip"));
+        close_the_panel(&mut app, &sent[0]);
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
         assert_eq!(standing(&app, faction), -30);
+    }
+
+    #[test]
+    fn the_picking_toast_is_gone_once_the_dice_show() {
+        let (mut app, _, _) = picking(-30, seed_rolling(1), false, false);
+        app.init_resource::<crate::inventory::Toast>();
+        app.world_mut().insert_resource(Time::<Real>::default());
+        app.world_mut().resource_mut::<crate::inventory::Toast>().say("Picking the lock...", 0.0);
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        let now = app.world().resource::<Time<Real>>().elapsed_secs();
+        assert!(!app.world().resource::<crate::inventory::Toast>().showing(now));
+    }
+
+    #[test]
+    fn a_pick_whose_level_changed_mid_roll_unlocks_and_costs_nothing() {
+        let standing = |app: &App, f: Faction| app.world().resource::<WorldRecord>().standings.get(f).value();
+        // Success, but the door in that cell now belongs to another faction.
+        let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
+        let sent = hold_the_pick(&mut app);
+        app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().faction = Faction(250);
+        close_the_panel(&mut app, &sent[0]);
+        assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
+        // A heard miss, but the level is another one.
+        let (mut app, _, faction) = picking(-30, seed_rolling(1), true, false);
+        let sent = hold_the_pick(&mut app);
+        app.world_mut().resource_mut::<CurrentLevel>().0.depth += 1;
+        close_the_panel(&mut app, &sent[0]);
+        assert_eq!(standing(&app, faction), -30);
+    }
+
+    #[test]
+    fn no_second_pick_starts_while_the_panel_shows() {
+        let (mut app, _, _) = picking(-30, seed_rolling(1), false, false);
+        let sent = hold_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        // R is still held and the panel is still up: another two seconds sends nothing.
+        assert!(hold_the_pick(&mut app).is_empty());
+        // Once it closes, a fresh press picks again.
+        close_the_panel(&mut app, &sent[0]);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyR);
+            keys.clear();
+            keys.press(KeyCode::KeyR);
+        }
+        assert_eq!(hold_the_pick(&mut app).len(), 1);
+    }
+
+    #[test]
+    fn the_delver_stands_still_while_the_dice_show() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<crate::dice::Dice>();
+        assert!(app.world_mut().run_system_once(level_has_focus).unwrap());
+        let request = RollRequest { roll: Check::d20("x", 10).with_natural(5), purpose: RollPurpose::Sample, result: None };
+        app.world_mut().resource_mut::<crate::dice::Dice>().queue_for_test(request);
+        assert!(!app.world_mut().run_system_once(level_has_focus).unwrap());
     }
 
     #[test]
@@ -1485,19 +1707,25 @@ mod tests {
 
     #[test]
     fn holding_the_pick_on_a_portcullis_does_nothing() {
+        // Holds the pick, shows the dice to their end, and says whether the door unlocked.
+        fn picked(app: &mut App, cell: (i32, i32)) -> bool {
+            for request in hold_the_pick(app) {
+                close_the_panel(app, &request);
+            }
+            app.world().resource::<Doors>().0[&cell].unlocked
+        }
         let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
         app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().kind = DoorKind::Portcullis;
-        hold_the_pick(&mut app);
+        assert!(hold_the_pick(&mut app).is_empty(), "no dice for a grate");
         let door = &app.world().resource::<Doors>().0[&cell];
         assert!(!door.unlocked && !door.open, "a natural 20 picked a grate");
         // And a steel door shrugs off the roll that a wooden one yields to: 14 + 1 (picks) is 15.
         let (mut app, cell, _) = picking(-30, seed_rolling(14), false, false);
         app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().kind = DoorKind::Steel;
-        hold_the_pick(&mut app);
-        assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
+        assert!(!picked(&mut app, cell));
         let (mut app, cell, _) = picking(-30, seed_rolling(14), false, false);
-        hold_the_pick(&mut app);
-        assert!(app.world().resource::<Doors>().0[&cell].unlocked, "the same roll picks a wooden one");
+        app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().kind = DoorKind::Wood;
+        assert!(picked(&mut app, cell), "the same roll picks a wooden one");
     }
 
     #[test]
@@ -1537,7 +1765,7 @@ mod tests {
             .insert_resource(Keymap::default())
             .insert_resource(keys)
             .insert_resource(Time::<()>::default())
-            .add_systems(Update, use_door);
+            .init_resource::<PickInFlight>().add_message::<RollRequest>().add_message::<RollDone>().add_systems(Update, use_door);
         app.world_mut().spawn((Player, Transform::from_xyz(outside.x, 0.0, outside.y)));
         app.update();
         let after = &app.world().resource::<Doors>().0[&(door.x, door.y)];
@@ -1611,7 +1839,7 @@ mod tests {
                     .insert_resource(Keymap::default())
                     .insert_resource(keys)
                     .insert_resource(Time::<()>::default())
-                    .add_systems(Update, use_door);
+                    .init_resource::<PickInFlight>().add_message::<RollRequest>().add_message::<RollDone>().add_systems(Update, use_door);
                 app.world_mut().spawn((Player, Transform::from_xyz(feet.x, 0.0, feet.y)));
                 app.update();
                 assert!(app.world().resource::<Doors>().0[&(door.x, door.y)].open, "{kind:?}: F from {side} did not open it");

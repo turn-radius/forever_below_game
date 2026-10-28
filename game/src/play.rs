@@ -208,14 +208,15 @@ impl ScreenOpen {
 
 /// Run condition: no screen is open over the level, the delver is not between levels
 /// ([`crate::travel`]) or asleep ([`crate::camp`]) and the debug inspector is closed
-/// ([`crate::inspect`]).
+/// ([`crate::inspect`]) and no roll shows on the dice panel ([`crate::dice`]): the delver stands still.
 pub fn level_has_focus(
     screen: Option<Res<ScreenOpen>>,
     journey: Option<Res<crate::travel::Journey>>,
     inspector: Option<Res<crate::inspect::InspectorOpen>>,
     asleep: Option<Res<crate::camp::Asleep>>,
+    dice: Option<Res<crate::dice::Dice>>,
 ) -> bool {
-    !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0) && !asleep.is_some_and(|a| a.0.is_some())
+    !dice.is_some_and(|d| d.busy()) && !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0) && !asleep.is_some_and(|a| a.0.is_some())
 }
 
 /// Run condition: the inventory screen is open, for keys that act on the item under the mouse.
