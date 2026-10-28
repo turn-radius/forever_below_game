@@ -31,3 +31,23 @@ pub(crate) fn near_light_or_prop(level: &Level, x: f32, y: f32, gap: f32) -> boo
     let near = |ax: f32, ay: f32| (ax - x).hypot(ay - y) < gap;
     level.lights.iter().any(|l| near(l.x, l.y)) || level.props.iter().any(|p| near(p.x, p.y))
 }
+
+/// Every wall face of the level's corridors: floor cells in no room with rock behind one side,
+/// clear of doors, in row order. Banners never use these; niches do.
+pub(crate) fn corridor_wall_faces(level: &Level) -> Vec<((i32, i32), (i32, i32))> {
+    let mut faces = Vec::new();
+    for y in 0..level.height as i32 {
+        for x in 0..level.width as i32 {
+            if level.cell(x, y) != Cell::Floor || by_door(level, x, y) || level.rooms.iter().any(|r| r.contains(x, y)) {
+                continue;
+            }
+            for f in Facing::ALL {
+                let w = f.step();
+                if level.cell(x + w.0, y + w.1) == Cell::Rock {
+                    faces.push(((x, y), w));
+                }
+            }
+        }
+    }
+    faces
+}

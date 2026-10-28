@@ -68,7 +68,7 @@ fn contents_of(spot: &NicheSpot, ceiling: f32) -> Option<(armory::ItemMesh, Item
 pub fn on_the_sill(spot: &NicheSpot, bounds: ([f32; 3], [f32; 3]), longest: Option<f32>) -> Transform {
     let (lo, hi) = (Vec3::from_array(bounds.0), Vec3::from_array(bounds.1));
     let size = hi - lo;
-    let fit = (ROOM[0] / size.x.max(1e-3)).min(ROOM[1] / size.y.max(1e-3)).min(ROOM[2] / size.z.max(1e-3));
+    let fit = (ROOM[0] / size.x.max(1e-3)).min((spot.spring - spot.sill).clamp(2.5, ROOM[1]) / size.y.max(1e-3)).min(ROOM[2] / size.z.max(1e-3));
     let scale = longest.map_or(fit.min(1.0), |l| (l / size.max_element().max(1e-3)).min(fit)).max(0.05);
     let (dx, dy) = spot.facing.step();
     // Out of the wall, into the room.
@@ -78,7 +78,7 @@ pub fn on_the_sill(spot: &NicheSpot, bounds: ([f32; 3], [f32; 3]), longest: Opti
     let wall = Vec3::new(px, 0.0, pz);
     let middle = Vec3::new((lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5) * scale;
     // The middle of the recess, half its depth in.
-    let seat = wall - out * niches::DEPTH * 0.5 + Vec3::Y * niches::SILL;
+    let seat = wall - out * niches::DEPTH * 0.5 + Vec3::Y * spot.sill;
     Transform { translation: seat - yaw * middle, rotation: yaw, scale: Vec3::splat(scale) }
 }
 
@@ -157,7 +157,7 @@ mod tests {
                 let p = at.transform_point(c) - wall;
                 let (side, up, deep) = (p.dot(across), p.y, -p.dot(out));
                 assert!(side.abs() <= niches::WIDTH * 0.5, "{contents:?}: {side} across");
-                assert!(up >= niches::SILL - 0.05 && up <= niches::SPRING, "{contents:?}: {up} up");
+                assert!(up >= spot.sill - 0.05 && up <= spot.spring, "{contents:?}: {up} up");
                 assert!((-0.05..=niches::DEPTH).contains(&deep), "{contents:?}: {deep} deep");
             }
         }
@@ -172,7 +172,7 @@ mod tests {
         let [px, _, pz] = Level::world(spot.face().0, spot.face().1);
         // The flame stands in the recess, between sill and arch.
         let deep = -(at - Vec3::new(px, 0.0, pz)).dot(Vec3::new(-dx as f32, 0.0, -dy as f32));
-        assert!(deep > 0.0 && deep < niches::DEPTH && at.y > niches::SILL && at.y < niches::SPRING, "{at:?}");
+        assert!(deep > 0.0 && deep < niches::DEPTH && at.y > spot.sill && at.y < spot.spring, "{at:?}");
         let tuning = LightTuning::default();
         let light = niche_light(&tuning);
         assert!(!light.shadow_maps_enabled, "a niche's candle takes no slot of the shadow budget");

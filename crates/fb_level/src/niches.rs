@@ -8,6 +8,10 @@
 //! stairs, the lights), so nothing else in a level moves for them, and each stands on a bare
 //! stretch of wall clear of all of it ([`crate::walls`]).
 //!
+//! Each niche has a height of its own (a short one holds a candle, a tall one an urn), and each room
+//! a style for all of its niches ([`NicheStyle`]): plain cut in a plain room, moulded in a claimed
+//! one, with a keystone in a hall. Corridors take niches too, plain.
+//!
 //! A level is rebuilt from its seed and its niches with it, so a niche is not saved. What one
 //! holds is scenery, not loot: nothing in a niche can be taken.
 //!
@@ -20,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::banners::BannerSpot;
 use crate::folk::by_door;
 use crate::generate::{item_seed, shuffle};
-use crate::walls::{bare_wall_faces, near_light_or_prop};
+use crate::roles::RoomRole;
+use crate::walls::{bare_wall_faces, corridor_wall_faces, near_light_or_prop};
 use crate::{CELL, Cell, Facing, Finishes, Level, LevelParams, LevelStyle, WallFinish, finishes};
 
 /// Salt for the niche stream.
@@ -36,14 +41,40 @@ const SECOND_CHANCE: f64 = 0.2;
 /// The lowest ceiling a niche is cut under, in world units: the arch peaks at about 16.
 const LOW_CEILING: f32 = 22.0;
 
-/// The width of a niche's opening, the height of its sill off the floor, the height its arch
-/// springs from and how far the arch rises over its springing, and how deep it is cut, in
-/// world units. The game's recess and its contents are built to these.
+/// The width of a niche's opening, how far its arch rises over its springing, and how deep it is
+/// cut, in world units. A niche's sill and springing are its own ([`NicheSpot::sill`]).
 pub const WIDTH: f32 = 6.4;
-pub const SILL: f32 = 7.5;
-pub const SPRING: f32 = 11.8;
 pub const RISE: f32 = 1.5;
 pub const DEPTH: f32 = 4.2;
+/// How high a niche's sill stands off the floor, least and most, and how tall its opening is from
+/// sill to springing, least and most, in world units.
+pub const SILL_RANGE: (f32, f32) = (6.0, 9.0);
+pub const OPENING_RANGE: (f32, f32) = (3.8, 8.8);
+/// The highest a niche's arch crown may reach, under the vault and clear of its moulding.
+const CROWN_LIMIT: f32 = 17.5;
+/// A moulded surround: how wide the architrave is round the opening, how far it and the sill
+/// ledge stand proud of the wall, how far the ledge reaches out to each side and down.
+pub const MOULD: f32 = 1.0;
+pub const MOULD_PROUD: f32 = 0.9;
+pub const LEDGE: f32 = 1.0;
+/// A keystone over the crown of a grand niche: half its width, its height, how proud it stands.
+pub const KEY_HALF: f32 = 0.9;
+pub const KEY_HEIGHT: f32 = 1.6;
+pub const KEY_PROUD: f32 = 1.3;
+/// Corridor niches: the most a level has, and the chance each wall face that takes one does.
+const MOST_IN_CORRIDORS: usize = 5;
+const CORRIDOR_CHANCE: f64 = 0.06;
+
+/// The surround of a room's niches, the same for every niche in the room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NicheStyle {
+    /// Cut straight into the wall: wild rooms and corridors.
+    Plain,
+    /// An architrave round the arch and a ledge under the sill: claimed rooms.
+    Moulded,
+    /// As moulded, with a keystone over the arch: a faction's hall.
+    Grand,
+}
 
 /// What a niche holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -66,9 +97,24 @@ pub struct NicheSpot {
     pub contents: NicheContents,
     /// Rolls what it holds.
     pub seed: u32,
+    /// How high the sill stands off the floor, and how high the arch springs, in world units.
+    pub sill: f32,
+    pub spring: f32,
+    /// The surround, shared by every niche of the room it is in.
+    pub style: NicheStyle,
 }
 
 impl NicheSpot {
+    /// How high the crown of the arch stands.
+    pub fn crown(&self) -> f32 {
+        self.spring + RISE
+    }
+
+    /// Whether the surround is moulded.
+    pub fn moulded(&self) -> bool {
+        self.style != NicheStyle::Plain
+    }
+
     /// The middle of its opening on the wall, in grid coordinates.
     pub fn face(&self) -> (f32, f32) {
         let (dx, dy) = self.facing.step();
@@ -107,6 +153,41 @@ fn crowds_a_banner(banners: &[BannerSpot], at: (f32, f32)) -> bool {
     banners.iter().any(|b| (b.x - at.0).hypot(b.y - at.1) < CLEAR)
 }
 
+/// What one wall face rolls for a niche, whether or not it is used.
+struct Rolls {
+    pick: f64,
+    seed: u32,
+    sill: f64,
+    opening: f64,
+    chance: f64,
+}
+
+fn roll(rng: &mut Mulberry32) -> Rolls {
+    Rolls { pick: rng.next_f64(), seed: item_seed(rng), sill: rng.next_f64(), opening: rng.next_f64(), chance: rng.next_f64() }
+}
+
+impl Rolls {
+    fn spot(&self, cell: (i32, i32), wall: (i32, i32), style: NicheStyle) -> NicheSpot {
+        let sill = SILL_RANGE.0 + (SILL_RANGE.1 - SILL_RANGE.0) * self.sill as f32;
+        let opening = OPENING_RANGE.0 + (OPENING_RANGE.1 - OPENING_RANGE.0) * self.opening as f32;
+        let spring = (sill + opening).min(CROWN_LIMIT - RISE);
+        NicheSpot { x: cell.0, y: cell.1, facing: facing_of(wall), contents: contents_for(self.pick), seed: self.seed, sill, spring, style }
+    }
+}
+
+/// The surround of the niches in room `room`: a hall's are grand, any other claimed room's moulded,
+/// a wild room's plain.
+fn style_of(level: &Level, room: usize) -> NicheStyle {
+    let roles = level.roles_of(room);
+    if roles.contains(&RoomRole::Hall) {
+        NicheStyle::Grand
+    } else if !roles.is_empty() {
+        NicheStyle::Moulded
+    } else {
+        NicheStyle::Plain
+    }
+}
+
 /// Cuts the level's niches: none outside a level of stone halls.
 pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
     let mut niches: Vec<NicheSpot> = Vec::new();
@@ -115,7 +196,12 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
     }
     let mut rng = Mulberry32::new(level.seed ^ NICHE_SALT);
     let finishes = finishes(level, &LevelParams::for_style(level.style));
-    for room in &level.rooms {
+    let fits = |niches: &[NicheSpot], spot: &NicheSpot| {
+        let at = spot.face();
+        !(crowds_a_banner(&level.banners, at) || near_light_or_prop(level, at.0, at.1, CLEAR) || niches.iter().any(|o| (o.x - spot.x).abs().max((o.y - spot.y).abs()) < APART))
+    };
+    for (r, room) in level.rooms.iter().enumerate() {
+        let style = style_of(level, r);
         let mut faces = bare_wall_faces(level, room);
         shuffle(&mut faces, &mut rng);
         let mut want = if rng.chance(ROOM_CHANCE) { 1 } else { 0 };
@@ -123,23 +209,36 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
             want = 2;
         }
         // Rolled for every face, used or not, so a wall that fails the checks never moves a later one.
-        let rolls: Vec<(f64, u32)> = faces.iter().map(|_| (rng.next_f64(), item_seed(&mut rng))).collect();
+        let rolls: Vec<Rolls> = faces.iter().map(|_| roll(&mut rng)).collect();
         let mut made = 0;
-        for (&(cell, wall), &(pick, seed)) in faces.iter().zip(&rolls) {
+        for (&(cell, wall), rolled) in faces.iter().zip(&rolls) {
             if made == want {
                 break;
             }
             if !takes_niche(level, &finishes, cell, wall) {
                 continue;
             }
-            let spot = NicheSpot { x: cell.0, y: cell.1, facing: facing_of(wall), contents: contents_for(pick), seed };
-            let at = spot.face();
-            if crowds_a_banner(&level.banners, at) || near_light_or_prop(level, at.0, at.1, CLEAR) {
-                continue;
+            let spot = rolled.spot(cell, wall, style);
+            if fits(&niches, &spot) {
+                niches.push(spot);
+                made += 1;
             }
-            if niches.iter().any(|o| (o.x - cell.0).abs().max((o.y - cell.1).abs()) < APART) {
-                continue;
-            }
+        }
+    }
+    // Then the corridors, plain: a few walls of the level's passages.
+    let mut faces = corridor_wall_faces(level);
+    shuffle(&mut faces, &mut rng);
+    let rolls: Vec<Rolls> = faces.iter().map(|_| roll(&mut rng)).collect();
+    let mut made = 0;
+    for (&(cell, wall), rolled) in faces.iter().zip(&rolls) {
+        if made == MOST_IN_CORRIDORS {
+            break;
+        }
+        if rolled.chance >= CORRIDOR_CHANCE || !takes_niche(level, &finishes, cell, wall) {
+            continue;
+        }
+        let spot = rolled.spot(cell, wall, NicheStyle::Plain);
+        if fits(&niches, &spot) {
             niches.push(spot);
             made += 1;
         }
@@ -227,5 +326,45 @@ mod tests {
             let level = generate(seed, depth);
             assert_eq!(Level { niches: Vec::new(), ..level }, before, "seed {seed} depth {depth}: the niche step moved something");
         }
+    }
+
+    #[test]
+    fn niches_vary_in_height_and_stay_under_the_vault() {
+        let (mut lo, mut hi, mut total) = (f32::MAX, f32::MIN, 0);
+        for (seed, depth) in sweep() {
+            for n in &generate(seed, depth).niches {
+                let opening = n.spring - n.sill;
+                assert!((SILL_RANGE.0..=SILL_RANGE.1).contains(&n.sill), "{n:?}");
+                assert!(opening >= 2.0 && n.crown() <= CROWN_LIMIT + 1e-3, "{n:?}");
+                (lo, hi, total) = (lo.min(opening), hi.max(opening), total + 1);
+            }
+        }
+        assert!(total > 100 && hi - lo > 4.0, "{total} niches, openings {lo} to {hi}");
+    }
+
+    #[test]
+    fn every_niche_of_a_room_shares_its_style_and_corridors_are_plain() {
+        let (mut moulded, mut grand, mut plain_rooms, mut corridor) = (0, 0, 0, 0);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for (r, room) in level.rooms.iter().enumerate() {
+                let styles: std::collections::HashSet<_> = level.niches.iter().filter(|n| room.contains(n.x, n.y)).map(|n| n.style).collect();
+                assert!(styles.len() <= 1, "seed {seed} depth {depth}: room {r} mixes {styles:?}");
+                for style in styles {
+                    assert_eq!(style, style_of(&level, r), "seed {seed} depth {depth}");
+                    match style {
+                        NicheStyle::Moulded => moulded += 1,
+                        NicheStyle::Grand => grand += 1,
+                        NicheStyle::Plain => plain_rooms += 1,
+                    }
+                }
+            }
+            for n in level.niches.iter().filter(|n| !level.rooms.iter().any(|r| r.contains(n.x, n.y))) {
+                assert_eq!(n.style, NicheStyle::Plain);
+                corridor += 1;
+            }
+            assert!(level.niches.iter().filter(|n| !level.rooms.iter().any(|r| r.contains(n.x, n.y))).count() <= MOST_IN_CORRIDORS);
+        }
+        assert!(moulded > 5 && grand > 3 && plain_rooms > 5 && corridor > 10, "{moulded} moulded, {grand} grand, {plain_rooms} plain rooms, {corridor} corridor niches");
     }
 }

@@ -382,7 +382,7 @@ pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use banners::{BannerSite, BannerSpot};
-pub use niches::{NicheContents, NicheSpot};
+pub use niches::{NicheContents, NicheSpot, NicheStyle};
 pub use crystals::{CavernStone, CrystalSpot, CrystalSurface, crystal_state};
 pub use claims::{Claim, ClaimRules, settle_claims};
 pub use folk::{DenizenBody, DenizenKind, Faction, FactionSpec, FolkSpot, Trade};
