@@ -69,8 +69,14 @@ const FLAG_CHAMFER: f32 = 0.09;
 /// The lowest course of wall is darker where the damp climbs it, and may be chipped.
 pub const DAMP_STONE: Rgb = Rgb::hex(0x676a67);
 /// How often a block of the lowest course has a corner knocked off, and how big a bite, in world units.
-const CHIP_CHANCE: f32 = 0.3;
+const CHIP_CHANCE: f32 = 0.05;
 const CHIP: (f32, f32) = (1.1, 2.1);
+/// Whether the block of the lowest course keyed by `key` is chipped, how big the bite is and
+/// whether it is taken from the left. The same key always rolls the same.
+fn chip_roll(key: u32) -> (bool, f32, bool) {
+    let mut luck = Mulberry32::new(key ^ 0x0da4_9b10);
+    (luck.range_f32(0.0, 1.0) < CHIP_CHANCE, luck.range_f32(CHIP.0, CHIP.1), luck.range_f32(0.0, 1.0) < 0.5)
+}
 /// The fine ink along a joint sits this far off the shell, down in the groove between blocks.
 const JOINT_INK_LIFT: f32 = 0.1;
 /// The ink along the base of a wall floats this high and this far off the shell, to clear the
@@ -767,8 +773,7 @@ fn lay_blocks(
             }
             // Damp darkens the lowest course, and now and then the knocks of a floor's traffic
             // have taken a corner off a block.
-            let mut luck = Mulberry32::new(run.key ^ (a * 64.0) as u32 ^ 0x0da4_9b10);
-            let (chipped, size, left) = (luck.range_f32(0.0, 1.0) < CHIP_CHANCE, luck.range_f32(CHIP.0, CHIP.1), luck.range_f32(0.0, 1.0) < 0.5);
+            let (chipped, size, left) = chip_roll(run.key ^ (a * 64.0) as u32);
             if chipped && hi - lo > size * 2.5 && top - bottom > size * 2.0 {
                 dress(damp, [lo, hi], [bottom + size, top], proud);
                 let strip = if left { [lo + size, hi] } else { [lo, hi - size] };
@@ -1034,6 +1039,16 @@ fn weld_normals(mesh: &mut MeshBuilder) {
 mod tests {
     use super::*;
     use fb_level::LevelStyle;
+
+    #[test]
+    fn about_one_block_in_twenty_of_the_lowest_course_is_chipped_and_the_same_each_time() {
+        let n = 20_000u32;
+        let chipped = (0..n).filter(|&k| chip_roll(k.wrapping_mul(2_654_435_761)).0).count() as f32 / n as f32;
+        assert!((0.04..0.06).contains(&chipped), "chip rate {chipped}");
+        for k in [1u32, 77, 4096, 0xdead_beef] {
+            assert_eq!(chip_roll(k), chip_roll(k));
+        }
+    }
 
     /// A stone halls level without its stairs, whose openings in the floor and vault are
     /// tested on their own ([`stairs_open_the_floor_and_the_vault`]).
