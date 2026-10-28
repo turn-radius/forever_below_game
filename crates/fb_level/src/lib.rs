@@ -340,8 +340,9 @@ impl Level {
     /// Whether the columns of room `room` are fluted: about a third of halls, all their columns
     /// alike. A pure function of the level seed and the room's rectangle, drawn from no stream, so
     /// it moves nothing else about a seed and is rebuilt the same each time, never saved.
+    /// Only a level of stone halls has colonnades: the rock pillars of a cavern are never fluted.
     pub fn hall_is_fluted(&self, room: usize) -> bool {
-        let Some(r) = self.rooms.get(room) else { return false };
+        let Some(r) = self.rooms.get(room).filter(|_| self.style == LevelStyle::StoneHalls) else { return false };
         let mut h = self.seed ^ 0xf1u32.wrapping_mul(0x9e37_79b1);
         for v in [r.x, r.y, r.w, r.h] {
             h = (h ^ v).wrapping_mul(0x85eb_ca6b);

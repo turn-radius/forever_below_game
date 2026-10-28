@@ -1489,6 +1489,21 @@ mod tests {
     }
 
     #[test]
+    fn flutes_run_out_at_the_ends_of_the_shaft() {
+        let radii = |fluted: bool, y: f32, tol: f32| {
+            let made = column(34.0, 36.0, 1, 1207, fluted);
+            let r: Vec<f32> = made.parts[0].positions.iter().filter(|p| (p[1] - y).abs() < tol && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
+            assert!(!r.is_empty(), "no ring at {y}");
+            r.iter().fold(0.0f32, |m, &r| m.max(r)) - r.iter().fold(f32::MAX, |m, &r| m.min(r))
+        };
+        let (bottom, top) = (3.1, 34.0 - 1.4 - 2.4 - 0.6);
+        for y in [bottom, top] {
+            assert!(radii(true, y, 0.01) < radii(false, y, 0.01) + 0.05, "grooves at {y}");
+        }
+        assert!(radii(true, 14.0, 0.3) > 0.3);
+    }
+
+    #[test]
     fn a_fluted_shaft_is_grooved_round_and_a_plain_one_is_not() {
         let ripple = |fluted: bool| {
             let made = column(34.0, 36.0, 1, 1207, fluted);
