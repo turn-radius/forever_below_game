@@ -312,7 +312,7 @@ mod tests {
                 for item in stock(&shop(Line::Armour, grade, Some(Lean::Mail)), 8, seed) {
                     let c = item.shape.condition();
                     assert!(c.wear >= grade.finish_wear().0 && c.wear <= grade.finish_wear().1, "{} wear {}", item.title(), c.wear);
-                    assert!((c.rust, c.damage, c.broken) == (1.0, 0.0, false), "{}", item.title());
+                    assert!((c.rust, c.damage, c.broken) == (0.0, 0.0, false), "{}", item.title());
                     assert!(item.affixes.iter().all(|a| a.good), "{} is flawed", item.title());
                     max[n] = max[n].max(c.wear);
                 }

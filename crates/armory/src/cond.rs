@@ -28,8 +28,11 @@ pub struct Condition {
     pub state: ConditionState,
     /// Overall wear, 0..=1.
     pub wear: f32,
-    /// Per-material multipliers on `wear`.
+    /// How much of the wear is rust on iron: 0 for none (plain wear only dulls, stains and nicks
+    /// it), 1 for rust to the full extent of the wear. Raised by things that rust iron: the
+    /// Rusted affix, grave goods.
     pub rust: f32,
+    /// Per-material multipliers on `wear`.
     pub patina: f32,
     pub rot: f32,
     pub fray: f32,
@@ -58,7 +61,8 @@ impl Condition {
     /// capped at 1.2 (`decayAmt` in `reference/spline_armory_engine.js`).
     pub fn decay(&self, kind: MaterialKind) -> f32 {
         let multiplier = match kind {
-            MaterialKind::Iron => self.rust,
+            // Iron's wear is dulling, stain and nicks; its rust is `rust_decay`.
+            MaterialKind::Iron => 1.0,
             MaterialKind::Brass | MaterialKind::Gold | MaterialKind::Silver => self.patina,
             MaterialKind::Wood | MaterialKind::Bone | MaterialKind::Stone | MaterialKind::Food => self.rot,
             MaterialKind::Leather | MaterialKind::Cord | MaterialKind::Cloth => self.fray,
@@ -67,13 +71,22 @@ impl Condition {
         (self.wear * multiplier).clamp(0.0, 1.2)
     }
 
+    /// How much rust iron shows: wear times `rust`, capped at 1.2. Zero for every other material,
+    /// and for iron unless `rust` is raised.
+    pub fn rust_decay(&self, kind: MaterialKind) -> f32 {
+        match kind {
+            MaterialKind::Iron => (self.wear * self.rust).clamp(0.0, 1.2),
+            _ => 0.0,
+        }
+    }
+
     /// The sliders for a named state (`COND_STATES`). `Custom` gives the pristine values.
     pub fn of(state: ConditionState) -> Self {
         let (wear, damage, rust, patina, rot, fray) = match state {
-            ConditionState::Custom | ConditionState::Pristine => (0.0, 0.0, 1.0, 1.0, 1.0, 1.0),
-            ConditionState::Serviceable => (0.25, 0.15, 1.0, 1.0, 1.0, 1.0),
-            ConditionState::BattleWorn => (0.45, 0.55, 1.0, 1.0, 0.8, 1.2),
-            ConditionState::Neglected => (0.75, 0.3, 1.25, 1.2, 1.25, 1.0),
+            ConditionState::Custom | ConditionState::Pristine => (0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
+            ConditionState::Serviceable => (0.25, 0.15, 0.0, 1.0, 1.0, 1.0),
+            ConditionState::BattleWorn => (0.45, 0.55, 0.0, 1.0, 0.8, 1.2),
+            ConditionState::Neglected => (0.75, 0.3, 0.0, 1.2, 1.25, 1.0),
             ConditionState::GraveFind => (1.0, 0.8, 1.4, 1.4, 1.4, 1.5),
         };
         Condition { state, wear, rust, patina, rot, fray, damage, broken: false, scale: 1.6 }
@@ -104,10 +117,26 @@ mod tests {
     #[test]
     fn decay_uses_the_material_multiplier() {
         let condition = Condition { wear: 0.5, rust: 2.0, rot: 0.5, ..Condition::default() };
-        assert_eq!(condition.decay(MaterialKind::Iron), 1.0);
+        assert_eq!(condition.decay(MaterialKind::Iron), 0.5);
+        assert_eq!(condition.rust_decay(MaterialKind::Iron), 1.0);
         assert_eq!(condition.decay(MaterialKind::Wood), 0.25);
+        assert_eq!(condition.rust_decay(MaterialKind::Wood), 0.0);
         let ruinous = Condition { wear: 1.0, rust: 1.5, ..Condition::default() };
-        assert_eq!(ruinous.decay(MaterialKind::Iron), 1.2);
+        assert_eq!(ruinous.rust_decay(MaterialKind::Iron), 1.2);
+    }
+
+    #[test]
+    fn plain_wear_never_rusts_iron() {
+        for state in [ConditionState::Pristine, ConditionState::Serviceable, ConditionState::BattleWorn, ConditionState::Neglected] {
+            let condition = Condition::of(state);
+            assert_eq!(condition.rust, 0.0, "{state:?}");
+            for kind in MaterialKind::SELECTABLE {
+                assert_eq!(condition.rust_decay(kind), 0.0, "{state:?} {kind:?}");
+            }
+        }
+        let worn = Condition::of(ConditionState::BattleWorn);
+        assert_eq!(worn.decay(MaterialKind::Iron), worn.wear);
+        assert!(Condition::of(ConditionState::GraveFind).rust_decay(MaterialKind::Iron) > 1.0);
     }
 
     #[test]

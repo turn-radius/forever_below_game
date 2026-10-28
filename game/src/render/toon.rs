@@ -68,6 +68,8 @@ pub struct Decay {
     pub kind: u32,
     /// 0 = as made, up to 1.2 = ruinous.
     pub amount: f32,
+    /// Iron only: how much of it is rust, 0 to 1.2. Without it wear dulls, stains and nicks iron.
+    pub rust: f32,
     /// Size of the noise pattern in item space.
     pub scale: f32,
     /// Shifts the pattern so no two items wear alike.
@@ -76,7 +78,7 @@ pub struct Decay {
 
 impl Default for Decay {
     fn default() -> Self {
-        Decay { kind: 0, amount: 0.0, scale: 1.6, seed: 0.0 }
+        Decay { kind: 0, amount: 0.0, rust: 0.0, scale: 1.6, seed: 0.0 }
     }
 }
 
@@ -261,6 +263,7 @@ pub struct ToonUniform {
     band_count: u32,
     decay_type: u32,
     decay_amount: f32,
+    decay_rust: f32,
     decay_scale: f32,
     decay_seed: f32,
     glow: f32,
@@ -321,6 +324,7 @@ impl From<&ToonExtension> for ToonUniform {
             band_count: toon.bands.count,
             decay_type: toon.decay.kind,
             decay_amount: toon.decay.amount,
+            decay_rust: toon.decay.rust,
             decay_scale: toon.decay.scale,
             decay_seed: toon.decay.seed,
             glow: toon.glow,

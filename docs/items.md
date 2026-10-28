@@ -249,7 +249,7 @@ Each family maps to a slot, tags, weight, armour, warmth and damage, plus a grid
 - **Rarity** multiplies it (our own): common 1, magic 2, rare 5, legendary 12. The first cut ran 1, 4, 20 and 200, which put a master's rare hauberk at about 2,000 gp; a rare sword is now about 120 gp and a magic piece two to three times its common base.
 - **Affixes** multiply it (our own): each good affix by 1.15, 1.3, 1.5 or 1.8 by the least rarity it rolls on, each flaw by 0.7. Held-back affixes count like the rest. The product of all of an item's affixes is held between 0.4 and 2.0, so a heap of good affixes cannot run the top end away: a legendary sword tops out at 12 x 2 x 15 gp = 360 gp.
 - **Purses** grow with depth: their coins times `1 + 0.25 (depth - 1)` (`coin_depth_step`), so the first level's purses are as they always were.
-- **Condition** multiplies it (our own): `(1 - 0.6 wear) (1 - 0.4 damage)`, and a quarter of that for a snapped blade. Wear 0.7 leaves 58%. The Armory's rust, rot and fray multipliers already act through wear, so they are not counted twice.
+- **Condition** multiplies it (our own): `(1 - 0.6 wear) (1 - 0.4 damage)`, and a quarter of that for a snapped blade. Wear 0.7 leaves 58%. The Armory's rot and fray multipliers (and rust, which only shows on iron when raised, #795) already act through wear, so they are not counted twice.
 - A value is never below 1 cp, except a purse: it is worth its coins, and nothing for the bag. A container's value leaves out what it holds; the contents are worth their own.
 
 | Item | Value |

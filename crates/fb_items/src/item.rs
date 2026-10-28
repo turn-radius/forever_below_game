@@ -809,6 +809,8 @@ mod tests {
         let rusted = (1..3_000).filter_map(|seed| roll_item("Sword", seed)).find(|i| i.affixes.iter().any(|a| a.name == "Rusted")).expect("no rusted sword");
         assert_eq!(rusted.profile.stats.damage_bonus, -1.0);
         assert_eq!(rusted.shape.condition().rust, 1.5);
+        let plain = (1..3_000).filter_map(|seed| roll_item("Sword", seed)).find(|i| i.affixes.is_empty()).expect("no plain sword");
+        assert_eq!(plain.shape.condition().rust, 0.0);
     }
 
     #[test]
