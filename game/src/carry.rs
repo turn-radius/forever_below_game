@@ -264,21 +264,34 @@ pub fn lie_down(size: Vec3, stands: bool) -> Quat {
 /// [`crate::tuning::ViewTuning`]), centred over `at` on the floor (y = 0) with its lowest point
 /// touching it. `points` are its item-space vertices. `None` for an item with no vertices.
 pub fn rest_on_floor(points: &[Vec3], stands: bool, at: Vec3, yaw: f32, scale: f32) -> Option<Transform> {
+    rest_on_drawn_floor(points, stands, at, yaw, scale, |_, _| 0.0).map(|(transform, _)| transform)
+}
+
+/// [`rest_on_floor`] on the floor as drawn instead of y = 0: `floor` gives its height under the
+/// footprint it is asked about (centre and half extents in x and z, world units), the highest
+/// point of it ([`crate::level::geometry::floor_under`]). Also returns that height.
+pub fn rest_on_drawn_floor(points: &[Vec3], stands: bool, at: Vec3, yaw: f32, scale: f32, floor: impl Fn([f32; 2], [f32; 2]) -> f32) -> Option<(Transform, f32)> {
     let (min, max) = bounds(points.iter().copied())?;
     let rotation = Quat::from_rotation_y(yaw) * lie_down(max - min, stands);
     let (min, max) = bounds(points.iter().map(|&p| rotation * p * scale))?;
     let centre = (min + max) * 0.5;
-    Some(Transform { translation: Vec3::new(at.x - centre.x, -min.y, at.z - centre.z), rotation, scale: Vec3::splat(scale) })
+    let (half_x, half_z) = ((max.x - min.x) * 0.5, (max.z - min.z) * 0.5);
+    let height = floor([at.x, at.z], [half_x, half_z]);
+    Some((Transform { translation: Vec3::new(at.x - centre.x, height - min.y, at.z - centre.z), rotation, scale: Vec3::splat(scale) }, height))
 }
 
 /// `rest` (from [`rest_on_floor`] over `at`) drawn at `scale` instead: everything it places
-/// grows or shrinks about `at` on the floor, so the item stays centred there with its lowest
-/// point on the floor.
-pub fn rescale_on_floor(rest: Transform, at: Vec3, scale: f32) -> Transform {
-    let anchor = Vec3::new(at.x, 0.0, at.z);
+/// grows or shrinks about `at` on the floor (at height `floor`, where it rests), so the item
+/// stays centred there with its lowest point on the floor.
+pub fn rescale_on_floor(rest: Transform, at: Vec3, floor: f32, scale: f32) -> Transform {
+    let anchor = Vec3::new(at.x, floor, at.z);
     let ratio = if rest.scale.x.abs() > 1e-6 { scale / rest.scale.x } else { 1.0 };
     Transform { translation: anchor + (rest.translation - anchor) * ratio, scale: Vec3::splat(scale), ..rest }
 }
+
+/// The height of the floor a [`FloorItem`] rests on, for [`rescale_on_floor`].
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct RestHeight(pub f32);
 
 fn bounds(points: impl Iterator<Item = Vec3>) -> Option<(Vec3, Vec3)> {
     points.fold(None, |acc, p| Some(acc.map_or((p, p), |(lo, hi): (Vec3, Vec3)| (lo.min(p), hi.max(p)))))
@@ -855,7 +868,7 @@ pub(crate) fn lay_out_items(
         }
         for lying in &saved.floor {
             if let Some(id) = restore_item(&mut inventory, &lying.item) {
-                spawn_floor_item(&mut spawner, &inventory, id, lying.spot, &tuning);
+                spawn_floor_item(&mut spawner, &inventory, &level.0, id, lying.spot, &tuning);
             }
         }
         return;
@@ -877,7 +890,7 @@ pub(crate) fn lay_out_items(
         };
         if let Some((item, mesh)) = rolled {
             let id = inventory.add(item);
-            spawn_floor_item_shaped(&mut spawner, &inventory, id, mesh, *spot, &tuning);
+            spawn_floor_item_shaped(&mut spawner, &inventory, &level.0, id, mesh, *spot, &tuning);
         }
     }
 }
@@ -890,22 +903,23 @@ pub fn item_points(mesh: &armory::ItemMesh) -> Vec<Vec3> {
 /// Spawns item `id` resting on the floor at `spot` as a [`FloorItem`], drawn with its own
 /// palette, dressed condition and etching at the tuning's floor scale, with its light if it
 /// gives one. `None` for an item with no vertices or one the inventory does not know.
-pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
+pub fn spawn_floor_item(spawner: &mut ItemSpawner, inventory: &Inventory, level: &Level, id: ItemId, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
     let mesh = inventory.item(id)?.shape.build();
-    spawn_floor_item_shaped(spawner, inventory, id, mesh, spot, tuning)
+    spawn_floor_item_shaped(spawner, inventory, level, id, mesh, spot, tuning)
 }
 
 /// [`spawn_floor_item`] for an item whose `mesh` is built already.
-pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory, id: ItemId, mesh: armory::ItemMesh, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
+pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory, level: &Level, id: ItemId, mesh: armory::ItemMesh, spot: ItemSpot, tuning: &Tuning) -> Option<Entity> {
     let item = inventory.item(id)?;
     let points = item_points(&mesh);
     let at = Vec3::from_array(Level::world(spot.x, spot.y));
-    let transform = rest_on_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, floor_scale_of(item, tuning))?;
+    let drawn = spawner.drawn_floor(level);
+    let (transform, rest_height) = rest_on_drawn_floor(&points, fb_items::profile::stands_on_base(&item.shape), at, spot.yaw, floor_scale_of(item, tuning), |centre, half| drawn.height_under(level, centre, half))?;
     let (min, max) = bounds(points.iter().copied())?;
     let light = rolled_light(item);
     let appearance = ItemAppearance { shimmer: floor_shimmer(item, tuning), ..appearance_of(&item.shape) };
     let mut root = spawner.spawn(&mesh, &appearance);
-    root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }));
+    root.insert((transform, Name::new(item.title().to_string()), FloorItem { id, spot, min, max }, RestHeight(rest_height)));
     if let Some(sparkles) = floor_sparkles(item, min, max, tuning) {
         root.insert(sparkles);
     }
@@ -1056,7 +1070,7 @@ pub fn set_down_at(spawner: &mut ItemSpawner, inventory: &Inventory, level: &mut
     // ([`fb_items::roll_loot`]); what is spawned is the item itself.
     let spot = ItemSpot { x: at.x, y: at.y, yaw, family: item.shape.family(), seed: item.seed };
     level.items.push(spot);
-    spawn_floor_item(spawner, inventory, id, spot, tuning)
+    spawn_floor_item(spawner, inventory, level, id, spot, tuning)
 }
 
 /// Lifts a floor item out of the level: out of the level data, without respawning what is
@@ -1107,12 +1121,12 @@ fn relight_given_lights(tuning: Res<Tuning>, mut lights: Query<(Ref<GivenLight>,
 }
 
 /// Redraws every floor item at the tuning's floor scale, about where it rests.
-fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut Transform), Without<crate::camp::SetCamp>>) {
+fn rescale_floor_items(tuning: Res<Tuning>, mut items: Query<(&FloorItem, &mut Transform, Option<&RestHeight>), Without<crate::camp::SetCamp>>) {
     let scale = tuning.view.floor_item_scale;
-    for (floor, mut transform) in &mut items {
+    for (floor, mut transform, height) in &mut items {
         if transform.scale.x != scale {
             let at = Vec3::from_array(Level::world(floor.spot.x, floor.spot.y));
-            *transform = rescale_on_floor(*transform, at, scale);
+            *transform = rescale_on_floor(*transform, at, height.map_or(0.0, |h| h.0), scale);
         }
     }
 }
@@ -1665,7 +1679,7 @@ mod tests {
         assert!(close(max.y - min.y, 0.5 * floor_scale()), "{min} {max}");
         assert!(close(floor_radius(&box_points, false, floor_scale()), 4.5 * floor_scale()));
         // Drawn at another scale it still rests at its spot, as if it had been laid there so.
-        let twice = rescale_on_floor(transform, at, 2.0);
+        let twice = rescale_on_floor(transform, at, 0.0, 2.0);
         let laid = rest_on_floor(&box_points, false, at, 0.7, 2.0).unwrap();
         assert!(twice.translation.abs_diff_eq(laid.translation, 1e-4) && twice.scale == laid.scale, "{twice:?}");
         // The pickup box grows with it, and a ray onto its top lands there, in world units.
@@ -2215,10 +2229,11 @@ mod tests {
         let reach = Vec3::new(spot.x * CELL, 0.0, spot.y * CELL).distance(eye.translation);
         assert!(reach < REACH, "{reach}");
         assert!(app.world().resource::<CurrentLevel>().0.is_open(spot.x.floor() as i32, spot.y.floor() as i32));
-        // Resting like a spawned item: lowest point on the floor.
+        // Resting like a spawned item: lowest point on the floor as drawn.
         let points = item_points(&item.shape.build());
         let low = points.iter().map(|&p| at.transform_point(p).y).fold(f32::INFINITY, f32::min);
-        assert!(low.abs() < 1e-3, "{low}");
+        let drawn = app.world().get::<RestHeight>(dropped).unwrap().0;
+        assert!((low - drawn).abs() < 1e-3, "{low} against the floor at {drawn}");
 
         // Look down at it and pick it up again with E: into the pack.
         let target = Vec3::new(spot.x * CELL, 0.5, spot.y * CELL);
@@ -2269,9 +2284,10 @@ mod tests {
         let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
         let spot = ItemSpot { x: 0.0, y: -0.5, yaw: 0.3, family: item.shape.family(), seed: item.seed };
         app.world_mut().resource_mut::<CurrentLevel>().0.items.push(spot);
+        let level = app.world().resource::<CurrentLevel>().0.clone();
         let entity = app
             .world_mut()
-            .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+            .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, &level, id, spot, &Tuning::default()).unwrap())
             .unwrap();
         let eye = Transform::from_xyz(0.0, EYE_HEIGHT, 0.0).looking_at(Vec3::new(0.0, 0.3, -10.0), Vec3::Y);
         app.world_mut().spawn((PlayerCamera, Equipped, eye));
@@ -2440,6 +2456,76 @@ mod tests {
     }
 
     #[test]
+    fn a_thin_item_rests_on_the_floor_height_under_its_footprint() {
+        // A note-thin sheet 4 by 6 units, drawn at scale 1.
+        let sheet = [Vec3::new(-2.0, 0.0, -3.0), Vec3::new(2.0, 0.02, 3.0)];
+        let at = Vec3::new(10.0, 0.0, 20.0);
+        let asked = std::cell::Cell::new(([0.0f32; 2], [0.0f32; 2]));
+        let (transform, height) = rest_on_drawn_floor(&sheet, false, at, 0.0, 1.0, |c, h| {
+            asked.set((c, h));
+            0.2
+        })
+        .unwrap();
+        assert_eq!(height, 0.2);
+        assert!((transform.translation.y - 0.2).abs() < 1e-6, "lowest point on the floor, not y = 0");
+        let (centre, half) = asked.get();
+        assert_eq!(centre, [10.0, 20.0]);
+        assert!((half[0] - 2.0).abs() < 1e-5 && (half[1] - 3.0).abs() < 1e-5, "asks for the whole footprint: {half:?}");
+        // The old flat floor is the drawn floor at height 0.
+        assert_eq!(rest_on_floor(&sheet, false, at, 0.0, 1.0).unwrap().translation.y, 0.0);
+    }
+
+    #[test]
+    fn a_floor_item_rests_on_the_flagstones_and_the_relief() {
+        let sheet = [Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.01, 0.5)];
+        for (style, seed) in [(fb_level::LevelStyle::StoneHalls, 1207u32), (fb_level::LevelStyle::RoughRock, 5)] {
+            let level = (seed..seed + 200).map(|s| fb_level::generate(s, if style == fb_level::LevelStyle::StoneHalls { 2 } else { 1 })).find(|l| l.style == style).unwrap();
+            let relief = crate::level::geometry::Relief::new(&level);
+            let view = crate::level::geometry::CellView::uncobbled(&level);
+            let drawn = crate::level::geometry::DrawnFloor::of_view(&view);
+            // Open cells only: where there is no floor drawn there is nothing to rest on.
+            let cells: Vec<(i32, i32)> = (0..level.height as i32).flat_map(|y| (0..level.width as i32).map(move |x| (x, y))).filter(|&(x, y)| level.is_open(x, y)).collect();
+            let mut raised = 0;
+            for k in 0..40 {
+                let (cx, cy) = cells[k * cells.len() / 40];
+                let at = Vec3::new((cx as f32 + 0.5) * CELL, 0.0, (cy as f32 + 0.5) * CELL);
+                let (transform, height) = rest_on_drawn_floor(&sheet, false, at, 0.0, 1.0, |c, h| drawn.height_under(&level, c, h)).unwrap();
+                assert!((transform.translation.y - height).abs() < 1e-6);
+                assert!(height >= relief.floor_height(at.x, at.z) - 1e-5, "rests at or above the floor under its middle");
+                raised += (height > 0.05) as i32;
+            }
+            assert!(raised > 5, "{style:?}: the floor under most items stands off y = 0 ({raised})");
+            // Cobbles stand 0.22 or more off the floor, so a thing set down on them rests there.
+            let cobbled = crate::level::geometry::CellView::new(&level);
+            let stones = crate::level::geometry::DrawnFloor::of_view(&cobbled);
+            for &(cx, cy) in cells.iter().filter(|&&(x, y)| cobbled.is_cobbled(x, y)).take(5) {
+                let at = [(cx as f32 + 0.5) * CELL, (cy as f32 + 0.5) * CELL];
+                assert!(stones.height_under(&level, at, [0.5, 0.5]) >= 0.22 - 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn a_set_down_item_rests_at_the_same_height_when_laid_out_again() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _) = delving_app();
+        let level = app.world().resource::<CurrentLevel>().0.clone();
+        let item = crate::inventory::underfoot::drops_for_capture("Sword").remove(0);
+        let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
+        // Saving keeps the spot, so loading spawns the item from the same spot again.
+        let spot = ItemSpot { x: 2.3, y: 1.6, yaw: 0.9, family: item.shape.family(), seed: item.seed };
+        let loaded: ItemSpot = serde_json::from_str(&serde_json::to_string(&spot).unwrap()).unwrap();
+        let mut heights = Vec::new();
+        for spot in [spot, loaded] {
+            let level = level.clone();
+            let entity = app.world_mut().run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, &level, id, spot, &Tuning::default()).unwrap()).unwrap();
+            heights.push((app.world().get::<Transform>(entity).unwrap().translation.y, app.world().get::<RestHeight>(entity).unwrap().0));
+            app.world_mut().despawn(entity);
+        }
+        assert_eq!(heights[0], heights[1]);
+    }
+
+    #[test]
     fn legendary_floor_items_shimmer_and_sparkle_and_others_do_not() {
         let drops = crate::inventory::underfoot::drops_for_capture("Sword:legendary,Sword:common");
         let [legendary, common] = [&drops[0], &drops[1]];
@@ -2450,9 +2536,10 @@ mod tests {
             use bevy::ecs::system::RunSystemOnce;
             let id = app.world_mut().resource_mut::<Inventory>().add(item.clone());
             let spot = ItemSpot { x, y: 0.0, yaw: 0.0, family: item.shape.family(), seed: item.seed };
+            let level = app.world().resource::<CurrentLevel>().0.clone();
             let entity = app
                 .world_mut()
-                .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, id, spot, &Tuning::default()).unwrap())
+                .run_system_once(move |mut spawner: ItemSpawner, inventory: Res<Inventory>| spawn_floor_item(&mut spawner, &inventory, &level, id, spot, &Tuning::default()).unwrap())
                 .unwrap();
             spawned.push(entity);
         }

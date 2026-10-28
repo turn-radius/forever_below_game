@@ -101,6 +101,11 @@ const COBBLE: Kind = Kind {
     wears: true,
 };
 
+/// How high the lowest stone of a cobbled floor, and of paving, stands off the floor: what a
+/// thin thing set down on it rests on, at the least (taller stones stand round it).
+pub const COBBLE_REST: f32 = COBBLE.raise.0;
+pub const PAVING_REST: f32 = PAVING.raise.0;
+
 const PAVING: Kind = Kind {
     classes: &[(30, 2.4, 3.4), (260, 1.5, 2.3)],
     long_share: 0.4,
