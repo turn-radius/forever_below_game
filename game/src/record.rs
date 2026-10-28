@@ -210,6 +210,10 @@ pub struct FolkRecord {
     /// the floor, or gone, as the record has it).
     #[serde(default)]
     pub dead: bool,
+    /// What is left on the body, still wearing it: none for a body from before bodies kept their
+    /// gear (its things lie on the floor as the record has them) or one looted bare.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRecord>,
 }
 
 impl FolkRecord {
@@ -258,6 +262,17 @@ pub struct ItemRecord {
     /// The rests the delver had had when an attempt to identify it fell short.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rest_tried: Option<u32>,
+    /// How many it stands for, a stack of arrows. Absent in a record from before stacks: one.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub quantity: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(n: &u32) -> bool {
+    *n == 1
 }
 
 /// An item in a container's grid.
@@ -267,6 +282,26 @@ pub struct Stowed {
     pub y: u8,
     pub turned: bool,
     pub item: ItemRecord,
+    /// The small grid of the pack or belt it lies in, if it hangs on one (the tent in a lashing, the
+    /// spear on a strap); `x` and `y` are then its cell in that grid. Absent for the container's main grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitting: Option<fb_items::Accessory>,
+}
+
+/// What is left on a fallen body: its things, each where it lay in the body's grid, and which
+/// were worn or held in what slot, so the body is drawn in them again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodyRecord {
+    /// How deep the body's grid is.
+    pub rows: u8,
+    pub contents: Vec<BodyStowed>,
+}
+
+/// One thing on a body: where it lay and, if it was worn or held, in what slot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodyStowed {
+    pub slot: Option<fb_items::Slot>,
+    pub stowed: Stowed,
 }
 
 /// A container prop as it was left.
@@ -288,6 +323,9 @@ pub struct CreatureRecord {
     pub scale: f32,
     /// Fallen: this is its body.
     pub dead: bool,
+    /// What is left on the body ([`FolkRecord::body`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRecord>,
     /// How charred a troll's skin is, 0 to 1 (`crate::creatures::scorch`); 0 for the rest.
     #[serde(default)]
     pub charred: f32,
@@ -354,16 +392,24 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         teaching: item.teaching.clone(),
         known: item.known,
         rest_tried: item.rest_tried,
+        quantity: item.quantity,
     }
 }
 
 /// What is in `container`'s grid.
 pub fn record_contents(inventory: &Inventory, container: ItemId) -> Vec<Stowed> {
     let Some(grid) = inventory.grid(container) else { return vec![] };
-    grid.entries()
-        .iter()
-        .filter_map(|e| Some(Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)? }))
-        .collect()
+    let stowed = |grid: &crate::inventory::Grid<ItemId>, fitting| -> Vec<Stowed> {
+        grid.entries().iter().filter_map(|e| Some(Stowed { x: e.at.x, y: e.at.y, turned: e.at.turned, item: record_item(inventory, e.id)?, fitting })).collect()
+    };
+    // What hangs on a pack or belt lies in its small grids, after the main grid's.
+    let mut all = stowed(grid, None);
+    for &(accessory, fitting) in inventory.fittings_of(container) {
+        if let Some(grid) = inventory.grid(fitting) {
+            all.extend(stowed(grid, Some(accessory)));
+        }
+    }
+    all
 }
 
 /// Keeps track of the item `record` describes in `inventory`, loose, with its contents where
@@ -406,6 +452,7 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         teaching: record.teaching.clone(),
         known: record.known,
         rest_tried: record.rest_tried,
+        quantity: record.quantity,
     });
     if item.is_none() {
         warn!("recorded item has unknown base {:?} (seed {}); dropping it", record.base, record.seed);
@@ -413,13 +460,35 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
     item
 }
 
-/// Puts `contents` back into `container`'s grid, each where it lay.
+/// Puts `contents` back into `container`'s grid, each where it lay and turned as it was. One
+/// that cannot go there (an old quiver's twenty loose arrows, its grid since shrunk to a row of
+/// stack places) folds into a stack of its kind or takes a free place; one that still has no
+/// room is never forgotten: it stays loose in `inventory`, listed in [`Inventory::spill`] for the
+/// game to set down underfoot, and is logged once.
 pub fn restore_contents(inventory: &mut Inventory, container: ItemId, contents: &[Stowed]) {
+    let mut spilled = 0;
     for stowed in contents {
         let Some(id) = restore_item(inventory, &stowed.item) else { continue };
-        if inventory.put(id, container, Placement::new(stowed.x, stowed.y, stowed.turned)).is_err() {
-            inventory.forget(id);
+        // Back in the small grid of the pack or belt it hung on, where it hung.
+        let into = match stowed.fitting {
+            Some(accessory) => inventory.fitting(container, accessory),
+            None => Some(container),
+        };
+        if let Some(into) = into
+            && inventory.put(id, into, Placement::new(stowed.x, stowed.y, stowed.turned)).is_ok()
+            // A stack put in a fitting gives it one piece and keeps the rest.
+            && inventory.location(id) != Some(crate::inventory::items::Location::Loose)
+        {
+            continue;
         }
+        let _ = inventory.stow_in(id, container);
+        if inventory.item(id).is_some() && inventory.location(id) == Some(crate::inventory::items::Location::Loose) {
+            inventory.spill.push(id);
+            spilled += 1;
+        }
+    }
+    if spilled > 0 {
+        warn!("{spilled} saved items found no room in their container and are set down underfoot");
     }
 }
 
@@ -432,8 +501,8 @@ pub fn record_level_left(
     mut record: ResMut<WorldRecord>,
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
-    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::creatures::scorch::Scorch>)>,
-    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>)>,
+    creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::creatures::scorch::Scorch>, Option<&crate::remains::BodyStock>)>,
+    folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>, Option<&crate::remains::BodyStock>)>,
     doors: Option<Res<crate::doors::Doors>>,
 ) {
     let mut left = LevelRecord::default();
@@ -444,7 +513,7 @@ pub fn record_level_left(
     for (piece, container) in &containers {
         left.containers.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
     }
-    for (critter, transform, health, corpse, scorch) in &creatures {
+    for (critter, transform, health, corpse, scorch, body) in &creatures {
         let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else { continue };
         let stood = corpse.map_or(*transform, |c| c.fell);
         let Some(health) = health else { continue };
@@ -457,11 +526,12 @@ pub fn record_level_left(
                 turn: stood.rotation.to_array(),
                 scale: stood.scale.x,
                 dead: corpse.is_some(),
+                body: body.and_then(|b| crate::remains::record_body(&inventory, b)),
                 charred: scorch.map_or(0.0, |s| s.level),
             },
         );
     }
-    for (denizen, transform, health, hostility, corpse, shelf) in &folk {
+    for (denizen, transform, health, hostility, corpse, shelf, body) in &folk {
         let Some(index) = level.0.folk.iter().position(|s| *s == denizen.person.spot) else { continue };
         if let Some(shelf) = shelf.filter(|_| corpse.is_none()) {
             left.shelves.insert(index, ShelfRecord { day: shelf.day, wares: shelf.wares.iter().map(item_record).collect(), sold: shelf.sold.iter().map(item_record).collect(), purse: Some(shelf.purse) });
@@ -477,6 +547,7 @@ pub fn record_level_left(
                 turn: stood.rotation.to_array(),
                 hostile: hostility.is_some_and(|h| h.is_hostile()),
                 dead: corpse.is_some(),
+                body: body.and_then(|b| crate::remains::record_body(&inventory, b)),
             },
         );
     }
@@ -718,19 +789,115 @@ mod tests {
     fn a_quiver_and_its_arrows_round_trip_and_a_loose_arrow_rolls_again() {
         let mut inventory = Inventory::default();
         let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
-        for seed in 0..20 {
-            let arrow = inventory.add(fb_items::roll_item("Arrow", seed).unwrap());
-            let at = inventory.grid(quiver).unwrap().first_free(inventory.footprint(arrow).unwrap()).unwrap();
-            inventory.put(arrow, quiver, at).unwrap();
+        for _ in 0..20 {
+            let arrow = inventory.add(fb_items::roll_item("Arrow", 3).unwrap());
+            inventory.stow_in(arrow, quiver).unwrap();
         }
         let json = serde_json::to_string(&record_item(&inventory, quiver).unwrap()).unwrap();
         let mut other = Inventory::default();
         let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
-        assert_eq!(other.contents_count(again), 20);
+        assert_eq!((other.contents_count(again), other.pieces_in(again)), (2, 20));
         assert_eq!(other.item(again), inventory.item(quiver));
         // A shot that came to rest is a level spot of its family and seed, which rolls the arrow again.
         let arrow = fb_items::roll_item("Arrow", 77).unwrap();
         assert_eq!(fb_items::roll_loot(arrow.shape.family(), arrow.seed, arrow.odds), Some(arrow));
+    }
+
+    fn stowed(inventory: &Inventory, id: ItemId, x: u8, y: u8, turned: bool) -> Stowed {
+        Stowed { x, y, turned, item: record_item(inventory, id).unwrap(), fitting: None }
+    }
+
+    #[test]
+    fn an_old_quiver_of_twenty_kinds_of_arrow_loses_nothing() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
+        let mut loose = Inventory::default();
+        // The old 5 by 4 grid: twenty arrows, each its own seed, most beyond today's row.
+        let contents: Vec<Stowed> = (0..20u8)
+            .map(|i| {
+                let arrow = loose.add(fb_items::roll_item("Arrow", 100 + u32::from(i)).unwrap());
+                stowed(&loose, arrow, i % 5, i / 5, false)
+            })
+            .collect();
+        restore_contents(&mut inventory, quiver, &contents);
+        let spilled: u32 = inventory.spill.iter().filter_map(|&id| inventory.item(id)).map(|i| i.quantity).sum();
+        assert_eq!(inventory.pieces_in(quiver) as u32 + spilled, 20);
+        assert!(spilled > 0 && inventory.spill.iter().all(|&id| inventory.location(id) == Some(crate::inventory::items::Location::Loose)));
+    }
+
+    #[test]
+    fn identical_old_arrows_fold_into_the_quivers_stacks() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(fb_items::roll_item("Quiver", 5).unwrap());
+        let mut loose = Inventory::default();
+        let arrow = loose.add(fb_items::roll_item("Arrow", 3).unwrap());
+        let contents: Vec<Stowed> = (0..20u8).map(|i| stowed(&loose, arrow, i % 5, i / 5, false)).collect();
+        restore_contents(&mut inventory, quiver, &contents);
+        assert_eq!((inventory.pieces_in(quiver), inventory.spill.len()), (20, 0));
+    }
+
+    #[test]
+    fn a_pack_and_a_chest_restore_their_stacks_where_and_as_they_were_saved() {
+        let mut source = Inventory::default();
+        let pack = source.add(fb_items::roll_item("Pack", 1).unwrap());
+        let stack = source.add(fb_items::roll_item("Arrow", 9).unwrap().with_quantity(7));
+        source.put(stack, pack, Placement::new(3, 2, false)).unwrap();
+        let sword = source.add(fb_items::roll_item("Sword", 2).unwrap());
+        source.put(sword, pack, Placement::new(0, 1, true)).unwrap();
+        let record = record_item(&source, pack).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &record).unwrap();
+        let at: Vec<(String, u32, u8, u8, bool)> = other
+            .grid(again)
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|e| {
+                let i = other.item(e.id).unwrap();
+                (i.base.clone(), i.quantity, e.at.x, e.at.y, e.at.turned)
+            })
+            .collect();
+        assert!(at.contains(&("Arrow".into(), 7, 3, 2, false)), "{at:?}");
+        assert!(at.contains(&("Sword".into(), 1, 0, 1, true)), "{at:?}");
+        assert!(other.spill.is_empty());
+        // A chest restores the same way.
+        let chest = other.add(fb_items::container_item(fb_level::chest_state(armory::families::chests::ChestStyle::Chest, 4, false)));
+        restore_contents(&mut other, chest, &[stowed(&source, stack, 2, 1, false)]);
+        let there = other.grid(chest).unwrap().entries()[0];
+        assert_eq!((there.at.x, there.at.y), (2, 1));
+    }
+
+    #[test]
+    fn a_container_too_full_spills_rather_than_forgets() {
+        let mut inventory = Inventory::default();
+        let case = inventory.add(fb_items::roll_item("Bolt case", 1).unwrap());
+        let places = inventory.item(case).unwrap().profile.holds.as_ref().unwrap().cols;
+        let mut loose = Inventory::default();
+        let contents: Vec<Stowed> = (0..u32::from(places) + 2)
+            .map(|k| {
+                let bolt = loose.add(fb_items::roll_item("Bolt", 40 + k).unwrap());
+                stowed(&loose, bolt, 0, 0, false)
+            })
+            .collect();
+        restore_contents(&mut inventory, case, &contents);
+        assert_eq!((inventory.contents_count(case), inventory.spill.len()), (usize::from(places), 2));
+        assert!(inventory.spill.iter().all(|&id| inventory.item(id).is_some()));
+    }
+
+    #[test]
+    fn a_stack_keeps_its_count_and_an_old_record_has_one() {
+        let mut inventory = Inventory::default();
+        let stack = inventory.add(fb_items::roll_item("Arrow", 9).unwrap().with_quantity(7));
+        let json = serde_json::to_string(&record_item(&inventory, stack).unwrap()).unwrap();
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(other.item(again).unwrap().quantity, 7);
+        let single = serde_json::to_string(&item_record(&fb_items::roll_item("Arrow", 9).unwrap())).unwrap();
+        assert!(!single.contains("quantity"), "a lone piece writes no count, so older saves read the same");
+        let mut old: serde_json::Value = serde_json::from_str(&json).unwrap();
+        old.as_object_mut().unwrap().remove("quantity");
+        let again = restore_item(&mut other, &serde_json::from_value(old).unwrap()).unwrap();
+        assert_eq!(other.item(again).unwrap().quantity, 1);
     }
 
     #[test]
@@ -827,11 +994,53 @@ mod tests {
             item: ItemRecord { coins: Some([1, 2, 3]), odds: fb_items::Odds::kit(4), ..record_of(&item) },
         });
         level.containers.insert(2, ContainerRecord { opened: true, contents: vec![] });
-        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false, charred: 0.0 });
-        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false });
+        level.creatures.insert(1, CreatureRecord { hp: 2, max: 5, at: [1.5, 0.0, 2.25], turn: [0.0, 0.7, 0.0, 0.7], scale: 1.25, dead: false, body: None, charred: 0.0 });
+        level.folk.insert(0, FolkRecord { hp: 3, max: 9, at: [4.0, 0.0, 6.5], turn: [0.0, 0.0, 0.0, 1.0], hostile: true, dead: false, body: None });
         record.levels.insert(1, level);
         record.levels.insert(4, LevelRecord::default());
         let json = serde_json::to_string(&record).unwrap();
         assert_eq!(serde_json::from_str::<WorldRecord>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn what_hangs_on_a_pack_or_belt_is_recorded_with_it_wherever_it_lies() {
+        use fb_items::Accessory::{LeftFrog, Lashing, WeaponStrap};
+        let mut inventory = Inventory::default();
+        let pack = (1..4000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap();
+        let pack = inventory.add(pack);
+        let (tent, spear, loaf) = (inventory.add(fb_items::roll_item("Tent", 3).unwrap()), inventory.add(fb_items::roll_item("Spear", 3).unwrap()), inventory.add(fb_items::roll_item("Bread", 3).unwrap()));
+        let (lashing, strap) = (inventory.fitting(pack, Lashing).unwrap(), inventory.fitting(pack, WeaponStrap).unwrap());
+        inventory.put(tent, lashing, Placement::new(0, 0, false)).unwrap();
+        inventory.put(spear, strap, Placement::new(0, 0, false)).unwrap();
+        inventory.put(loaf, pack, Placement::new(2, 1, false)).unwrap();
+        // A belt with a dagger in its frog, packed in a sack.
+        let belt = (1..4000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(LeftFrog)).unwrap();
+        let belt = inventory.add(belt);
+        let dagger = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
+        inventory.put(dagger, inventory.fitting(belt, LeftFrog).unwrap(), Placement::new(0, 0, false)).unwrap();
+        let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
+        inventory.put(belt, sack, Placement::new(0, 0, false)).unwrap();
+        for (host, weight) in [(pack, inventory.contents_weight(pack)), (sack, inventory.contents_weight(sack))] {
+            // Down to the level record's json and back, as a bag set down or a chest's contents are.
+            let json = serde_json::to_string(&record_item(&inventory, host).unwrap()).unwrap();
+            assert!(json.contains("\"fitting\""), "the fitting grids are recorded");
+            let mut other = Inventory::default();
+            let again = restore_item(&mut other, &serde_json::from_str(&json).unwrap()).unwrap();
+            assert_eq!(other.contents_weight(again), weight, "the same load");
+            assert_eq!(record_item(&other, again), record_item(&inventory, host), "and the same record");
+        }
+        let mut other = Inventory::default();
+        let again = restore_item(&mut other, &record_item(&inventory, pack).unwrap()).unwrap();
+        assert_eq!(other.hung_on(again).iter().map(|&(a, id)| (a, other.item(id).unwrap().base.clone())).collect::<Vec<_>>(), vec![(Lashing, "Tent".to_string()), (WeaponStrap, "Spear".to_string())]);
+        assert_eq!(other.contents_count(again), 1, "and the loaf in the main grid");
+        // Counted without duplicates: the items are the pack, its three things and nothing else.
+        assert_eq!(other.ids().count(), 4);
+        // A save that put a fitting's contents where its grid is gone puts them in the main grid, never loses them.
+        let mut record = record_item(&inventory, pack).unwrap();
+        record.contents[1].fitting = Some(fb_items::Accessory::PotionPouch);
+        let mut third = Inventory::default();
+        let kept = restore_item(&mut third, &record).unwrap();
+        assert_eq!(third.ids().count(), 4, "{:?}", third.spill);
+        assert!(third.holds(kept, third.ids().find(|&id| third.item(id).is_some_and(|i| i.base == "Tent" || i.base == "Spear")).unwrap()) || !third.spill.is_empty());
     }
 }

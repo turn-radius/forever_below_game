@@ -906,9 +906,9 @@ mod tests {
     }
 
     #[test]
-    fn killing_a_skeleton_drops_every_item_it_wore_once_to_pick_up_and_wield() {
-        use crate::inventory::{FloorChange, FloorChanges};
+    fn killing_a_skeleton_leaves_every_item_it_wore_on_its_bones_to_search_and_take() {
         use crate::play::CurrentLevel;
+        use crate::remains::BodyStock;
         let seed = kitted_seed();
         let gear = fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default());
         let (mut app, _, skeleton) = skeleton_fight(seed, None);
@@ -919,63 +919,43 @@ mod tests {
         for _ in 0..120 {
             app.update();
         }
-        // Every item it wore and held, as the same item, once.
-        let floor = on_the_floor(&mut app);
-        assert_eq!(floor.len(), gear.worn.len(), "one for each piece of gear");
+        assert!(on_the_floor(&mut app).is_empty(), "nothing is set on the floor");
+        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), dropped_before, "and the level records nothing");
+        // Every item it wore and held, as the same item, on the body.
+        let stock = app.world().get::<BodyStock>(skeleton).expect("its things are kept on the body").clone();
+        assert_eq!(stock.kit.len(), gear.worn.len(), "one for each piece of gear");
         let inventory = app.world().resource::<Inventory>();
-        let mut lying: Vec<(String, u32)> = floor.iter().map(|f| inventory.item(f.id).map(|i| (i.base.to_string(), i.seed)).unwrap()).collect();
-        let mut wore: Vec<(String, u32)> = gear.worn.iter().map(|(_, i)| (i.base.to_string(), i.seed)).collect();
-        lying.sort();
-        wore.sort();
-        assert_eq!(lying, wore);
-        for f in &floor {
-            let item = inventory.item(f.id).unwrap();
-            let original = gear.worn.iter().map(|(_, i)| i).find(|i| i.seed == item.seed && i.base == item.base).unwrap();
-            assert_eq!(item, original, "the same rarity, affixes and wear");
+        for (slot, item) in &gear.worn {
+            assert!(stock.kit.iter().any(|&(s, id)| s == *slot && inventory.item(id) == Some(item)), "{slot:?} is kept as the same item");
         }
-        assert_eq!(app.world().resource::<CurrentLevel>().0.items.len(), dropped_before + gear.worn.len(), "the level records them");
-        // They fall near it, not far away.
-        let at = app.world().get::<Transform>(skeleton).unwrap().translation.xz();
-        for f in &floor {
-            let world = fb_level::Level::world(f.spot.x, f.spot.y);
-            let there = Vec2::new(world[0], world[2]);
-            assert!(there.distance(at) < 12.0, "{} from where it fell", there.distance(at));
-        }
-        // Picked up, they are the player's: lifted from the floor, worn and wielded.
-        let slots: Vec<(crate::inventory::ItemId, fb_items::Slot)> = floor.iter().map(|f| (f.id, inventory.item(f.id).unwrap().profile.slot.unwrap())).collect();
-        for &(id, _) in &slots {
-            app.world_mut().resource_mut::<FloorChanges>().0.push(FloorChange::Lifted(id));
-        }
-        app.update();
-        assert!(on_the_floor(&mut app).is_empty(), "all taken up");
+        // Taken from the body, each is the player's to wear or hold where the skeleton had it.
         let mut inventory = app.world_mut().resource_mut::<Inventory>();
-        for &(id, slot) in &slots {
-            // Swapping with whatever the delver already wears there, as equipping does.
+        for &(slot, id) in &stock.kit {
+            let slot = if slot == fb_items::Slot::Mainhand || slot == fb_items::Slot::Offhand { inventory.item(id).unwrap().profile.slot.unwrap_or(slot) } else { slot };
             inventory.equip(id, slot).unwrap_or_else(|e| panic!("{slot:?}: {e:?}"));
             assert_eq!(inventory.worn(slot), Some(id), "{slot:?} is worn");
         }
-        assert_eq!(inventory.worn(fb_items::Slot::Mainhand).is_some(), gear.item(fb_items::Slot::Mainhand).is_some());
     }
 
     #[test]
-    fn a_skeletons_gear_is_dropped_once_and_a_body_brought_back_drops_none() {
+    fn a_skeletons_gear_is_kept_once_and_a_looted_body_brought_back_keeps_none() {
         use feedback::Corpse;
         let seed = kitted_seed();
-        let n = fb_items::undead::skeleton_outfit(seed, fb_items::Odds::default()).worn.len();
         let (mut app, _, skeleton) = skeleton_fight(seed, None);
         app.update();
         strike_down(&mut app, skeleton);
         for _ in 0..600 {
             app.update();
         }
-        assert_eq!(on_the_floor(&mut app).len(), n);
-        // Left lying, it sheds nothing more however long it lies.
+        let stock = app.world().get::<crate::remains::BodyStock>(skeleton).unwrap().clone();
+        let kept = app.world().resource::<Inventory>().ids().count();
         for _ in 0..120 {
             app.update();
         }
-        assert_eq!(on_the_floor(&mut app).len(), n, "an old body never drops its gear again");
-        // A dead skeleton put back as the record has it (what leaving a level and returning
-        // does) is a body marked looted, and does not drop its kit a second time.
+        assert_eq!(app.world().get::<crate::remains::BodyStock>(skeleton), Some(&stock), "kept once");
+        assert_eq!(app.world().resource::<Inventory>().ids().count(), kept, "and never again");
+        assert!(on_the_floor(&mut app).is_empty());
+        // A dead skeleton put back as the record has it, looted, does not drop or keep a kit.
         let (mut app, _, restored) = skeleton_fight(seed, None);
         app.update();
         let fell = *app.world().get::<Transform>(restored).unwrap();
@@ -984,6 +964,7 @@ mod tests {
             app.update();
         }
         assert!(on_the_floor(&mut app).is_empty(), "a restored body drops nothing");
+        assert!(app.world().get::<crate::remains::BodyStock>(restored).is_none());
     }
 
     #[test]
@@ -1125,8 +1106,9 @@ mod tests {
             inventory.wear(weapon, fb_items::Slot::Mainhand).unwrap();
             let holder = inventory.add(fb_items::roll_item(holder, 3).unwrap());
             inventory.wear(holder, fb_items::Slot::Quiver).unwrap();
-            for seed in 0..count {
-                let piece = inventory.add(fb_items::roll_item(ammo, 100 + seed as u32).unwrap());
+            // One kind, so the pieces stack in the holder's few places as a delver's own do.
+            for _ in 0..count {
+                let piece = inventory.add(fb_items::roll_item(ammo, 100).unwrap());
                 inventory.stow(piece).unwrap();
             }
             holder
@@ -1148,7 +1130,8 @@ mod tests {
     }
 
     fn held(app: &App, holder: crate::inventory::ItemId) -> usize {
-        app.world().resource::<Inventory>().contents_count(holder)
+        // Pieces, not places: the arrows lie in stacks.
+        app.world().resource::<Inventory>().pieces_in(holder)
     }
 
     #[test]

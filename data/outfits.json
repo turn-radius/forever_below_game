@@ -103,8 +103,12 @@
     "Belt"
    ],
    "back": [
-    "Satchel",
+    0.6,
     "Pack"
+   ],
+   "satchel": [
+    0.6,
+    "Satchel"
    ],
    "mainhand": [
     "Bow",

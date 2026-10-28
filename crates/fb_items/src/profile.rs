@@ -52,6 +52,33 @@ pub struct Profile {
     pub description: String,
 }
 
+/// The rows a belt's small sack adds to its grid.
+pub const BELT_SACK_ROWS: u8 = 1;
+
+/// How many arrows or bolts share one cell.
+pub const AMMUNITION_STACK: u8 = 10;
+
+impl Profile {
+    /// Sizes a worn bag's grid to its capacity affixes: its plain rows plus `stats.grid_rows`,
+    /// never under one row. Call it once after the affixes are applied to the stats; a profile
+    /// with no inner grid, or with no capacity change, is left alone.
+    pub fn fit_capacity(&mut self) {
+        let by = self.stats.grid_rows.round() as i32;
+        if let Some(g) = self.holds.as_mut().filter(|_| by != 0) {
+            g.rows = (g.rows as i32 + by).clamp(1, u8::MAX as i32) as u8;
+        }
+    }
+
+    /// The columns and rows a plain bag of this size would open into, when its capacity
+    /// affixes made this one differ; `None` for a bag at its plain size and for anything else.
+    pub fn plain_grid(&self) -> Option<(u8, u8)> {
+        let g = self.holds.as_ref()?;
+        let by = self.stats.grid_rows.round() as i32;
+        let plain = g.rows as i32 - by;
+        (by != 0 && (1..=u8::MAX as i32).contains(&plain)).then_some((g.cols, plain as u8))
+    }
+}
+
 /// The ammunition a bow or crossbow takes and its range.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ranged {
@@ -193,7 +220,17 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     } else {
         from_shape(base, shape)
     };
-    if !folds(family) {
+    // A belt's small sack is four cells more in the belt's one grid (a 2 by 2 worth): `fb_items`
+    // keeps a single grid per container, so it widens that one by a row of its four columns.
+    if let Item::Belt(belt) = shape
+        && belt.fittings.sack
+        && let Some(grid) = p.holds.as_mut()
+    {
+        grid.rows = grid.rows.saturating_add(BELT_SACK_ROWS);
+    }
+    // A potion keeps its goods row's footprint: every potion takes one cell, the large flask too.
+    let potion = matches!(shape, Item::Food(s) if s.provision.style == armory::families::food::FoodStyle::Potion) && goods().contains_key(base);
+    if !folds(family) && !potion {
         p.footprint = Footprint { cols: cells(wide), rows: cells(long) };
     }
     if stands_upright(family) {
@@ -201,6 +238,7 @@ pub fn profile(base: &str, shape: &Item) -> Profile {
     }
     if matches!(family, Family::Arrow | Family::Bolt) {
         p.footprint = Footprint { cols: 1, rows: 1 };
+        p.stack = AMMUNITION_STACK;
     }
     if matches!(family, Family::Staff | Family::Spear | Family::Bow) && long > PACK_LIMIT_UNITS {
         p.packable = false;
@@ -378,21 +416,26 @@ fn from_shape(base: &str, shape: &Item) -> Profile {
             let (cols, rows, label, slot, wt, fp) = match b.style {
                 BagStyle::Purse | BagStyle::Pouch => return good(&[Container], 0.4, [1, 1], "Coins"),
                 BagStyle::Backpack => (8, 5, "Pack", Slot::Back, 4.0, [2, 3]),
-                BagStyle::Satchel => (6, 3, "Satchel", Slot::Back, 2.0, [2, 2]),
+                BagStyle::Satchel => (6, 3, "Satchel", Slot::Satchel, 2.0, [2, 2]),
                 BagStyle::Sack => (4, 4, "Sack", Slot::Back, 0.5, [2, 2]),
                 BagStyle::BeltPouch => (4, 2, "Belt pouch", Slot::Belt, 1.0, [2, 2]),
             };
             let stuff = if b.fabric == Textile::Leather { Leather } else { Cloth };
-            Profile { holds: Some(Grid { cols, rows, label: label.to_string(), accepts: vec![] }), ..gear(slot, &[Container, Wear, stuff], Stats { weight: wt, ..Stats::default() }, fp) }
+            Profile { holds: Some(Grid { cols, rows, label: label.to_string(), accepts: vec![] }), ..gear(slot, &[Container, Bag, Wear, stuff], Stats { weight: wt, ..Stats::default() }, fp) }
         }
         // SRD 5.1 p. 69: an arrow weighs 0.05 lb and a bolt 0.075 lb. Each takes one cell.
         Item::Arrow(_) => good(&[Ammunition], 0.05, [1, 1], "Ammunition · arrow"),
         Item::Bolt(_) => good(&[Ammunition], 0.075, [1, 1], "Ammunition · crossbow bolt"),
-        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68), slung in a slot
-        // of its own so it never vies with the lantern at the hip or the pack on the back.
+        // A quiver or bolt case weighs 1 lb empty and holds 20 (SRD 5.1 p. 67-68) or more, slung in
+        // a slot of its own so it never vies with the lantern at the hip or the pack on the back.
+        // Its place is one row of stacks, 3 to 5 of them by its size: 30 to 50 shots.
         Item::Quiver(_) | Item::BoltCase(_) => {
-            let (ammunition, label) = if matches!(shape, Item::Quiver(_)) { (Family::Arrow, "Quiver") } else { (Family::Bolt, "Bolt case") };
-            let holds = Grid { cols: 5, rows: 4, label: label.to_string(), accepts: vec![ammunition] };
+            let (ammunition, label, stacks) = match shape {
+                Item::Quiver(s) => (Family::Arrow, "Quiver", armory::families::quiver::Quivers::stacks(s)),
+                Item::BoltCase(s) => (Family::Bolt, "Bolt case", armory::families::quiver::BoltCases::stacks(s)),
+                _ => unreachable!(),
+            };
+            let holds = Grid { cols: stacks, rows: 1, label: label.to_string(), accepts: vec![ammunition] };
             Profile { holds: Some(holds), ..gear(Slot::Quiver, &[Container, Wear, Leather], Stats { weight: 1.0, ..Stats::default() }, [1, 3]) }
         }
         Item::Ring(_) => gear(Slot::Ring1, &[Trinket], Stats { weight: 0.05, ..Stats::default() }, [1, 1]),
@@ -454,7 +497,8 @@ mod tests {
         assert_eq!(grid("Pack"), Some((8, 5)));
         assert_eq!(grid("Satchel"), Some((6, 3)));
         assert_eq!(grid("Sack"), Some((4, 4)));
-        assert_eq!(grid("Belt"), Some((4, 2)));
+        let plain_belt = (1..50).map(|s| rolled("Belt", s)).find(|(shape, _)| matches!(shape, Item::Belt(b) if !b.fittings.sack)).unwrap().1;
+        assert_eq!(plain_belt.holds.map(|g| (g.cols, g.rows)), Some((4, 2)));
         assert_eq!(grid("Purse"), None);
     }
 
@@ -625,10 +669,32 @@ mod tests {
         let (q, c) = (quiver.holds.unwrap(), case.holds.unwrap());
         assert!(q.takes(Family::Arrow) && !q.takes(Family::Bolt) && !q.takes(Family::Food));
         assert!(c.takes(Family::Bolt) && !c.takes(Family::Arrow));
-        assert!(q.cols as usize * q.rows as usize >= 20 && c.cols as usize * c.rows as usize >= 20);
+        assert!((3..=5).contains(&q.cols) && q.rows == 1 && (3..=5).contains(&c.cols) && c.rows == 1);
         assert_eq!((quiver.stats.weight, case.stats.weight), (1.0, 1.0));
         // A bag takes anything.
         assert!(rolled("Pack", 3).1.holds.unwrap().takes(Family::Bolt));
+    }
+
+    #[test]
+    fn holders_hold_three_to_five_stacks_by_their_size() {
+        for base in ["Quiver", "Bolt case"] {
+            // (size, stacks) over many seeds: size is the volume `stacks` is read from.
+            let mut rolls: Vec<(f32, u8)> = (1..300)
+                .map(|seed| {
+                    let (shape, p) = rolled(base, seed);
+                    let size = match &shape {
+                        Item::Quiver(s) => s.holder.width * s.holder.width * s.holder.length,
+                        Item::BoltCase(s) => s.holder.width * s.holder.depth * s.holder.length,
+                        _ => unreachable!(),
+                    };
+                    (size, p.holds.unwrap().cols)
+                })
+                .collect();
+            assert!(rolls.iter().all(|r| (3..=5).contains(&r.1)), "{base}");
+            rolls.sort_by(|a, b| a.0.total_cmp(&b.0));
+            assert!(rolls.windows(2).all(|w| w[0].1 <= w[1].1), "{base}: a bigger holder never holds fewer");
+            assert!(rolls.first().unwrap().1 < rolls.last().unwrap().1, "{base}: the smallest holds fewer than the largest");
+        }
     }
 
     #[test]

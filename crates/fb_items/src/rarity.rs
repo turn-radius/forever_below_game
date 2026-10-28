@@ -498,7 +498,7 @@ mod tests {
     const COMFORT: [(&str, &[Slot]); 5] = [
         ("of Plenty", &[Slot::Belt, Slot::Neck, Slot::Charm, Slot::Ring1]),
         ("of Wakefulness", &[Slot::Belt, Slot::Neck, Slot::Charm, Slot::Ring1]),
-        ("of the Ox", &[Slot::Belt, Slot::Back, Slot::Body]),
+        ("of the Ox", &[Slot::Belt, Slot::Back, Slot::Satchel, Slot::Body]),
         ("of Lesser Warding", &[Slot::Head, Slot::Hands, Slot::Neck, Slot::Charm]),
         ("of the Mole", &[Slot::Head, Slot::Neck, Slot::Charm]),
     ];

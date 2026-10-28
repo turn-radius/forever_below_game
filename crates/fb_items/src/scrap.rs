@@ -96,7 +96,12 @@ pub fn scrap(item: &Item) -> Option<Salvage> {
             }
         }
     }
-    Some(Salvage { essence: (essence.round() as u32).max(1), materials })
+    // A stack gives every piece's salvage.
+    let n = item.quantity.max(1);
+    for m in &mut materials {
+        m.count *= n;
+    }
+    Some(Salvage { essence: (essence.round() as u32).max(1) * n, materials })
 }
 
 /// A delver's enchanting resources for one delve: essence and materials, kept by id.
@@ -180,6 +185,14 @@ mod tests {
     #[test]
     fn a_common_cloak_is_a_little_essence() {
         assert_eq!(scrap(&plain_cloak()), Some(Salvage { essence: 2, materials: vec![] }));
+    }
+
+    #[test]
+    fn a_stack_scraps_into_every_pieces_salvage() {
+        let one = sword_of(Rarity::Rare);
+        let (single, three) = (scrap(&one).unwrap(), scrap(&one.clone().with_quantity(3)).unwrap());
+        assert_eq!(three.essence, single.essence * 3);
+        assert_eq!(three.materials, single.materials.iter().map(|m| Material { id: m.id.clone(), count: m.count * 3 }).collect::<Vec<_>>());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bevy::prelude::Resource;
-use fb_items::{Coins, Item, Slot, footprint::Footprint};
+use fb_items::{Accessory, Coins, Item, Slot, footprint::Footprint};
 
 use super::grid::{Grid, Misfit, Placement};
 
@@ -85,7 +85,7 @@ impl From<Misfit> for Refusal {
 /// Worn slots that carry a container whose grid shows on the inventory screen, in the order
 /// they show: the pack or sack on the back, then the belt's pouch (the plate's
 /// `containersOf`), then the quiver or bolt case.
-pub const CARRYING_SLOTS: [Slot; 4] = [Slot::Back, Slot::Belt, Slot::Hip, Slot::Quiver];
+pub const CARRYING_SLOTS: [Slot; 5] = [Slot::Back, Slot::Satchel, Slot::Belt, Slot::Hip, Slot::Quiver];
 
 /// The minute of fuel a light's card shows ("Fuel 0:42"), rounded as the card rounds it.
 fn fuel_minute(item: &Item) -> Option<u32> {
@@ -108,8 +108,22 @@ pub fn char_bucket(shape: &armory::Item) -> u8 {
 pub enum Displaced {
     Worn(Slot),
     In { container: ItemId, at: Placement },
+    /// Folded into a stack of its kind in the container, and gone as an item of its own.
+    Folded { container: ItemId },
     Underfoot,
 }
+
+/// What [`Inventory::top_up`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TopUp {
+    None,
+    Some,
+    Done,
+}
+
+/// The base of the container that stands for a fallen body's gear ([`crate::remains`]): a grid
+/// that, unlike a pack, takes things too long to pack.
+pub const BODY_BASE: &str = "Body";
 
 /// Everything the delver has, and the items lying in the level.
 #[derive(Resource, Clone, Debug, Default)]
@@ -120,8 +134,21 @@ pub struct Inventory {
     /// Each container's grid and what lies in it, wherever the container is.
     grids: HashMap<ItemId, Grid<ItemId>>,
     worn: HashMap<Slot, ItemId>,
+    /// The small grids a pack or belt came with (its lashing, weapon strap, frogs and potion pouch,
+    /// [`fb_items::fitting_grids`]), each a hidden container item of its own that stays with the pack or
+    /// belt wherever it goes. Made when the pack or belt is added, in the order it was rolled with them.
+    fittings: HashMap<ItemId, Vec<(Accessory, ItemId)>>,
+    /// Each fitting's container and the pack or belt it belongs to.
+    fitted_on: HashMap<ItemId, (ItemId, Accessory)>,
     /// The delver's own coin purse: what they are paid, and what the purses they open hold.
     coins: Coins,
+    /// Items a load could find no place for in their container (an old quiver's twenty kinds of
+    /// arrow in a few stack places): still loose and kept, set down underfoot by
+    /// [`crate::belongings::set_down_spill`].
+    pub spill: Vec<ItemId>,
+    /// The bedroll or tent last laid out from the pack's lashing, so packing it up ties it there
+    /// again ([`crate::camp::pack`]). Saved with the camp it lies in.
+    pub lashed_out: Option<ItemId>,
 }
 
 impl Inventory {
@@ -142,6 +169,19 @@ impl Inventory {
 
     /// Keeps track of `item`, loose. A container gets its empty grid.
     pub fn add(&mut self, item: Item) -> ItemId {
+        let id = self.add_plain(item);
+        // A pack or belt comes with the small grids it was rolled with, empty.
+        let host = self.items[&id].clone();
+        for grid in fb_items::fitting_grids(&host) {
+            let fitting = self.add_plain(fb_items::fitting_item(&host, &grid));
+            self.fittings.entry(id).or_default().push((grid.accessory, fitting));
+            self.fitted_on.insert(fitting, (id, grid.accessory));
+        }
+        id
+    }
+
+    /// [`Inventory::add`] without the fitting grids of a pack or belt.
+    fn add_plain(&mut self, item: Item) -> ItemId {
         let id = ItemId(self.next);
         self.next += 1;
         if let Some(holds) = &item.profile.holds {
@@ -155,6 +195,10 @@ impl Inventory {
     /// Stops keeping track of `id` and of everything inside it, wherever it is.
     pub fn forget(&mut self, id: ItemId) {
         self.take_out(id);
+        for (_, fitting) in self.fittings.remove(&id).unwrap_or_default() {
+            self.fitted_on.remove(&fitting);
+            self.forget(fitting);
+        }
         if let Some(grid) = self.grids.remove(&id) {
             for entry in grid.entries() {
                 self.locations.insert(entry.id, Location::Loose);
@@ -163,6 +207,14 @@ impl Inventory {
         }
         self.items.remove(&id);
         self.locations.remove(&id);
+    }
+
+    /// Uses up one of `id`: a stack gives a piece and stays where it is, under its id; the last
+    /// piece, or an item that is not a stack, is forgotten.
+    pub fn use_one(&mut self, id: ItemId) {
+        if let Some(one) = self.take_one(id) {
+            self.forget(one);
+        }
     }
 
     pub fn item(&self, id: ItemId) -> Option<&Item> {
@@ -270,6 +322,8 @@ impl Inventory {
             match self.location(at) {
                 Some(Location::Worn(_)) => return true,
                 Some(Location::In { container, .. }) => at = container,
+                // A fitting's grid is as carried as its pack or belt.
+                Some(Location::Loose) if self.fitted_on.contains_key(&at) => at = self.fitted_on[&at].0,
                 _ => return false,
             }
         }
@@ -278,7 +332,9 @@ impl Inventory {
 
     /// Whether `holder` is `id` or holds it, at any depth (the plate's `holdsId`).
     pub fn holds(&self, holder: ItemId, id: ItemId) -> bool {
-        holder == id || self.grids.get(&holder).is_some_and(|g| g.entries().iter().any(|e| self.holds(e.id, id)))
+        holder == id
+            || self.grids.get(&holder).is_some_and(|g| g.entries().iter().any(|e| self.holds(e.id, id)))
+            || self.fittings.get(&holder).is_some_and(|f| f.iter().any(|&(_, fitting)| self.holds(fitting, id)))
     }
 
     /// The footprint of `id`, upright.
@@ -293,16 +349,35 @@ impl Inventory {
         if self.holds(id, container) {
             return Err(Refusal::IntoItself);
         }
-        if !item.profile.packable {
+        // A body's grid takes whatever it wore or held, a long spear included, and so does a
+        // pack's strap its long weapon and its lashing a tent.
+        let fitting = self.fitted_on.get(&container).map(|&(_, accessory)| accessory);
+        if !item.profile.packable && !self.is_body(container) && fitting.is_none() {
             return Err(Refusal::Unpackable);
         }
         if !self.accepts(container, item) {
             return Err(Refusal::NotAccepted);
         }
+        // A fitting takes only what it holds, and only so many of them.
+        if let Some(accessory) = fitting {
+            if !item.fits_accessory(accessory) {
+                return Err(Refusal::NotAccepted);
+            }
+            let held = grid.entries().iter().filter(|e| e.id != id).count();
+            if fb_items::fitting_grid(accessory).is_some_and(|g| held >= g.holds as usize) {
+                return Err(Refusal::NoRoom);
+            }
+        }
         let size = super::grid::oriented(item.profile.footprint, at.turned);
         let ignoring = matches!(self.location(id), Some(Location::In { container: c, .. }) if c == container).then_some(id);
         grid.check(size, at.x as i32, at.y as i32, ignoring)?;
         Ok(())
+    }
+
+    /// Whether `container` is a fallen body's grid ([`BODY_BASE`]), which takes things too long to
+    /// pack.
+    pub fn is_body(&self, container: ItemId) -> bool {
+        self.item(container).is_some_and(|i| i.base == BODY_BASE)
     }
 
     /// Whether `container` takes `item` by its filter ([`fb_items::footprint::Grid::takes`]).
@@ -361,11 +436,30 @@ impl Inventory {
     /// stays where it was.
     pub fn put(&mut self, id: ItemId, container: ItemId, at: Placement) -> Result<(), Refusal> {
         self.check_put(id, container, at)?;
+        // A stack gives a fitting one piece (a place of the potion pouch holds one) and keeps the rest.
+        if self.fitted_on.contains_key(&container) && self.item(id).is_some_and(|i| i.quantity > 1) {
+            let one = self.take_one(id).ok_or(Refusal::Unknown)?;
+            if let Err(refusal) = self.put(one, container, at) {
+                self.merge_back(one, id);
+                return Err(refusal);
+            }
+            return Ok(());
+        }
         let footprint = self.item(id).ok_or(Refusal::Unknown)?.profile.footprint;
         self.take_out(id);
         self.grids.get_mut(&container).ok_or(Refusal::NotAContainer)?.place(id, footprint, at)?;
         self.locations.insert(id, Location::In { container, at });
         Ok(())
+    }
+
+    /// Puts the piece `one`, split off the stack `stack`, back on it.
+    fn merge_back(&mut self, one: ItemId, stack: ItemId) {
+        if let Some(piece) = self.items.get(&one).map(|i| i.quantity) {
+            if let Some(stack) = self.items.get_mut(&stack) {
+                stack.quantity += piece;
+            }
+            self.forget(one);
+        }
     }
 
     /// Whether `id` could go on the trader's `shelf` at `at`: any size of thing, long ones too,
@@ -401,17 +495,137 @@ impl Inventory {
     }
 
     /// Puts `id` into the first carried container with room for it, at its first free spot.
-    /// Returns the container.
+    /// Returns the container. A stack (arrows, bolts) first tops up the stacks of its own kind
+    /// already carried, then fills places of its own, ten to a place: 14 arrows make a stack of
+    /// 10 and one of 4.
+    ///
+    /// Contract for callers: on `Ok`, `id` may have been folded into other stacks and forgotten
+    /// (`item(id)` is `None`), and `id` may be in a different place than it was or even be
+    /// still loose: when some pieces were stowed and the rest found no room, the result is `Ok`
+    /// (a partial pickup) and `id` is still loose, holding what is left ([`Inventory::is_partial`]).
+    /// `Err` means nothing moved. Use [`Inventory::stow_apart`] to keep `id` itself.
     pub fn stow(&mut self, id: ItemId) -> Result<ItemId, Refusal> {
+        let (footprint, containers) = self.stowing(id)?;
+        self.stow_among(id, footprint, &containers)
+    }
+
+    /// Puts `id` in `container` alone, folding stacks as [`Inventory::stow`] does: for loose
+    /// ammunition an older save laid out cell by cell.
+    pub fn stow_in(&mut self, id: ItemId, container: ItemId) -> Result<ItemId, Refusal> {
+        let (footprint, _) = self.stowing(id)?;
+        self.stow_among(id, footprint, &[container])
+    }
+
+    fn stow_among(&mut self, id: ItemId, footprint: Footprint, containers: &[ItemId]) -> Result<ItemId, Refusal> {
+        let mut first = None;
+        if self.item(id).is_some_and(|i| i.stack_limit() > 1) {
+            for &container in containers {
+                if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
+                    continue;
+                }
+                match self.top_up(id, container) {
+                    TopUp::Done => return Ok(container),
+                    TopUp::Some => {
+                        first.get_or_insert(container);
+                    }
+                    TopUp::None => {}
+                }
+            }
+            // What is left goes in places of its own, a full stack at a time.
+            while self.item(id).is_some_and(|i| i.quantity > i.stack_limit()) {
+                let limit = self.item(id).map_or(1, |i| i.stack_limit());
+                let mut chunk = self.item(id).ok_or(Refusal::Unknown)?.clone();
+                chunk.quantity = limit;
+                let chunk_id = self.add(chunk);
+                match self.stow_whole(chunk_id, footprint, containers) {
+                    Ok(container) => {
+                        first.get_or_insert(container);
+                        if let Some(rest) = self.items.get_mut(&id) {
+                            rest.quantity -= limit;
+                        }
+                    }
+                    Err(refusal) => {
+                        self.forget(chunk_id);
+                        return first.ok_or(refusal);
+                    }
+                }
+            }
+        }
+        match self.stow_whole(id, footprint, containers) {
+            Ok(container) => Ok(first.unwrap_or(container)),
+            Err(refusal) => first.ok_or(refusal),
+        }
+    }
+
+    /// Puts `id` itself, whole, in the first carried container with room, never folding it into
+    /// another stack: a deal's moves must keep every id, so Cancel can find it
+    /// ([`crate::barter`] folds what it bought at settle, [`Inventory::fold_into_stacks`]).
+    pub fn stow_apart(&mut self, id: ItemId) -> Result<ItemId, Refusal> {
+        let (footprint, containers) = self.stowing(id)?;
+        self.stow_whole(id, footprint, &containers)
+    }
+
+    /// Whether `id` is still loose with pieces left after a [`Inventory::stow`] said `Ok`.
+    pub fn is_partial(&self, id: ItemId) -> bool {
+        self.item(id).is_some() && self.location(id) == Some(Location::Loose)
+    }
+
+    /// Folds `id`, a carried stack, into the other stacks of its kind in the same bag, as far as
+    /// they have room. True when none is left and `id` has been forgotten.
+    pub fn fold_into_stacks(&mut self, id: ItemId) -> bool {
+        let Some(Location::In { container, .. }) = self.location(id) else { return false };
+        // A place of a potion pouch holds one piece, so nothing folds into it.
+        if self.item(id).is_none_or(|i| i.stack_limit() <= 1) || self.fitting_host(container).is_some() {
+            return false;
+        }
+        self.top_up(id, container) == TopUp::Done
+    }
+
+    /// Moves what `id` has into `onto`, a stack of its kind with room (a drag let go on it).
+    /// True when `id` is emptied and forgotten; false when some is left in `id`, which stays
+    /// where it is. Refused when nothing could move.
+    pub fn merge_onto(&mut self, id: ItemId, onto: ItemId) -> Result<bool, Refusal> {
+        let (from, to) = (self.items.get(&id).ok_or(Refusal::Unknown)?, self.items.get(&onto).ok_or(Refusal::Unknown)?);
+        if id == onto || !to.can_stack_with(from) || to.stack_room() == 0 {
+            return Err(Refusal::NoRoom);
+        }
+        let moved = to.stack_room().min(from.quantity);
+        let left = from.quantity - moved;
+        self.items.get_mut(&onto).map(|t| t.quantity += moved);
+        if left == 0 {
+            self.forget(id);
+        } else {
+            self.items.get_mut(&id).map(|f| f.quantity = left);
+        }
+        Ok(left == 0)
+    }
+
+    /// A stack in `container` at cell `(x, y)` that `id` could be dropped on and top up.
+    pub fn stack_at(&self, id: ItemId, container: ItemId, x: i32, y: i32) -> Option<ItemId> {
+        // A fitting's places each hold one piece; stacks do not pile up in them.
+        if self.fitted_on.contains_key(&container) {
+            return None;
+        }
+        let onto = self.grids.get(&container)?.at_cell(x, y)?.id;
+        let (from, to) = (self.item(id)?, self.item(onto)?);
+        (onto != id && to.can_stack_with(from) && to.stack_room() > 0 && !self.holds(id, container)).then_some(onto)
+    }
+
+    /// The footprint and the carried containers to try for `id`, the ones that name what they
+    /// take (a quiver) first.
+    fn stowing(&self, id: ItemId) -> Result<(Footprint, Vec<ItemId>), Refusal> {
         let item = self.item(id).ok_or(Refusal::Unknown)?;
         if !item.profile.packable {
             return Err(Refusal::Unpackable);
         }
-        let footprint = item.profile.footprint;
-        // A container that names what it takes (a quiver) is tried before one that takes anything.
         let mut containers = self.carried_containers();
         containers.sort_by_key(|c| self.item(*c).and_then(|c| c.profile.holds.as_ref()).is_none_or(|g| g.accepts.is_empty()));
-        for container in containers {
+        Ok((item.profile.footprint, containers))
+    }
+
+    /// Puts `id` as it is in the first of `containers` with room, at its first free spot.
+    fn stow_whole(&mut self, id: ItemId, footprint: Footprint, containers: &[ItemId]) -> Result<ItemId, Refusal> {
+        for &container in containers {
             if self.holds(id, container) || !self.accepts(container, self.item(id).ok_or(Refusal::Unknown)?) {
                 continue;
             }
@@ -421,6 +635,58 @@ impl Inventory {
             }
         }
         Err(Refusal::NoRoom)
+    }
+
+    /// Moves what `id` has into the unfilled stacks of its kind lying directly in `container`.
+    fn top_up(&mut self, id: ItemId, container: ItemId) -> TopUp {
+        let Some(grid) = self.grids.get(&container) else { return TopUp::None };
+        let targets: Vec<ItemId> = grid.entries().iter().map(|e| e.id).filter(|&t| t != id).collect();
+        let mut result = TopUp::None;
+        for target in targets {
+            let (Some(from), Some(to)) = (self.items.get(&id), self.items.get(&target)) else { return result };
+            if !to.can_stack_with(from) {
+                continue;
+            }
+            let moved = to.stack_room().min(from.quantity);
+            if moved == 0 {
+                continue;
+            }
+            let left = from.quantity - moved;
+            if let Some(to) = self.items.get_mut(&target) {
+                to.quantity += moved;
+            }
+            result = TopUp::Some;
+            if left == 0 {
+                self.forget(id);
+                return TopUp::Done;
+            }
+            if let Some(from) = self.items.get_mut(&id) {
+                from.quantity = left;
+            }
+        }
+        result
+    }
+
+    /// Takes one piece out of the stack `id`: the stack itself if it is one, else a loose piece
+    /// of the same kind split from it, the stack left one fewer. `None` for something kept no
+    /// longer.
+    pub fn take_one(&mut self, id: ItemId) -> Option<ItemId> {
+        let item = self.items.get(&id)?;
+        if item.quantity <= 1 {
+            self.take_out(id);
+            return Some(id);
+        }
+        let mut one = item.clone();
+        one.quantity = 1;
+        if let Some(stack) = self.items.get_mut(&id) {
+            stack.quantity -= 1;
+        }
+        Some(self.add(one))
+    }
+
+    /// How many pieces lie in `container`'s grid, counting each stack's quantity.
+    pub fn pieces_in(&self, container: ItemId) -> usize {
+        self.grids.get(&container).map_or(0, |g| g.entries().iter().map(|e| self.item(e.id).map_or(0, |i| i.quantity as usize)).sum())
     }
 
     /// Picks `id` up: a bag goes on, in its slot, if that slot is free; anything else is
@@ -464,11 +730,154 @@ impl Inventory {
         let went = match self.stow(id) {
             Ok(container) => match self.location(id) {
                 Some(Location::In { at, .. }) => Displaced::In { container, at },
+                None => Displaced::Folded { container },
                 _ => Displaced::Underfoot,
             },
             Err(_) => Displaced::Underfoot,
         };
         Some((id, went))
+    }
+
+    /// The fitting grids of the pack or belt `host`, in the order it was rolled with them.
+    pub fn fittings_of(&self, host: ItemId) -> &[(Accessory, ItemId)] {
+        self.fittings.get(&host).map_or(&[], Vec::as_slice)
+    }
+
+    /// The grid of `host`'s `accessory`, if it was rolled with one.
+    pub fn fitting(&self, host: ItemId, accessory: Accessory) -> Option<ItemId> {
+        self.fittings_of(host).iter().find(|(a, _)| *a == accessory).map(|&(_, id)| id)
+    }
+
+    /// The pack or belt a fitting's grid belongs to, and which fitting it is; none for any other container.
+    pub fn fitting_host(&self, container: ItemId) -> Option<(ItemId, Accessory)> {
+        self.fitted_on.get(&container).copied()
+    }
+
+    /// What each slot of the fitting `fitting` holds, in order: one slot for a lashing, strap or frog,
+    /// three for the pouch, filled from the first. Empty for any other container.
+    pub fn fitting_slots(&self, fitting: ItemId) -> Vec<Option<ItemId>> {
+        let Some(&(_, accessory)) = self.fitted_on.get(&fitting) else { return vec![] };
+        let holds = fb_items::fitting_grid(accessory).map_or(0, |g| g.holds as usize);
+        let mut held: Vec<_> = self.grids.get(&fitting).map(|g| g.entries().iter().map(|e| (e.at.y, e.at.x, e.id)).collect()).unwrap_or_default();
+        held.sort();
+        let mut slots: Vec<Option<ItemId>> = held.into_iter().map(|(_, _, id)| Some(id)).collect();
+        slots.resize(holds.max(slots.len()), None);
+        slots
+    }
+
+    /// Whether `id` could go in a slot of `fitting`: it is the fitting's kind of thing
+    /// ([`Item::fits_accessory`]), of any size. A full slot is no bar: [`Inventory::fit`] swaps.
+    pub fn check_fit(&self, id: ItemId, fitting: ItemId) -> Result<(), Refusal> {
+        let &(_, accessory) = self.fitted_on.get(&fitting).ok_or(Refusal::NotAContainer)?;
+        let item = self.item(id).ok_or(Refusal::Unknown)?;
+        if self.holds(id, fitting) {
+            return Err(Refusal::IntoItself);
+        }
+        if !item.fits_accessory(accessory) {
+            return Err(Refusal::NotAccepted);
+        }
+        Ok(())
+    }
+
+    /// Puts `id` in the slot `index` of `fitting` ([`Inventory::fitting_slots`]), taking it from wherever it
+    /// was; a stack gives one piece and keeps the rest. Whatever the slot held goes back where `id` came from
+    /// if it fits there, else is stowed in a carried bag, else is left loose to be set down underfoot (as
+    /// [`Inventory::equip`] does for a doll slot). Returns what was displaced and where it went.
+    pub fn fit(&mut self, id: ItemId, fitting: ItemId, index: usize) -> Result<Option<(ItemId, Displaced)>, Refusal> {
+        self.check_fit(id, fitting)?;
+        let slots = self.fitting_slots(fitting);
+        if index >= slots.len() {
+            return Err(Refusal::NotAContainer);
+        }
+        if slots.contains(&Some(id)) {
+            return Ok(None);
+        }
+        let old = slots[index];
+        let from = self.location(id);
+        let footprint = self.item(id).ok_or(Refusal::Unknown)?.profile.footprint;
+        if let Some(old) = old {
+            self.take_out(old);
+        }
+        let piece = if self.item(id).is_some_and(|i| i.quantity > 1) {
+            self.take_one(id).ok_or(Refusal::Unknown)?
+        } else {
+            self.take_out(id);
+            id
+        };
+        let at = self.grids.get(&fitting).and_then(|g| g.first_free(footprint));
+        let placed = at.and_then(|at| self.grids.get_mut(&fitting)?.place(piece, footprint, at).ok().map(|_| at));
+        let Some(at) = placed else {
+            // Cannot happen with room behind a slot for anything it accepts; put things back as they were.
+            if piece != id {
+                self.merge_back(piece, id);
+            } else if let Some(Location::In { container, at }) = from {
+                let _ = self.put(id, container, at);
+            }
+            if let Some(old) = old {
+                let spot = self.grids.get(&fitting).and_then(|g| g.first_free(self.item(old)?.profile.footprint));
+                if let Some(spot) = spot {
+                    let _ = self.put(old, fitting, spot);
+                }
+            }
+            return Err(Refusal::NoRoom);
+        };
+        self.locations.insert(piece, Location::In { container: fitting, at });
+        let Some(old) = old else { return Ok(None) };
+        let back = match from {
+            Some(Location::Worn(was)) if piece == id && self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
+            Some(Location::In { container, at }) if piece == id || container != fitting => {
+                match [false, true].into_iter().map(|turned| Placement { turned, ..at }).find(|&placed| self.put(old, container, placed).is_ok()) {
+                    Some(at) => Displaced::In { container, at },
+                    None => self.stow_displaced(old),
+                }
+            }
+            _ => self.stow_displaced(old),
+        };
+        Ok(Some((old, back)))
+    }
+
+    /// Stows `id`, loose, in a carried bag with room: where it went, else [`Displaced::Underfoot`].
+    fn stow_displaced(&mut self, id: ItemId) -> Displaced {
+        match self.stow(id) {
+            Ok(container) => match self.location(id) {
+                Some(Location::In { at, .. }) => Displaced::In { container, at },
+                None => Displaced::Folded { container },
+                _ => Displaced::Underfoot,
+            },
+            Err(_) => Displaced::Underfoot,
+        }
+    }
+
+    /// Everything sitting in a fitting of `host`, with the fitting that holds it, in the order of its
+    /// fittings: the bedroll in the lashing, the spear on the strap, the weapons in the frogs, the potions.
+    pub fn hung_on(&self, host: ItemId) -> Vec<(Accessory, ItemId)> {
+        self.fittings_of(host).iter().flat_map(|&(accessory, fitting)| self.grids.get(&fitting).into_iter().flat_map(move |g| g.entries().iter().map(move |e| (accessory, e.id)))).collect()
+    }
+
+    /// Everything hung on the pack worn on the back and the belt worn at the waist.
+    pub fn worn_hung(&self) -> Vec<(Accessory, ItemId)> {
+        [Slot::Back, Slot::Belt].into_iter().filter_map(|slot| self.worn(slot)).flat_map(|host| self.hung_on(host)).collect()
+    }
+
+    /// The bedroll or tent tied to the worn pack's lashing.
+    pub fn lashed(&self) -> Option<ItemId> {
+        let lashing = self.fitting(self.worn(Slot::Back)?, Accessory::Lashing)?;
+        self.grids.get(&lashing)?.entries().first().map(|e| e.id)
+    }
+
+    /// Whether `id` is tied to a lashing, of any pack.
+    pub fn is_lashed(&self, id: ItemId) -> bool {
+        matches!(self.location(id), Some(Location::In { container, .. }) if self.fitting_host(container).is_some_and(|(_, a)| a == Accessory::Lashing))
+    }
+
+    /// Ties `id` to the lashing of the pack worn on the back, if it has one that is free and `id`
+    /// is a bedroll or tent.
+    pub fn lash(&mut self, id: ItemId) -> Result<(), Refusal> {
+        let lashing = self.worn(Slot::Back).and_then(|pack| self.fitting(pack, Accessory::Lashing)).ok_or(Refusal::NotAccepted)?;
+        let footprint = self.footprint(id).ok_or(Refusal::Unknown)?;
+        let grid = self.grids.get(&lashing).ok_or(Refusal::NotAContainer)?;
+        let at = grid.first_free(footprint).ok_or(Refusal::NoRoom)?;
+        self.put(id, lashing, at)
     }
 
     /// The slot `id` goes in when worn without saying where: the first of its slots
@@ -526,12 +935,20 @@ impl Inventory {
         self.wear(id, slot)?;
         let back = match from {
             Some(Location::Worn(was)) if self.check_wear(old, was).is_ok() && self.wear(old, was).is_ok() => Displaced::Worn(was),
-            // Upright where it fits, else turned, else set down.
-            Some(Location::In { container, at }) => [false, true]
-                .into_iter()
-                .map(|turned| Placement { turned, ..at })
-                .find(|&placed| self.put(old, container, placed).is_ok())
-                .map_or(Displaced::Underfoot, |at| Displaced::In { container, at }),
+            // Upright where it fits, else turned, else set down. Drawn from a fitting, the weapon it
+            // was swapped for (a mace on the strap, a torch in a frog) cannot go back there: it is
+            // stowed if a bag has room.
+            Some(Location::In { container, at }) => match [false, true].into_iter().map(|turned| Placement { turned, ..at }).find(|&placed| self.put(old, container, placed).is_ok()) {
+                Some(at) => Displaced::In { container, at },
+                None if self.fitted_on.contains_key(&container) => match self.stow(old) {
+                    Ok(container) => match self.location(old) {
+                        Some(Location::In { at, .. }) => Displaced::In { container, at },
+                        _ => Displaced::Underfoot,
+                    },
+                    Err(_) => Displaced::Underfoot,
+                },
+                None => Displaced::Underfoot,
+            },
             _ => Displaced::Underfoot,
         };
         Ok(Some((old, back)))
@@ -563,14 +980,21 @@ impl Inventory {
     /// Pounds inside `container`, counted through every bag in it (the plate's
     /// `contentsWeight`).
     pub fn contents_weight(&self, container: ItemId) -> f32 {
-        self.grids.get(&container).map_or(0.0, |g| {
-            g.entries().iter().map(|e| self.item(e.id).map_or(0.0, |i| i.profile.stats.weight) + self.contents_weight(e.id)).sum()
-        })
+        let inside: f32 = self.grids.get(&container).map_or(0.0, |g| {
+            g.entries().iter().map(|e| self.item(e.id).map_or(0.0, |i| i.profile.stats.weight * i.quantity as f32) + self.contents_weight(e.id)).sum()
+        });
+        // What hangs on a pack or belt weighs with it.
+        inside + self.fittings_of(container).iter().map(|&(_, fitting)| self.contents_weight(fitting)).sum::<f32>()
     }
 
-    /// Every item kept track of, in the order added.
+    /// How many things lie in `container` and in the fitting grids of a pack or belt.
+    pub fn holding(&self, container: ItemId) -> usize {
+        self.contents_count(container) + self.fittings_of(container).iter().map(|&(_, fitting)| self.contents_count(fitting)).sum::<usize>()
+    }
+
+    /// Every item kept track of, in the order added. The fitting grids of packs and belts are not items.
     pub fn ids(&self) -> impl Iterator<Item = ItemId> + '_ {
-        self.items.keys().copied()
+        self.items.keys().copied().filter(|id| !self.fitted_on.contains_key(id))
     }
 }
 
@@ -588,7 +1012,7 @@ mod tests {
     }
 
     fn worn_pack(inventory: &mut Inventory) -> ItemId {
-        let pack = inventory.add(rolled("Pack", 7));
+        let pack = inventory.add(rolled("Pack", 1));
         inventory.wear(pack, Slot::Back).unwrap();
         pack
     }
@@ -781,6 +1205,205 @@ mod tests {
         assert_eq!(inventory.check_wear(helm, Slot::Offhand), Err(Refusal::WrongSlot));
     }
 
+    /// A pack rolled with (or without) a weapon strap.
+    fn pack_strapped(strap: bool) -> Item {
+        (1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap) == strap).expect("a pack of that kind")
+    }
+
+    /// A pack rolled with (or without) a lashing.
+    pub(crate) fn pack_lashed(lashing: bool) -> Item {
+        (1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing) == lashing).expect("a pack of that kind")
+    }
+
+    /// The grid of the worn pack's `accessory`.
+    fn grid_of(inventory: &Inventory, host: ItemId, accessory: fb_items::Accessory) -> ItemId {
+        inventory.fitting(host, accessory).expect("the pack or belt has that grid")
+    }
+
+    fn at(x: u8, y: u8) -> Placement {
+        Placement::new(x, y, false)
+    }
+
+    #[test]
+    fn a_lashing_holds_one_bedroll_or_tent_and_nothing_else() {
+        use fb_items::Accessory::Lashing;
+        let mut inventory = Inventory::default();
+        let bedroll = inventory.add(rolled("Bedroll", 3));
+        let tent = inventory.add(rolled("Tent", 3));
+        let sword = inventory.add(rolled("Sword", 3));
+        let bare = inventory.add(pack_lashed(false));
+        assert_eq!(inventory.fittings_of(bare), &[], "a pack with no lashing has no lashing grid");
+        let pack = inventory.add(pack_lashed(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let lashing = grid_of(&inventory, pack, Lashing);
+        assert_eq!(inventory.fitting_slots(lashing), vec![None], "one slot");
+        assert_eq!(inventory.put(sword, lashing, at(0, 0)), Err(Refusal::NotAccepted), "not a bundle");
+        assert_eq!(inventory.put(bedroll, lashing, at(0, 0)), Ok(()));
+        assert_eq!(inventory.lashed(), Some(bedroll));
+        assert!(inventory.is_lashed(bedroll));
+        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's main grid");
+        assert!(inventory.is_carried(bedroll));
+        assert!(inventory.holds(pack, bedroll));
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot == Slot::Back), "it gives nothing, only weight");
+        // One only: a second bundle finds no room.
+        assert_eq!(inventory.put(tent, lashing, at(0, 3)), Err(Refusal::NoRoom));
+        assert_eq!(inventory.location(tent), Some(Location::Loose));
+        // A bundle laid out is no bundle.
+        let laid = fb_items::camp::set_up(&rolled("Bedroll", 4)).unwrap();
+        assert!(!laid.lashable());
+        // Tied by the camp code's call.
+        let tent2 = inventory.add(rolled("Tent", 5));
+        inventory.take_out(bedroll);
+        assert_eq!(inventory.lash(tent2), Ok(()));
+        assert_eq!(inventory.lashed(), Some(tent2));
+    }
+
+    #[test]
+    fn what_hangs_on_a_pack_goes_where_it_goes() {
+        use fb_items::Accessory::{Lashing, WeaponStrap};
+        let mut inventory = Inventory::default();
+        let pack = inventory.add((1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap)).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let (tent, spear) = (inventory.add(rolled("Tent", 3)), inventory.add((1..99).map(|s| rolled("Spear", s)).find(|s| s.strappable() && s.profile.footprint.cols <= 2).unwrap()));
+        let (lashing, strap) = (grid_of(&inventory, pack, Lashing), grid_of(&inventory, pack, WeaponStrap));
+        inventory.put(tent, lashing, at(0, 0)).unwrap();
+        inventory.put(spear, strap, at(0, 0)).unwrap();
+        let load = inventory.contents_weight(pack);
+        assert!(load >= inventory.item(tent).unwrap().profile.stats.weight + inventory.item(spear).unwrap().profile.stats.weight);
+        assert_eq!(inventory.worn_hung(), vec![(Lashing, tent), (WeaponStrap, spear)]);
+        // Taken off and set down, the pack keeps its tent tied and its spear strapped; nothing is carried.
+        inventory.take_out(pack);
+        assert!(!inventory.is_carried(tent) && !inventory.is_carried(spear));
+        assert_eq!(inventory.hung_on(pack), vec![(Lashing, tent), (WeaponStrap, spear)]);
+        assert_eq!(inventory.contents_weight(pack), load);
+        assert!(inventory.worn_hung().is_empty());
+        // Packed in a sack's grid, it is still a pack with things on it.
+        let sack = inventory.add(rolled("Sack", 3));
+        inventory.wear(sack, Slot::Back).unwrap();
+        let small = inventory.add((1..2000).map(|s| rolled("Pack", s)).find(|p| p.has_accessory(Lashing) && p.profile.packable).unwrap_or_else(|| rolled("Pack", 1)));
+        let bedroll = inventory.add(rolled("Bedroll", 3));
+        let small_lashing = inventory.fitting(small, Lashing);
+        if let Some(lashing) = small_lashing {
+            inventory.put(bedroll, lashing, at(0, 0)).unwrap();
+            if inventory.put(small, sack, at(0, 0)).is_ok() {
+                assert!(inventory.is_carried(bedroll) && inventory.holds(sack, bedroll));
+            }
+        }
+        // Forgetting the pack forgets all of it.
+        inventory.forget(pack);
+        assert_eq!((inventory.item(tent), inventory.item(spear), inventory.item(lashing), inventory.item(strap)), (None, None, None, None));
+        assert!(inventory.ids().all(|id| inventory.fitting_host(id).is_none()), "grids are not items");
+    }
+
+    #[test]
+    fn a_weapon_strap_holds_one_long_weapon_and_it_can_be_drawn() {
+        use fb_items::Accessory::WeaponStrap;
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(pack_strapped(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let strap = grid_of(&inventory, pack, WeaponStrap);
+        let dagger = inventory.add(rolled("Dagger", 3));
+        let spear = inventory.add(rolled("Spear", 3));
+        let staff = inventory.add(rolled("Staff", 3));
+        assert_eq!(inventory.put(dagger, strap, at(0, 0)), Err(Refusal::NotAccepted), "not a long weapon");
+        inventory.put(spear, strap, at(0, 0)).unwrap();
+        assert_eq!(inventory.put(staff, strap, at(1, 0)), Err(Refusal::NoRoom), "one only");
+        assert_eq!(inventory.contents_count(pack), 0, "not in the pack's main grid");
+        assert!(inventory.is_carried(spear));
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot == Slot::Back), "it gives no stats, only weight");
+        // Drawn into the main hand, where the dagger was: the dagger cannot go on the strap, so it is packed.
+        inventory.wear(dagger, Slot::Mainhand).unwrap();
+        let swapped = inventory.equip(spear, Slot::Mainhand).unwrap();
+        assert!(matches!(swapped, Some((old, Displaced::In { container, .. })) if old == dagger && container == pack), "{swapped:?}");
+        assert_eq!((inventory.hung_on(pack), inventory.worn(Slot::Mainhand)), (vec![], Some(spear)));
+    }
+
+    /// A belt rolled with the given fittings.
+    fn belt_with(want: impl Fn(&Item) -> bool) -> Item {
+        (1..3000).map(|s| rolled("Belt", s)).find(|b| want(b)).expect("a belt of that kind")
+    }
+
+    #[test]
+    fn a_frog_holds_one_short_weapon_at_its_hip() {
+        use fb_items::Accessory::{LeftFrog, RightFrog};
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(rolled("Sword", 3));
+        let mace = inventory.add(rolled("Mace", 3));
+        let spear = inventory.add(rolled("Spear", 3));
+        let one = inventory.add(belt_with(|b| b.has_accessory(LeftFrog) && !b.has_accessory(RightFrog)));
+        assert_eq!(inventory.fitting(one, RightFrog), None, "one frog");
+        let two = inventory.add(belt_with(|b| b.has_accessory(LeftFrog) && b.has_accessory(RightFrog)));
+        inventory.wear(two, Slot::Belt).unwrap();
+        let (left, right) = (grid_of(&inventory, two, LeftFrog), grid_of(&inventory, two, RightFrog));
+        assert_eq!(inventory.put(spear, left, at(0, 0)), Err(Refusal::NotAccepted), "not a short weapon");
+        inventory.put(sword, left, at(0, 0)).unwrap();
+        inventory.put(mace, right, at(0, 0)).unwrap();
+        assert_eq!(inventory.worn_hung(), vec![(LeftFrog, sword), (RightFrog, mace)]);
+        let another = inventory.add(rolled("Mace", 4));
+        assert_eq!(inventory.put(another, left, at(0, 2)), Err(Refusal::NoRoom), "a frog holds one");
+        assert!(inventory.equipped().iter().all(|(slot, _)| *slot == Slot::Belt), "a framed weapon gives no stats");
+        // Drawn into the hand; the hand's old weapon is stowed or set down.
+        inventory.equip(sword, Slot::Mainhand).unwrap();
+        assert_eq!((inventory.hung_on(two), inventory.worn(Slot::Mainhand)), (vec![(RightFrog, mace)], Some(sword)));
+        // The belt off and set down: the weapon stays in its frog.
+        inventory.take_out(two);
+        assert_eq!(inventory.hung_on(two), vec![(RightFrog, mace)]);
+        assert!(!inventory.is_carried(mace));
+    }
+
+    #[test]
+    fn the_potion_pouch_holds_three_small_potions() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let potions: Vec<ItemId> = ["Vial", "Small potion", "Healing vial", "Small healing draught"].iter().map(|b| inventory.add(rolled(b, 2))).collect();
+        let large = inventory.add(rolled("Large potion", 2));
+        let medium = inventory.add(rolled("Potion", 2));
+        let belt = inventory.add(belt_with(|b| b.has_accessory(PotionPouch)));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let pouch = grid_of(&inventory, belt, PotionPouch);
+        assert_eq!(inventory.put(large, pouch, at(0, 0)), Err(Refusal::NotAccepted));
+        assert_eq!(inventory.put(medium, pouch, at(0, 0)), Err(Refusal::NotAccepted));
+        for (n, &potion) in potions[..3].iter().enumerate() {
+            inventory.put(potion, pouch, inventory.grid(pouch).unwrap().first_free(inventory.footprint(potion).unwrap()).unwrap_or(at(n as u8, 0))).unwrap();
+        }
+        assert_eq!(inventory.hung_on(belt).iter().map(|(_, id)| *id).collect::<Vec<_>>().len(), 3);
+        let free = inventory.grid(pouch).unwrap().first_free(inventory.footprint(potions[3]).unwrap());
+        assert_eq!(inventory.put(potions[3], pouch, free.unwrap_or(at(0, 1))), Err(Refusal::NoRoom), "the fourth has no place");
+        // A potion in the pouch is carried, and drunk from it frees its place.
+        assert!(inventory.is_carried(potions[0]));
+        inventory.use_one(potions[0]);
+        assert_eq!(inventory.hung_on(belt).len(), 2);
+    }
+
+    #[test]
+    fn a_slot_takes_one_whole_item_of_any_size_and_swaps_a_full_one() {
+        use fb_items::Accessory::LeftFrog;
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(pack_lashed(true));
+        inventory.wear(pack, Slot::Back).unwrap();
+        let strap_pack = inventory.add(belt_with(|b| b.has_accessory(LeftFrog)));
+        inventory.wear(strap_pack, Slot::Belt).unwrap();
+        let frog = grid_of(&inventory, strap_pack, LeftFrog);
+        let tent = inventory.add(rolled("Tent", 3));
+        let lashing = grid_of(&inventory, pack, fb_items::Accessory::Lashing);
+        // A tent fits whatever its footprint.
+        assert_eq!(inventory.fit(tent, lashing, 0), Ok(None));
+        assert_eq!(inventory.fitting_slots(lashing), vec![Some(tent)]);
+        // A mace taken into the frog, then the dagger swapped for it: the mace goes back to the pack's cell it came from.
+        let mace = inventory.add((1..99).filter_map(|s| fb_items::roll_item("Mace", s)).find(|m| m.frogable()).unwrap());
+        let dagger = inventory.add(rolled("Dagger", 3));
+        inventory.put(dagger, pack, at(0, 0)).unwrap();
+        assert_eq!(inventory.fit(mace, frog, 0), Ok(None));
+        let swapped = inventory.fit(dagger, frog, 0).unwrap().unwrap();
+        assert_eq!(swapped.0, mace);
+        assert!(matches!(swapped.1, Displaced::In { container, .. } | Displaced::Folded { container } if container == pack), "{swapped:?}");
+        assert_eq!(inventory.fitting_slots(frog), vec![Some(dagger)]);
+        // What does not go is refused and nothing moves.
+        let sword = inventory.add(rolled("Staff", 3));
+        assert_eq!(inventory.fit(sword, frog, 0), Err(Refusal::NotAccepted));
+        assert_eq!(inventory.location(sword), Some(Location::Loose));
+    }
+
     #[test]
     fn weapons_trade_hands() {
         let mut inventory = Inventory::default();
@@ -860,13 +1483,158 @@ mod tests {
         assert_eq!(inventory.check_put(bread, quiver, at), Err(Refusal::NotAccepted));
         assert_eq!(inventory.check_put(bolt, case, at), Ok(()));
         assert_eq!(inventory.check_put(arrow, case, Placement::new(1, 0, false)), Err(Refusal::NotAccepted));
-        // Twenty arrows fit, found by the quiver before a pack.
+        // Arrows fit, found by the quiver before a pack, a kind to each place.
         inventory.wear(quiver, Slot::Quiver).unwrap();
-        for seed in 2..21 {
+        let places = u32::from(inventory.item(quiver).unwrap().profile.holds.as_ref().unwrap().cols);
+        for seed in 2..=places {
             let more = inventory.add(rolled("Arrow", seed));
             assert_eq!(inventory.stow(more), Ok(quiver));
         }
-        assert_eq!(inventory.contents_count(quiver), 20);
+        assert_eq!(inventory.contents_count(quiver) as u32, places);
+    }
+
+    #[test]
+    fn fourteen_arrows_make_a_stack_of_ten_and_one_of_four() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        for _ in 0..14 {
+            let arrow = inventory.add(rolled("Arrow", 5));
+            assert_eq!(inventory.stow(arrow), Ok(quiver));
+        }
+        let mut counts: Vec<u32> = inventory.grid(quiver).unwrap().entries().iter().map(|e| inventory.item(e.id).unwrap().quantity).collect();
+        counts.sort();
+        assert_eq!(counts, vec![4, 10]);
+        assert_eq!(inventory.pieces_in(quiver), 14);
+        // A bundle of fourteen lying together splits the same way.
+        let mut other = Inventory::default();
+        let quiver = other.add(rolled("Quiver", 1));
+        other.wear(quiver, Slot::Quiver).unwrap();
+        let bundle = other.add(rolled("Arrow", 5).with_quantity(14));
+        assert_eq!(other.stow(bundle), Ok(quiver));
+        assert_eq!((other.contents_count(quiver), other.pieces_in(quiver)), (2, 14));
+    }
+
+    #[test]
+    fn a_quiver_of_four_stacks_takes_forty_arrows_and_the_forty_first_goes_to_the_pack() {
+        let seed = (1..400).find(|&s| rolled("Quiver", s).profile.holds.as_ref().unwrap().cols == 4).expect("a quiver of four stacks");
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", seed));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        let pack = inventory.add(rolled("Pack", 1));
+        inventory.wear(pack, Slot::Back).unwrap();
+        for _ in 0..40 {
+            let arrow = inventory.add(rolled("Arrow", 5));
+            assert_eq!(inventory.stow(arrow), Ok(quiver));
+        }
+        assert_eq!((inventory.contents_count(quiver), inventory.pieces_in(quiver)), (4, 40));
+        let arrow = inventory.add(rolled("Arrow", 5));
+        assert_eq!(inventory.stow(arrow), Ok(pack), "the quiver is full");
+        assert_eq!(inventory.pieces_in(quiver), 40);
+        // Only arrows go in a quiver, and bolts only in a case.
+        let bolt = inventory.add(rolled("Bolt", 5));
+        assert!(inventory.check_put(bolt, quiver, Placement::new(0, 0, false)).is_err());
+        let sword = inventory.add(rolled("Sword", 5));
+        assert!(inventory.check_put(sword, quiver, Placement::new(0, 0, false)).is_err());
+        let case = inventory.add(rolled("Bolt case", 5));
+        assert!(inventory.check_put(arrow, case, Placement::new(0, 0, false)).is_err());
+    }
+
+    #[test]
+    fn two_kinds_of_arrow_never_share_a_stack_and_one_comes_off_a_stack_at_a_time() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        for seed in [5, 6, 5, 6] {
+            let arrow = inventory.add(rolled("Arrow", seed));
+            inventory.stow(arrow).unwrap();
+        }
+        assert_eq!((inventory.contents_count(quiver), inventory.pieces_in(quiver)), (2, 4));
+        let stack = inventory.grid(quiver).unwrap().entries()[0].id;
+        let one = inventory.take_one(stack).unwrap();
+        assert_ne!(one, stack);
+        assert_eq!((inventory.item(one).unwrap().quantity, inventory.item(stack).unwrap().quantity), (1, 1));
+        // Put back, it folds into its stack.
+        inventory.stow(one).unwrap();
+        assert_eq!(inventory.item(stack).unwrap().quantity, 2);
+        assert!(inventory.item(one).is_none());
+        // The last of a stack comes off whole.
+        let last = inventory.take_one(inventory.grid(quiver).unwrap().entries()[1].id).unwrap();
+        assert_eq!(inventory.take_one(last), Some(last));
+    }
+
+    /// A quiver worn with stacks of `counts` arrows of one kind in it.
+    fn quiver_with(counts: &[u32]) -> (Inventory, ItemId, Vec<ItemId>) {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        let ids = counts
+            .iter()
+            .map(|&n| {
+                let id = inventory.add(rolled("Arrow", 5).with_quantity(n));
+                let at = inventory.grid(quiver).unwrap().first_free(Footprint { cols: 1, rows: 1 }).unwrap();
+                inventory.put(id, quiver, at).unwrap();
+                id
+            })
+            .collect();
+        (inventory, quiver, ids)
+    }
+
+    fn quantity(inventory: &Inventory, id: ItemId) -> Option<u32> {
+        inventory.item(id).map(|i| i.quantity)
+    }
+
+    #[test]
+    fn dropping_a_stack_on_another_tops_it_up_and_keeps_the_rest_in_hand() {
+        // 10 onto 4: six move, four stay where they were.
+        let (mut inventory, _, ids) = quiver_with(&[4, 10]);
+        assert_eq!(inventory.merge_onto(ids[1], ids[0]), Ok(false));
+        assert_eq!((quantity(&inventory, ids[0]), quantity(&inventory, ids[1])), (Some(10), Some(4)));
+        // 4 onto a full 10: nothing moves.
+        assert_eq!(inventory.merge_onto(ids[1], ids[0]), Err(Refusal::NoRoom));
+        assert_eq!((quantity(&inventory, ids[0]), quantity(&inventory, ids[1])), (Some(10), Some(4)));
+        // 6 onto 3 is 9, the dropped one gone.
+        let (mut inventory, quiver, ids) = quiver_with(&[3, 6]);
+        assert_eq!(inventory.merge_onto(ids[1], ids[0]), Ok(true));
+        assert_eq!((quantity(&inventory, ids[0]), quantity(&inventory, ids[1])), (Some(9), None));
+        assert_eq!(inventory.contents_count(quiver), 1);
+        // Another kind of arrow never merges.
+        let other = inventory.add(rolled("Arrow", 6));
+        assert_eq!(inventory.merge_onto(other, ids[0]), Err(Refusal::NoRoom));
+        assert!(inventory.stack_at(other, quiver, 0, 0).is_none());
+    }
+
+    #[test]
+    fn a_stack_is_found_under_the_cell_it_is_dropped_on() {
+        let (mut inventory, quiver, ids) = quiver_with(&[4]);
+        let hand = inventory.add(rolled("Arrow", 5).with_quantity(3));
+        assert_eq!(inventory.stack_at(hand, quiver, 0, 0), Some(ids[0]));
+        assert_eq!(inventory.stack_at(hand, quiver, 1, 0), None);
+    }
+
+    #[test]
+    fn a_pickup_with_no_room_for_the_rest_is_partial_and_the_rest_stays_loose() {
+        let mut inventory = Inventory::default();
+        let quiver = inventory.add(rolled("Quiver", 1));
+        inventory.wear(quiver, Slot::Quiver).unwrap();
+        let (cols, rows) = {
+            let g = inventory.grid(quiver).unwrap();
+            (g.cols, g.rows)
+        };
+        for k in 0..cols as u32 * rows as u32 - 1 {
+            let other = inventory.add(rolled("Arrow", 100 + k));
+            inventory.stow(other).unwrap();
+        }
+        let ours = inventory.add(rolled("Arrow", 5).with_quantity(7));
+        inventory.stow(ours).unwrap();
+        let more = inventory.add(rolled("Arrow", 5).with_quantity(6));
+        assert_eq!(inventory.stow(more), Ok(quiver), "three fit the stack of seven");
+        assert_eq!(quantity(&inventory, ours), Some(10));
+        assert!(inventory.is_partial(more));
+        assert_eq!(quantity(&inventory, more), Some(3));
+        let none = inventory.add(rolled("Arrow", 5).with_quantity(2));
+        assert_eq!(inventory.stow(none), Err(Refusal::NoRoom));
+        assert_eq!(quantity(&inventory, none), Some(2));
     }
 
     #[test]
@@ -889,5 +1657,51 @@ mod tests {
         inventory.take_out(belt);
         inventory.unhang();
         assert_eq!(inventory.worn(Slot::Quiver), Some(quiver));
+    }
+
+    #[test]
+    fn a_satchel_is_worn_beside_a_pack_but_a_second_pack_has_no_room() {
+        let mut inventory = Inventory::default();
+        let (pack, satchel, sack) = (inventory.add(rolled("Pack", 1)), inventory.add(rolled("Satchel", 1)), inventory.add(rolled("Sack", 1)));
+        assert_eq!((inventory.target_slot(pack), inventory.target_slot(satchel), inventory.target_slot(sack)), (Some(Slot::Back), Some(Slot::Satchel), Some(Slot::Back)));
+        assert_eq!(inventory.check_wear(satchel, Slot::Back), Err(Refusal::WrongSlot));
+        assert_eq!(inventory.check_wear(pack, Slot::Satchel), Err(Refusal::WrongSlot));
+        inventory.pick_up(pack).unwrap();
+        inventory.pick_up(satchel).unwrap();
+        assert_eq!((inventory.worn(Slot::Back), inventory.worn(Slot::Satchel)), (Some(pack), Some(satchel)));
+        assert_eq!(inventory.carried_containers(), vec![pack, satchel]);
+        // The back is taken: a sack is stowed, not worn, and wearing it would take the pack's place.
+        inventory.pick_up(sack).unwrap();
+        assert_eq!((inventory.worn(Slot::Back), inventory.worn(Slot::Satchel)), (Some(pack), Some(satchel)));
+        assert!(!matches!(inventory.location(sack), Some(Location::Worn(_))));
+    }
+
+    #[test]
+    fn a_stack_of_potions_gives_the_pouch_one_piece_at_a_time() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let belt = inventory.add(belt_with(|b| b.has_accessory(PotionPouch)));
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let pouch = grid_of(&inventory, belt, PotionPouch);
+        let mut vials = rolled("Vial", 3);
+        vials.quantity = 3;
+        let stack = inventory.add(vials);
+        let count = |inventory: &Inventory| inventory.ids().filter_map(|id| inventory.item(id)).filter(|i| i.base == "Vial").map(|i| i.quantity).sum::<u32>();
+        let spot = |inventory: &Inventory, id| inventory.grid(pouch).unwrap().first_free(inventory.footprint(id).unwrap()).unwrap();
+        let first = spot(&inventory, stack);
+        assert_eq!(inventory.put(stack, pouch, first), Ok(()));
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.hung_on(belt).len(), count(&inventory)), (2, 1, 3), "one piece went in, none lost");
+        let second = spot(&inventory, stack);
+        inventory.put(stack, pouch, second).unwrap();
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.hung_on(belt).len()), (1, 2));
+        // The last piece goes in whole.
+        let third = spot(&inventory, stack);
+        inventory.put(stack, pouch, third).unwrap();
+        assert_eq!((inventory.location(stack), inventory.hung_on(belt).len(), count(&inventory)), (Some(Location::In { container: pouch, at: third }), 3, 3));
+        let mut more = rolled("Vial", 4);
+        more.quantity = 2;
+        let more = inventory.add(more);
+        assert_eq!(inventory.put(more, pouch, at(0, 1)), Err(Refusal::NoRoom));
+        assert_eq!((inventory.item(more).unwrap().quantity, count(&inventory)), (2, 5), "a full pouch refuses and loses nothing");
     }
 }

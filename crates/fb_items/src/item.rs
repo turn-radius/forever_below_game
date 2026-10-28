@@ -1,6 +1,7 @@
 //! A whole Forever Below item from a base name and a seed: the plate's `rollSA` and
 //! `makeGood`, tying together the shape, profile, rarity, affixes, name, legend and dress.
 
+use armory::families::bags::Accessory;
 use crate::identify::Known;
 use crate::armory_base::{base_for, roll_shape};
 use crate::dress::dress;
@@ -12,6 +13,18 @@ use crate::tables::Affix;
 use crate::{Kind, Rarity, Slot, Tag, game_rng};
 use fb_denizens::tongue::Teaching;
 use std::fmt;
+
+/// The fewest cells long (about 24 cm each) a weapon is to ride a pack's weapon strap.
+pub const STRAP_CELLS: u8 = 4;
+
+/// The most cells long (about 24 cm each) a weapon is to hang in a belt's frog: the one-handers.
+pub const FROG_CELLS: u8 = 5;
+
+/// Whether `item` goes in a belt's potion pouch: a vial or a small potion. Each place holds one
+/// piece, so three small potions are the most it holds.
+pub fn fits_potion_pouch(item: &Item) -> bool {
+    matches!(item.potion_size(), Some(armory::families::food::PotionSize::Vial | armory::families::food::PotionSize::Small))
+}
 
 /// D&D coinage in a purse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -120,6 +133,9 @@ pub struct Item {
     /// The count of rests when an attempt to identify it last fell short: it cannot be tried
     /// again until the delver has rested since ([`Item::can_identify`]).
     pub rest_tried: Option<u32>,
+    /// How many of it this one item stands for: a stack of arrows is one item of ten, sharing one
+    /// seed and so one model ([`Item::stack_limit`], [`Item::can_stack_with`]). Always at least 1.
+    pub quantity: u32,
 }
 
 /// The parts an [`Item`] is built from by [`Item::from_parts`], rather than rolled: what an item
@@ -140,11 +156,12 @@ pub struct ItemParts {
     pub teaching: Option<Teaching>,
     pub known: Known,
     pub rest_tried: Option<u32>,
+    pub quantity: u32,
 }
 
 impl From<Item> for ItemParts {
     fn from(i: Item) -> Self {
-        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known, rest_tried: i.rest_tried }
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known, rest_tried: i.rest_tried, quantity: i.quantity }
     }
 }
 
@@ -155,7 +172,13 @@ impl Item {
     /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
-        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried } = parts;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried, quantity } = parts;
+        // A potion's base is its size: a record from before sizes (any scale) is made the size
+        // its base names, so its bottle, its name's size word and its stack agree.
+        let mut shape = shape;
+        if let (Some(size), armory::Item::Food(s)) = (crate::provision::potion_size(&base), &mut shape) {
+            s.provision.sized(size);
+        }
         let mut profile = profile(&base, &shape);
         if let Some(c) = coins {
             profile.description = c.to_string();
@@ -163,11 +186,61 @@ impl Item {
         for a in &affixes {
             a.apply_to_stats(&mut profile.stats);
         }
-        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried })
+        profile.fit_capacity();
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried, quantity: quantity.max(1) })
     }
 }
 
 impl Item {
+    /// How many of it share one place in a grid: the goods table's `stack` for what is used one
+    /// at a time (ammunition, and food and drink, which the game eats and drinks one off a
+    /// stack), 1 for everything else.
+    pub fn stack_limit(&self) -> u32 {
+        if self.profile.tags.contains(&Tag::Ammunition) || self.provision().is_some() { u32::from(self.profile.stack.max(1)) } else { 1 }
+    }
+
+    /// Whether `other` could join this one's stack: a kind that stacks at all, and every part of
+    /// it the same. The base and seed are one model, one seed for the stack; `shape` is compared
+    /// with the Armory state's derived `==`, so every slider, the condition (wear, rust, fuel)
+    /// and the palette must be bit for bit alike, and an arrow worn by a shot never joins a
+    /// fresh one; the rest (rarity, affixes, name, legend, history, coins, words, teaching, how
+    /// known, the rest an identify was tried at, the odds it was rolled against) must be equal
+    /// too. Two arrow types never stack. Quantity is not compared.
+    /// Potions of one base (size) join when they hold the same brew, whatever bottle their seeds
+    /// made: the stack shows the first one's. Everything else needs one seed and one shape.
+    pub fn can_stack_with(&self, other: &Item) -> bool {
+        let same_kind = if self.potion_size().is_some() {
+            self.brew().is_some() && self.brew() == other.brew()
+        } else {
+            self.seed == other.seed && self.shape == other.shape
+        };
+        self.stack_limit() > 1
+            && same_kind
+            && self.base == other.base
+            && self.legend == other.legend
+            && self.history == other.history
+            && self.teaching == other.teaching
+            && self.rest_tried == other.rest_tried
+            && self.odds == other.odds
+            && self.rarity == other.rarity
+            && self.affixes == other.affixes
+            && self.name == other.name
+            && self.coins == other.coins
+            && self.words == other.words
+            && self.known == other.known
+    }
+
+    /// How many more it can take before it is full.
+    pub fn stack_room(&self) -> u32 {
+        self.stack_limit().saturating_sub(self.quantity)
+    }
+
+    /// This item as a stack of `n`.
+    pub fn with_quantity(mut self, n: u32) -> Item {
+        self.quantity = n.max(1);
+        self
+    }
+
     /// The name shown first: a legendary's title, otherwise its name.
     pub fn title(&self) -> &str {
         self.legend.as_ref().map_or(&self.name, |l| &l.title)
@@ -275,6 +348,85 @@ impl Item {
     pub fn fits(&self, slot: Slot) -> bool {
         self.slots().contains(&slot)
     }
+
+    /// What a bag or belt was rolled with, in a fixed order: a pack's lashing and weapon strap, or a
+    /// belt's frogs, potion pouch and sack. Accessories are part of the Armory's roll, so they are
+    /// never found loose or fitted by the delver. Empty for anything but a bag or a belt.
+    pub fn accessories(&self) -> Vec<Accessory> {
+        match &self.shape {
+            armory::Item::Bags(s) => s.bag.accessories(),
+            armory::Item::Belt(s) => s.accessories(),
+            _ => vec![],
+        }
+    }
+
+    /// Whether it was rolled with `accessory`.
+    pub fn has_accessory(&self, accessory: Accessory) -> bool {
+        self.accessories().contains(&accessory)
+    }
+
+    /// Whether a pack's lashing holds it: a large camp bundle, which is a bedroll or a tent
+    /// ([`crate::camp::Camp`]) in its carried form. The kind decides, not the size: every other
+    /// camp good (a campfire kit, a tinderbox) is small enough for a grid, and a bedroll or tent
+    /// that is set down is no bundle. Add a camp bundle's kind to `Camp` and it is lashable.
+    pub fn lashable(&self) -> bool {
+        self.camp().is_some() && !self.is_set_camp()
+    }
+
+    /// Whether a weapon strap holds it: a weapon at least [`STRAP_CELLS`] cells long by its
+    /// footprint, so a staff, spear, bow or long sword, and a polearm (an axe or mace with a long
+    /// haft) as well, but not a dagger, a club or a short axe. Only long and thin things: a
+    /// crossbow, as wide as it is long, is not strapped (the user's call, to keep the strap's grid
+    /// narrow).
+    pub fn strappable(&self) -> bool {
+        let fp = self.profile.footprint;
+        self.profile.tags.contains(&Tag::Weapon) && self.shape.family() != armory::Family::Crossbow && fp.cols.max(fp.rows) >= STRAP_CELLS
+    }
+
+    /// Whether a belt's frog holds it: a one-handed weapon (a dagger, sword, mace, club or axe)
+    /// no more than [`FROG_CELLS`] cells long by its footprint. A bow or crossbow, a staff, a
+    /// spear and a polearm are left to the weapon strap.
+    pub fn frogable(&self) -> bool {
+        use armory::Family as F;
+        let fp = self.profile.footprint;
+        self.profile.tags.contains(&Tag::Weapon)
+            && !self.profile.tags.contains(&Tag::Ranged)
+            && matches!(self.shape.family(), F::Dagger | F::Sword | F::Mace | F::Club | F::Axe)
+            && fp.cols.max(fp.rows) <= FROG_CELLS
+    }
+
+    /// Whether it goes in the small grid of `accessory` ([`crate::fittings`]): a bedroll or tent
+    /// in a lashing, a long weapon in a strap, a short one in a frog, a small potion in the pouch.
+    /// A stack of potions fits too: the inventory takes one piece off it.
+    pub fn fits_accessory(&self, accessory: Accessory) -> bool {
+        match accessory {
+            Accessory::WeaponStrap => self.strappable(),
+            Accessory::Lashing => self.lashable(),
+            Accessory::LeftFrog | Accessory::RightFrog => self.frogable(),
+            Accessory::PotionPouch => fits_potion_pouch(self),
+            Accessory::BeltSack => false,
+        }
+    }
+}
+
+/// `items` with the pieces that stack folded together, a full stack at a time, in the order of
+/// each kind's first piece: twenty arrows of one seed come back as stacks of 10 and 10.
+pub fn stack_up(items: impl IntoIterator<Item = Item>) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::new();
+    for mut item in items {
+        for have in out.iter_mut() {
+            if !have.can_stack_with(&item) {
+                continue;
+            }
+            let moved = have.stack_room().min(item.quantity);
+            have.quantity += moved;
+            item.quantity -= moved;
+        }
+        if item.quantity > 0 {
+            out.push(item);
+        }
+    }
+    out
 }
 
 /// Rolls base `base` from `seed` at the first level's odds ([`roll_item_with`]).
@@ -310,19 +462,20 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None, quantity: 1 });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
     for a in &affixes {
         a.apply_to_stats(&mut profile.stats);
     }
+    profile.fit_capacity();
     let name = item_name(&noun, &affixes);
     let legend = (rarity == Rarity::Legendary).then(|| legendize(&mut rng, &name, &profile.tags));
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None, quantity: 1 })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that
@@ -335,6 +488,103 @@ pub fn roll_loot(family: armory::Family, seed: u32, odds: Odds) -> Option<Item> 
 mod tests {
     use super::*;
     use crate::armory_base::{ARMORY_BASES, held_back};
+
+    #[test]
+    fn packs_roll_with_their_accessories_and_nothing_else_does() {
+        let packs: Vec<Item> = (1..80).filter_map(|s| roll_item("Pack", s)).collect();
+        assert!(packs.iter().any(|p| p.has_accessory(Accessory::Lashing)), "a lashing");
+        assert!(packs.iter().any(|p| p.has_accessory(Accessory::WeaponStrap)), "a weapon strap");
+        assert!(packs.iter().any(|p| p.accessories().is_empty()), "a plain pack");
+        // The same seed rolls the same accessories.
+        assert!(packs.iter().all(|p| roll_item("Pack", p.seed).unwrap().accessories() == p.accessories()));
+        for base in ["Satchel", "Sack", "Purse", "Sword", "Bedroll"] {
+            assert!((1..20).all(|s| roll_item(base, s).unwrap().accessories().is_empty()), "{base}");
+        }
+    }
+
+    #[test]
+    fn belts_roll_with_their_fittings_and_nothing_else_does() {
+        let belts: Vec<Item> = (1..200).filter_map(|s| roll_item("Belt", s)).collect();
+        for want in [Accessory::LeftFrog, Accessory::RightFrog, Accessory::PotionPouch, Accessory::BeltSack] {
+            assert!(belts.iter().any(|b| b.has_accessory(want)), "{want:?}");
+        }
+        assert!(belts.iter().any(|b| b.accessories().is_empty()), "a plain belt");
+        assert!(belts.iter().all(|b| roll_item("Belt", b.seed).unwrap().accessories() == b.accessories()));
+        // The sack is a row more in the belt's grid.
+        let rows = |b: &Item| b.profile.holds.as_ref().unwrap().rows;
+        let plain = belts.iter().find(|b| !b.has_accessory(Accessory::BeltSack) && b.profile.stats.grid_rows == 0.0).unwrap();
+        let sacked = belts.iter().find(|b| b.has_accessory(Accessory::BeltSack) && b.profile.stats.grid_rows == 0.0).unwrap();
+        assert_eq!(rows(sacked), rows(plain) + 1);
+        assert!((1..20).all(|s| roll_item("Pack", s).unwrap().accessories().iter().all(|a| matches!(a, Accessory::Lashing | Accessory::WeaponStrap))));
+    }
+
+    #[test]
+    fn frogs_take_one_handed_weapons_and_the_pouch_small_potions() {
+        for base in ["Dagger", "Sword", "Mace", "Club"] {
+            assert!((1..30).filter_map(|s| roll_item(base, s)).any(|w| w.frogable()), "some {base}");
+        }
+        for base in ["Staff", "Spear", "Bow", "Crossbow", "Shield", "Torch", "Lantern"] {
+            assert!((1..30).filter_map(|s| roll_item(base, s)).all(|w| !w.frogable()), "{base}");
+        }
+        for (base, fits) in [("Vial", true), ("Small potion", true), ("Healing vial", true), ("Small healing draught", true), ("Potion", false), ("Large potion", false), ("Healing draught", false), ("Bread", false), ("Sword", false)] {
+            assert_eq!(roll_item(base, 3).map(|i| fits_potion_pouch(&i)), Some(fits), "{base}");
+        }
+        let vial = roll_item("Vial", 3).unwrap();
+        assert!(vial.fits_accessory(Accessory::PotionPouch) && !vial.fits_accessory(Accessory::LeftFrog) && !vial.fits_accessory(Accessory::WeaponStrap));
+        let mut stack = vial;
+        stack.quantity = 2;
+        assert!(stack.fits_accessory(Accessory::PotionPouch), "a stack gives one piece to a place");
+    }
+
+    #[test]
+    fn only_weapons_long_by_their_footprint_are_strapped() {
+        for base in ["Staff", "Spear", "Bow"] {
+            assert!((1..30).map(|s| roll_item(base, s).unwrap()).filter(|w| w.profile.footprint.rows.max(w.profile.footprint.cols) >= STRAP_CELLS).all(|w| w.strappable()), "{base}");
+            assert!((1..30).map(|s| roll_item(base, s).unwrap()).any(|w| w.strappable()), "some {base} is long enough");
+        }
+        for base in ["Dagger", "Shield", "Torch", "Mail", "Pack"] {
+            assert!((1..30).all(|s| !roll_item(base, s).unwrap().strappable()), "{base}");
+        }
+        // Whatever the family, it is the length that decides, but a crossbow is never strapped.
+        for base in ["Sword", "Axe", "Mace", "Club"] {
+            assert!((1..30).filter_map(|s| roll_item(base, s)).all(|w| w.strappable() == (w.profile.footprint.rows.max(w.profile.footprint.cols) >= STRAP_CELLS)), "{base}");
+        }
+        assert!((1..30).filter_map(|s| roll_item("Crossbow", s)).all(|w| !w.strappable()), "a crossbow is never strapped");
+    }
+
+    #[test]
+    fn arrows_and_bolts_stack_to_ten_and_only_with_their_own_kind() {
+        let arrow = roll_item("Arrow", 7).unwrap();
+        assert_eq!((arrow.quantity, arrow.stack_limit(), arrow.stack_room()), (1, 10, 9));
+        assert_eq!(roll_item("Bolt", 7).unwrap().stack_limit(), 10);
+        assert!(arrow.can_stack_with(&roll_item("Arrow", 7).unwrap()));
+        assert!(!arrow.can_stack_with(&roll_item("Arrow", 8).unwrap()), "another model is another stack");
+        assert!(!arrow.can_stack_with(&roll_item("Bolt", 7).unwrap()));
+        let mut told = roll_item("Arrow", 7).unwrap();
+        told.history.push("Fletched by Brenna".into());
+        assert!(!arrow.can_stack_with(&told), "a different history is a different piece");
+        let full = roll_item("Arrow", 7).unwrap().with_quantity(10);
+        assert_eq!(full.stack_room(), 0);
+        assert_eq!(roll_item("Sword", 1).unwrap().stack_limit(), 1);
+        assert!(!roll_item("Sword", 1).unwrap().can_stack_with(&roll_item("Sword", 1).unwrap()));
+        // Food stacks by the goods table's column, one model to a stack.
+        assert_eq!(roll_item("Bread", 1).unwrap().stack_limit(), 3);
+        assert!(!roll_item("Bread", 1).unwrap().can_stack_with(&roll_item("Bread", 2).unwrap()));
+    }
+
+    #[test]
+    fn stacking_up_folds_pieces_ten_to_a_stack() {
+        let pieces = (0..24).map(|i| roll_item(if i == 5 { "Bolt" } else { "Arrow" }, 7).unwrap());
+        let stacks = stack_up(pieces);
+        assert_eq!(stacks.iter().map(|i| (i.base.as_str(), i.quantity)).collect::<Vec<_>>(), vec![("Arrow", 10), ("Bolt", 1), ("Arrow", 10), ("Arrow", 3)]);
+    }
+
+    #[test]
+    fn a_stack_keeps_its_count_through_parts() {
+        let stack = roll_item("Arrow", 3).unwrap().with_quantity(6);
+        assert_eq!(Item::from_parts(stack.clone().into()).unwrap().quantity, 6);
+        assert_eq!(Item::from_parts(ItemParts { quantity: 0, ..stack.into() }).unwrap().quantity, 1);
+    }
 
     #[test]
     fn tents_and_campfire_kits_roll_by_name_but_never_lie_loose() {
@@ -581,6 +831,88 @@ mod tests {
         let item = Item::from_parts(parts).unwrap();
         assert_eq!(item.profile.stats.warmth, plain.profile.stats.warmth + 2.0);
         assert_eq!(crate::tables::affix_named("Nope"), None);
+    }
+
+    fn grid(item: &Item) -> (u8, u8) {
+        item.profile.holds.as_ref().map(|g| (g.cols, g.rows)).unwrap()
+    }
+
+    #[test]
+    fn a_satchel_of_holding_has_a_bigger_grid_and_a_cramped_one_a_smaller() {
+        let plain = roll_item("Satchel", 3).unwrap();
+        let with = |name: &str| {
+            let mut parts = ItemParts::from(plain.clone());
+            parts.affixes = vec![crate::tables::affix_named(name).unwrap()];
+            Item::from_parts(parts).unwrap()
+        };
+        let base = grid(&Item::from_parts(ItemParts { affixes: vec![], ..plain.clone().into() }).unwrap());
+        assert_eq!(base, (6, 3));
+        assert_eq!(grid(&with("of Holding")), (6, 4));
+        assert_eq!(grid(&with("of the Bottomless")), (6, 5));
+        assert_eq!(grid(&with("Cramped")), (6, 2));
+        assert_eq!(with("of Holding").profile.plain_grid(), Some((6, 3)));
+        assert_eq!(Item::from_parts(ItemParts { affixes: vec![], ..plain.into() }).unwrap().profile.plain_grid(), None);
+    }
+
+    /// Rolls each of `bags` (a base and the seeds to roll it at) and checks its grid follows its
+    /// capacity affixes; the capacity affixes that came up are marked in the result.
+    fn capacity_rolls(bags: &[(&str, Vec<u32>)]) -> [bool; 3] {
+        let mut seen = [false; 3];
+        for (base, seeds) in bags {
+            for &seed in seeds {
+                let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
+                // The same item bare of affixes: a belt's own rows vary by seed (a sack adds one).
+                let plain_rows = grid(&Item::from_parts(ItemParts { affixes: vec![], ..item.clone().into() }).unwrap()).1 as i32;
+                let by = item.affixes.iter().map(|a| match a.name.as_str() {
+                    "of Holding" => 1,
+                    "of the Bottomless" => 2,
+                    "Cramped" => -1,
+                    _ => 0,
+                }).sum::<i32>();
+                assert_eq!(grid(&item).1 as i32, plain_rows + by, "{base} {seed}");
+                assert!(item.affixes.iter().filter(|a| a.group.as_deref() == Some("capacity")).count() <= 1, "{base} {seed}");
+                if item.affixes.iter().any(|a| a.name == "of the Bottomless") {
+                    assert!(item.rarity >= Rarity::Rare);
+                }
+                for (i, n) in ["of Holding", "of the Bottomless", "Cramped"].into_iter().enumerate() {
+                    seen[i] |= item.affixes.iter().any(|a| a.name == n);
+                }
+            }
+        }
+        seen
+    }
+
+    #[test]
+    #[ignore = "slow sweep: 500 seeds of each of four bags; run before merging"]
+    fn bags_roll_capacity_affixes_and_the_grid_follows_them() {
+        let bags: Vec<_> = ["Pack", "Satchel", "Sack", "Belt"].into_iter().map(|b| (b, (1..500).collect())).collect();
+        assert_eq!(capacity_rolls(&bags), [true; 3]);
+    }
+
+    #[test]
+    fn bags_roll_capacity_affixes_and_the_grid_follows_them_smoke() {
+        let bags = [("Pack", (1..30).collect())];
+        assert_eq!(capacity_rolls(&bags), [true; 3]);
+    }
+
+    #[test]
+    #[ignore = "slow sweep: 1000 seeds of a quiver and a purse; run before merging"]
+    fn quivers_and_purses_roll_no_capacity() {
+        no_capacity_on(1..1_000);
+    }
+
+    #[test]
+    fn quivers_and_purses_roll_no_capacity_smoke() {
+        no_capacity_on(1..30);
+    }
+
+    fn no_capacity_on(seeds: std::ops::Range<u32>) {
+        for seed in seeds {
+            for base in ["Quiver", "Purse"] {
+                let item = roll_item_with(base, seed, Odds::loot(6)).unwrap();
+                assert!(item.affixes.iter().all(|a| a.group.as_deref() != Some("capacity")), "{base} {seed}");
+            }
+        }
     }
 
     #[test]

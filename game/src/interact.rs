@@ -16,6 +16,7 @@
 //! | Bedroll or tent set down | Sleep | Pack up | | |
 //! | Stair | Go down or Go up | | | |
 //! | Troll lying down, with a lit torch in either hand | Burn | | | |
+//! | Fallen body still dressed, within reach | Search | | | |
 //!
 //! Hang at hip sends something that can hang from the belt (a lantern) straight to the hip,
 //! where Equip would put it in a hand. It is on Special because Tertiary's key turns a dragged
@@ -115,6 +116,9 @@ pub enum Verb {
     GoUp,
     /// Put a lit torch to a troll lying down, so it does not rise (`crate::creatures::trolls`).
     Burn,
+    /// Go through what a fallen body wears and holds, opening its inventory as a window
+    /// (`crate::remains`).
+    Search,
 }
 
 impl Verb {
@@ -148,6 +152,7 @@ impl Verb {
             Verb::GoDown => "Go down",
             Verb::GoUp => "Go up",
             Verb::Burn => "Burn",
+            Verb::Search => "Search",
         }
     }
 }
@@ -254,6 +259,9 @@ pub enum Target {
     /// A troll lying down that is not yet dead for good, and whether the delver holds a lit
     /// torch to burn it with.
     FallenTroll { torch: bool },
+    /// A fallen body still dressed in what it wore and held, within reach. A living folk is
+    /// [`Target::Folk`]: trading stays with barter.
+    Body,
 }
 
 /// What the lookup needs of the delver. Keys, lockpicks and hiding are not in the game yet, so
@@ -287,6 +295,7 @@ pub fn verbs_for(target: &Target, delver: &Delver) -> Verbs {
         Target::Stair { down } => Verbs { primary: Some(if down { Verb::GoDown } else { Verb::GoUp }), ..Verbs::default() },
         Target::Camp => Verbs { primary: Some(Verb::Sleep), secondary: Some(Verb::PackUp), ..Verbs::default() },
         Target::FallenTroll { torch } => Verbs { primary: torch.then_some(Verb::Burn), ..Verbs::default() },
+        Target::Body => Verbs { primary: Some(Verb::Search), ..Verbs::default() },
     }
 }
 
@@ -372,7 +381,7 @@ pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt.after(crate::props::prompt_aimed_container).after(crate::travel::prompt_stair)).chain().in_set(DelveSystems));
+        app.init_resource::<CrosshairPrompt>().add_systems(Update, (spawn_prompt, show_prompt.after(crate::props::prompt_aimed_container).after(crate::travel::prompt_stair).after(crate::remains::prompt_search)).chain().in_set(DelveSystems));
     }
 }
 
@@ -619,6 +628,8 @@ mod tests {
         assert_eq!(row(verbs_for(&Target::FallenTroll { torch: true }, &Delver::default())), (Some(Verb::Burn), None, None, None));
         assert_eq!(row(verbs_for(&Target::FallenTroll { torch: false }, &Delver::default())), (None, None, None, None));
         assert_eq!(key_line(&Keymap::default(), &verbs_for(&Target::FallenTroll { torch: true }, &Delver::default())), "F Burn");
+        assert_eq!(row(verbs_for(&Target::Body, &Delver::default())), (Some(Verb::Search), None, None, None));
+        assert!(!key_line(&Keymap::default(), &verbs_for(&Target::Folk, &Delver::default())).contains("Search"), "the living are bartered with, not searched");
     }
 
     #[test]

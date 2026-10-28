@@ -366,9 +366,13 @@ pub fn lay_out(
         check_passage(&canvas, level, blocked_cells, obstacles, body_radius).map_err(CampRefusal::reason)?;
     }
     let line = set_down_line(&set);
-    // Out of its pack and into its new form in one step, or not at all.
+    // Out of its pack (or off its lashing) and into its new form in one step, or not at all.
+    let lashed = inventory.is_lashed(id);
     if !inventory.set_form_out(id, set) {
         return Err("That cannot be set down.");
+    }
+    if lashed {
+        inventory.lashed_out = Some(id);
     }
     changes.0.push(FloorChange::SetDownAt(id, site.centre / CELL, site.yaw));
     Ok(line)
@@ -554,6 +558,8 @@ fn go_to_sleep(
 pub struct PendingBed {
     pub spot: fb_level::ItemSpot,
     /// Frames spent looking for the camp.
+    /// Whether it was laid out from the pack's lashing ([`Inventory::lashed_out`]).
+    pub lashed: bool,
     pub waited: u32,
 }
 
@@ -567,6 +573,7 @@ fn resume_in_bed(
     mut commands: Commands,
     pending: Option<ResMut<PendingBed>>,
     beds: Query<(Entity, &FloorItem, &SetCamp)>,
+    mut inventory: ResMut<Inventory>,
     clock: Res<GameClock>,
     mut asleep: ResMut<Asleep>,
     mut toast: ResMut<Toast>,
@@ -575,7 +582,7 @@ fn resume_in_bed(
 ) {
     let Some(mut pending) = pending else { return };
     let now = time.map_or(0.0, |t| t.elapsed_secs());
-    let Some((bed, _, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == pending.spot) else {
+    let Some((bed, floor, camp)) = beds.iter().find(|(_, floor, _)| floor.spot == pending.spot) else {
         pending.waited += 1;
         if pending.waited >= BED_PATIENCE {
             commands.remove_resource::<PendingBed>();
@@ -584,6 +591,10 @@ fn resume_in_bed(
         return;
     };
     commands.remove_resource::<PendingBed>();
+    // A camp that was laid out from the lashing goes back on it when packed up.
+    if pending.lashed {
+        inventory.lashed_out = Some(floor.id);
+    }
     let Ok((mut locomotion, health)) = players.single_mut() else { return };
     locomotion.velocity = Vec2::ZERO;
     asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
@@ -755,11 +766,16 @@ pub fn pack(inventory: &mut Inventory, changes: &mut FloorChanges, id: ItemId) -
     if !inventory.replace_form(id, packed) {
         return Err("That cannot be packed.");
     }
-    if inventory.stow(id).is_err() {
+    // It goes back on the lashing it came off, if the pack still has one free, else into a bag.
+    let relash = inventory.lashed_out == Some(id) && inventory.lashed().is_none() && inventory.lash(id).is_ok();
+    if relash {
+        inventory.lashed_out = None;
+    } else if inventory.stow(id).is_err() {
         // Nowhere to put it: it is still lying loose, and goes back as it was.
         inventory.replace_form(id, before);
         return Err(PACK_FULL);
     }
+    inventory.lashed_out = inventory.lashed_out.filter(|&out| out != id);
     changes.0.push(FloorChange::Lifted(id));
     Ok(line)
 }
@@ -959,6 +975,60 @@ mod tests {
         let [FloorChange::SetDownAt(id, at, _)] = changes.0.as_slice() else { panic!("{:?}", changes.0) };
         assert_eq!(*id, bedroll);
         assert!(at.y * CELL < feet.y, "ahead is north: {at}");
+    }
+
+    #[test]
+    fn a_lashed_bedroll_is_laid_out_from_the_lash_and_packed_back_to_it() {
+        use crate::inventory::Location;
+        let level = room();
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let bedroll = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
+        inventory.lash(bedroll).unwrap();
+        // It is offered to be laid out where it hangs.
+        let target = interact::item_target(&inventory, bedroll).unwrap();
+        assert_eq!(interact::verbs_for(&target, &interact::Delver::default()).primary, Some(Verb::LayOut));
+        let mut changes = FloorChanges::default();
+        let line = lay_out(&mut inventory, &mut changes, bedroll, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
+        assert!(line.starts_with("You lay out the"), "{line}");
+        assert_eq!((inventory.location(bedroll), inventory.lashed()), (Some(Location::Loose), None));
+        assert!(inventory.item(bedroll).unwrap().is_set_camp());
+        // Packed up again, it goes back on the lashing, not into the grid.
+        pack_up_test(&mut inventory, bedroll);
+        assert_eq!((inventory.lashed(), inventory.contents_count(pack)), (Some(bedroll), 0));
+        assert!(!inventory.item(bedroll).unwrap().is_set_camp());
+        // One that came from a bag goes back to a bag, even with the lashing free.
+        inventory.take_out(bedroll);
+        inventory.stow(bedroll).unwrap();
+        lay_out(&mut inventory, &mut changes, bedroll, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
+        pack_up_test(&mut inventory, bedroll);
+        assert_eq!((inventory.lashed(), inventory.contents_count(pack)), (None, 1));
+    }
+
+    fn pack_up_test(inventory: &mut Inventory, id: ItemId) {
+        let mut changes = FloorChanges::default();
+        pack(inventory, &mut changes, id).unwrap();
+    }
+
+    #[test]
+    fn a_lashed_tent_is_pitched_from_the_lash() {
+        let level = room();
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, fb_items::Slot::Back).unwrap();
+        let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+        inventory.lash(tent).unwrap();
+        let target = interact::item_target(&inventory, tent).unwrap();
+        assert_eq!(interact::verbs_for(&target, &interact::Delver::default()).primary, Some(Verb::Pitch));
+        let mut changes = FloorChanges::default();
+        let line = lay_out(&mut inventory, &mut changes, tent, at_cell(3.5, 3.5), Vec2::NEG_Y, &level, &BlockedCells::default(), &[], &[], 3.5).unwrap();
+        assert!(line.starts_with("You pitch the"), "{line}");
+        assert_eq!(inventory.lashed(), None);
+        pack_up_test(&mut inventory, tent);
+        assert_eq!(inventory.lashed(), Some(tent));
     }
 
     #[test]

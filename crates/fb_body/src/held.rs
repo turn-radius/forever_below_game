@@ -755,6 +755,219 @@ pub fn fit_hip(body: &Body, item: &Item, belt: &ItemMesh) -> Option<HipFit> {
     Some(HipFit { item: item.clone(), mesh: drawn, scale, placement, hook, side })
 }
 
+// ── Lashed to a pack's weapon strap ──
+
+/// How far the lashed weapon leans out from plumb, as a share of its length. Our own.
+const STRAP_LEAN: f32 = 0.1;
+/// How far below the strap's lower band the butt hangs, in body units. Our own.
+const STRAP_BUTT: f32 = 2.5;
+
+/// A long weapon lashed to a worn pack's weapon strap ([`fit_strapped`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StrapFit {
+    pub item: Item,
+    /// The weapon in body space.
+    pub mesh: ItemMesh,
+    pub placement: Placement,
+}
+
+/// Lashes `item` (a long weapon: head up, butt down) alongside `pack`, the worn pack's mesh in
+/// body space ([`crate::fit_worn`]): upright along the pack's side where its "weapon_strap" part
+/// runs, leaning a little outward, its butt a little below the lower band and its body just
+/// clear of the strap. `None` for a pack with no strap, or an item with no mesh. Our own fit.
+pub fn fit_strapped(item: &Item, pack: &ItemMesh) -> Option<StrapFit> {
+    let strap: Vec<V3> = pack.parts.iter().filter(|p| p.name == "weapon_strap").flat_map(|p| p.positions.iter().copied()).collect();
+    if strap.is_empty() {
+        return None;
+    }
+    let centre = strap.iter().fold([0.0; 3], |a, p| vec3::add(a, *p));
+    let centre = vec3::scale(centre, 1.0 / strap.len() as f32);
+    let sign = if centre[0] < 0.0 { -1.0 } else { 1.0 };
+    let outer = strap.iter().map(|p| p[0] * sign).fold(f32::MIN, f32::max);
+    let low = strap.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+
+    // Its long axis to item +Y, heavier end up.
+    let mut drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    let longest = if ext[0] > ext[1] && ext[0] >= ext[2] {
+        0
+    } else if ext[2] > ext[1] {
+        2
+    } else {
+        1
+    };
+    let upright = match longest {
+        0 => Placement::new([0.0; 3], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        2 => Placement::new([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+        _ => Placement::IDENTITY,
+    };
+    upright.apply_to_item(&mut drawn);
+    let (lo, hi) = drawn.bounds()?;
+    let all: Vec<V3> = drawn.parts.iter().flat_map(|p| p.positions.iter().copied()).collect();
+    let mean_y = all.iter().map(|p| p[1]).sum::<f32>() / all.len().max(1) as f32;
+    if mean_y < (lo[1] + hi[1]) * 0.5 {
+        Placement::new([0.0; 3], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]).apply_to_item(&mut drawn);
+    }
+    let (lo, hi) = drawn.bounds()?;
+    let radius = ((hi[0] - lo[0]).max(hi[2] - lo[2]) * 0.5).min(1.0);
+    let bottom = [(lo[0] + hi[0]) * 0.5, lo[1], (lo[2] + hi[2]) * 0.5];
+
+    let lean = vec3::normalize_or([sign * STRAP_LEAN, 1.0, 0.0], vec3::Y);
+    let rotation = frame_yz(lean, [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]);
+    let target = [sign * (outer + radius), low - STRAP_BUTT, centre[2]];
+    let placement = Placement { rotation, origin: vec3::sub(target, rotation.transform(bottom)) };
+    placement.apply_to_item(&mut drawn);
+    Some(StrapFit { item: item.clone(), mesh: drawn, placement })
+}
+
+// ── Hung in a belt's frog ──
+
+/// How far a weapon in a frog leans back from plumb, as a share of its length. Our own.
+const FROG_LEAN: f32 = 0.3;
+/// How far down a blade's length (from its hilt) the frog's sleeve takes it; a blunt weapon's
+/// sleeve sits this far below its head. Our own.
+const FROG_SLEEVE: f32 = 0.28;
+/// The least a hanging weapon's tip stands off the floor, in body units. Our own.
+const FROG_FLOOR: f32 = 0.1;
+/// How much of the height from the floor to the sleeve a hanging weapon's lower part may take. Our own.
+const FROG_REACH: f32 = 0.9;
+/// The least a weapon is drawn at in a frog, as a share of its size. Our own.
+const FROG_MIN_SCALE: f32 = 0.7;
+/// How far the weapon's lower end tucks in toward the leg, as a share of its length: so a cloak
+/// over the hips takes it in without standing out at the knee. Our own.
+const FROG_TUCK: f32 = 0.12;
+/// How far the weapon stands out from the sleeve's middle, clear of the arm hanging beside it. Our own.
+const FROG_OUT: f32 = 0.15;
+
+/// A short weapon hung in one of a worn belt's frogs ([`fit_frogged`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrogFit {
+    pub item: Item,
+    /// The weapon in body space.
+    pub mesh: ItemMesh,
+    pub placement: Placement,
+}
+
+/// Hangs `item` (a one-handed weapon) in a frog of `belt`, the worn belt's mesh in body space
+/// ([`crate::fit_worn`]): the left hip's frog (at +X) when `left`, else the right hip's. A blade
+/// hangs hilt up, point down, through the frog's sleeve; a mace, club or axe head up, its haft
+/// through the sleeve. Either leans back a little, its flats facing out. `None` for a belt with
+/// no frog at that hip, or an item with no mesh. Our own fit.
+pub fn fit_frogged(item: &Item, belt: &ItemMesh, left: bool) -> Option<FrogFit> {
+    let sign = if left { 1.0 } else { -1.0 };
+    let frog: Vec<V3> = belt.parts.iter().filter(|p| p.name == "frogs").flat_map(|p| p.positions.iter().copied()).filter(|p| p[0] * sign > 0.0).collect();
+    if frog.is_empty() {
+        return None;
+    }
+    // The sleeve is the frog's lowest band: its centre is where the weapon passes.
+    let low = frog.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+    let ring: Vec<&V3> = frog.iter().filter(|p| p[1] < low + 0.12).collect();
+    let sleeve = vec3::scale(ring.iter().fold([0.0; 3], |a, p| vec3::add(a, **p)), 1.0 / ring.len() as f32);
+
+    let mut drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    // On a short body a full-length weapon would trail on the floor: it is drawn smaller, down to
+    // [`FROG_MIN_SCALE`], so that it hangs from the sleeve with its tip a little off the floor.
+    let below = (hi[1] - lo[1]) * (1.0 - FROG_SLEEVE);
+    let k = (FROG_REACH * sleeve[1] / below.max(1e-3)).clamp(FROG_MIN_SCALE, 1.0);
+    if k < 1.0 {
+        scale_mesh(&mut drawn, k);
+    }
+    let (lo, hi) = drawn.bounds()?;
+    let length = hi[1] - lo[1];
+    let centre = [(lo[0] + hi[0]) * 0.5, 0.0, (lo[2] + hi[2]) * 0.5];
+    // Plumb but for the lean back (body -Z) and a touch out; the weapon's own +Y along it, or
+    // against it for a blade, which hangs hilt up. A long weapon on a short body leans further
+    // until its tip clears the floor, and is lifted the rest of the way if it still does not.
+    let blade = matches!(item.family(), Family::Sword | Family::Dagger);
+    let pivot_y = if blade { lo[1] + length * FROG_SLEEVE } else { hi[1] - length * FROG_SLEEVE };
+    let pivot = [centre[0], pivot_y, centre[2]];
+    let hung = |lean: f32| {
+        let down = vec3::normalize_or([-sign * FROG_TUCK, -1.0, -lean], vec3::neg(vec3::Y));
+        let axis = if blade { down } else { vec3::neg(down) };
+        let rotation = frame_yz(axis, [sign, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let mut mesh = drawn.clone();
+        let placement = Placement { rotation, origin: vec3::sub(vec3::add(sleeve, [sign * FROG_OUT, 0.0, 0.0]), rotation.transform(pivot)) };
+        placement.apply_to_item(&mut mesh);
+        let floor = mesh.bounds().map_or(0.0, |(lo, _)| lo[1]);
+        (placement, mesh, floor)
+    };
+    let (mut placement, mut mesh, mut floor) = hung(FROG_LEAN);
+    for lean in [0.5, 0.8, 1.2] {
+        if floor > FROG_FLOOR {
+            break;
+        }
+        (placement, mesh, floor) = hung(lean);
+    }
+    if floor < FROG_FLOOR {
+        placement.origin[1] += FROG_FLOOR - floor;
+        mesh = drawn.clone();
+        placement.apply_to_item(&mut mesh);
+    }
+    let drawn = mesh;
+    Some(FrogFit { item: item.clone(), mesh: drawn, placement })
+}
+
+// ── Tied to a pack's lashing ──
+
+/// How far past the lashing's hoops (a share of their radius) the tied bundle's girth reaches: the hoops sit snug round a thin roll and a stout one rides above them. Our own.
+const LASH_FILL: f32 = 1.4;
+/// The longest a bundle may be, as a share of the pack's width. Our own.
+const LASH_REACH: f32 = 1.7;
+
+/// A bedroll or tent tied to a worn pack's lashing ([`fit_lashed`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LashFit {
+    pub item: Item,
+    /// The bundle in body space.
+    pub mesh: ItemMesh,
+    pub placement: Placement,
+}
+
+/// Ties `item` (a bedroll or tent in its packed form, as the Armory draws it) in `pack`'s
+/// lashing, the worn pack's mesh in body space ([`crate::fit_worn`]): its long axis across the pack
+/// through the hoops of the "lashing" part, scaled until its girth fills them (a bedroll is near its own
+/// size, a tent bundle a little smaller) and its length keeps within [`LASH_REACH`] of the pack's width. `None` for a pack with no
+/// lashing, or an item with no mesh. Our own fit.
+pub fn fit_lashed(item: &Item, pack: &ItemMesh) -> Option<LashFit> {
+    let straps: Vec<V3> = pack.parts.iter().filter(|p| p.name == "lashing").flat_map(|p| p.positions.iter().copied()).collect();
+    if straps.is_empty() {
+        return None;
+    }
+    let bounds = |points: &[V3]| {
+        points.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])], [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])]))
+    };
+    let (slo, shi) = bounds(&straps);
+    // The hoops stand open in YZ: their middle and their radius.
+    let hoop = [(slo[0] + shi[0]) * 0.5, (slo[1] + shi[1]) * 0.5, (slo[2] + shi[2]) * 0.5];
+    let radius = ((shi[1] - slo[1]).min(shi[2] - slo[2])) * 0.5;
+    let (plo, phi) = pack.bounds()?;
+    let width = phi[0] - plo[0];
+
+    let mut drawn = item.build();
+    let (lo, hi) = drawn.bounds()?;
+    let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    // Its long axis to item +X, across the pack.
+    let across = if ext[1] > ext[0] && ext[1] >= ext[2] {
+        Placement::new([0.0; 3], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    } else if ext[2] > ext[0] {
+        Placement::new([0.0; 3], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])
+    } else {
+        Placement::IDENTITY
+    };
+    across.apply_to_item(&mut drawn);
+    let (lo, hi) = drawn.bounds()?;
+    let girth = ((hi[1] - lo[1]).max(hi[2] - lo[2]) * 0.5).max(1e-3);
+    let scale = (radius * LASH_FILL / girth).min(width * LASH_REACH / (hi[0] - lo[0]).max(1e-3));
+    scale_mesh(&mut drawn, scale);
+    let (lo, hi) = drawn.bounds()?;
+    let middle = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5];
+    let placement = Placement { rotation: Mat3::IDENTITY, origin: vec3::sub(hoop, middle) };
+    placement.apply_to_item(&mut drawn);
+    Some(LashFit { item: item.clone(), mesh: drawn, placement })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,6 +988,107 @@ mod tests {
 
     fn fit(body: &Body, side: Side, item: &Item) -> HeldFit {
         fit_held(body, side, item).unwrap()
+    }
+
+    #[test]
+    fn a_short_weapon_hangs_in_each_of_the_belts_frogs() {
+        use armory::Item as Armory;
+        use fb_items::Slot;
+        let belt_with = |frogs: u32| {
+            (0..4000)
+                .map(|s| roll(Family::Belt, s))
+                .find(|b| matches!(b, Armory::Belt(s) if s.fittings.frogs == frogs))
+                .unwrap_or_else(|| panic!("no belt with {frogs} frogs"))
+        };
+        let (two, one, none) = (belt_with(2), belt_with(1), belt_with(0));
+        for folk in Folk::fitted() {
+            let body = body(folk);
+            let worn = |belt: &Item| crate::fit_worn(&body, &[(Slot::Belt, belt.clone())]).layer(Slot::Belt).unwrap().mesh.clone();
+            let (two_mesh, one_mesh, none_mesh) = (worn(&two), worn(&one), worn(&none));
+            for family in [Family::Sword, Family::Mace, Family::Dagger, Family::Club, Family::Axe] {
+                let weapon = roll(family, 5);
+                let mut sides = vec![];
+                for left in [true, false] {
+                    let hung = fit_frogged(&weapon, &two_mesh, left).unwrap_or_else(|| panic!("{folk:?} {family:?} {left}"));
+                    let (lo, hi) = hung.mesh.bounds().unwrap();
+                    assert!(lo[1] > 0.0, "{folk:?} {family:?}: through the floor");
+                    let (belt_lo, belt_hi) = two_mesh.bounds().unwrap();
+                    assert!(hi[1] < belt_hi[1] + 4.0 * body.scale, "{folk:?} {family:?}: hilt far above the belt");
+                    let x = (lo[0] + hi[0]) * 0.5;
+                    assert!(if left { x > 0.0 } else { x < 0.0 }, "{folk:?} {family:?}: on the wrong hip ({x})");
+                    assert!(lo[0].min(hi[0]).abs() <= belt_hi[0].max(-belt_lo[0]) + 2.0, "{folk:?} {family:?}: hangs far from the hip");
+                    sides.push(x);
+                }
+                assert!(sides[0] > 0.0 && sides[1] < 0.0);
+                // One frog is the left hip's; none is nobody's.
+                assert!(fit_frogged(&weapon, &one_mesh, true).is_some() && fit_frogged(&weapon, &one_mesh, false).is_none());
+                assert!(fit_frogged(&weapon, &none_mesh, true).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_weapon_rides_the_packs_weapon_strap_beside_it() {
+        use armory::families::bags::{BagStyle, Bags};
+        use fb_items::Slot;
+        let strapped = |seed: u32| {
+            let mut state = Bags::roll_as(seed, BagStyle::Backpack);
+            state.bag.weapon_strap = true;
+            Item::Bags(state)
+        };
+        let plain = {
+            let Item::Bags(mut state) = strapped(4) else { unreachable!() };
+            state.bag.weapon_strap = false;
+            Item::Bags(state)
+        };
+        for folk in Folk::fitted() {
+            let body = body(folk);
+            let worn = crate::fit_worn(&body, &[(Slot::Back, strapped(4))]);
+            let pack = &worn.layer(Slot::Back).unwrap().mesh;
+            let (plo, phi) = pack.bounds().unwrap();
+            for family in [Family::Spear, Family::Staff, Family::Bow] {
+                let weapon = roll(family, 5);
+                let lashed = fit_strapped(&weapon, pack).unwrap_or_else(|| panic!("{folk:?} {family:?}"));
+                let (lo, hi) = lashed.mesh.bounds().unwrap();
+                // Standing up beside the pack, on the strap's side, clear of the pack's width, its butt off the floor.
+                assert!(hi[1] - lo[1] > (phi[1] - plo[1]) * 0.8, "{folk:?} {family:?}: not upright {lo:?}..{hi:?}");
+                assert!(lo[1] > 0.0, "{folk:?} {family:?}: through the floor");
+                let side = if pack.parts.iter().filter(|p| p.name == "weapon_strap").flat_map(|p| &p.positions).map(|p| p[0]).sum::<f32>() < 0.0 { -1.0 } else { 1.0 };
+                let centre_x = (lo[0] + hi[0]) * 0.5 * side;
+                assert!(centre_x > (phi[0] * side).min(-plo[0] * side) * 0.5, "{folk:?} {family:?}: not on the strap's side");
+            }
+            // No strap, no place for it.
+            let bare = crate::fit_worn(&body, &[(Slot::Back, plain.clone())]);
+            assert!(fit_strapped(&roll(Family::Spear, 5), &bare.layer(Slot::Back).unwrap().mesh).is_none(), "{folk:?}");
+        }
+    }
+
+    #[test]
+    fn a_bedroll_or_tent_is_tied_in_the_packs_lashing_and_fills_it() {
+        use armory::families::bags::{BagStyle, Bags};
+        use fb_items::Slot;
+        let pack = |lashing: bool| {
+            let mut state = Bags::roll_as(4, BagStyle::Backpack);
+            state.bag.lashing = lashing;
+            Item::Bags(state)
+        };
+        for folk in Folk::fitted() {
+            let body = body(folk);
+            let worn = crate::fit_worn(&body, &[(Slot::Back, pack(true))]);
+            let mesh = &worn.layer(Slot::Back).unwrap().mesh;
+            let (plo, phi) = mesh.bounds().unwrap();
+            for (name, item) in [("bedroll", fb_items::roll_item("Bedroll", 5).unwrap().shape), ("tent", fb_items::roll_item("Tent", 5).unwrap().shape)] {
+                let lashed = fit_lashed(&item, mesh).unwrap_or_else(|| panic!("{folk:?} {name}"));
+                let (lo, hi) = lashed.mesh.bounds().unwrap();
+                // Across the pack, inside the hoops' height, above the pack's body and no wider than the pack plus a little.
+                assert!(hi[0] - lo[0] >= hi[1] - lo[1] && hi[0] - lo[0] >= hi[2] - lo[2], "{folk:?} {name}: not across the pack {lo:?}..{hi:?}");
+                assert!(lo[1] > plo[1] + (phi[1] - plo[1]) * 0.4, "{folk:?} {name}: hangs down the pack");
+                assert!(hi[0] - lo[0] < (phi[0] - plo[0]) * 1.8, "{folk:?} {name}: much wider than the pack");
+            }
+            // No lashing, no place for it.
+            let bare = crate::fit_worn(&body, &[(Slot::Back, pack(false))]);
+            assert!(fit_lashed(&fb_items::roll_item("Bedroll", 5).unwrap().shape, &bare.layer(Slot::Back).unwrap().mesh).is_none(), "{folk:?}");
+        }
     }
 
     #[test]

@@ -29,8 +29,9 @@
 //! shield, down in front of them. `FB_HOLD=<main>[,<off>]` puts items of those bases in the hands
 //! (a torch or lantern lit; `none` empties a hand), after either kit. `FB_DEBUG_HOVER=<n>` holds the
 //! card over the `n`th thing in the first carried grid (`u<n>` underfoot, `o<n>` in the open
-//! container or trader's shelf).
+//! container or trader's shelf; `q` the worn quiver on the doll).
 
+pub mod bags;
 pub mod card;
 pub mod doll;
 pub mod factions;
@@ -140,6 +141,7 @@ impl Plugin for InventoryPlugin {
             .init_resource::<Tuning>()
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
+            .init_resource::<bags::BagWindows>()
             .add_systems(OnExit(AppState::Delving), leave_the_delve)
             .add_systems(OnEnter(AppState::Delving), (roll_character, give_starting_kit, give_debug_kit.run_if(debug_kit_wanted), hold_for_capture.run_if(|| env_flag("FB_HOLD")), give_ammunition.run_if(|| debug_kit_wanted() || env_flag("FB_HOLD")), give_for_capture).chain())
             .add_systems(PostStartup, open_for_capture.run_if(in_state(AppState::Delving)).run_if(|| env_flag("FB_OPEN_INVENTORY")))
@@ -153,9 +155,9 @@ impl Plugin for InventoryPlugin {
                         underfoot::track_underfoot,
                         close_container_with_screen,
                         (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
+                        (bags::settle_click, bags::open_for_capture.run_if(|| env_flag("FB_OPEN_BAGS")), bags::place_windows).chain(),
                         build_screen,
-                        scroll_column,
-                        scroll_shelf,
+                        (bags::drag_windows, scroll_column, scroll_shelf).chain(),
                         drag_items,
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
@@ -192,6 +194,7 @@ pub fn leave_the_delve(mut commands: Commands, mut stage: ResMut<DollStage>, mut
     commands.insert_resource(Underfoot::default());
     commands.insert_resource(FloorChanges::default());
     commands.insert_resource(OpenContainer::default());
+    commands.insert_resource(bags::BagWindows::default());
     commands.insert_resource(Hovered::default());
     commands.insert_resource(card::ShownCard::default());
     commands.insert_resource(Toast::default());
@@ -304,11 +307,28 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let pack = inventory.add(pack);
         let _ = inventory.wear(pack, Slot::Back);
     }
+    // A satchel beside the pack, to try wearing both.
+    if inventory.worn(Slot::Satchel).is_none()
+        && let Some(satchel) = fb_items::roll_item("Satchel", seed(2))
+    {
+        let satchel = inventory.add(satchel);
+        let _ = inventory.wear(satchel, Slot::Satchel);
+    }
     let legendary = (1..4_000).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|i| i.rarity == Rarity::Legendary);
-    let things = ["Sword", "Healing draught", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
-    for item in legendary.into_iter().chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {
+    let things = ["Sword", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
+    // Potions in all four sizes: healing, a mana potion of each (the brew the seed rolls, found
+    // by looking), and three small healing draughts that stack.
+    let sizes = [("Healing vial", "Vial"), ("Small healing draught", "Small potion"), ("Healing draught", "Potion"), ("Large healing draught", "Large potion")];
+    let mana = |plain: &str| (0..2_000).filter_map(|s| fb_items::roll_item(plain, seed(60) + s)).find(|i| i.brew() == Some(armory::families::food::Brew::Mana));
+    let potions = sizes.iter().enumerate().filter_map(|(i, (healing, _))| fb_items::roll_item(healing, seed(40 + i as u32)));
+    let manas = sizes.iter().filter_map(|(_, plain)| mana(plain));
+    let stacked = (0..3).filter_map(|k| fb_items::roll_item("Small healing draught", seed(50 + k)));
+    for item in potions.chain(manas).chain(stacked).chain(legendary).chain(things.iter().enumerate().filter_map(|(i, base)| fb_items::roll_item(base, seed(10 + i as u32)))) {
         let id = inventory.add(item);
         if inventory.stow(id).is_err() {
+            if let Some(item) = inventory.item(id) {
+                warn!("debug kit: no room for {}", item.title());
+            }
             inventory.forget(id);
         }
     }
@@ -332,12 +352,13 @@ fn give_ammunition(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentLe
             holder
         }
     };
-    let have = inventory.contents_count(holder);
-    for k in have..fb_items::outfit::AMMUNITION_CARRIED {
-        let Some(item) = fb_items::roll_item_with(ammo_base, kit_seed(level.as_deref(), 0xa770 + 1 + k as u32), starting_odds()) else { return };
+    // One kind of arrow for the lot, in stacks.
+    let have = inventory.pieces_in(holder);
+    let kind = kit_seed(level.as_deref(), 0xa771);
+    for _ in have..fb_items::outfit::AMMUNITION_CARRIED {
+        let Some(item) = fb_items::roll_item_with(ammo_base, kind, starting_odds()) else { return };
         let id = inventory.add(item);
-        let at = inventory.grid(holder).and_then(|g| g.first_free(fb_items::footprint::Footprint { cols: 1, rows: 1 }));
-        if at.is_none_or(|at| inventory.put(id, holder, at).is_err()) {
+        if inventory.stow(id).is_err() {
             inventory.forget(id);
             break;
         }
@@ -363,6 +384,39 @@ pub fn hold_spec(spec: &str) -> (Option<Option<String>>, Option<Option<String>>)
 fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
     let (base, holder) = if base == "Chamberstick" { ("Candle", true) } else { (base, false) };
     let rolled = |s: u32| fb_items::roll_item(base, s);
+    // `FB_PACK=strap|lashing|both|plain` picks a pack with those accessories, for captures.
+    if base == "Pack"
+        && let Ok(want) = std::env::var("FB_PACK")
+    {
+        let has = |i: &fb_items::Item, a| i.has_accessory(a);
+        let (strap, lashing) = (fb_items::Accessory::WeaponStrap, fb_items::Accessory::Lashing);
+        let found = (0..2000).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| match want.as_str() {
+            "strap" => has(i, strap) && !has(i, lashing),
+            "lashing" => has(i, lashing) && !has(i, strap),
+            "both" => has(i, strap) && has(i, lashing),
+            _ => i.accessories().is_empty(),
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    // `FB_BELT=frogs|potions|sack|all` picks a belt with those fittings, for captures.
+    if base == "Belt"
+        && let Ok(want) = std::env::var("FB_BELT")
+    {
+        use fb_items::Accessory::{BeltSack, LeftFrog, PotionPouch, RightFrog};
+        let needs: &[fb_items::Accessory] = match want.as_str() {
+            "frogs" => &[LeftFrog, RightFrog],
+            "potions" => &[PotionPouch],
+            "sack" => &[BeltSack],
+            "all" => &[LeftFrog, RightFrog, PotionPouch, BeltSack],
+            _ => &[],
+        };
+        let found = (0..6000).filter_map(|k| rolled(seed.wrapping_add(k))).find(|i| needs.iter().all(|a| i.has_accessory(*a)));
+        if found.is_some() {
+            return found;
+        }
+    }
     let wanted = |i: &fb_items::Item| crate::carry::item_light(&i.shape).is_some() && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder));
     let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(wanted);
     lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle")).or_else(|| rolled(seed))
@@ -442,6 +496,34 @@ fn give_for_capture(mut inventory: ResMut<Inventory>, level: Option<Res<CurrentL
         if inventory.stow(id).is_err() {
             warn!("FB_TEACH: no room for {spec:?}");
             inventory.forget(id);
+        }
+    }
+    // `FB_HANG=Tent,Spear,Sword,Mace,Vial` hangs one of each base from the first fitting of the worn pack and belt
+    // that takes it (the lashing, strap, frogs and potion pouch), after the kit.
+    let hang = std::env::var("FB_HANG").unwrap_or_default();
+    for (i, base) in bases_in(&hang).enumerate() {
+        // The first roll of the base that a free fitting takes (a sword may be too long for a frog).
+        let hosts: Vec<ItemId> = [Slot::Back, Slot::Belt].into_iter().filter_map(|slot| inventory.worn(slot)).collect();
+        let free: Vec<(fb_items::Accessory, ItemId)> = hosts.iter().flat_map(|&host| inventory.fittings_of(host).iter().copied().collect::<Vec<_>>()).filter(|&(_, fitting)| inventory.fitting_slots(fitting).contains(&None)).collect();
+        let mut hung = false;
+        for k in 0..60 {
+            let Some(item) = roll(base, 0x40 + i as u32 + 0x100 * k) else {
+                warn!("FB_HANG: no base called {base:?}");
+                break;
+            };
+            if let Some(&(_, fitting)) = free.iter().find(|&&(accessory, fitting)| item.fits_accessory(accessory) && inventory.fitting_slots(fitting).contains(&None)) {
+                let id = inventory.add(item);
+                if let Some(index) = inventory.fitting_slots(fitting).iter().position(Option::is_none) {
+                    hung = inventory.fit(id, fitting, index).is_ok();
+                }
+                if !hung {
+                    inventory.forget(id);
+                }
+                break;
+            }
+        }
+        if !hung {
+            warn!("FB_HANG: nothing worn takes {base:?}");
         }
     }
     let stow = std::env::var("FB_STOW").unwrap_or_default();
@@ -579,6 +661,8 @@ pub enum Target {
     Doll,
     /// A quickslot on the strip: the item is bound to it, not moved ([`crate::quickslots`]).
     Quickslot(usize),
+    /// An item slot of a pack's or belt's fitting ([`FittingSlot`]): the item goes in whole, of any size.
+    Fitting { container: ItemId, index: u8 },
 }
 
 /// An item being dragged, or pressed and about to be.
@@ -701,12 +785,33 @@ pub fn landing(inventory: &Inventory, drag: &Drag, container: ItemId, cell: IVec
 /// Whether `drag` may be let go at `target`.
 pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<(), Refusal> {
     match target {
-        Target::Cell { view: GridView::Container(container), cell } => landing(inventory, drag, container, cell).map(|_| ()),
+        Target::Cell { view: GridView::Container(container), cell } => {
+            if inventory.stack_at(drag.id, container, cell.x, cell.y).is_some() {
+                return Ok(());
+            }
+            landing(inventory, drag, container, cell).map(|_| ())
+        }
         Target::Slot(slot) => inventory.check_wear(drag.id, slot),
         Target::Doll => inventory.target_slot(drag.id).map_or(Err(Refusal::NotWearable), |slot| inventory.check_wear(drag.id, slot)),
         Target::Quickslot(_) => crate::quickslots::check_bind(inventory, drag.id),
+        Target::Fitting { container, .. } => inventory.check_fit(drag.id, container),
         Target::Cell { view: GridView::Underfoot, .. } | Target::Page | Target::Level => Ok(()),
     }
+}
+
+/// Puts `id` in the fitting slot `index` of `fitting` ([`Inventory::fit`]) and says what that changes in
+/// the level: the item lifted if it lay there (or a piece of it, if the stack was left lying), and whatever
+/// it displaced set down if it found no room.
+pub fn fit_in(inventory: &mut Inventory, id: ItemId, fitting: ItemId, index: usize) -> Result<Vec<FloorChange>, Refusal> {
+    let lying = inventory.location(id) == Some(Location::Loose);
+    let displaced = inventory.fit(id, fitting, index)?;
+    // A stack of potions left on the floor with a piece in the pouch is still lying there.
+    let lifted = lying && inventory.location(id) != Some(Location::Loose);
+    let mut changes: Vec<FloorChange> = lifted.then_some(FloorChange::Lifted(id)).into_iter().collect();
+    if let Some((old, Displaced::Underfoot)) = displaced {
+        changes.push(FloorChange::SetDown(old, 0.0));
+    }
+    Ok(changes)
 }
 
 /// Equips `id` in `slot` ([`Inventory::equip`]) and says what that changes in the level: the
@@ -715,7 +820,9 @@ pub fn check_drop(inventory: &Inventory, drag: &Drag, target: Target) -> Result<
 pub fn equip(inventory: &mut Inventory, id: ItemId, slot: Slot) -> Result<Vec<FloorChange>, Refusal> {
     let lying = inventory.location(id) == Some(Location::Loose);
     let displaced = inventory.equip(id, slot)?;
-    let mut changes: Vec<FloorChange> = lying.then_some(FloorChange::Lifted(id)).into_iter().collect();
+    // A stack of potions left on the floor with a piece in the pouch is still lying there.
+    let lifted = lying && inventory.location(id) != Some(Location::Loose);
+    let mut changes: Vec<FloorChange> = lifted.then_some(FloorChange::Lifted(id)).into_iter().collect();
     if let Some((old, Displaced::Underfoot)) = displaced {
         changes.push(FloorChange::SetDown(old, 0.0));
     }
@@ -855,14 +962,22 @@ pub fn drop_at(inventory: &mut Inventory, drag: &Drag, target: Target, underfoot
     };
     match target {
         Target::Cell { view: GridView::Container(container), cell } => {
+            // Let go on a stack of its kind with room, it tops that up and keeps what is left
+            // where it was.
+            if let Some(onto) = inventory.stack_at(drag.id, container, cell.x, cell.y) {
+                let whole = inventory.merge_onto(drag.id, onto)?;
+                return Ok((lying && whole).then_some(FloorChange::Lifted(drag.id)).into_iter().collect());
+            }
             let at = landing(inventory, drag, container, cell)?;
             inventory.put(drag.id, container, at)?;
-            Ok(lying.then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
+            // A stack of potions left on the floor with a piece in the pouch is still lying there.
+            Ok((lying && inventory.location(drag.id) != Some(Location::Loose)).then_some(FloorChange::Lifted(drag.id)).into_iter().collect())
         }
         Target::Slot(slot) => equip(inventory, drag.id, slot),
         Target::Doll => equip(inventory, drag.id, inventory.target_slot(drag.id).ok_or(Refusal::NotWearable)?),
         Target::Cell { view: GridView::Underfoot, cell } => Ok(set_down(inventory, underfoot::aside_for_column(cell.x, underfoot_cols))),
         Target::Level => Ok(set_down(inventory, 0.0)),
+        Target::Fitting { container, index } => fit_in(inventory, drag.id, container, index as usize),
         Target::Page | Target::Quickslot(_) => Ok(vec![]),
     }
 }
@@ -889,7 +1004,7 @@ pub(crate) fn build_screen(
     fonts: Res<UiFonts>,
     doll_assets: Res<DollAssets>,
     character: Res<Character>,
-    (tuning, scrolled, barter, shelf_scrolled, record, abyss): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::travel::Abyss>>),
+    (tuning, scrolled, barter, shelf_scrolled, record, abyss, windows): (Res<Tuning>, Res<ColumnScroll>, Res<crate::barter::Barter>, Res<ShelfScrolled>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::travel::Abyss>>, Res<bags::BagWindows>),
     rules: Option<Res<crate::rules::GameRules>>,
     keymap: Option<Res<Keymap>>,
     players: Query<(&crate::character::DelverNeeds, &crate::exhaustion::Exhaustion, Option<&crate::character::DelverStamina>, Option<&crate::character::DelverMana>), With<crate::play::Player>>,
@@ -902,7 +1017,7 @@ pub(crate) fn build_screen(
         }
         return;
     }
-    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed())) && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
+    if existing.is_some() && !inventory.is_changed() && !underfoot.is_changed() && !showing.is_changed() && !tab.is_changed() && !character.is_changed() && !tuning.is_changed() && !barter.is_changed() && !windows.is_changed() && !(*tab == SheetTab::Factions && record.as_ref().is_some_and(|r| r.is_changed())) && !rules.as_ref().is_some_and(|r| r.is_changed()) && !keymap.as_ref().is_some_and(|k| k.is_changed()) {
         return;
     }
     // Drawn by the camera that draws over the held torch, as the HUD is.
@@ -981,10 +1096,14 @@ pub(crate) fn build_screen(
                             Node { flex_direction: FlexDirection::Column, row_gap: px(16), min_height: px(0), overflow: Overflow::scroll_y(), ..default() },
                         ))
                         .with_children(|leaf| {
+                        let popped = |id: ItemId| !barter.active() && windows.is_open(id);
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
+                                // A bag opened as a window leaves the column until it is closed.
                                 let carried = screen.inventory.carried_containers();
-                                if carried.is_empty() {
+                                let none_carried = carried.is_empty();
+                                let carried: Vec<ItemId> = carried.into_iter().filter(|&c| !popped(c)).collect();
+                                if none_carried {
                                     row.spawn((
                                         Text::new("Nothing to carry things in. Find a pack, a sack or a belt with a pouch."),
                                         UiFonts::style(&fonts.body, 14.0, MUTED),
@@ -1014,13 +1133,13 @@ pub(crate) fn build_screen(
                             });
                         leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
                             .with_children(|row| {
-                                if let Some(container) = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c)) {
+                                if let Some(container) = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c) && !popped(c)) {
                                     screen.container(row, &mut icons, container, GridView::Container(container), "");
                                 }
                                 // Nothing lies about in the trader's stall.
                                 if !barter.active() {
                                     screen.underfoot(row, &mut icons, &underfoot);
-                                    for &bag in &underfoot.bags {
+                                    for &bag in underfoot.bags.iter().filter(|&&b| !popped(b)) {
                                         screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                     }
                                 }
@@ -1030,7 +1149,7 @@ pub(crate) fn build_screen(
                 // The doll, with the quickslots and the help under it, leaving the left leaf's
                 // height to the grids.
                 ledger
-                    .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() })
+                    .spawn((bags::DollColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() }))
                     .with_children(|leaf| {
                         doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
                         if *tab != SheetTab::Inventory {
@@ -1043,6 +1162,13 @@ pub(crate) fn build_screen(
                         leaf.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
             });
+            // Opened bags float over the ledger, the last opened in front.
+            if *tab == SheetTab::Inventory && !barter.active() {
+                for (z, &id) in windows.order.iter().enumerate() {
+                    let at = windows.at.get(&id).copied().unwrap_or_default();
+                    screen.bag_window(root, &mut icons, id, at, z as i32 + 1);
+                }
+            }
             root.spawn((
                 DragGhost,
                 Node { position_type: PositionType::Absolute, ..default() },
@@ -1123,6 +1249,7 @@ impl ScreenLayout<'_> {
                 head.spawn((Text::new(format!("{label}{suffix}")), UiFonts::style(&self.fonts.display, 18.0, INK)));
             });
             match scroll {
+                None if matches!(view, GridView::Container(_)) => self.grid_with_fittings(column, icons, id, grid),
                 None => self.grid(column, icons, view, grid, false),
                 Some(y) => {
                     let size = grid_size(grid, self.cell);
@@ -1135,6 +1262,89 @@ impl ScreenLayout<'_> {
                         .with_children(|area| self.grid(area, icons, view, grid, false));
                 }
             }
+        });
+    }
+
+    /// A container opened as a window at `at`: a title bar to drag it by with a cross to close
+    /// it, over its grid. `z` stacks it among the other windows.
+    fn bag_window(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, at: Vec2, z: i32) {
+        let (Some(item), Some(grid)) = (self.inventory.item(id), self.inventory.grid(id)) else { return };
+        let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
+        let size = bags::window_size(self.inventory, id, self.cell).unwrap_or_default();
+        parent
+            .spawn((
+                bags::BagWindow(id),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(at.x),
+                    top: px(at.y),
+                    width: px(size.x),
+                    height: px(size.y),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(bags::GAP_PX),
+                    padding: UiRect::all(px(bags::PAD_PX)),
+                    border: UiRect::all(px(bags::BORDER_PX)),
+                    border_radius: BorderRadius::all(px(GRID_RADIUS_PX)),
+                    ..default()
+                },
+                BackgroundColor(BG),
+                BorderColor::all(LINE),
+                ZIndex(z),
+            ))
+            .with_children(|window| {
+                window.spawn((bags::BagTitle(id), Node { align_items: AlignItems::Center, column_gap: px(8), height: px(bags::TITLE_PX), flex_shrink: 0.0, ..default() })).with_children(|head| {
+                    let icon_size = icon::icon_size(item, false).as_vec2();
+                    let icon_size = icon_size * (30.0 / icon_size.max_element());
+                    icons.spawn(head, item, false, Node { width: px(icon_size.x), height: px(icon_size.y), ..default() }, icon_size.min_element().max(14.0));
+                    head.spawn((Text::new(label), UiFonts::style(&self.fonts.display, 18.0, INK), Node { flex_grow: 1.0, ..default() }));
+                    head.spawn((
+                        bags::BagClose(id),
+                        Node { width: px(26), height: px(26), justify_content: JustifyContent::Center, align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() },
+                        BackgroundColor(CELL),
+                    ))
+                    .with_children(|close| {
+                        close.spawn((Text::new("x"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                    });
+                });
+                self.grid_with_fittings(window, icons, id, grid);
+            });
+    }
+
+    /// A container's main grid with, beside it or under it, the item slots of the fittings a pack or belt
+    /// came with (a lashing, a weapon strap, frogs, a potion pouch's three), each group under its label,
+    /// framed and drawn as the doll's slots are. Just the grid for a container with none.
+    fn grid_with_fittings(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, id: ItemId, grid: &Grid<ItemId>) {
+        let Some(layout) = bags::fittings_layout(self.inventory, id, grid_size(grid, self.cell)) else {
+            self.grid(parent, icons, GridView::Container(id), grid, false);
+            return;
+        };
+        let direction = if layout.beside { FlexDirection::Row } else { FlexDirection::Column };
+        parent.spawn(Node { flex_direction: direction, align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), row_gap: px(bags::FITTING_GAP_PX), flex_shrink: 0.0, ..default() }).with_children(|outer| {
+            self.grid(outer, icons, GridView::Container(id), grid, false);
+            let along = if layout.beside { FlexDirection::Column } else { FlexDirection::Row };
+            outer.spawn(Node { flex_direction: along, align_items: AlignItems::FlexStart, column_gap: px(bags::FITTING_GAP_PX), row_gap: px(bags::FITTING_GAP_PX), ..default() }).with_children(|slots| {
+                for &(accessory, fitting) in self.inventory.fittings_of(id) {
+                    let Some(kind) = fb_items::fitting_grid(accessory) else { continue };
+                    let size = bags::fitting_slot_px(kind.small);
+                    let held = self.inventory.fitting_slots(fitting);
+                    slots.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2), ..default() }).with_children(|group| {
+                        group.spawn(Node { column_gap: px(bags::SLOT_GAP_PX), ..default() }).with_children(|row| {
+                            for (index, &item) in held.iter().enumerate() {
+                                row.spawn((
+                                    FittingSlot { container: fitting, index: index as u8 },
+                                    doll::slot_node(size),
+                                    BackgroundColor(BG.with_alpha(0.8)),
+                                    BorderColor::all(if item.is_some() { BRIGHT } else { LINE }),
+                                ))
+                                .with_children(|slot| doll::slot_contents(slot, icons, self.fonts, self.inventory, item, size));
+                            }
+                        });
+                        group.spawn(Node { height: px(bags::FITTING_LABEL_PX - 2.0), ..default() }).with_children(|head| {
+                            head.spawn((FittingLabel(fitting), Text::new(kind.label), UiFonts::style(&self.fonts.display, 13.0, INK), TextLayout::no_wrap()));
+                        });
+                    });
+                }
+            });
         });
     }
 
@@ -1213,6 +1423,21 @@ impl ScreenLayout<'_> {
                                     BackgroundColor(rarity_color(item.shown_rarity())),
                                 ));
                             }
+                            if item.quantity > 1 {
+                                slot.spawn((
+                                    CountBadge,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        right: px(3),
+                                        top: px(2),
+                                        padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                                        border_radius: BorderRadius::all(px(4)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(BG.with_alpha(0.88)),
+                                ))
+                                .with_child((Text::new(item.quantity.to_string()), UiFonts::style(&self.fonts.mono_bold, 12.0, Color::WHITE)));
+                            }
                             if let Some((text, ink, edge)) = self.barter.tag(self.inventory, entry.id).and_then(cell_tag) {
                                 slot.spawn((
                                     PriceTag,
@@ -1236,6 +1461,22 @@ impl ScreenLayout<'_> {
     }
 }
 
+/// The label under a fitting's slots in its pack's or belt's window.
+#[derive(Component)]
+pub struct FittingLabel(pub ItemId);
+
+/// One framed item slot of a pack's or belt's fitting (`container` is the fitting's hidden container,
+/// `index` the slot among its one or three): a drop target, and where the item in it is hovered and dragged from.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FittingSlot {
+    pub container: ItemId,
+    pub index: u8,
+}
+
+/// The number on a stack's cell: how many arrows or bolts lie there.
+#[derive(Component)]
+pub struct CountBadge;
+
 /// A grid's size on the page, in logical pixels, with cells `cell` pixels apart: its cells and
 /// the lines round them.
 pub fn grid_size<T>(grid: &Grid<T>, cell: f32) -> Vec2 {
@@ -1248,17 +1489,41 @@ fn target_under(
     drops: &Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
     grids: &Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
     slots: &Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+    fslots: &Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
     doll: Option<Rect>,
     ledger: Option<Rect>,
     column: Option<Rect>,
     shelf: Option<(GridView, Rect)>,
+    windows: &[Rect],
     cell: f32,
 ) -> Target {
+    // A window floats over everything, the doll and the quickslots too: under the mouse it takes
+    // the drop (a grid in it, else the page), and what lies behind it does not count. `windows` is front first.
+    if let Some(window) = windows.iter().find(|w| w.contains(point)) {
+        for (view, node, transform) in grids {
+            let rect = node_rect(node, transform);
+            if rect.contains(point) && window.contains(rect.center()) {
+                return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
+            }
+        }
+        for (slot, node, transform) in fslots {
+            let rect = node_rect(node, transform);
+            if rect.contains(point) && window.contains(rect.center()) {
+                return Target::Fitting { container: slot.container, index: slot.index };
+            }
+        }
+        return Target::Page;
+    }
     if let Some((slot, ..)) = drops.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Quickslot(slot.0);
     }
     if let Some((slot, ..)) = slots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point)) {
         return Target::Slot(slot.0);
+    }
+    if column.is_none_or(|c| c.contains(point))
+        && let Some((slot, ..)) = fslots.iter().find(|(_, node, transform)| node_rect(node, transform).contains(point))
+    {
+        return Target::Fitting { container: slot.container, index: slot.index };
     }
     // The grids' rectangles follow the scroll (`UiGlobalTransform` includes it), but a grid
     // scrolled out of the column is clipped, so only the visible part of the column counts.
@@ -1415,12 +1680,14 @@ fn drag_items(
     underfoot: Res<Underfoot>,
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
-    (time, tuning, ui_scale, mut barter): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>),
-    (drops, mut quickslots, columns, shelf_areas): (
+    (time, tuning, ui_scale, mut barter, mut bag_windows): (Res<Time<Real>>, Res<Tuning>, Option<Res<UiScale>>, ResMut<crate::barter::Barter>, ResMut<bags::BagWindows>),
+    (drops, fslots, mut quickslots, columns, shelf_areas, window_frames): (
         Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+        Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
         ResMut<Quickslots>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
+        Query<(&bags::BagWindow, &ComputedNode, &UiGlobalTransform)>,
     ),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
@@ -1436,7 +1703,9 @@ fn drag_items(
     let column = columns.iter().next().map(|(n, t)| node_rect(n, t));
     // The shelf's grid is clipped to its own scroll area.
     let shelf = barter.session.as_ref().zip(shelf_areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
-    let target = target_under(point, &drops, &grids, &slots, doll, ledger, column, shelf, cell_px);
+    // The open windows' rectangles, front first.
+    let window_rects: Vec<Rect> = bag_windows.order.iter().rev().filter_map(|id| window_frames.iter().find(|(w, ..)| w.0 == *id)).map(|(_, n, t)| node_rect(n, t)).collect();
+    let target = target_under(point, &drops, &grids, &slots, &fslots, doll, ledger, column, shelf, &window_rects, cell_px);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
@@ -1450,6 +1719,11 @@ fn drag_items(
         }),
         Target::Slot(slot) => inventory.worn(slot).and_then(|id| {
             let (_, node, transform) = slots.iter().find(|(s, ..)| s.0 == slot)?;
+            let size = inventory.footprint(id)?;
+            Some((node_rect(node, transform), Drag { id, grab: IVec2::ZERO, size, turned: false, press: point, active: false, target: None }))
+        }),
+        Target::Fitting { container, index } => inventory.fitting_slots(container).get(index as usize).copied().flatten().and_then(|id| {
+            let (_, node, transform) = fslots.iter().find(|(s, ..)| s.container == container && s.index == index)?;
             let size = inventory.footprint(id)?;
             Some((node_rect(node, transform), Drag { id, grab: IVec2::ZERO, size, turned: false, press: point, active: false, target: None }))
         }),
@@ -1486,9 +1760,16 @@ fn drag_items(
         let outcome = if drag.active {
             (if barter.active() { barter.drop_at(&mut inventory, &drag, target) } else { None }).unwrap_or_else(|| drop_at(&mut inventory, &drag, target, underfoot.grid.cols))
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
+            // A double-click is not a click on a bag's window.
+            bag_windows.bypass_change_detection().pending = None;
             (if barter.active() { barter.quick(&mut inventory, drag.id) } else { None }).unwrap_or_else(|| quick(&mut inventory, drag.id))
         } else {
             *last_click = Some((drag.id, now));
+            // A click on a bag opens its grid as a window, or closes it, once the interval for a
+            // second click has passed ([`bags::settle_click`]).
+            if inventory.grid(drag.id).is_some() && !barter.active() {
+                bag_windows.bypass_change_detection().pending = Some((drag.id, now));
+            }
             return;
         };
         match outcome {
@@ -1525,9 +1806,21 @@ fn debug_hover(
     underfoot: Res<Underfoot>,
     open: Res<OpenContainer>,
     views: Query<(&ItemView, &ComputedNode, &UiGlobalTransform)>,
+    slots: Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
     mut hovered: ResMut<Hovered>,
 ) {
     let spec = std::env::var("FB_DEBUG_HOVER").unwrap_or_default();
+    // `q` is the worn quiver's own slot on the doll.
+    if spec == "q"
+        && let Some(id) = inventory.worn(Slot::Quiver)
+        && let Some((_, node, transform)) = slots.iter().find(|(v, ..)| v.0 == Slot::Quiver)
+    {
+        let rect = node_rect(node, transform);
+        if rect.width() > 0.0 {
+            hovered.set_if_neq(Hovered(Some((id, rect))));
+        }
+        return;
+    }
     let (place, number) = match spec.chars().next() {
         Some(c @ ('u' | 'o')) => (Some(c), &spec[1..]),
         _ => (None, spec.as_str()),
@@ -1563,7 +1856,8 @@ fn show_drag(
     mut hints: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor, &mut Visibility), (With<DropHint>, Without<DragGhost>)>,
     mut views: Query<(&ItemView, &mut BackgroundColor, &Children), Without<DropHint>>,
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
-    mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>)>,
+    mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>, Without<FittingSlot>)>,
+    mut fitting_borders: Query<(&FittingSlot, &mut BorderColor), (Without<DropHint>, Without<ItemView>, Without<SlotView>)>,
     (tuning, ui_scale): (Res<Tuning>, Option<Res<UiScale>>),
     mut icons: Icons,
 ) {
@@ -1614,6 +1908,17 @@ fn show_drag(
             _ => None,
         });
         let colour = hint.unwrap_or(if inventory.worn(slot.0).is_some() { BRIGHT } else { LINE });
+        if border.top != colour {
+            *border = BorderColor::all(colour);
+        }
+    }
+    for (slot, mut border) in &mut fitting_borders {
+        let hint = drag.and_then(|d| d.target).and_then(|(target, fits)| match target {
+            Target::Fitting { container, index } if container == slot.container && index == slot.index => Some(if fits.is_ok() { OK } else { BAD }),
+            _ => None,
+        });
+        let filled = inventory.fitting_slots(slot.container).get(slot.index as usize).is_some_and(|held| held.is_some());
+        let colour = hint.unwrap_or(if filled { BRIGHT } else { LINE });
         if border.top != colour {
             *border = BorderColor::all(colour);
         }
@@ -1808,6 +2113,7 @@ mod tests {
             .init_resource::<Tuning>()
             .init_resource::<ColumnScroll>()
             .init_resource::<ShelfScrolled>()
+            .init_resource::<bags::BagWindows>()
             .add_systems(PreUpdate, crate::keymap::track_context)
             .add_systems(Update, (switch_screens, header::click_tabs, reset_scroll_on_tab, build_screen, crate::character::wear_abilities, sheet::update_status, sheet::update_vitals, sheet::update_gear, sheet::spawn_tip, sheet::show_breakdown, drag_items, icon::reveal_icons).chain());
         app.world_mut().spawn(ViewModelCamera { follows: Entity::PLACEHOLDER });
@@ -2666,8 +2972,10 @@ mod tests {
         press(&mut app, KeyCode::KeyI);
         let mut slots = app.world_mut().query::<(&SlotView, &Node, &Children)>();
         let found: Vec<(Slot, Node, Vec<Entity>)> = slots.iter(app.world()).map(|(s, n, c)| (s.0, n.clone(), c.to_vec())).collect();
-        assert_eq!(found.len(), fb_items::tables::slot_places().len());
-        for place in fb_items::tables::slot_places() {
+        // A pack's strap and lashing and a belt's frogs and pouch are grids in their window, not places on the doll.
+        let places: Vec<_> = fb_items::tables::slot_places().iter().collect();
+        assert_eq!(found.len(), places.len());
+        for place in places {
             let (_, node, children) = found.iter().find(|(s, ..)| *s == place.slot).unwrap();
             let x = px(doll::FRAME.x * place.x_percent / 100.0);
             match place.side {
@@ -2702,7 +3010,7 @@ mod tests {
     #[test]
     fn a_sword_dropped_on_the_doll_goes_in_the_main_hand_and_swaps() {
         let mut inventory = Inventory::default();
-        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
         inventory.wear(pack, Slot::Back).unwrap();
         let sword = inventory.add(fb_items::roll_item("Sword", 4).unwrap());
         inventory.put(sword, pack, Placement::new(0, 0, false)).unwrap();
@@ -3023,13 +3331,324 @@ mod tests {
             Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
             Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
             Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
         )>::new(&mut world);
-        let (drops, grids, slots) = state.get(&world).unwrap();
+        let (drops, grids, slots, fslots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
-        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, None, page, column, None, 72.0);
+        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, &fslots, None, page, column, None, &[], 72.0);
         assert!(matches!(at(None), Target::Cell { .. }));
         assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
         // The column starts below this point: the grid is under the header, clipped away.
         assert_eq!(at(Some(Rect::new(0.0, 80.0, 200.0, 200.0))), Target::Page);
+    }
+
+    #[test]
+    fn a_window_over_the_doll_or_quickslots_takes_the_drop() {
+        let mut world = World::new();
+        let rect_at = |at: Vec2, size: Vec2| (ComputedNode { size, inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(at)));
+        world.spawn((QuickslotDrop(1), rect_at(Vec2::new(300.0, 300.0), Vec2::splat(44.0))));
+        world.spawn((SlotView(Slot::Back), rect_at(Vec2::new(300.0, 300.0), Vec2::splat(44.0))));
+        // A grid in a window over them.
+        world.spawn((GridView::Underfoot, rect_at(Vec2::new(300.0, 300.0), Vec2::new(100.0, 100.0))));
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
+        )>::new(&mut world);
+        let (drops, grids, slots, fslots) = state.get(&world).unwrap();
+        let page = Some(Rect::new(0.0, 0.0, 600.0, 600.0));
+        let window = [Rect::new(200.0, 250.0, 400.0, 400.0)];
+        let at = |point: Vec2, windows: &[Rect]| target_under(point, &drops, &grids, &slots, &fslots, None, page, None, None, windows, 72.0);
+        assert!(matches!(at(Vec2::new(300.0, 300.0), &[]), Target::Quickslot(1)), "bare, the strip takes it");
+        assert!(matches!(at(Vec2::new(300.0, 300.0), &window), Target::Cell { view: GridView::Underfoot, .. }), "the window's grid takes it");
+        assert_eq!(at(Vec2::new(210.0, 260.0), &window), Target::Page, "its title bar is the page, not the level");
+    }
+
+    #[test]
+    fn a_click_on_a_bag_opens_its_window_and_a_press_on_a_window_rebuilds_nothing() {
+        let mut app = screen_app();
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.add_systems(Update, bags::settle_click.after(drag_items));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let size = app.world().resource::<Inventory>().footprint(pack).unwrap();
+        // The press went down a few pixels from where it comes up: under the threshold, so a click.
+        let press = Vec2::new(100.0 - DRAG_START_PX / 2.0, 100.0);
+        app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id: pack, grab: IVec2::ZERO, size, turned: false, press, active: false, target: None });
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.press(MouseButton::Left);
+        mouse.release(MouseButton::Left);
+        app.update();
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.pending.is_some_and(|(id, _)| id == pack), "a click, not a drag");
+        assert!(!windows.is_open(pack), "opens once the double-click interval has passed");
+        app.world_mut().resource_mut::<bags::BagWindows>().pending = Some((pack, -10.0));
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().is_open(pack));
+    }
+
+    #[test]
+    fn a_double_click_on_a_bag_never_toggles_its_window() {
+        let mut app = screen_app();
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.add_systems(Update, bags::settle_click.after(drag_items));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        let size = app.world().resource::<Inventory>().footprint(pack).unwrap();
+        for _ in 0..2 {
+            app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id: pack, grab: IVec2::ZERO, size, turned: false, press: Vec2::new(100.0, 100.0), active: false, target: None });
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            mouse.press(MouseButton::Left);
+            mouse.release(MouseButton::Left);
+            app.update();
+        }
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert_eq!(windows.pending, None, "the second click cancelled the first");
+        assert!(!windows.is_open(pack));
+    }
+
+    #[test]
+    fn pressing_the_front_window_does_not_mark_the_windows_changed() {
+        #[derive(Resource, Default)]
+        struct Seen(bool);
+        fn probe(windows: Res<bags::BagWindows>, mut seen: ResMut<Seen>) {
+            seen.0 |= windows.is_changed();
+        }
+        let mut app = screen_app();
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.init_resource::<Seen>().add_systems(Update, (bags::drag_windows, probe).chain());
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(150.0, 150.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.world_mut().spawn((
+            bags::BagWindow(pack),
+            Node::default(),
+            ComputedNode { size: Vec2::new(200.0, 200.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(150.0, 150.0))),
+        ));
+        app.update();
+        app.world_mut().resource_mut::<Seen>().0 = false;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert!(!app.world().resource::<Seen>().0, "a press on the window already in front changes nothing");
+    }
+
+    /// A pack rolled with both a lashing and a strap, worn, with a tent tied on and a spear strapped;
+    /// and a belt with both frogs and the pouch, worn.
+    fn hung_kit(inventory: &mut Inventory) -> (ItemId, ItemId) {
+        use fb_items::Accessory::{LeftFrog, Lashing, PotionPouch, RightFrog, WeaponStrap};
+        // The seeds are found once, not for every test.
+        static SEEDS: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+        let (pack_seed, belt_seed) = *SEEDS.get_or_init(|| {
+            let pack = (1..4000).find(|&s| fb_items::roll_item("Pack", s).is_some_and(|p| p.has_accessory(Lashing) && p.has_accessory(WeaponStrap))).unwrap();
+            let belt = (1..4000).find(|&s| fb_items::roll_item("Belt", s).is_some_and(|b| b.has_accessory(LeftFrog) && b.has_accessory(RightFrog) && b.has_accessory(PotionPouch))).unwrap();
+            (pack, belt)
+        });
+        let pack = inventory.add(fb_items::roll_item("Pack", pack_seed).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let belt = inventory.add(fb_items::roll_item("Belt", belt_seed).unwrap());
+        inventory.wear(belt, Slot::Belt).unwrap();
+        (pack, belt)
+    }
+
+    #[test]
+    fn a_packs_window_shows_its_lashing_and_strap_as_slots_beside_the_main_grid() {
+        use fb_items::Accessory::{Lashing, WeaponStrap};
+        let mut app = screen_app();
+        let (pack, tent, spear) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let (pack, _) = hung_kit(&mut inventory);
+            let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+            let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
+            inventory.lash(tent).unwrap();
+            let strap = inventory.fitting(pack, WeaponStrap).unwrap();
+            inventory.put(spear, strap, Placement::new(0, 0, false)).unwrap();
+            (pack, tent, spear)
+        };
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.update();
+        app.update();
+        let inventory = app.world().resource::<Inventory>();
+        let (lashing, strap) = (inventory.fitting(pack, Lashing).unwrap(), inventory.fitting(pack, WeaponStrap).unwrap());
+        let mut views = app.world_mut().query::<&GridView>();
+        let shown: Vec<GridView> = views.iter(app.world()).copied().collect();
+        assert!(shown.contains(&GridView::Container(pack)), "the main grid is on the screen");
+        for container in [lashing, strap] {
+            assert!(!shown.contains(&GridView::Container(container)), "{container:?} is a slot, not a grid");
+        }
+        let mut slots = app.world_mut().query::<&FittingSlot>();
+        let mut drawn: Vec<(ItemId, u8)> = slots.iter(app.world()).map(|s| (s.container, s.index)).collect();
+        drawn.sort();
+        drawn.retain(|(container, _)| [lashing, strap].contains(container));
+        assert_eq!(drawn, vec![(lashing, 0), (strap, 0)]);
+        let mut labels = app.world_mut().query::<(&FittingLabel, &Text)>();
+        let mut names: Vec<(ItemId, String)> = labels.iter(app.world()).map(|(l, t)| (l.0, t.0.clone())).collect();
+        names.sort_by_key(|(id, _)| id.0);
+        assert!(names.iter().any(|(id, name)| *id == lashing && name == "Lashing") && names.iter().any(|(id, name)| *id == strap && name == "Strap"), "{names:?}");
+        // A tent in the lashing grid and a spear in the strap grid are on the screen as their items.
+        let inventory = app.world().resource::<Inventory>();
+        assert_eq!((inventory.hung_on(pack).len(), inventory.location(tent).is_some(), inventory.location(spear).is_some()), (2, true, true));
+        // The window is barely bigger than the main grid: a column of slots beside it, no taller than it.
+        let cell = app.world().resource::<Tuning>().interface.cell_size;
+        let size = bags::window_size(inventory, pack, cell).unwrap();
+        let main = grid_size(inventory.grid(pack).unwrap(), cell);
+        let edge = 2.0 * (bags::PAD_PX + bags::BORDER_PX);
+        assert!(size.x > main.x + edge && size.x < main.x + edge + 1.3 * cell, "{size} against the main grid {main}");
+        assert!((size.y - (main.y + bags::TITLE_PX + bags::GAP_PX + edge)).abs() < 0.5, "no taller than the grid: {size} against {main}");
+    }
+
+    #[test]
+    fn the_doll_has_no_lashing_strap_frog_or_potion_places() {
+        let mut app = screen_app();
+        {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            hung_kit(&mut inventory);
+        }
+        press(&mut app, KeyCode::KeyI);
+        let mut slots = app.world_mut().query::<&SlotView>();
+        let names: Vec<String> = slots.iter(app.world()).map(|s| format!("{:?}", s.0).to_lowercase()).collect();
+        assert!(!names.is_empty());
+        for gone in ["strap", "lash", "frog", "potion"] {
+            assert!(!names.iter().any(|n| n.contains(gone)), "{gone}: {names:?}");
+        }
+        assert!(fb_items::tables::slot_places().iter().all(|p| !["strap", "lash", "frog", "potion"].iter().any(|g| format!("{:?}", p.slot).to_lowercase().contains(g))));
+    }
+
+    #[test]
+    fn a_bedroll_dragged_into_the_lashing_is_tied_on_a_sword_is_refused_by_a_frog_and_a_mace_taken() {
+        use fb_items::Accessory::{LeftFrog, Lashing};
+        let mut inventory = Inventory::default();
+        let (pack, belt) = hung_kit(&mut inventory);
+        let lashing = inventory.fitting(pack, Lashing).unwrap();
+        let bedroll = inventory.add(fb_items::roll_item("Bedroll", 3).unwrap());
+        inventory.put(bedroll, pack, Placement::new(0, 0, false)).unwrap();
+        let drag = |inventory: &Inventory, id| Drag { id, grab: IVec2::ZERO, size: inventory.footprint(id).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        let onto = |container| Target::Fitting { container, index: 0 };
+        assert_eq!(check_drop(&inventory, &drag(&inventory, bedroll), onto(lashing)), Ok(()));
+        let tying = drag(&inventory, bedroll);
+        drop_at(&mut inventory, &tying, onto(lashing), 4).unwrap();
+        assert_eq!((inventory.lashed(), inventory.contents_count(pack)), (Some(bedroll), 0), "tied on, out of the main grid");
+        // A frog takes a mace and not a sword (a sword is for the hand or the main grid): the table calls a one-handed sword frogable,
+        // so the refusal here is for a two-handed one too long for the frog.
+        let frog = inventory.fitting(belt, LeftFrog).unwrap();
+        let mace = (1..99).filter_map(|s| fb_items::roll_item("Mace", s)).find(|m| m.frogable()).unwrap();
+        let mace = inventory.add(mace);
+        let staff = inventory.add(fb_items::roll_item("Staff", 3).unwrap());
+        assert_eq!(check_drop(&inventory, &drag(&inventory, staff), onto(frog)), Err(Refusal::NotAccepted));
+        assert_eq!(check_drop(&inventory, &drag(&inventory, mace), onto(frog)), Ok(()));
+        let hanging = drag(&inventory, mace);
+        drop_at(&mut inventory, &hanging, onto(frog), 4).unwrap();
+        assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, mace)]);
+        let second = inventory.add(fb_items::roll_item("Dagger", 3).unwrap());
+        // A frog holds one: a second weapon swaps the first out, to wherever it came from, here the stowed dagger's cell.
+        inventory.put(second, pack, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(check_drop(&inventory, &drag(&inventory, second), onto(frog)), Ok(()));
+        let swapping = drag(&inventory, second);
+        drop_at(&mut inventory, &swapping, onto(frog), 4).unwrap();
+        assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, second)]);
+        assert_eq!(inventory.location(mace), Some(Location::In { container: pack, at: Placement::new(0, 0, false) }), "the mace went back where the dagger came from");
+    }
+
+    #[test]
+    fn a_spear_swapped_out_of_the_strap_that_the_pack_cannot_take_is_set_down() {
+        use fb_items::Accessory::WeaponStrap;
+        let mut inventory = Inventory::default();
+        let (pack, _) = hung_kit(&mut inventory);
+        let strap = inventory.fitting(pack, WeaponStrap).unwrap();
+        let long = |base: &str| (1..200).filter_map(|s| fb_items::roll_item(base, s)).find(|i| !i.profile.packable && i.strappable()).unwrap();
+        let (spear, staff) = (inventory.add(long("Spear")), inventory.add(long("Staff")));
+        let drag = |id| Drag { id, grab: IVec2::ZERO, size: inventory.footprint(id).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        let (spearing, staffing) = (drag(spear), drag(staff));
+        let onto = Target::Fitting { container: strap, index: 0 };
+        assert_eq!(drop_at(&mut inventory, &spearing, onto, 4), Ok(vec![FloorChange::Lifted(spear)]));
+        assert_eq!(inventory.hung_on(pack), vec![(WeaponStrap, spear)]);
+        assert_eq!(drop_at(&mut inventory, &staffing, onto, 4), Ok(vec![FloorChange::Lifted(staff), FloorChange::SetDown(spear, 0.0)]));
+        assert_eq!(inventory.hung_on(pack), vec![(WeaponStrap, staff)]);
+    }
+
+    #[test]
+    fn a_belt_taken_off_and_set_down_keeps_its_weapons_in_the_frogs() {
+        use fb_items::Accessory::{LeftFrog, RightFrog};
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let (sword, mace) = (inventory.add(fb_items::roll_item("Dagger", 3).unwrap()), inventory.add((1..99).filter_map(|s| fb_items::roll_item("Mace", s)).find(|m| m.frogable()).unwrap()));
+        for (id, accessory) in [(sword, LeftFrog), (mace, RightFrog)] {
+            let frog = inventory.fitting(belt, accessory).unwrap();
+            inventory.put(id, frog, Placement::new(0, 0, false)).unwrap();
+        }
+        // Taken off and set down underfoot as a bag is.
+        inventory.take_out(belt);
+        assert_eq!(inventory.hung_on(belt), vec![(LeftFrog, sword), (RightFrog, mace)], "still in its frogs");
+        assert!(!inventory.is_carried(sword) && !inventory.is_carried(mace));
+        // Picked up and worn again, they are carried again.
+        inventory.wear(belt, Slot::Belt).unwrap();
+        assert!(inventory.is_carried(sword) && inventory.is_carried(mace));
+        assert_eq!(inventory.worn_hung().len(), 2);
+    }
+
+    #[test]
+    fn a_potion_in_the_pouch_can_be_bound_to_a_quickslot() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let vial = inventory.add(fb_items::roll_item("Healing vial", 3).unwrap());
+        let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+        inventory.put(vial, pouch, Placement::new(0, 0, false)).unwrap();
+        assert_eq!(crate::quickslots::check_bind(&inventory, vial), Ok(()), "it is carried and a quickslot can use it");
+        assert_eq!(crate::eat::nearest_healing(&inventory, None), Some(vial), "and H drinks it");
+    }
+
+    #[test]
+    fn a_stack_lying_on_the_floor_dropped_on_the_pouch_gives_one_piece_and_stays_lying() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let mut vials = fb_items::roll_item("Vial", 3).unwrap();
+        vials.quantity = 3;
+        let stack = inventory.add(vials);
+        let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+        let drag = Drag { id: stack, grab: IVec2::ZERO, size: inventory.footprint(stack).unwrap(), turned: false, press: Vec2::ZERO, active: true, target: None };
+        let changes = drop_at(&mut inventory, &drag, Target::Fitting { container: pouch, index: 0 }, 4).unwrap();
+        assert!(changes.is_empty(), "the stack is still lying there: {changes:?}");
+        assert_eq!((inventory.item(stack).unwrap().quantity, inventory.location(stack)), (2, Some(Location::Loose)));
+        assert_eq!(inventory.hung_on(belt).len(), 1);
+        assert_eq!(inventory.item(inventory.hung_on(belt)[0].1).unwrap().quantity, 1);
+    }
+
+    #[test]
+    fn nothing_folds_into_a_place_of_the_pouch() {
+        use fb_items::Accessory::PotionPouch;
+        let mut inventory = Inventory::default();
+        let (_, belt) = hung_kit(&mut inventory);
+        let pouch = inventory.fitting(belt, PotionPouch).unwrap();
+        let (a, b) = (inventory.add(fb_items::roll_item("Vial", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
+        inventory.put(a, pouch, Placement::new(0, 0, false)).unwrap();
+        inventory.put(b, pouch, Placement::new(1, 0, false)).unwrap();
+        assert!(!inventory.fold_into_stacks(b));
+        assert_eq!((inventory.item(a).unwrap().quantity, inventory.item(b).unwrap().quantity), (1, 1), "one piece to a place");
     }
 }

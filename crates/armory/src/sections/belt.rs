@@ -51,6 +51,13 @@ pub struct BeltFittings {
     pub tip: bool,
     /// A belt pouch hung at the right hip.
     pub pouch: bool,
+    /// Three loops that each hold a small potion, in front of the right hip. One of the belt's
+    /// [`crate::families::bags::Accessory`]s.
+    #[serde(default)]
+    pub potion_pouch: bool,
+    /// A small sack hung behind the left hip. One of the belt's accessories.
+    #[serde(default)]
+    pub sack: bool,
 }
 
 sliders! {
@@ -80,6 +87,8 @@ impl Default for BeltFittings {
             keeper: true,
             tip: false,
             pouch: true,
+            potion_pouch: false,
+            sack: false,
         }
     }
 }

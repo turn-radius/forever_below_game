@@ -198,18 +198,36 @@ pub fn card_text(item: &Item, held: Option<(&Inventory, ItemId)>) -> CardText {
     } else {
         // A purse's description is its coins, which the price line says.
         let description = (!p.description.is_empty() && item.coins.is_none()).then(|| p.description.clone());
-        [description, Some(weight), Some(cells)].into_iter().flatten().collect()
+        let count = (item.quantity > 1).then(|| format!("\u{d7}{}", item.quantity));
+        let weight = if item.quantity > 1 { format!("{} lb", number(s.weight * item.quantity as f32)) } else { weight };
+        [description, count, Some(weight), Some(cells)].into_iter().flatten().collect()
     };
-    let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.value()) } else { Price::Unsure }, Price::Holds);
+    let price = item.coins.map_or_else(|| if item.is_known() { Price::Worth(item.stack_value()) } else { Price::Unsure }, Price::Holds);
     let contents = p.holds.as_ref().map(|holds| {
-        let inside = format!("{}\u{d7}{} inside", holds.cols, holds.rows);
-        match held {
-            Some((inventory, id)) if inventory.contents_count(id) > 0 => {
-                let n = inventory.contents_count(id);
+        // A quiver or bolt case is a row of stacks: its card counts shots against its capacity.
+        if let Some(family) = holds.accepts.first().filter(|f| matches!(f, armory::Family::Arrow | armory::Family::Bolt)) {
+            let shots = if *family == armory::Family::Arrow { "arrows" } else { "bolts" };
+            let room = holds.cols as u32 * held.and_then(|(inventory, id)| inventory.grid(id)?.entries().first().and_then(|e| inventory.item(e.id)).map(Item::stack_limit)).unwrap_or_else(|| fb_items::roll_item(if *family == armory::Family::Arrow { "Arrow" } else { "Bolt" }, 1).map_or(10, |i| i.stack_limit()));
+            let stacks = format!("{} stacks", holds.cols);
+            return match held {
+                Some((inventory, id)) => {
+                    format!("Holds {stacks} \u{b7} {}/{room} {shots} \u{b7} {} lb inside", inventory.pieces_in(id), number(inventory.contents_weight(id)))
+                }
+                _ => format!("Holds {stacks} \u{b7} {room} {shots} when full"),
+            };
+        }
+        let plain = p.plain_grid().map_or_else(String::new, |(c, r)| format!(" (plain {c}\u{d7}{r})"));
+        let inside = format!("{}\u{d7}{} inside{plain}", holds.cols, holds.rows);
+        let line = match held {
+            Some((inventory, id)) if inventory.holding(id) > 0 => {
+                let n = inventory.holding(id);
                 format!("Holds {n} {} \u{b7} {} lb inside \u{b7} {inside}", if n == 1 { "thing" } else { "things" }, number(inventory.contents_weight(id)))
             }
             _ => format!("Empty \u{b7} {inside}"),
-        }
+        };
+        // What the pack was rolled with: "with a lashing, a weapon strap".
+        let accessories: Vec<String> = item.accessories().iter().map(|a| format!("a {}", a.name().to_lowercase())).collect();
+        if accessories.is_empty() { line } else { format!("{line} \u{b7} with {}", accessories.join(", ")) }
     });
     CardText {
         title: item.shown_title(),
@@ -976,6 +994,14 @@ mod tests {
     }
 
     #[test]
+    fn a_bag_of_holding_shows_its_size_against_the_plain_one() {
+        let mut parts = fb_items::ItemParts::from(fb_items::roll_item("Satchel", 3).unwrap());
+        parts.affixes = vec![fb_items::tables::affix_named("of Holding").unwrap()];
+        let bag = fb_items::Item::from_parts(parts).unwrap();
+        assert_eq!(card_text(&bag, None).contents.as_deref(), Some("Empty \u{b7} 6\u{d7}4 inside (plain 6\u{d7}3)"));
+    }
+
+    #[test]
     fn goods_and_containers_say_what_they_are() {
         let bread = fb_items::roll_item("Bread", 3).unwrap();
         let card = card_text(&bread, None);
@@ -984,8 +1010,17 @@ mod tests {
         assert_eq!(card.price.line(), format!("Worth {}", bread.value().short()));
 
         let mut inventory = Inventory::default();
-        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
-        assert_eq!(card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.as_deref(), Some("Empty \u{b7} 8\u{d7}5 inside"));
+        // Seed 1 is a plain Rucksack (seed 7 rolls Cramped).
+        let pack = inventory.add(fb_items::roll_item("Pack", 1).unwrap());
+        let empty = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();
+        assert!(empty.starts_with("Empty \u{b7} 8\u{d7}5 inside"), "{empty}");
+        // What the pack was rolled with is named after.
+        let accessories = inventory.item(pack).unwrap().accessories();
+        assert_eq!(empty.contains("with "), !accessories.is_empty(), "{empty}");
+        // Named as what the pack has: "with a lashing, a weapon strap".
+        let both = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing) && p.has_accessory(fb_items::Accessory::WeaponStrap)).unwrap();
+        let line = card_text(&both, None).contents.unwrap();
+        assert!(line.ends_with("with a lashing, a weapon strap"), "{line}");
         let bread = inventory.add(bread);
         inventory.put(bread, pack, super::super::grid::Placement::new(0, 0, false)).unwrap();
         let contents = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();

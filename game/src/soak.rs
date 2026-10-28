@@ -379,7 +379,7 @@ fn act(
         .filter(|&id| match inventory.location(id) {
             Some(Location::In { .. }) => inventory.is_carried(id),
             // Worn things too, but not the pack everything rides in.
-            Some(Location::Worn(slot)) => slot != fb_items::Slot::Back,
+            Some(Location::Worn(slot)) => !matches!(slot, fb_items::Slot::Back | fb_items::Slot::Satchel),
             _ => false,
         })
         .collect();
@@ -394,7 +394,7 @@ fn act(
             changes.0.extend(change);
             soak.stats.equipped += 1;
         }
-    } else if inventory.contents_count(id) == 0 {
+    } else if inventory.holding(id) == 0 {
         let Some(size) = inventory.footprint(id) else { return };
         let drag = Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
         if let Ok(change) = crate::inventory::drop_at(&mut inventory, &drag, Target::Level, 4) {

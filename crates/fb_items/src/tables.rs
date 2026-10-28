@@ -330,9 +330,9 @@ mod tests {
     #[test]
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 13);
-        assert_eq!(goods().len(), 32);
-        assert_eq!(affixes().len(), 83);
-        assert_eq!(slot_places().len(), 17);
+        assert_eq!(goods().len(), 39);
+        assert_eq!(affixes().len(), 86);
+        assert_eq!(slot_places().len(), 18);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));
         let charm = slot_places().iter().find(|p| p.slot == Slot::Charm).unwrap();
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(base_groups().len(), 26);
         assert_eq!(food_descriptions().len(), 12);
         assert_eq!((syllables().len(), places().len()), (11, 9));
-        assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 73);
+        assert_eq!(base_groups().iter().map(|g| g.bases.len()).sum::<usize>(), 79);
     }
 
     #[test]

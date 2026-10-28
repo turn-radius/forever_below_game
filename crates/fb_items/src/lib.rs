@@ -14,6 +14,7 @@ pub mod contents;
 pub mod dice;
 pub mod dress;
 pub mod enchant;
+pub mod fittings;
 pub mod foe;
 pub mod footprint;
 pub mod identify;
@@ -41,11 +42,14 @@ pub mod value;
 pub use foe::Foe;
 pub use identify::Known;
 pub use contents::{container_item, roll_contents};
-pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot};
+pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot, stack_up};
+pub use armory::families::bags::Accessory;
+pub use fittings::{FittingGrid, fitting_grid, fitting_grids, fitting_item};
+pub use item::{FROG_CELLS, STRAP_CELLS, fits_potion_pouch};
 pub use naming::Sex;
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;
-pub use provision::{Consume, ELIXIRS, Elixir, Provision, SWALLOW, elixir, provision};
+pub use provision::{Consume, ELIXIRS, Elixir, Heal, POTIONS, Provision, SWALLOW, elixir, healing_base, provision};
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -61,16 +65,22 @@ pub enum Rarity { Common, Magic, Rare, Legendary }
 pub enum Kind { Gear, Good }
 
 /// Equipment slots on the doll, as in the prototype, the hip a lantern hangs at from the belt,
-/// and the quiver slot a quiver or bolt case is slung in (both our own; the plate had neither).
+/// the quiver slot a quiver or bolt case is slung in, and the satchel slot a satchel is slung in
+/// at the hip, beside a pack or sack on the back (all our own; the plate had none). `Satchel` is
+/// last so the slots keep their order in saves; a save from before it holds a satchel in `Back`
+/// (the game moves it on load).
+///
+/// A pack's lashing and weapon strap and a belt's frogs and potion pouch are not slots: each is a
+/// small grid of its own that belongs to its pack or belt ([`fittings`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver }
+pub enum Slot { Head, Neck, Shirt, Cloak, Body, Mainhand, Offhand, Hands, Belt, Legs, Feet, Back, Ring1, Ring2, Charm, Hip, Quiver, Satchel }
 
 /// What an item is made of and how it is used. Affixes roll only on items with their tag
 /// (`docs/items.md`, "Rarity and affixes").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Food, Ammunition, Ranged, Blunt, Blade }
+pub enum Tag { Cloth, Leather, Metal, Wood, Wear, Armor, Quiet, Weapon, Light, Trinket, Container, Bag, Food, Ammunition, Ranged, Blunt, Blade }
 
 /// The game layer's random stream for an item rolled from `seed`: rarity, affixes, names and
 /// history draw from it in that order. Kept apart from the Armory's own stream for the shape,

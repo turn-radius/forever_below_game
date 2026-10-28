@@ -414,7 +414,8 @@ pub fn transform_of(place: &Placement) -> Transform {
 fn spawn_creatures(
     mut commands: Commands,
     level: Res<CurrentLevel>,
-    old: Query<Entity, With<Critter>>,
+    old: Query<(Entity, Option<&crate::remains::BodyStock>), With<Critter>>,
+    mut inventory: Option<ResMut<crate::inventory::Inventory>>,
     record: Option<Res<WorldRecord>>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
     mut spawner: ItemSpawner,
@@ -424,7 +425,10 @@ fn spawn_creatures(
     if shown.as_deref() == Some(&level.0.creatures[..]) && !old.is_empty() {
         return;
     }
-    for entity in &old {
+    for (entity, stock) in &old {
+        if let (Some(stock), Some(inventory)) = (stock, inventory.as_deref_mut()) {
+            inventory.forget(stock.container);
+        }
         commands.entity(entity).despawn();
     }
     debug!("spawning creatures: {:?}", level.0.creatures.iter().map(|c| c.species).collect::<Vec<_>>());
@@ -437,13 +441,25 @@ fn spawn_creatures(
         let left = saved.and_then(|l| l.creatures.get(&index));
         // A body from the record lies bare: what it wore was set down where it fell, and is on
         // the floor (or gone) as the record has it.
-        let root = spawn_built(&mut commands, &mut spawner, &level.0, spot, built, left.is_some_and(|l| l.dead));
+        // A skeleton's body that still has things on it is drawn in them, and the ones taken are
+        // taken off its bones ([`crate::remains`]).
+        let dressed = left.filter(|l| l.dead && spot.species.is_skeleton()).and_then(|l| l.body.as_ref()).zip(inventory.as_deref_mut());
+        let root = spawn_built(&mut commands, &mut spawner, &level.0, spot, built, left.is_some_and(|l| l.dead) && dressed.is_none());
         if let Some(left) = left {
             let at = left.transform();
             commands.entity(root).insert((Health { hp: left.hp, max: left.max }, at));
             if left.dead {
                 // Long fallen: lying as it lies once it has collapsed.
-                commands.entity(root).insert((Corpse { since: LONG_FALLEN, fell: at }, skeletons::Looted));
+                commands.entity(root).insert(Corpse { since: LONG_FALLEN, fell: at });
+                match dressed {
+                    Some((body, inventory)) => {
+                        let stock = crate::remains::restore_body(inventory, body, spot.seed, spot.species.stat_block().name);
+                        commands.entity(root).insert(stock);
+                    }
+                    None => {
+                        commands.entity(root).insert(skeletons::Looted);
+                    }
+                }
             }
             // A troll is as burned as it was left.
             if left.charred > 0.0 && spot.species.is_troll() {
@@ -679,8 +695,21 @@ pub fn spawn_built(commands: &mut Commands, spawner: &mut ItemSpawner, level: &L
         }
     }
     if let Some(gear) = gear.as_ref().filter(|_| !fallen) {
+        // The pieces of one thing run together; a second thing of the same kind starts a new
+        // run, so each piece knows which of its kind it belongs to ([`skeletons::WornItem::nth`]).
+        let mut last: Option<(armory::Family, u32)> = None;
+        let mut runs: Vec<((armory::Family, u32), usize)> = Vec::new();
         for piece in &gear.pieces {
-            spawner.spawn(&piece.mesh, &crate::carry::appearance_of(&piece.item)).insert((Name::new(piece.name.clone()), WornGear, ChildOf(bones[piece.bone])));
+            let key = (piece.item.family(), piece.item.seed());
+            if last != Some(key) {
+                match runs.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, n)) => *n += 1,
+                    None => runs.push((key, 0)),
+                }
+                last = Some(key);
+            }
+            let nth = runs.iter().find(|(k, _)| *k == key).map_or(0, |(_, n)| *n);
+            spawner.spawn(&piece.mesh, &crate::carry::appearance_of(&piece.item)).insert((Name::new(piece.name.clone()), WornGear, skeletons::WornItem { family: key.0, seed: key.1, nth }, ChildOf(bones[piece.bone])));
         }
     }
     root

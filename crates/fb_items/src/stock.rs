@@ -156,7 +156,7 @@ impl Line {
                 "Lantern", "Torch", "Spare torch", "Lamp oil", "Candle", "Bread", "Cheese", "Smoked fish", "Apple", "Meat pie", "Sausages", "Tankard", "Wine", "Waterskin",
                 "Rope", "Pack", "Satchel", "Sack", "Purse",
             ],
-            Line::Potions => &["Potion", "Healing draught", "Elixir of the Hare", "Elixir of Vigil", "Elixir of Fasting", "Elixir of Embers"],
+            Line::Potions => &["Vial", "Small potion", "Potion", "Large potion", "Healing vial", "Small healing draught", "Healing draught", "Large healing draught", "Elixir of the Hare", "Elixir of Vigil", "Elixir of Fasting", "Elixir of Embers"],
         }
     }
 

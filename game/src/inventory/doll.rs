@@ -33,13 +33,13 @@ use fb_items::{
 use std::sync::Arc;
 
 use super::icon::Icons;
-use super::items::Inventory;
+use super::items::{Inventory, ItemId};
 use super::seal::{Canvas, Glyph, Seal, SealInks, TURN_SECONDS};
 use crate::launch::AppState;
 use crate::carry::item_light;
 use crate::character::Character;
 use crate::figure::{Figure, spawn_figure};
-use crate::fitting::{FitCache, Fitting, figure_key};
+use crate::fitting::{FitCache, Fitting, figure_key_hung};
 use crate::light::{StudioLight, Torch, point_light, reach_falloff};
 use crate::play::{Screen, ScreenOpen};
 use crate::render::ItemSpawner;
@@ -338,7 +338,15 @@ pub fn start_doll_fitting(
     let spec = character.spec();
     let dirt = character.dirt;
     let worn: Vec<(Slot, fb_items::Item)> = inventory.equipped().into_iter().map(|(slot, item)| (slot, item.clone())).collect();
-    let key = figure_key(&spec, &worn, dirt);
+    // A weapon on the pack's strap and a bundle on its lashing ride the pack and one in a frog hangs at the hip, drawn with them
+    // ([`Figure::dress_hung`]); the potions in the pouch are not drawn.
+    let hung: Vec<(fb_items::Accessory, fb_items::Item)> = inventory
+        .worn_hung()
+        .into_iter()
+        .filter(|(accessory, _)| matches!(accessory, fb_items::Accessory::WeaponStrap | fb_items::Accessory::Lashing | fb_items::Accessory::LeftFrog | fb_items::Accessory::RightFrog))
+        .filter_map(|(accessory, id)| Some((accessory, inventory.item(id)?.clone())))
+        .collect();
+    let key = figure_key_hung(&spec, &worn, &hung, dirt);
     if stage.dressed.as_ref() == Some(&key) {
         // Already dressed for this equipment; drop any in-flight fit
         stage.fitting = None;
@@ -352,7 +360,7 @@ pub fn start_doll_fitting(
         stage.fitting = Some(Fitting::ready(key, figure));
         return;
     }
-    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress(&spec, &worn, dirt))));
+    stage.fitting = Some(Fitting::start(key, move || Arc::new(Figure::dress_hung(&spec, &worn, &hung, dirt))));
 }
 
 /// Poll the fitting task and spawn the figure when it's ready.
@@ -460,7 +468,7 @@ pub fn show_doll(open: Res<ScreenOpen>, stage: Res<DollStage>, mut cameras: Quer
 }
 
 /// Turns the doll while the mouse is dragged across it with the button down, unless the press
-/// took up an item or landed on a slot.
+/// took up an item or landed on a slot or a bag window.
 #[allow(clippy::too_many_arguments)]
 pub fn turn_doll(
     open: Res<ScreenOpen>,
@@ -470,6 +478,7 @@ pub fn turn_doll(
     ui_scale: Option<Res<UiScale>>,
     views: Query<(&ComputedNode, &UiGlobalTransform), With<DollView>>,
     slots: Query<(&ComputedNode, &UiGlobalTransform), With<SlotView>>,
+    bag_windows: Query<(&ComputedNode, &UiGlobalTransform), With<super::bags::BagWindow>>,
     dragging: Res<super::Dragging>,
     mut stage: ResMut<DollStage>,
     mut transforms: Query<&mut Transform>,
@@ -482,7 +491,7 @@ pub fn turn_doll(
     if buttons.just_pressed(MouseButton::Left) {
         let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
         let on = |rect: Rect| cursor.is_some_and(|c| rect.contains(c));
-        *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t)));
+        *turning = dragging.0.is_none() && views.iter().any(|(n, t)| on(node_rect(n, t))) && !slots.iter().any(|(n, t)| on(node_rect(n, t))) && !bag_windows.iter().any(|(n, t)| on(node_rect(n, t)));
     }
     if !*turning || motion.delta.x == 0.0 {
         return;
@@ -598,20 +607,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                     BorderColor::all(if worn.is_some() { BRIGHT } else { LINE }),
                 ))
                 .with_children(|slot| {
-                    if let Some(item) = worn {
-                        let shape = super::icon::icon_size(item, false).as_vec2();
-                        let fit = (size - 11.0) / shape.max_element();
-                        slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
-                            .with_children(|centre| {
-                                icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
-                            });
-                        if item.profile.kind == Kind::Gear {
-                            slot.spawn((
-                                Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
-                                BackgroundColor(rarity_color(item.shown_rarity())),
-                            ));
-                        }
-                    }
+                    slot_contents(slot, icons, fonts, inventory, inventory.worn(place.slot), size);
                     let font = if place.size == SlotSize::Big { 14.0 } else { 12.0 };
                     let (label_left, label_right) = match place.side {
                         SlotSide::Left => (px(0), Val::Auto),
@@ -626,6 +622,55 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                 });
         }
     });
+}
+
+/// What a framed item slot shows of `id`: its icon fitted inside a slot `size` across (a thin
+/// long item lying on the diagonal), the shots in a quiver and the rarity dot of gear. The doll's
+/// slots and the fitting slots in a pack's or belt's window draw alike.
+pub(super) fn slot_contents(slot: &mut ChildSpawnerCommands, icons: &mut Icons, fonts: &UiFonts, inventory: &Inventory, id: Option<ItemId>, size: f32) {
+    let Some((id, item)) = id.and_then(|id| Some((id, inventory.item(id)?))) else { return };
+    let shape = super::icon::icon_size(item, false).as_vec2();
+    // A thin long item (a staff, a spear) is a dot in a small slot upright, so it
+    // lies on the slot's diagonal, its length fitted to it.
+    let thin = shape.max_element() >= 3.0 * shape.min_element();
+    let fit = (size - 11.0) / shape.max_element() * if thin { std::f32::consts::SQRT_2 * 0.92 } else { 1.0 };
+    slot.spawn(Node { width: percent(100), height: percent(100), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() })
+        .with_children(|centre| {
+            let mut icon = icons.spawn(centre, item, false, Node { width: px(shape.x * fit), height: px(shape.y * fit), ..default() }, (size * 0.45).min(40.0));
+            if thin {
+                icon.insert(UiTransform { rotation: Rot2::degrees(45.0), ..default() });
+            }
+        });
+    // A quiver or bolt case counts the shots in it, as a stack's cell does.
+    if item.profile.holds.as_ref().is_some_and(|h| !h.accepts.is_empty()) {
+        let shots = inventory.pieces_in(id);
+        if shots > 0 {
+            slot.spawn((
+                super::CountBadge,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(3),
+                    bottom: px(2),
+                    padding: UiRect::new(px(4), px(4), px(0), px(1)),
+                    border_radius: BorderRadius::all(px(4)),
+                    ..default()
+                },
+                BackgroundColor(BG.with_alpha(0.88)),
+            ))
+            .with_child((Text::new(shots.to_string()), UiFonts::style(&fonts.mono_bold, 12.0, Color::WHITE)));
+        }
+    }
+    if item.profile.kind == Kind::Gear {
+        slot.spawn((
+            Node { position_type: PositionType::Absolute, right: px(5), top: px(5), width: px(7), height: px(7), border_radius: BorderRadius::MAX, ..default() },
+            BackgroundColor(rarity_color(item.shown_rarity())),
+        ));
+    }
+}
+
+/// The node of a framed item slot `size` across, as the doll draws its places.
+pub(super) fn slot_node(size: f32) -> Node {
+    Node { width: px(size), height: px(size), padding: UiRect::all(px(4)), border: UiRect::all(px(1.5)), border_radius: BorderRadius::all(px(8)), flex_shrink: 0.0, ..default() }
 }
 
 /// One rune of a band, centred on its place in a layer `side` across, turned to its circle.
@@ -677,6 +722,7 @@ mod tests {
             fb_items::Slot::Ring2,
             fb_items::Slot::Charm,
             fb_items::Slot::Hip,
+            fb_items::Slot::Satchel,
         ] {
             let place = places.iter().find(|p| p.slot == slot).unwrap_or_else(|| panic!("{slot:?}"));
             let size = if place.size == SlotSize::Big { BIG_SLOT } else { SMALL_SLOT };
@@ -881,6 +927,19 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<DollStage>().turn, turn);
+    }
+
+    #[test]
+    fn the_doll_does_not_turn_under_a_bag_window() {
+        let mut app = stage_app();
+        wait_for_doll_fitting(&mut app);
+        let node = ComputedNode { size: Vec2::splat(100.0), inverse_scale_factor: 1.0, ..ComputedNode::DEFAULT };
+        app.world_mut().spawn((super::super::bags::BagWindow(crate::inventory::ItemId(1)), node, UiGlobalTransform::from_translation(Vec2::splat(320.0))));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(60.0, 0.0);
+        app.update();
+        assert_eq!(app.world().resource::<DollStage>().turn, 0.0, "the press belongs to the window");
     }
 
     #[test]

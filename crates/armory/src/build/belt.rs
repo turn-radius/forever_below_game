@@ -14,7 +14,8 @@ use crate::build::form::{FRONT, TorsoForm, TorsoProfile};
 use crate::build::parts::{Look, Parts};
 use crate::build::strap::{buckle, d_ring, rivets, strap};
 use crate::geom::vec3::{self, V3};
-use crate::geom::{CatmullRom, Mat3, MeshBuilder, cuboid};
+use crate::geom::{CatmullRom, Mat3, MeshBuilder, Shading, cuboid, cylinder};
+use crate::material::MaterialKind;
 use crate::sections::belt::{Belt, BeltFittings, BeltStyle};
 
 /// Strap thickness.
@@ -88,6 +89,14 @@ fn frog_angle(i: u32) -> f32 {
 /// Where a pouch hangs: behind the right hip.
 const POUCH_ANGLE: f32 = PI - 0.45;
 
+/// Where a small sack hangs: behind the left hip.
+const SACK_ANGLE: f32 = 0.95;
+
+/// The middle of the potion pouch's three loops: between the buckle and the right frog.
+const POTION_ANGLE: f32 = FRONT - 0.55;
+/// How far round the belt the pouch's loops stand apart.
+const POTION_STEP: f32 = 0.14;
+
 /// Every part of a belt on `form`: `"belt"`, `"tail"`, `"buckle"`, `"keeper"`, `"tip"`,
 /// `"studs"`, `"frogs"`, `"loops"` and `"rings"`, as the state calls for them.
 pub fn belt_parts(form: &TorsoForm, belt: &Belt, fittings: &BeltFittings) -> Parts {
@@ -146,7 +155,7 @@ pub fn belt_parts(form: &TorsoForm, belt: &Belt, fittings: &BeltFittings) -> Par
     if fittings.studs > 0 {
         let skip = |a: f32| {
             let near = |b: f32| ((a - b + PI).rem_euclid(TAU) - PI).abs() < 0.3;
-            near(FRONT) || near(FRONT + 0.35) || (0..fittings.frogs).any(|i| near(frog_angle(i))) || fittings.pouch && near(POUCH_ANGLE)
+            near(FRONT) || near(FRONT + 0.35) || (0..fittings.frogs).any(|i| near(frog_angle(i))) || fittings.pouch && near(POUCH_ANGLE) || fittings.potion_pouch && near(POTION_ANGLE) || fittings.sack && near(SACK_ANGLE)
         };
         let angles: Vec<f32> =
             (0..fittings.studs).map(|i| FRONT + 0.4 + (TAU - 0.8) * (i as f32 + 0.5) / fittings.studs as f32).filter(|&a| !skip(a)).collect();
@@ -193,6 +202,37 @@ pub fn belt_parts(form: &TorsoForm, belt: &Belt, fittings: &BeltFittings) -> Par
         parts.add_look("frogs", frogs, leather);
     }
 
+    // The potion pouch: three leather sleeves hung from the belt's lower edge, a vial standing
+    // in each with its cork showing. Decorative: what is carried in it is the inventory's.
+    if fittings.potion_pouch {
+        let mut sleeves = MeshBuilder::new();
+        let mut corks = MeshBuilder::new();
+        for k in 0..3 {
+            let a = POTION_ANGLE + (k as f32 - 1.0) * POTION_STEP;
+            sleeves.append(&line.loop_round(a, 0.12, 0.015));
+            let top = line.height(a) - w * 0.5;
+            let (tab, tab_faces): (Vec<V3>, Vec<V3>) =
+                (0..=6).map(|j| line.surface(a, top + 0.05 - 0.4 * j as f32 / 6.0, CLEARANCE + THICKNESS + 0.025)).unzip();
+            sleeves.append(&strap(&tab, &tab_faces, 0.12, 0.03, false));
+            // The sleeve itself, standing off the tab so a vial fits behind its face.
+            let (centre, n) = line.surface(a, top - 0.3, CLEARANCE + THICKNESS + 0.11);
+            let t = line.tangent(a);
+            let ring: Vec<V3> = (0..16)
+                .map(|j| {
+                    let th = TAU * j as f32 / 16.0;
+                    vec3::add(centre, vec3::add(vec3::scale(n, 0.085 * th.cos()), vec3::scale(t, 0.085 * th.sin())))
+                })
+                .collect();
+            let ring_faces: Vec<V3> = ring.iter().map(|&q| vec3::sub(q, centre)).collect();
+            sleeves.append(&strap(&ring, &ring_faces, 0.2, 0.025, true));
+            let mut cork = cylinder(0.05, 0.16, 8, Shading::SMOOTH);
+            cork.translate(vec3::add(centre, [0.0, 0.1, 0.0]));
+            corks.append(&cork);
+        }
+        parts.add_look("potion_pouch", sleeves, leather);
+        parts.add_look("vials", corks, Look::of(MaterialKind::Wood));
+    }
+
     // Pouch loops at the back, and D-rings on tabs at the sides.
     if fittings.loops > 0 {
         let mut loops = MeshBuilder::new();
@@ -225,6 +265,14 @@ pub fn belt_parts(form: &TorsoForm, belt: &Belt, fittings: &BeltFittings) -> Par
 pub fn belt_pouch_mount(form: &TorsoForm, belt: &Belt, fittings: &BeltFittings) -> (V3, V3) {
     let line = BeltLine::new(form, belt, fittings);
     let (p, n) = line.at(POUCH_ANGLE, 0.0, THICKNESS);
+    (p, vec3::normalize_or([n[0], 0.0, n[2]], n))
+}
+
+/// Where a small sack hangs on the belt: the point on the belt's face behind the left hip and the
+/// outward direction there, like [`belt_pouch_mount`].
+pub fn belt_sack_mount(form: &TorsoForm, belt: &Belt, fittings: &BeltFittings) -> (V3, V3) {
+    let line = BeltLine::new(form, belt, fittings);
+    let (p, n) = line.at(SACK_ANGLE, 0.0, THICKNESS);
     (p, vec3::normalize_or([n[0], 0.0, n[2]], n))
 }
 

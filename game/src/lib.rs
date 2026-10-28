@@ -67,6 +67,7 @@ pub mod props;
 pub mod quickslots;
 pub mod reading;
 pub mod record;
+pub mod remains;
 pub mod save;
 pub mod shelf;
 pub mod render;

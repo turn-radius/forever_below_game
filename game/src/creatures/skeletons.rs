@@ -194,6 +194,16 @@ impl SkeletonKit {
 #[derive(Component, Debug)]
 pub struct WornGear;
 
+/// Which item a [`WornGear`] piece is a piece of, so the piece is taken off the bones when the
+/// item is taken from the body ([`crate::remains::keep_bodies_dressed`]).
+#[derive(Component, Debug)]
+pub struct WornItem {
+    pub family: armory::Family,
+    pub seed: u32,
+    /// Which of the things of this kind it is a piece of, from 0: two of one kind are two things.
+    pub nth: usize,
+}
+
 pub use crate::combat::feedback::Looted;
 
 /// Whether a blow of `damage` that is `bludgeoning` hurts a skeleton for more (double: the stat

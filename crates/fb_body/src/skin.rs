@@ -94,7 +94,7 @@ impl SkinRegion {
             Slot::Legs => SkinRegion::Legs,
             Slot::Feet => SkinRegion::Foot,
             Slot::Hands => SkinRegion::Hand,
-            Slot::Belt | Slot::Neck | Slot::Back => SkinRegion::Trunk,
+            Slot::Belt | Slot::Neck | Slot::Back | Slot::Satchel => SkinRegion::Trunk,
             Slot::Head => SkinRegion::Head,
             Slot::Cloak => SkinRegion::Loose,
             _ if part == "sleeves" => SkinRegion::Arm,

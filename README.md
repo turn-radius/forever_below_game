@@ -241,6 +241,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_RESUME=<seconds>` | the title resumes the saved delve by itself after that many seconds; with `FB_SAVE_FILE` and `FB_SCREENSHOT_FRAMES`, captures a resumed delve |
 | `FB_EQUIP=<base>[,<base>...]` | equips one item of each named base in its slot (or `<base>@<slot>` in another it fits: `Lantern@hip`, `Sword@offhand`), after the starting or debug kit and `FB_HOLD` (`Mail coif,Tunic`, or `Pack` for room); whatever it displaces is stowed |
 | `FB_STOW=<base>[,<base>...]` | puts one item of each named base in the carried grids, after `FB_EQUIP` (`Mail coif,Hood,Helm,Tunic`) |
+| `FB_HANG=<base>[,<base>...]` | hangs one item of each named base from the first fitting of the worn pack and belt that takes it (`Tent,Spear,Sword,Mace,Vial` for the lashing, strap, a frog and the pouch), after `FB_EQUIP`; with `FB_PACK=both` and `FB_BELT=all` choosing the pack and belt rolled with those fittings |
 | `FB_FOLK=<folk>` | makes the delver one of that folk (human, dwarf, gnome, goblin, lizard, pig) |
 | `FB_FOLK_WALK=<n>` | every folk in the level walks in place at `n` times its natural pace (`FB_FOLK_WALK=1`), to see the gait and measure its cost before anything moves them |
 | `FB_DEBUG_HOVER=<n>` | holds the hover card over the nth item in the first bag |

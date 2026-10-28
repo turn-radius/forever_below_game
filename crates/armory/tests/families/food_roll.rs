@@ -170,3 +170,56 @@ fn freshness_words() {
     assert_eq!(at(0.7), "Mouldy");
     assert_eq!(at(0.95), "Rotten");
 }
+
+#[test]
+fn a_potion_rolls_in_four_sizes_and_the_noun_names_the_size() {
+    use armory::families::food::PotionSize;
+    let sizes: std::collections::HashSet<_> = (1..=1024).map(|s| Food::roll_as(s, FoodStyle::Potion)).map(|s| s.provision.potion_size()).collect();
+    assert_eq!(sizes.len(), 4, "{sizes:?}");
+    for size in PotionSize::ALL {
+        assert_eq!(PotionSize::of(size.scale()), size);
+        let s = Food::roll_potion(5, size, Brew::Mana);
+        assert_eq!(Food::noun(&s), format!("{}Mana Potion", size.adjective()));
+        assert!(s.out_of_range(&LIMITS).is_empty());
+    }
+    let top = |size| Food::build(&Food::roll_potion(5, size, Brew::Healing)).bounds().unwrap().1[1];
+    assert!(top(PotionSize::Large) > top(PotionSize::Vial) * 1.5, "a large flask stands taller than a vial");
+}
+
+#[test]
+fn potions_of_one_seed_and_size_differ_only_in_their_liquid() {
+    use armory::families::food::PotionSize;
+    for seed in [3, 77, 1207] {
+        for size in PotionSize::ALL {
+            let healing = Food::build(&Food::roll_potion(seed, size, Brew::Healing));
+            let mana = Food::build(&Food::roll_potion(seed, size, Brew::Mana));
+            assert_eq!(healing.parts.len(), mana.parts.len());
+            let mut recoloured = 0;
+            for (a, b) in healing.parts.iter().zip(&mana.parts) {
+                assert_eq!((a.name, &a.positions, &a.indices), (b.name, &b.positions, &b.indices), "seed {seed}: one bottle");
+                recoloured += usize::from(a.tint != b.tint);
+            }
+            assert!(recoloured >= 2, "the glass and the liquid take the colour");
+        }
+    }
+}
+
+#[test]
+fn small_potions_roll_skinny_bottles_and_big_ones_round() {
+    use armory::families::food::PotionSize;
+    for seed in 1..=200 {
+        for size in PotionSize::ALL {
+            let s = Food::roll_potion(seed, size, Brew::Healing);
+            let (lo, hi) = Food::build(&s).bounds().unwrap();
+            let (width, height) = ((hi[0] - lo[0]).max(hi[2] - lo[2]), hi[1] - lo[1]);
+            let skinny = matches!(size, PotionSize::Vial | PotionSize::Small);
+            assert_eq!(s.provision.skinny(), skinny, "seed {seed} {size:?}");
+            // A skinny bottle is about twice as tall as wide; a round one clearly squatter.
+            if skinny {
+                assert!(height / width > 1.9, "seed {seed} {size:?}: {height} by {width}");
+            } else {
+                assert!(height / width < 1.9, "seed {seed} {size:?}: {height} by {width}");
+            }
+        }
+    }
+}

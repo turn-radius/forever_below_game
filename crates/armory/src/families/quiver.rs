@@ -180,6 +180,11 @@ impl Quivers {
         quiver_slots(s).len()
     }
 
+    /// How many stacks of ten the quiver holds, 3 to 5: a wider, longer tube holds more.
+    pub fn stacks(s: &QuiverState) -> u8 {
+        stacks_for(s.holder.width * s.holder.width * s.holder.length, 6.0, 18.0)
+    }
+
     /// A rolled quiver filled to `fullness` (0..=1) of its capacity with matching arrows, its
     /// length sized to them. Pure in `(seed, fullness)`.
     pub fn stocked(seed: u32, fullness: f32) -> QuiverState {
@@ -195,6 +200,11 @@ impl BoltCases {
         case_slots(s).len()
     }
 
+    /// How many stacks of ten the case holds, 3 to 5: a bigger box holds more.
+    pub fn stacks(s: &QuiverState) -> u8 {
+        stacks_for(s.holder.width * s.holder.depth * s.holder.length, 4.0, 10.0)
+    }
+
     /// A rolled bolt case filled to `fullness` (0..=1) of its capacity with matching bolts.
     /// Pure in `(seed, fullness)`.
     pub fn stocked(seed: u32, fullness: f32) -> QuiverState {
@@ -202,6 +212,11 @@ impl BoltCases {
         stock(&mut s, Bolts::roll(seed ^ 0xB017_5EED), fullness, 0.78, BoltCases::capacity);
         s
     }
+}
+
+/// 3 stacks at `small` volume up to 5 at `big`.
+fn stacks_for(volume: f32, small: f32, big: f32) -> u8 {
+    3 + (2.0 * ((volume - small) / (big - small)).clamp(0.0, 1.0)).round() as u8
 }
 
 /// Sizes the holder to `ammo`, then fills it with copies that differ a little.

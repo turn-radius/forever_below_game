@@ -90,6 +90,9 @@ pub struct Person {
     /// quiver or case they wear when they are slain. (The rest of the outfit's goods are not
     /// theirs yet.)
     pub goods: Vec<Item>,
+    /// What hangs on the pack and belt they wear, each with the fitting that holds it: drawn on the
+    /// pack or belt. Nothing is rolled hung on a folk; it is what a fallen body's pack still has on it.
+    pub hung: Vec<(fb_items::Accessory, Item)>,
     /// How dirty their skin is, 0 clean to about 0.85 (the plate's `C.dirt`).
     pub dirt: f32,
 }
@@ -177,7 +180,7 @@ impl Person {
         goods.extend(crate::doors::key_of(faction));
         // A denizen's build is its race's own, rolled as ever; folk take the hips and bust of their sex.
         let spec = if spot.denizen.is_some() && !succubus { BodySpec::roll(folk, spot.seed) } else { BodySpec::roll_as(folk, spot.seed, sex) };
-        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, dirt }
+        Person { spot: *spot, depth, faction: faction.clone(), name, spec, outfit, gear, goods, hung: Vec::new(), dirt }
     }
 
     /// What they wear, innermost slots first as listed.
@@ -366,7 +369,8 @@ pub(crate) fn spawn_folk(
     mut commands: Commands,
     level: Res<CurrentLevel>,
     mut figures: ResMut<FolkFigures>,
-    old: Query<Entity, With<Denizen>>,
+    old: Query<(Entity, Option<&crate::remains::BodyStock>), With<Denizen>>,
+    mut inventory: Option<ResMut<crate::inventory::Inventory>>,
     mut record: Option<ResMut<crate::record::WorldRecord>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut spawner: ItemSpawner,
@@ -376,7 +380,10 @@ pub(crate) fn spawn_folk(
     if shown.as_deref() == Some(&level.0.folk[..]) && !old.is_empty() {
         return;
     }
-    for entity in &old {
+    for (entity, stock) in &old {
+        if let (Some(stock), Some(inventory)) = (stock, inventory.as_deref_mut()) {
+            inventory.forget(stock.container);
+        }
         commands.entity(entity).despawn();
     }
     // On a level that was left, each folk is as they were left (`crate::record`).
@@ -392,7 +399,22 @@ pub(crate) fn spawn_folk(
         };
         let hostility = if left.hostile { crate::hostility::Hostility::Hostile } else { crate::hostility::Hostility::Friendly };
         let health = crate::combat::Health { hp: left.hp, max: left.max };
-        if left.dead {
+        if let (true, Some(body), Some(inventory)) = (left.dead, left.body.as_ref(), inventory.as_deref_mut()) {
+            // A body that still has things on it lies dressed in them where it fell, long
+            // fallen ([`crate::remains`]).
+            let stock = crate::remains::restore_body(inventory, body, person.spot.seed, &person.name);
+            let hung = crate::remains::hung_kit(inventory, &stock.kit);
+            let worn = Person {
+                gear: stock.kit.iter().filter_map(|&(slot, id)| Some((slot, inventory.item(id)?.clone()))).collect(),
+                hung: hung.iter().filter_map(|&(accessory, id)| Some((accessory, inventory.item(id)?.clone()))).collect(),
+                goods: Vec::new(),
+                ..person.clone()
+            };
+            let figure = Figure::dress_hung(&worn.spec, &worn.gear, &worn.hung, worn.dirt);
+            let root = spawn_denizen(&mut commands, &mut spawner, &mut bindposes, &worn, &figure);
+            let fallen = crate::combat::feedback::Corpse { since: LONG_FALLEN, fell: left.transform() };
+            commands.entity(root).insert((health, hostility, fallen, stock)).remove::<BlocksTheWay>();
+        } else if left.dead {
             // A body lies bare where it fell, long fallen: what it wore is on the floor.
             let bare = crate::folk_combat::bare(person);
             let figure = Figure::dress(&bare.spec, &bare.gear, bare.dirt);

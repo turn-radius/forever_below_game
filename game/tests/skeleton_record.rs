@@ -1,4 +1,4 @@
-//! Skeletons and the world record (#291): a skeleton killed lies bare when its level is come
+//! Skeletons and the world record (#291): a skeleton killed is still in its gear, less what was taken, when its level is come
 //! back to, its gear on the floor exactly once; one that lived comes back in its gear.
 //!
 //! The whole game runs here without a window or a GPU, as in `world_record.rs`, stepped a 60th
@@ -25,6 +25,7 @@ use forever_below::{
     menu::MenuCommand,
     play::{CurrentLevel, PlayPlugin, Player},
     record::WorldRecord,
+    remains::BodyStock,
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
     title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
@@ -151,34 +152,55 @@ fn strike_dead(app: &mut App, skeleton: Entity) {
 }
 
 #[test]
-fn a_skeleton_killed_then_the_level_left_and_revisited_lies_bare_with_its_gear_on_the_floor_once() {
+fn a_skeleton_killed_then_the_level_left_and_revisited_is_still_dressed_in_what_was_not_taken() {
     let mut app = in_the_halls();
     let (spot, gear) = a_kitted_skeleton(&mut app);
     let skeleton = skeleton_at(&mut app, spot).unwrap();
-    assert!(worn_pieces(&mut app, skeleton) >= gear.len(), "it stands in its gear");
+    let drawn = worn_pieces(&mut app, skeleton);
+    assert!(drawn >= gear.len(), "it stands in its gear");
     assert_eq!(gear_on_the_floor(&mut app, &gear), 0, "nothing of it lies about while it stands");
     strike_dead(&mut app, skeleton);
     run(&mut app, 60);
     assert!(app.world().get::<Corpse>(skeleton).is_some());
-    assert_eq!(gear_on_the_floor(&mut app, &gear), gear.len(), "everything it wore lies where it fell");
+    assert_eq!(gear_on_the_floor(&mut app, &gear), 0, "nothing is set on the floor");
+    assert_eq!(worn_pieces(&mut app, skeleton), drawn, "its gear stays among the bones");
+    // Take one thing from the body: its piece leaves the bones.
+    let (base, seed) = gear[0].clone();
+    let id = {
+        let inventory = app.world().resource::<Inventory>();
+        let stock = app.world().get::<BodyStock>(skeleton).expect("its things are kept on the body");
+        inventory.grid(stock.container).unwrap().entries().iter().map(|e| e.id).find(|&id| inventory.item(id).is_some_and(|i| i.base == base && i.seed == seed)).expect("it is on the body")
+    };
+    // (The delver left a loaf on it, so there is still something on the body when its gear is gone.)
+    let container = app.world().get::<BodyStock>(skeleton).unwrap().container;
+    {
+        let mut inventory = app.world_mut().resource_mut::<Inventory>();
+        let loaf = inventory.add(fb_items::roll_item("Bread", 3).unwrap());
+        let at = inventory.grid(container).unwrap().first_free(inventory.footprint(loaf).unwrap()).expect("room");
+        inventory.put(loaf, container, at).unwrap();
+        inventory.take_out(id);
+    }
+    run(&mut app, 3);
+    let left = worn_pieces(&mut app, skeleton);
+    assert!(left < drawn, "the taken piece is off the bones ({left} of {drawn})");
     for trip in 0..2 {
         round_trip(&mut app);
         let body = skeleton_at(&mut app, spot).expect("its body is still there");
-        assert!(app.world().get::<Corpse>(body).is_some() && app.world().get::<Looted>(body).is_some(), "trip {trip}: a looted body");
-        assert_eq!(worn_pieces(&mut app, body), 0, "trip {trip}: the body lies bare");
-        assert_eq!(gear_on_the_floor(&mut app, &gear), gear.len(), "trip {trip}: its gear lies on the floor exactly once");
-    }
-    let inventory = app.world().resource::<Inventory>();
-    for (base, seed) in &gear {
-        assert_eq!(inventory.ids().filter(|&id| inventory.item(id).is_some_and(|i| &i.base == base && i.seed == *seed)).count(), 1, "{base} {seed} is kept once");
+        assert!(app.world().get::<Corpse>(body).is_some(), "trip {trip}: a body");
+        assert!(app.world().get::<Looted>(body).is_none(), "trip {trip}: not looted");
+        assert!(app.world().get::<BodyStock>(body).is_some(), "trip {trip}: it keeps its things");
+        run(&mut app, 3);
+        assert_eq!(worn_pieces(&mut app, body), left, "trip {trip}: dressed in what was left");
+        assert_eq!(gear_on_the_floor(&mut app, &gear), 0, "trip {trip}: nothing on the floor");
     }
 }
 
 #[test]
-fn a_skeleton_killed_just_before_the_delver_leaves_still_drops_its_gear_once() {
+fn a_skeleton_killed_just_before_the_delver_leaves_is_kept_dressed() {
     let mut app = in_the_halls();
     let (spot, gear) = a_kitted_skeleton(&mut app);
     let skeleton = skeleton_at(&mut app, spot).unwrap();
+    let drawn = worn_pieces(&mut app, skeleton);
     // Struck down and the stair taken in the same breath.
     strike_dead(&mut app, skeleton);
     app.world_mut().write_message(UseStair(StairKind::Down));
@@ -186,11 +208,13 @@ fn a_skeleton_killed_just_before_the_delver_leaves_still_drops_its_gear_once() {
     assert_eq!(depth(&app), 3);
     go(&mut app, StairKind::Up);
     let body = skeleton_at(&mut app, spot).expect("its body is there");
-    assert!(app.world().get::<Corpse>(body).is_some() && app.world().get::<Looted>(body).is_some());
-    assert_eq!(worn_pieces(&mut app, body), 0, "bare");
-    assert_eq!(gear_on_the_floor(&mut app, &gear), gear.len(), "its gear lies on the floor once");
+    assert!(app.world().get::<Corpse>(body).is_some() && app.world().get::<Looted>(body).is_none());
+    run(&mut app, 3);
+    assert_eq!(worn_pieces(&mut app, body), drawn, "still in its gear");
+    assert_eq!(gear_on_the_floor(&mut app, &gear), 0, "nothing on the floor");
     round_trip(&mut app);
-    assert_eq!(gear_on_the_floor(&mut app, &gear), gear.len(), "and still once after another trip");
+    let body = skeleton_at(&mut app, spot).unwrap();
+    assert!(app.world().get::<BodyStock>(body).is_some(), "and still after another trip");
 }
 
 #[test]

@@ -38,23 +38,47 @@ pub fn set_down_around<'a>(
     obstacles: &[crate::play::Obstacle],
     floor_scale: f32,
 ) {
-    use fb_level::CELL;
-    let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
     let ids: Vec<ItemId> = items.map(|item| inventory.add(item.clone())).collect();
     // What goes in a holder set down with it (an archer's arrows in its quiver) stays in it.
     let holders: Vec<ItemId> = ids.iter().copied().filter(|&id| inventory.item(id).and_then(|i| i.profile.holds.as_ref()).is_some_and(|g| !g.accepts.is_empty())).collect();
     let loose: Vec<ItemId> = ids
         .into_iter()
         .filter(|&id| {
-            let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
-            !holders.iter().any(|&holder| {
-                holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) && inventory.grid(holder).and_then(|g| g.first_free(footprint)).is_some_and(|at| inventory.put(id, holder, at).is_ok())
-            })
+            for &holder in &holders {
+                // Once in one holder, or folded away, it is not moved to the next.
+                if inventory.item(id).is_none() || inventory.location(id) != Some(super::items::Location::Loose) {
+                    break;
+                }
+                if holder != id && inventory.item(id).is_some_and(|item| inventory.accepts(holder, item)) {
+                    // Arrows fold into the holder's stacks; what its places cannot take lies about.
+                    let _ = inventory.stow_in(id, holder);
+                }
+            }
+            inventory.item(id).is_some() && inventory.location(id) == Some(super::items::Location::Loose)
         })
         .collect();
-    let count = loose.len().max(1);
+    lay_round(centre, loose, seed, inventory, changes, blocked, obstacles, floor_scale);
+}
+
+/// Sets the loose items `ids`, already in `inventory`, down round `centre` (world `(x, z)`) as
+/// [`set_down_around`] does: a ring from an angle rolled from `seed`, each slid clear of `blocked`
+/// cells and `obstacles`, through [`FloorChange::SetDownAt`].
+#[allow(clippy::too_many_arguments)]
+pub fn lay_round(
+    centre: Vec2,
+    ids: Vec<ItemId>,
+    seed: u32,
+    inventory: &Inventory,
+    changes: &mut FloorChanges,
+    blocked: impl Fn(i32, i32) -> bool,
+    obstacles: &[crate::play::Obstacle],
+    floor_scale: f32,
+) {
+    use fb_level::CELL;
+    let mut rng = procgen_rng::Mulberry32::new(seed ^ SHED_SALT);
+    let count = ids.len().max(1);
     let first = rng.range_f32(0.0, std::f32::consts::TAU);
-    for (i, id) in loose.into_iter().enumerate() {
+    for (i, id) in ids.into_iter().enumerate() {
         let Some(item) = inventory.item(id) else { continue };
         let radius = crate::carry::floor_radius(&crate::carry::item_points(&item.shape.build()), fb_items::profile::stands_on_base(&item.shape), floor_scale).min(CELL * 0.5 - 0.5);
         let angle = first + i as f32 / count as f32 * std::f32::consts::TAU;
@@ -323,6 +347,18 @@ mod tests {
 
     fn near(id: u32, cols: u8, rows: u8, distance: f32, bag: bool) -> Nearby {
         Nearby { id: ItemId(id), footprint: Footprint { cols, rows }, distance, bag }
+    }
+
+    #[test]
+    fn a_shed_arrow_stays_in_the_first_quiver_that_took_it() {
+        let mut inventory = Inventory::default();
+        let quivers = [fb_items::roll_item("Quiver", 1).unwrap(), fb_items::roll_item("Quiver", 2).unwrap()];
+        let arrow = fb_items::roll_item("Arrow", 3).unwrap();
+        let mut changes = FloorChanges::default();
+        let items = [quivers[0].clone(), quivers[1].clone(), arrow];
+        set_down_around(Vec2::ZERO, items.iter(), 7, &mut inventory, &mut changes, |_, _| false, &[], 1.0);
+        let held: Vec<usize> = (0..2u32).map(|q| inventory.contents_count(ItemId(q))).collect();
+        assert_eq!(held, vec![1, 0], "the second quiver stays empty");
     }
 
     #[test]

@@ -49,10 +49,10 @@ pub use folk::{Beard, BlockAttack, EyeKind, Ears, Folk, HairStyle, Nose, Race, S
 pub use hair::HairFit;
 pub use head::{HeadFit, StandingFeatures};
 pub use hand::HandPose;
-pub use held::{HIP_SIDE, Hands, HeldFit, HipFit, Hold, MAIN_HAND, OFF_HAND, fit_hands, fit_held, fit_hip};
+pub use held::{FrogFit, HIP_SIDE, Hands, HeldFit, HipFit, Hold, LashFit, MAIN_HAND, OFF_HAND, StrapFit, fit_frogged, fit_hands, fit_held, fit_hip, fit_lashed, fit_strapped};
 pub use limb::{Limb, Side};
 pub use place::Placement;
 pub use rig::{JOINTS, Joint, Quat, Rig, RigPose, Rigid};
 pub use skin::{PartSkin, SkinRegion, Skinner};
 pub use spec::{BodyShape, BodySpec, STATURE, Sex, ShapeSlider, figure_bust};
-pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn};
+pub use worn::{Covered, LAYER_ORDER, WornFit, WornLayer, fit_worn, fit_worn_hung};

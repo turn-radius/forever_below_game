@@ -42,7 +42,7 @@ use armory::build::parts::{Look, Parts};
 use armory::build::strap::strap;
 use armory::families::Generator;
 use armory::families::amulet::{AmuletState, NecklaceStyle, necklace_parts, pendant_parts};
-use armory::families::bags::{BagState, BagStyle, Bags};
+use armory::families::bags::{Accessory, BagState, BagStyle, Bags};
 use armory::families::belt::{BeltState, Belts};
 use armory::families::feet::FeetState;
 use armory::families::garment::GarmentState;
@@ -69,7 +69,7 @@ use crate::place::Placement;
 
 /// The order slots are dressed in, innermost first. Slots not listed (held gear, rings and
 /// charms) are not worn on the body's surface and are skipped.
-pub const LAYER_ORDER: [Slot; 10] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::Body, Slot::Hands, Slot::Belt, Slot::Neck, Slot::Head, Slot::Cloak, Slot::Back];
+pub const LAYER_ORDER: [Slot; 11] = [Slot::Legs, Slot::Feet, Slot::Shirt, Slot::Body, Slot::Hands, Slot::Belt, Slot::Neck, Slot::Head, Slot::Cloak, Slot::Back, Slot::Satchel];
 
 /// Clearance kept between a layer and the one under it, over the outer layer's own ease.
 const GAP: f32 = 0.04;
@@ -124,6 +124,10 @@ impl Covered {
     }
 }
 
+/// How far below the hips, as a share of the trunk's length, what hangs in a belt's frogs counts toward
+/// what a cloak drapes over. Our own.
+const FROG_ENVELOPE_DEPTH: f32 = 0.7;
+
 /// Everything worn, fitted to one body.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WornFit {
@@ -155,6 +159,13 @@ impl WornFit {
 /// whatever order they are given in. Items in slots outside [`LAYER_ORDER`] are skipped, as
 /// are items whose family has no place on the body (a sword in the shirt slot).
 pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
+    fit_worn_hung(body, worn, &[])
+}
+
+/// [`fit_worn`] with what hangs on the worn pack and belt: the things in their lashing, weapon strap and
+/// frogs, each with the fitting that holds it. A cloak drapes over the weapons in the frogs, as it does
+/// over a pack; the rest are drawn by [`fit_strapped`], [`fit_lashed`] and [`fit_frogged`].
+pub fn fit_worn_hung(body: &Body, worn: &[(Slot, Item)], hung: &[(Accessory, Item)]) -> WornFit {
     let mut fit = WornFit::default();
     let mut env = Envelope::new(body);
     // Hooves take no boots: footwear is skipped for a race on its toes (see docs/body.md).
@@ -211,7 +222,7 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
                 (Slot::Head, Item::Helm(s)) => helm(body, s, fit.head),
                 (Slot::Head, Item::Hood(s)) => hood(body, &env, s, fit.head),
                 (Slot::Head, Item::Hat(s)) => hat(body, s, fit.head),
-                (Slot::Back, Item::Bags(s)) => bag(body, &env, s),
+                (Slot::Back | Slot::Satchel, Item::Bags(s)) => bag(body, &env, s),
                 _ => continue,
             };
             if slot == Slot::Head {
@@ -219,6 +230,22 @@ pub fn fit_worn(body: &Body, worn: &[(Slot, Item)]) -> WornFit {
             }
             fit.covered.tail |= body.folk() == Folk::Pigfolk && matches!(slot, Slot::Legs | Slot::Shirt | Slot::Body | Slot::Cloak);
             env.absorb(slot, matches!(item, Item::Hood(_)), &mesh);
+            // What hangs in the belt's frogs is part of what a cloak drapes over, as a pack is.
+            if slot == Slot::Belt {
+                for (frog, left) in [(Accessory::LeftFrog, true), (Accessory::RightFrog, false)] {
+                    if let Some((_, hung)) = hung.iter().find(|(a, _)| *a == frog)
+                        && let Some(fitted) = crate::held::fit_frogged(hung, &mesh, left)
+                    {
+                        // Down to the upper thigh: a long weapon's lower end would balloon the cloak's hem
+                        // out for no more than the cloak's own fall.
+                        let cut = body.hip_y - FROG_ENVELOPE_DEPTH * body.trunk_length;
+                        for &p in fitted.mesh.parts.iter().flat_map(|part| part.positions.iter()).filter(|p| p[1] >= cut) {
+                            let q = env.torso(p);
+                            env.outline.add(q);
+                        }
+                    }
+                }
+            }
             fit.layers.push(WornLayer { slot, mesh });
         }
     }
@@ -1508,6 +1535,9 @@ fn bag(body: &Body, env: &Envelope, state: &BagState) -> ItemMesh {
     mesh.parts.retain(|p| p.name != "carry");
     // Its back against the wearer's.
     mesh.transform(&Mat3::from_axis_angle(vec3::Y, PI), [0.0; 3]);
+    if style == BagStyle::Satchel {
+        return satchel(body, env, mesh, tint);
+    }
     let Some((lo, hi)) = mesh.bounds() else { return mesh };
     let sw = body.shoulder_half_width;
     let width = match style {
@@ -1586,6 +1616,91 @@ fn bag(body: &Body, env: &Envelope, state: &BagState) -> ItemMesh {
     mesh
 }
 
+/// A satchel resting against the front of the wearer's near hip (+x), its back to the body,
+/// hung from a crossbody strap: one straight diagonal from the far shoulder down the chest to
+/// the bag's medial top corner, and another down the back, round the side to its lateral top
+/// corner. The bag stands out from the trunk by depth, so the hanging arm may sit beside it.
+/// `mesh` has had its back turned to +z already, as a pack's has.
+fn satchel(body: &Body, env: &Envelope, mut mesh: ItemMesh, tint: Option<armory::Rgb>) -> ItemMesh {
+    let (sw, s, t, w) = (body.shoulder_half_width, body.scale, body.trunk_length, body.waist_y);
+    // Its back (+z so far) to the body (-z), its width along x.
+    mesh.transform(&Mat3::from_axis_angle(vec3::Y, PI), [0.0; 3]);
+    let Some((lo, hi)) = mesh.bounds() else { return mesh };
+    let k = (sw * 0.5 / (hi[0] - lo[0]).max(1e-3)).clamp(0.3, 3.0);
+    scale_mesh(&mut mesh, k);
+    let (lo, hi) = (vec3::scale(lo, k), vec3::scale(hi, k));
+    let (height, halfw, thick) = (hi[1] - lo[1], (hi[0] - lo[0]) * 0.5, hi[2] - lo[2]);
+    let top = body.hip_y + 0.05 * t;
+    // The reach from the trunk's axis: the trunk's own below the chest, the worn one (cloak,
+    // shoulders) from there up, or all the worn one when `m` is 1.
+    let blend = |y: f32| ((y - body.chest_y) / (0.15 * t) + 0.5).clamp(0.0, 1.0);
+    let reach = |phi: f32, y: f32, m: f32| env.reach.at(phi, y - w) * (1.0 - m) + env.worn_reach(phi, y - w) * m;
+    // How far in front (`sg` 1) or behind (-1) the axis the surface is at `x`, `y`.
+    let depth = |x: f32, y: f32, m: f32, sg: f32| {
+        let mut z = body.waist.half_depth * sg;
+        for _ in 0..4 {
+            let r = reach(z.atan2(x), y, m);
+            z = sg * (r * r - x * x).max(0.0).sqrt();
+        }
+        z
+    };
+    let xc = 0.9 * reach(0.0, top, 0.0);
+    let mut zb = 0.0f32;
+    for i in 0..=4 {
+        for j in 0..=4 {
+            zb = zb.max(depth(xc + halfw * (j as f32 / 2.0 - 1.0), top - height * i as f32 / 4.0, 0.0, 1.0));
+        }
+    }
+    zb += 0.02;
+    mesh.transform(&Mat3::IDENTITY, [xc - (lo[0] + hi[0]) * 0.5, top - hi[1], zb - lo[2]]);
+    // Further forward if an arm hangs where it lies (by depth, not by pushing it outward).
+    let nearest = mesh.parts.iter().flat_map(|p| p.positions.iter()).map(|&p| env.nearest_arm(p).2).fold(f32::MAX, f32::min);
+    let push = (0.02 * s - nearest).max(0.0);
+    mesh.transform(&Mat3::IDENTITY, [0.0, 0.0, push]);
+    let zc = zb + push + thick * 0.5;
+    let (xm, xl) = (xc - halfw * 0.85, xc + halfw * 0.85);
+    let (width, thickness) = (0.24 * s.sqrt(), 0.05 * s.sqrt());
+    let ty = body.shoulder_y + 0.08 * t;
+    // A point on the straight line (in x and y) from `a` to `b`, laid on the surface.
+    let on_line = |a: [f32; 2], b: [f32; 2], u: f32, sg: f32| -> V3 {
+        let (x, y) = (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u);
+        [x, y, depth(x, y, blend(y), sg) + 0.01 * sg]
+    };
+    let y_side = top + 0.25 * t;
+    let x_side = reach(0.0, y_side, 0.0) + 0.01;
+    let y_mid = (y_side + top + 0.1 * t) * 0.5;
+    let r_mid = reach(0.95, y_mid, 0.0) + 0.01;
+    let far = reach(PI, ty, blend(ty)) + 0.01;
+    let back_from = [-sw * 0.55, ty - 0.04 * t];
+    let front_from = [-sw * 0.5, body.shoulder_y - 0.12 * t];
+    let mut control = vec![
+        // The bag's lateral corner, round the side, then up the back...
+        [xl, top, zc],
+        [xl, top + 0.1 * t, zc],
+        [r_mid * 0.95f32.cos(), y_mid, r_mid * 0.95f32.sin()],
+        [x_side, y_side, 0.0],
+    ];
+    for u in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        control.push(on_line([x_side, y_side], back_from, u, -1.0));
+    }
+    // ...over the far shoulder, outside a pack's strap (at 0.46 of the half width), and down
+    // the chest to the bag's medial corner.
+    control.push([-far.max(sw * 0.72), ty, 0.0]);
+    for u in [0.0, 0.33, 0.66, 1.0] {
+        control.push(on_line(front_from, [xm, top + 0.1 * t], u, 1.0));
+    }
+    control.push([xm, top, zc]);
+    let path: Vec<V3> = CatmullRom::centripetal(control).sample_evenly(120);
+    let faces: Vec<V3> = path.iter().map(|p| env.reach.normal(p[2].atan2(p[0]), p[1] - w)).collect();
+    let mut straps = armory::geom::MeshBuilder::new();
+    straps.append(&strap(&path, &faces, width, thickness, false));
+    let look = tint.map_or(Look::of(MaterialKind::Leather), |c| Look::of(MaterialKind::Leather).tinted(c));
+    let mut parts = Parts::new();
+    parts.add_look("carry", straps, look);
+    mesh.parts.extend(parts.finish().parts);
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1618,6 +1733,186 @@ mod tests {
             (Slot::Neck, roll(Family::Amulet, seed)),
             (Slot::Head, roll(Family::Hood, seed)),
         ]
+    }
+
+    /// A satchel and a pack are worn at once, and the satchel hangs in front of the hip, the
+    /// pack, not through it.
+    #[test]
+    fn a_satchel_hangs_at_the_hip_beside_a_pack() {
+        for body in bodies().step_by(4) {
+            for seed in [1u32] {
+                let mut kit = outfit(seed);
+                kit.push((Slot::Satchel, Item::Bags(Bags::roll_as(seed, BagStyle::Satchel))));
+                let fit = fit_worn(&body, &kit);
+                let bounds = |slot| {
+                    let layer = fit.layers.iter().find(|l| l.slot == slot).expect("worn");
+                    let parts: Vec<&Part> = layer.mesh.parts.iter().filter(|p| p.name != "carry").collect();
+                    let xs = parts.iter().flat_map(|p| p.positions.iter().map(|q| q[2]));
+                    (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max))
+                };
+                let (pack, satchel) = (bounds(Slot::Back), bounds(Slot::Satchel));
+                assert!(satchel.0 > pack.1, "satchel z {satchel:?} clear of pack {pack:?}");
+            }
+        }
+    }
+
+    fn folk_body(folk: Folk) -> Body {
+        Body::new(&BodySpec::roll(folk, 3))
+    }
+
+    /// A satchel alone, under a cloak, and on a gnome and a goblin sits at the hip (its middle
+    /// below the waist and above the knee), clear of the arm's skin and out from the body.
+    #[test]
+    fn a_satchel_sits_at_the_hip_clear_of_the_arm_and_the_cloak() {
+        for folk in [Folk::Human, Folk::Gnome, Folk::Goblin] {
+            let body = folk_body(folk);
+            let env = Envelope::new(&body);
+            let cloak = (Slot::Cloak, Item::Garment(Garment::roll_as(2, GarmentStyle::Cloak)));
+            let satchel = (Slot::Satchel, Item::Bags(Bags::roll_as(5, BagStyle::Satchel)));
+            for kit in [vec![satchel.clone()], vec![cloak, satchel]] {
+                let fit = fit_worn(&body, &kit);
+                let layer = fit.layers.iter().find(|l| l.slot == Slot::Satchel).expect("worn");
+                let pts: Vec<V3> = layer.mesh.parts.iter().filter(|p| p.name != "carry").flat_map(|p| p.positions.iter().copied()).collect();
+                let mid = pts.iter().map(|p| p[1]).sum::<f32>() / pts.len() as f32;
+                assert!(mid < body.waist_y && mid > body.hip_y - body.trunk_length, "{folk:?} satchel at {mid}, waist {}, hip {}", body.waist_y, body.hip_y);
+                let worst = pts.iter().map(|&p| env.nearest_arm(p).2).fold(f32::MAX, f32::min);
+                assert!(worst > -0.02 * body.scale, "{folk:?} satchel in the arm by {worst}");
+                assert!(pts.iter().all(|p| p[0] > 0.0), "{folk:?} satchel on the wrong side of the body");
+            }
+        }
+    }
+
+    /// A cloak drapes over a sword and a mace hung in a belt's frogs: where the cloak covers them,
+    /// nothing of either stands out through it, and the cloak's hem does not balloon for them.
+    #[test]
+    #[ignore = "slow sweep; the _smoke twin runs by default"]
+    fn a_cloak_drapes_over_what_hangs_in_the_frogs() {
+        a_cloak_drapes_over_what_hangs_in_the_frogs_check(&[Folk::Human, Folk::Gnome, Folk::Goblin, Folk::Dwarf]);
+    }
+
+    #[test]
+    fn a_cloak_drapes_over_what_hangs_in_the_frogs_smoke() {
+        a_cloak_drapes_over_what_hangs_in_the_frogs_check(&[Folk::Human]);
+    }
+
+    fn a_cloak_drapes_over_what_hangs_in_the_frogs_check(folks: &[Folk]) {
+        use crate::held::fit_frogged;
+        for &folk in folks {
+            let body = folk_body(folk);
+            let belt = (0..4000).map(|s| Item::roll(Family::Belt, s).unwrap()).find(|b| matches!(b, Item::Belt(s) if s.fittings.frogs == 2)).unwrap();
+            let sword = Item::roll(Family::Sword, 5).unwrap();
+            let mace = Item::roll(Family::Mace, 5).unwrap();
+            let base = vec![(Slot::Belt, belt), (Slot::Cloak, Item::Garment(Garment::roll_as(2, GarmentStyle::Cloak)))];
+            let frogs = [(Accessory::LeftFrog, sword.clone()), (Accessory::RightFrog, mace.clone())];
+            let (bare, hung) = (fit_worn(&body, &base), fit_worn_hung(&body, &base, &frogs));
+            let cloak_of = |fit: &WornFit| -> Vec<V3> { fit.layer(Slot::Cloak).unwrap().mesh.parts.iter().flat_map(|p| p.positions.iter().copied()).collect() };
+            let (plain, draped) = (cloak_of(&bare), cloak_of(&hung));
+            let belt_mesh = &hung.layer(Slot::Belt).unwrap().mesh;
+            let polar = |p: &V3| (p[2].atan2(p[0]), p[0].hypot(p[2]));
+            let cloak: Vec<(f32, f32, f32)> = draped.iter().map(|c| (polar(c).0, c[1], polar(c).1)).collect();
+            let mut worst = f32::MIN;
+            for (weapon, left) in [(&sword, true), (&mace, false)] {
+                let fitted = fit_frogged(weapon, belt_mesh, left).unwrap();
+                for p in fitted.mesh.parts.iter().flat_map(|part| part.positions.iter()) {
+                    let (phi, r) = polar(p);
+                    // The cloak's outermost reach about that direction and height, and where its hem is
+                    // there: a weapon's tip below or at the hem hangs out under it.
+                    let (mut hem, mut reach) = (f32::MAX, f32::MIN);
+                    let near: Vec<&(f32, f32, f32)> = cloak
+                        .iter()
+                        .filter(|c| ((c.0 - phi + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs() < 0.2)
+                        .collect();
+                    for c in &near {
+                        hem = hem.min(c.1);
+                    }
+                    if p[1] < hem + 0.5 * body.scale {
+                        continue;
+                    }
+                    for c in near.iter().filter(|c| (c.1 - p[1]).abs() < 0.35 * body.scale) {
+                        reach = reach.max(c.2);
+                    }
+                    if reach > f32::MIN {
+                        worst = worst.max(r - reach);
+                    }
+                }
+            }
+            assert!(worst < 0.1 * body.scale, "{folk:?}: a weapon stands {worst} outside the cloak");
+            // The hem: the cloak's widest reach over its lowest tenth, against the same cloak with nothing hung.
+            let hem = |c: &[V3]| {
+                let low = c.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+                let high = c.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+                c.iter().filter(|p| p[1] < low + 0.1 * (high - low)).map(|p| polar(p).1).fold(0.0f32, f32::max)
+            };
+            let flare = hem(&draped) - hem(&plain);
+            assert!(flare < 0.5 * body.scale, "{folk:?}: the hem flares {flare} for the weapons");
+        }
+    }
+
+    /// A satchel's strap and a pack's lie apart where they meet on the shoulder (a strap laid
+    /// over the other stands off it by its thickness, not through it).
+    #[test]
+    fn a_satchels_strap_clears_a_packs() {
+        for folk in [Folk::Human, Folk::Gnome] {
+            let body = folk_body(folk);
+            let kit = vec![
+                (Slot::Back, Item::Bags(Bags::roll_as(1, BagStyle::Backpack))),
+                (Slot::Satchel, Item::Bags(Bags::roll_as(1, BagStyle::Satchel))),
+            ];
+            let fit = fit_worn(&body, &kit);
+            let strap = |slot| -> Vec<V3> { fit.layers.iter().find(|l| l.slot == slot).unwrap().mesh.parts.iter().filter(|p| p.name == "carry").flat_map(|p| p.positions.iter().copied()).collect() };
+            let (pack, satchel) = (strap(Slot::Back), strap(Slot::Satchel));
+            let nearest = satchel.iter().map(|&a| pack.iter().map(|&b| vec3::distance(a, b)).fold(f32::MAX, f32::min)).fold(f32::MAX, f32::min);
+            assert!(nearest > 0.012 * body.scale, "{folk:?} straps {nearest} apart");
+        }
+    }
+
+    /// A satchel's strap runs crossbody: on the chest and on the back it spans from the far
+    /// shoulder to the near hip, crossing the midline both ways.
+    #[test]
+    fn a_satchels_strap_crosses_the_body_front_and_back() {
+        for folk in [Folk::Human, Folk::Dwarf, Folk::Gnome, Folk::Goblin] {
+            let body = folk_body(folk);
+            let kit = vec![(Slot::Satchel, Item::Bags(Bags::roll_as(1, BagStyle::Satchel)))];
+            let fit = fit_worn(&body, &kit);
+            let strap: Vec<V3> = fit.layers[0].mesh.parts.iter().filter(|p| p.name == "carry").flat_map(|p| p.positions.iter().copied()).collect();
+            for (name, side) in [("chest", 1.0f32), ("back", -1.0)] {
+                let pts: Vec<V3> = strap.iter().copied().filter(|p| p[2] * side > 0.0 && p[0].abs() < body.shoulder_half_width * 1.2).collect();
+                let hi = pts.iter().filter(|p| p[1] > body.chest_y).map(|p| p[0]).fold(f32::MAX, f32::min);
+                let lo = strap.iter().filter(|p| p[1] < body.waist_y + 0.1 * body.trunk_length).map(|p| p[0]).fold(f32::MIN, f32::max);
+                assert!(hi < -body.shoulder_half_width * 0.4, "{folk:?} {name}: strap high on the far shoulder side only reaches x {hi}");
+                assert!(lo > body.shoulder_half_width * 0.2, "{folk:?} {name}: strap low reaches only x {lo}");
+                assert!(pts.iter().any(|p| p[0].abs() < body.shoulder_half_width * 0.15), "{folk:?} {name}: strap never crosses the midline");
+            }
+            let bag: Vec<V3> = fit.layers[0].mesh.parts.iter().filter(|p| p.name != "carry").flat_map(|p| p.positions.iter().copied()).collect();
+            let (bx0, bx1) = (bag.iter().map(|p| p[0]).fold(f32::MAX, f32::min), bag.iter().map(|p| p[0]).fold(f32::MIN, f32::max));
+            let (bz0, bz1) = (bag.iter().map(|p| p[2]).fold(f32::MAX, f32::min), bag.iter().map(|p| p[2]).fold(f32::MIN, f32::max));
+            // The bag sits against the front of the hip: its middle within the hip's width, its
+            // back forward of the trunk's middle.
+            let hip_top = bag.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+            let hip_width = Envelope::new(&body).reach.at(0.0, hip_top - body.waist_y);
+            assert!((bx0 + bx1).abs() * 0.5 < hip_width + (bz1 - bz0) * 0.5, "{folk:?}: bag at x {bx0}..{bx1}, hip {hip_width}");
+            assert!(bz0 > body.waist.half_depth * 0.5, "{folk:?}: bag not forward of the trunk, z {bz0}");
+            // Each run is close to a straight line seen from the front or the back.
+            let top = bag.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+            for (name, side) in [("chest", 1.0f32), ("back", -1.0)] {
+                let run: Vec<[f32; 2]> = strap.iter().filter(|p| p[2] * side > 0.0 && p[1] < body.shoulder_y - 0.2 * body.trunk_length && (side < 0.0 || p[0] < bx0) && p[1] > top + 0.4 * body.trunk_length).map(|p| [p[0], p[1]]).collect();
+                // The strap's centre line: the middle of each band of height, so the ribbon's
+                // width does not skew the chord.
+                let (ymin, ymax) = (run.iter().map(|p| p[1]).fold(f32::MAX, f32::min), run.iter().map(|p| p[1]).fold(f32::MIN, f32::max));
+                let centres: Vec<[f32; 2]> = (0..6)
+                    .filter_map(|i| {
+                        let (y0, y1) = (ymin + (ymax - ymin) * i as f32 / 6.0, ymin + (ymax - ymin) * (i + 1) as f32 / 6.0);
+                        let band: Vec<&[f32; 2]> = run.iter().filter(|p| p[1] >= y0 && p[1] <= y1).collect();
+                        (!band.is_empty()).then(|| [band.iter().map(|p| p[0]).sum::<f32>() / band.len() as f32, band.iter().map(|p| p[1]).sum::<f32>() / band.len() as f32])
+                    })
+                    .collect();
+                let (a, b) = (centres[0], *centres.last().unwrap());
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let len = dx.hypot(dy);
+                let worst = centres.iter().map(|p| ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len).fold(0.0f32, f32::max);
+                assert!(worst < 0.08 * body.scale, "{folk:?} {name}: strap bows {worst} off its chord");
+            }
+        }
     }
 
     fn bodies() -> impl Iterator<Item = Body> {
@@ -2369,7 +2664,7 @@ mod tests {
             let held = |slot: Slot| kit.iter().find(|(s, _)| *s == slot).map(|(_, i)| &i.shape);
             // Posed for what it holds, as in the game: a grip turns a hand off the forearm.
             let body = crate::held::fit_hands(&spec, held(Slot::Mainhand), held(Slot::Offhand)).body;
-            let mut worn: Vec<(Slot, Item)> = kit.iter().filter(|(s, _)| LAYER_ORDER.contains(s) && !matches!(s, Slot::Body | Slot::Head | Slot::Back)).map(|(s, i)| (*s, i.shape.clone())).collect();
+            let mut worn: Vec<(Slot, Item)> = kit.iter().filter(|(s, _)| LAYER_ORDER.contains(s) && !matches!(s, Slot::Body | Slot::Head | Slot::Back | Slot::Satchel)).map(|(s, i)| (*s, i.shape.clone())).collect();
             // A cuirass with pauldrons under a ventailed mail coif, as on a lizardfolk of the
             // Scale Court whose cape spread out like wings.
             let mut cuirass = Garment::roll_as(seed, GarmentStyle::Cuirass);

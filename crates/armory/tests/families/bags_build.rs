@@ -58,7 +58,8 @@ fn every_enabled_section_has_a_part() {
             ("fittings", true),
             ("coins", b.coins),
             ("pocket", b.pocket),
-            ("bedroll", b.bedroll),
+            ("lashing", b.lashing),
+            ("weapon_strap", b.weapon_strap),
             ("patch", b.patch),
         ];
         for (name, on) in expected {
@@ -89,7 +90,7 @@ fn patterned_bodies_carry_their_surface_pattern() {
         if let Some(pocket) = part(&mesh, "pocket") {
             assert_eq!(pocket.pattern, expected, "seed {}", s.seed);
         }
-        for plain in ["flap", "patch", "bedroll", "straps"] {
+        for plain in ["flap", "patch", "lashing", "straps"] {
             if let Some(p) = part(&mesh, plain) {
                 assert_eq!(p.pattern, None, "seed {}: patterned {plain}", s.seed);
             }

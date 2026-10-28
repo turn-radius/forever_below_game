@@ -103,6 +103,10 @@ pub struct Stats {
     /// What swinging, blocking and sprinting cost the wearer in stamina, as a multiple of normal.
     #[serde(default = "one")]
     pub stamina_cost: f32,
+    /// Rows a worn bag's grid gains (or loses, when negative) against a plain bag of its size
+    /// ([`crate::profile::Profile::fit_capacity`], which rounds it to whole rows).
+    #[serde(default)]
+    pub grid_rows: f32,
 }
 
 fn one() -> f32 {
@@ -148,6 +152,7 @@ impl Default for Stats {
             attack_rate: 1.0,
             stamina_refill: 1.0,
             stamina_cost: 1.0,
+            grid_rows: 0.0,
         }
     }
 }
@@ -189,20 +194,21 @@ pub enum Stat {
     AttackRate,
     StaminaRefill,
     StaminaCost,
+    GridRows,
 }
 
 impl Stat {
-    pub const ALL: [Stat; 31] = [
+    pub const ALL: [Stat; 32] = [
         Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::RangedToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
         Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
         Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance, Stat::AttackRate,
-        Stat::StaminaRefill, Stat::StaminaCost,
+        Stat::StaminaRefill, Stat::StaminaCost, Stat::GridRows,
     ];
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
     pub fn is_item_property(self) -> bool {
-        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance)
+        matches!(self, Stat::Weight | Stat::Armour | Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Light | Stat::BurnTime | Stat::BreakChance | Stat::GridRows)
     }
 
     /// Wearer stats: affect the character wearing the item (Warmth, Stealth, Carry, Darkvision, HungerRate, SleepinessRate, DiseaseRisk, Lockpicking, HealOnKill).
@@ -230,7 +236,7 @@ impl Stat {
     /// distances and rates cannot (its `Math.max(0, it.warmth - 1)`).
     pub fn range(self) -> (f32, f32) {
         match self {
-            Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Stealth | Stat::Lockpicking => (f32::NEG_INFINITY, f32::INFINITY),
+            Stat::DamageBonus | Stat::ToHit | Stat::RangedToHit | Stat::Stealth | Stat::Lockpicking | Stat::GridRows => (f32::NEG_INFINITY, f32::INFINITY),
             Stat::Strength | Stat::Dexterity | Stat::Constitution | Stat::Intelligence | Stat::Wisdom | Stat::Charisma => (f32::NEG_INFINITY, f32::INFINITY),
             Stat::BreakChance | Stat::BlockChance => (0.0, 1.0),
             _ => (0.0, f32::INFINITY),
@@ -287,6 +293,7 @@ impl Stats {
             Stat::AttackRate => &self.attack_rate,
             Stat::StaminaRefill => &self.stamina_refill,
             Stat::StaminaCost => &self.stamina_cost,
+            Stat::GridRows => &self.grid_rows,
         }
     }
 
@@ -323,6 +330,7 @@ impl Stats {
             Stat::AttackRate => &mut self.attack_rate,
             Stat::StaminaRefill => &mut self.stamina_refill,
             Stat::StaminaCost => &mut self.stamina_cost,
+            Stat::GridRows => &mut self.grid_rows,
         }
     }
 }

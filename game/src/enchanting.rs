@@ -16,7 +16,7 @@ pub struct Enchanting(pub EnchantingStock);
 /// Scraps item `id` into `stock`: the item is gone and its salvage is added. `None`, and
 /// nothing changes, for what is not gear or a bag with something in it.
 pub fn scrap_item(inventory: &mut Inventory, stock: &mut EnchantingStock, id: ItemId) -> Option<Salvage> {
-    if inventory.contents_count(id) > 0 {
+    if inventory.holding(id) > 0 {
         return None;
     }
     let salvage = scrap(inventory.item(id)?)?;

@@ -99,11 +99,26 @@ pub struct IconKey {
     /// Lines of history, which grow whenever an enchanter changes the item, so its icon is drawn
     /// again with its new rarity, etching and wear.
     pub worked: usize,
+    /// How many arrows or bolts the icon draws: one, three for a few, five for a stack.
+    pub pieces: u8,
+}
+
+/// How many arrows an icon draws for `item`: ammunition reads as a bundle, since one arrow in a
+/// cell is a hairline; one piece draws one, a few three, a stack five. Everything else 1.
+pub fn bundle_pieces(item: &Item) -> u8 {
+    if !item.profile.tags.contains(&fb_items::Tag::Ammunition) {
+        return 1;
+    }
+    match item.quantity {
+        0..=1 => 1,
+        2..=5 => 3,
+        _ => 5,
+    }
 }
 
 impl IconKey {
     pub fn of(item: &Item, turned: bool) -> Self {
-        IconKey { base: item.base.clone(), seed: item.seed, turned, lit: item.shape.lit(), worked: item.history.len() }
+        IconKey { base: item.base.clone(), seed: item.seed, turned, lit: item.shape.lit(), worked: item.history.len(), pieces: bundle_pieces(item) }
     }
 }
 
@@ -444,9 +459,14 @@ pub fn draw_icons(mut commands: Commands, mut cache: ResMut<IconCache>, mut spaw
 /// Spawns `item` posed on `stage` with a camera drawing it into `image`, its light, and a
 /// readback watching for it to show. Returns the camera, the item, the light and the readback.
 fn stage_icon(commands: &mut Commands, spawner: &mut ItemSpawner, item: &Item, turned: bool, image: Handle<Image>, stage: usize) -> Option<[Entity; 4]> {
-    let mesh = item.shape.build();
+    let mut mesh = item.shape.build();
+    let ammunition = item.profile.tags.contains(&fb_items::Tag::Ammunition);
+    if ammunition {
+        // Laid slantwise, fanned and thickened so they read in one cell.
+        mesh = mesh.fanned(bundle_pieces(item) as usize, 0.45, -0.75, 2.8);
+    }
     let points: Vec<Vec3> = mesh.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
-    let (rotation, min, max) = icon_pose(&points, stands_upright(item), turned)?;
+    let (rotation, min, max) = icon_pose(&points, ammunition || stands_upright(item), turned)?;
     let size = icon_size(item, turned);
     Some(stage_mesh(commands, spawner, &mesh, &appearance_of(&item.shape), &format!("Icon: {}", item.name), (rotation, min, max), size, image, stage))
 }
@@ -644,6 +664,23 @@ mod tests {
         // Twice the cell at 1080 lines, so never enlarged up to 2160 lines at one pixel a point.
         assert!(ICON_CELL_PX as f32 >= interface.cell_px(Vec2::new(3840.0, 2160.0)));
         assert!(ICON_CELL_PX as f32 >= 2.0 * interface.cell_px(Vec2::new(1920.0, 1080.0)));
+    }
+
+    #[test]
+    fn ammunition_icons_draw_a_bundle_by_count_and_the_bundle_fills_the_cell() {
+        let arrow = fb_items::roll_item("Arrow", 3).unwrap();
+        let counts: Vec<u8> = [1, 2, 5, 6, 10].iter().map(|&n| bundle_pieces(&arrow.clone().with_quantity(n))).collect();
+        assert_eq!(counts, vec![1, 3, 3, 5, 5]);
+        assert_eq!(bundle_pieces(&fb_items::roll_item("Sword", 3).unwrap()), 1);
+        // Fanned five ways, the bundle is a fat diagonal, not the hairline one arrow is.
+        let one = arrow.shape.build();
+        let (lo, hi) = one.bounds().unwrap();
+        let bundle = one.fanned(5, 0.45, -0.75, 2.8);
+        assert_eq!(bundle.parts.len(), one.parts.len() * 5);
+        let points: Vec<Vec3> = bundle.parts.iter().flat_map(|p| &p.positions).map(|&p| Vec3::from_array(p)).collect();
+        let (blo, bhi) = bounds(points.iter().copied()).unwrap();
+        let (width, height) = (bhi.x - blo.x, bhi.y - blo.y);
+        assert!(width > 0.5 * (hi[0] - lo[0]) && height > 0.5 * (hi[0] - lo[0]), "diagonal: {width} by {height}");
     }
 
     #[test]

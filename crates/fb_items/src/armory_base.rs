@@ -15,7 +15,7 @@
 use armory::families::axe::{Axe, AxeArchetype};
 use armory::families::bags::{BagStyle, Bags};
 use armory::families::feet::Feet;
-use armory::families::food::{Brew, Food, FoodStyle, GLOWCAP};
+use armory::families::food::{Brew, Food, FoodStyle, GLOWCAP, PotionSize};
 use armory::families::campfire::FireForm;
 use armory::families::crystal::Growth;
 use armory::gem::Gemstone;
@@ -165,7 +165,13 @@ pub fn bases_of(family: Family) -> impl Iterator<Item = &'static str> {
 /// (the level's item spots). Its own stream, so `roll_item(base, seed)` with the same seed is
 /// unaffected; the mixing constant is this port's own. `None` for a family no base uses.
 pub fn base_for(family: Family, seed: u32) -> Option<&'static str> {
-    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b))).filter(|&(_, w)| w > 0).collect();
+    // Eight potion bases would crowd the other food out, so among food each is a quarter as
+    // likely to be found as the rest (our own): potions are about one find in six.
+    let share = |b: &str| match (family, crate::provision::potion_size(b)) {
+        (Family::Food, None) => 4,
+        _ => 1,
+    };
+    let bases: Vec<(&str, u32)> = bases_of(family).map(|b| (b, find_weight(b) * share(b))).filter(|&(_, w)| w > 0).collect();
     (!bases.is_empty()).then(|| *Mulberry32::new(seed ^ 0xBA5E_F00D).weighted(&bases))
 }
 
@@ -261,8 +267,16 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Roast haunch", ArmoryBase::of(A::Food(&[FoodStyle::Haunch]))),
     ("Tankard", ArmoryBase::of(A::Food(&[FoodStyle::Tankard]))),
     ("Wine", ArmoryBase::of(A::Food(&[FoodStyle::Bottle]))),
-    ("Potion", ArmoryBase::of(A::Food(&[FoodStyle::Potion]))),
-    ("Healing draught", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing_draught).named()),
+    // Potions are one family in four sizes: the base sets the size and the seed the bottle. The
+    // plain ones hold whatever brew the seed rolls; the healing ones always hold the healing brew.
+    ("Vial", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(potion::<0>)),
+    ("Small potion", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(potion::<1>)),
+    ("Potion", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(potion::<2>)),
+    ("Large potion", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(potion::<3>)),
+    ("Healing vial", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing::<0>).named()),
+    ("Small healing draught", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing::<1>).named()),
+    ("Healing draught", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing::<2>).named()),
+    ("Large healing draught", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(healing::<3>).named()),
     ("Elixir of the Hare", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_the_hare).named()),
     ("Elixir of Vigil", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_vigil).named()),
     ("Elixir of Fasting", ArmoryBase::of(A::Food(&[FoodStyle::Potion])).tweaked(elixir_of_fasting).named()),
@@ -421,14 +435,24 @@ fn purse(item: &mut Item, _: &mut Mulberry32) {
 /// Clear glass of the `Food` roll (`GLASS` in `armory::families::food`).
 const GLASS: Rgb = Rgb::hex(0xdfe9ee);
 
-/// A red healing brew: the plate's `s.food.color2='#c8323c'`, now the liquid, with the glass
-/// tinted toward it as the Armory tints every potion.
-fn healing_draught(item: &mut Item, r: &mut Mulberry32) {
+/// A potion of size tier `SIZE` ([`PotionSize::ALL`]): the seed's own bottle, scaled.
+fn potion<const SIZE: usize>(item: &mut Item, _: &mut Mulberry32) {
+    if let Item::Food(s) = item {
+        s.provision.sized(PotionSize::ALL[SIZE]);
+        // A potion is found full.
+        s.provision.fill = s.provision.fill.max(0.6);
+    }
+}
+
+/// A healing potion of size tier `SIZE`: a red healing brew (the plate's
+/// `s.food.color2='#c8323c'`), now the liquid, with the glass tinted toward it as the Armory
+/// tints every potion.
+fn healing<const SIZE: usize>(item: &mut Item, r: &mut Mulberry32) {
     if let Item::Food(s) = item {
         let p = &mut s.provision;
-        p.liquid = Brew::Healing.rgb();
-        p.outer = mix(GLASS, p.liquid, 0.4);
+        p.sized(PotionSize::ALL[SIZE]);
         p.fill = p.fill.max(r.range_f32(0.6, 0.95));
+        p.brewed(Brew::Healing);
     }
 }
 

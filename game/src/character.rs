@@ -154,6 +154,16 @@ impl Default for Character {
     }
 }
 
+/// Where a fitting holds what it holds, for the load's breakdown ("on the strap").
+fn fitting_place(accessory: fb_items::Accessory) -> &'static str {
+    match accessory {
+        fb_items::Accessory::WeaponStrap => "on the strap",
+        fb_items::Accessory::Lashing => "on the lashing",
+        fb_items::Accessory::LeftFrog | fb_items::Accessory::RightFrog => "in a frog",
+        _ => "in the potion pouch",
+    }
+}
+
 impl Character {
     /// A delver rolled from `seed`: the same seed always gives the same delver.
     ///
@@ -459,7 +469,13 @@ impl Character {
             for entry in inventory.grid(container).map(|g| g.entries()).unwrap_or_default() {
                 let Some(inside) = inventory.item(entry.id) else { continue };
                 // What a bag inside the bag holds counts with it.
-                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight + inventory.contents_weight(entry.id)));
+                lines.push(format!("    {}  {:.1} lb", inside.name, inside.profile.stats.weight * inside.quantity as f32 + inventory.contents_weight(entry.id)));
+            }
+            // What hangs on a pack or belt, in its small grids, is carried outside the main grid and weighs as it does.
+            for (accessory, id) in inventory.hung_on(container) {
+                if let Some(item) = inventory.item(id) {
+                    lines.push(format!("    {} ({})  {:.1} lb", item.name, fitting_place(accessory), item.profile.stats.weight * item.quantity as f32));
+                }
             }
         }
         let band = LoadBand::from_load_with(rules, carried.value(), capacity);
@@ -1105,6 +1121,64 @@ mod tests {
         };
         let (plain, light) = (load(None), load(Some("Featherlight")));
         assert!(plain > 0.0 && (light - plain * 0.6).abs() < 1e-3, "{light} against {plain}");
+    }
+
+    #[test]
+    fn a_frogged_weapon_and_a_pouch_potion_weigh_on_the_load() {
+        use fb_items::{Accessory, Slot};
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let belt = (1..3000).filter_map(|s| fb_items::roll_item("Belt", s)).find(|b| b.has_accessory(Accessory::LeftFrog) && b.has_accessory(Accessory::PotionPouch)).unwrap();
+        let belt = inventory.add(belt);
+        inventory.wear(belt, Slot::Belt).unwrap();
+        let before = delver.derive(&inventory);
+        let (mace, vial) = (inventory.add(fb_items::roll_item("Mace", 3).unwrap()), inventory.add(fb_items::roll_item("Vial", 3).unwrap()));
+        let (frog, pouch) = (inventory.fitting(belt, Accessory::LeftFrog).unwrap(), inventory.fitting(belt, Accessory::PotionPouch).unwrap());
+        inventory.put(mace, frog, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        inventory.put(vial, pouch, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        let after = delver.derive(&inventory);
+        let weight = inventory.item(mace).unwrap().profile.stats.weight + inventory.item(vial).unwrap().profile.stats.weight;
+        assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "load {} to {} for {weight}", before.load, after.load);
+        let lines = delver.load_breakdown(fb_character::rules::defaults(), &inventory);
+        assert!(lines.iter().any(|l| l.contains("in a frog")) && lines.iter().any(|l| l.contains("potion pouch")), "{lines:?}");
+        assert_eq!(after.armour_class, before.armour_class);
+    }
+
+    #[test]
+    fn a_strapped_weapon_weighs_on_the_load_but_gives_nothing_else() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::WeaponStrap)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, Slot::Back).unwrap();
+        let before = delver.derive(&inventory);
+        let spear = inventory.add(fb_items::roll_item("Spear", 3).unwrap());
+        let weight = inventory.item(spear).unwrap().profile.stats.weight;
+        let strap = inventory.fitting(pack, fb_items::Accessory::WeaponStrap).unwrap();
+        inventory.put(spear, strap, crate::inventory::Placement::new(0, 0, false)).unwrap();
+        let after = delver.derive(&inventory);
+        assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
+        assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));
+        assert!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).iter().any(|l| l.contains("on the strap")));
+    }
+
+    #[test]
+    fn a_lashed_bundle_weighs_on_the_load_but_gives_nothing_else() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        let pack = (1..2000).filter_map(|s| fb_items::roll_item("Pack", s)).find(|p| p.has_accessory(fb_items::Accessory::Lashing)).unwrap();
+        let pack = inventory.add(pack);
+        inventory.wear(pack, Slot::Back).unwrap();
+        let before = delver.derive(&inventory);
+        let tent = inventory.add(fb_items::roll_item("Tent", 3).unwrap());
+        let weight = inventory.item(tent).unwrap().profile.stats.weight;
+        inventory.lash(tent).unwrap();
+        let after = delver.derive(&inventory);
+        assert!(weight > 0.0 && (after.load - before.load - weight).abs() < 1e-3, "{} against {} plus {weight}", after.load, before.load);
+        assert_eq!((after.armour_class, after.warmth, after.to_hit), (before.armour_class, before.warmth, before.to_hit));
+        assert!(delver.load_breakdown(fb_character::rules::defaults(), &inventory).iter().any(|l| l.contains("on the lashing")));
     }
 
     #[test]

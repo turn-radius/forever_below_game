@@ -11,7 +11,7 @@
 //! player; the game clock steps them in #229.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
-use armory::families::food::Brew;
+use armory::families::food::{Brew, PotionSize};
 use fb_items::{Consume, Provision};
 use procgen_rng::Mulberry32;
 
@@ -38,17 +38,19 @@ impl Plugin for EatPlugin {
     }
 }
 
-/// The base of the potion that heals.
+/// The base of the medium potion that heals.
 pub const HEALING_DRAUGHT: &str = "Healing draught";
 /// How long the green flash of a healing draught lasts, seconds. Our own.
 pub const HEAL_FLASH_TIME: f32 = 0.33;
 /// The green flash's strongest alpha. Our own.
 const HEAL_FLASH_ALPHA: f32 = 0.22;
 
-/// What a Healing draught restores: 2d4 + 2 hit points (SRD 5.1 "Potion of Healing"), rolled
-/// with the run's dice, and never above the maximum. Returns the hit points restored.
-pub fn drink_healing(health: &mut Health, dice: &mut Mulberry32) -> u32 {
-    let roll = dice.int(1, 4) + dice.int(1, 4) + 2;
+/// What a healing potion of `size` restores ([`fb_items::Heal`]: the medium one 2d4 + 2 hit
+/// points, SRD 5.1 "Potion of Healing"), rolled with the run's dice, and never above the
+/// maximum. Returns the hit points restored.
+pub fn drink_healing(health: &mut Health, dice: &mut Mulberry32, size: PotionSize) -> u32 {
+    let heal = fb_items::Heal::of(size);
+    let roll: u32 = (0..heal.dice).map(|_| dice.int(1, 4)).sum::<u32>() + heal.bonus;
     health.heal(roll)
 }
 
@@ -107,11 +109,14 @@ pub struct Consumed {
     pub sipped: bool,
     /// What a potion held, so a rule keyed on it (the antidote's cure) can follow.
     pub brew: Option<Brew>,
+    /// How big a bottle it was, which fixes how much a healing brew restores.
+    pub size: Option<PotionSize>,
     /// What an elixir gives, so the delver can be given it.
     pub elixir: Option<fb_items::Elixir>,
 }
 
-/// Eats or drinks `id`: takes it out of the inventory, wherever it lies, and takes its
+/// Eats or drinks `id`: takes one of it out of the inventory, wherever it lies (the stack it is
+/// part of keeps its place and its id until the last is gone), and takes its
 /// nutrition and water off `needs`. A waterskin is drunk from instead: a swallow comes out of its
 /// fill and it stays. `None`, and nothing changed, if it is not food or drink.
 pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: ItemId) -> Option<Consumed> {
@@ -120,11 +125,11 @@ pub fn consume(inventory: &mut Inventory, needs: &mut fb_character::Needs, id: I
         let (name, base) = (item.title().to_string(), item.base.clone());
         let provision = inventory.sip(id)?;
         needs.consume(provision.nutrition, provision.water);
-        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true, brew: None, elixir: None });
+        return Some(Consumed { how: Consume::Drink, name, provision, base, sipped: true, brew: None, size: None, elixir: None });
     }
     let (how, provision) = (item.consume()?, item.provision()?);
-    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false, brew: item.brew(), elixir: item.elixir() };
-    inventory.forget(id);
+    let done = Consumed { how, name: item.title().to_string(), provision, base: item.base.clone(), sipped: false, brew: item.brew(), size: item.potion_size(), elixir: item.elixir() };
+    inventory.use_one(id);
     needs.consume(provision.nutrition, provision.water);
     Some(done)
 }
@@ -176,10 +181,10 @@ impl Eating<'_, '_> {
         let mut needs = self.needs.single_mut().ok()?;
         let done = consume(inventory, &mut needs.0, id)?;
         let mut line = say(&done);
-        if done.base == HEALING_DRAUGHT
+        if done.brew == Some(Brew::Healing)
             && let (Some(dice), Ok(mut health)) = (self.dice.as_mut(), self.healths.single_mut())
         {
-            let restored = drink_healing(&mut health, &mut dice.0);
+            let restored = drink_healing(&mut health, &mut dice.0, done.size.unwrap_or(PotionSize::Medium));
             line = format!("{line} (+{restored})");
             self.glow.0 = HEAL_FLASH_TIME;
             if let Some(sound) = &self.sound {
@@ -261,15 +266,19 @@ impl Eating<'_, '_> {
 }
 
 /// The healing draught nearest to hand among what is carried, never one lying underfoot or in a
-/// container not carried: a quickslot's first, then the belt's grid, then the pack's, then the
+/// container not carried: a quickslot's first, then the belt's potion pouch, then the belt's grid, then the pack's, then the
 /// bags inside those, breadth first.
 pub fn nearest_healing(inventory: &Inventory, slots: Option<&crate::quickslots::Quickslots>) -> Option<ItemId> {
     use fb_items::Slot;
-    let is_draught = |id: ItemId| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.base == HEALING_DRAUGHT);
+    let is_draught = |id: ItemId| inventory.is_carried(id) && inventory.item(id).is_some_and(|i| i.brew() == Some(Brew::Healing));
     if let Some(id) = slots.and_then(|s| s.0.iter().flatten().copied().find(|&id| is_draught(id))) {
         return Some(id);
     }
-    let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Quiver];
+    let pouch = inventory.worn(Slot::Belt).and_then(|belt| inventory.fitting(belt, fb_items::Accessory::PotionPouch));
+    if let Some(id) = pouch.and_then(|pouch| inventory.grid(pouch)).and_then(|g| g.entries().iter().map(|e| e.id).find(|&id| is_draught(id))) {
+        return Some(id);
+    }
+    let order = [Slot::Belt, Slot::Hip, Slot::Back, Slot::Satchel, Slot::Quiver];
     let mut level: Vec<ItemId> = order.iter().filter_map(|&slot| inventory.worn(slot)).collect();
     while !level.is_empty() {
         let mut inside = Vec::new();
@@ -478,7 +487,7 @@ mod tests {
         let mut inventory = Inventory::default();
         let pack = inventory.add(item("Pack"));
         inventory.wear(pack, fb_items::Slot::Back).unwrap();
-        let loaves: Vec<ItemId> = (0..3).map(|_| inventory.add(item("Bread"))).collect();
+        let loaves: Vec<ItemId> = (0..3).map(|k| inventory.add(fb_items::roll_item("Bread", 5 + k).unwrap())).collect();
         for &loaf in &loaves {
             inventory.stow(loaf).unwrap();
         }
@@ -813,7 +822,7 @@ mod tests {
     fn a_draught_at_three_of_twelve_heals_to_between_seven_and_twelve() {
         for seed in 0..200 {
             let mut health = hurt(3);
-            drink_healing(&mut health, &mut Mulberry32::new(seed));
+            drink_healing(&mut health, &mut Mulberry32::new(seed), PotionSize::Medium);
             assert!((7..=12).contains(&health.hp), "seed {seed}: {}", health.hp);
         }
     }
@@ -822,11 +831,11 @@ mod tests {
     fn a_draught_never_heals_above_the_maximum() {
         for seed in 0..50 {
             let mut health = hurt(11);
-            assert_eq!(drink_healing(&mut health, &mut Mulberry32::new(seed)), 1);
+            assert_eq!(drink_healing(&mut health, &mut Mulberry32::new(seed), PotionSize::Medium), 1);
             assert_eq!(health.hp, 12);
         }
         let mut full = Health::full(12);
-        assert_eq!(drink_healing(&mut full, &mut Mulberry32::new(1)), 0);
+        assert_eq!(drink_healing(&mut full, &mut Mulberry32::new(1), PotionSize::Medium), 0);
         assert_eq!(full.hp, 12);
     }
 
@@ -834,7 +843,7 @@ mod tests {
     fn the_same_dice_give_the_same_roll() {
         let roll = |seed| {
             let mut health = Health { hp: 1, max: 100 };
-            drink_healing(&mut health, &mut Mulberry32::new(seed))
+            drink_healing(&mut health, &mut Mulberry32::new(seed), PotionSize::Medium)
         };
         assert_eq!(roll(7), roll(7));
         assert!((4..=10).contains(&roll(7)));
@@ -909,12 +918,47 @@ mod tests {
         assert!(app.world().resource::<Inventory>().item(draught).is_none());
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 12);
         assert!(app.world().resource::<Toast>().text.ends_with("(+0)"));
-        // A plain Potion does not heal.
+        // A plain Potion heals only if its brew is the healing one.
         app.world_mut().entity_mut(player).insert(hurt(3));
-        let potion = app.world_mut().resource_mut::<Inventory>().add(item("Potion"));
+        let other = (0..200).map(item_seeded("Potion")).find(|p| p.brew() != Some(Brew::Healing)).unwrap();
+        let potion = app.world_mut().resource_mut::<Inventory>().add(other);
         app.world_mut().resource_mut::<Hovered>().0 = Some((potion, Rect::default()));
         press_u(&mut app);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3);
+    }
+
+    #[test]
+    fn a_small_draught_heals_less_than_a_large_one() {
+        let heal = |base: &str, seed: u32| {
+            let (mut app, player) = app();
+            app.world_mut().entity_mut(player).insert(Health { hp: 1, max: 100 });
+            app.world_mut().resource_mut::<RunDice>().0 = Mulberry32::new(seed);
+            let id = carry(&mut app, base);
+            hover(&mut app, id);
+            press_u(&mut app);
+            app.world().get::<Health>(player).unwrap().hp - 1
+        };
+        for seed in 0..40 {
+            let (small, large) = (heal("Small healing draught", seed), heal("Large healing draught", seed));
+            assert!((2..=8).contains(&small), "small {small}");
+            assert!((8..=20).contains(&large), "large {large}");
+            assert!(heal("Healing vial", seed) <= 5);
+        }
+        let mean = |base| (0..40).map(|seed| heal(base, seed) as f32).sum::<f32>() / 40.0;
+        assert!(mean("Small healing draught") < mean("Healing draught") && mean("Healing draught") < mean("Large healing draught"));
+    }
+
+    #[test]
+    fn drinking_from_a_stack_takes_one_and_the_stack_stays_until_the_last() {
+        let (mut app, player) = app();
+        app.world_mut().entity_mut(player).insert(hurt(1));
+        let stack = stow(&mut app, item("Small healing draught").with_quantity(3));
+        hover(&mut app, stack);
+        press_u(&mut app);
+        press_u(&mut app);
+        assert_eq!(app.world().resource::<Inventory>().item(stack).map(|i| i.quantity), Some(1));
+        press_u(&mut app);
+        assert!(app.world().resource::<Inventory>().item(stack).is_none());
     }
 
     #[test]
@@ -1068,7 +1112,8 @@ mod tests {
         on_the_level(&mut app);
         app.world_mut().entity_mut(player).insert(hurt(3));
         let (_, in_pouch) = draught_in_a_pouch(&mut app);
-        let in_pack = stow(&mut app, item(HEALING_DRAUGHT));
+        // A smaller size, so it does not fold into the pouch's stack.
+        let in_pack = stow(&mut app, item("Small healing draught"));
         let on_belt = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let belt = inventory.add(item("Belt"));
@@ -1163,8 +1208,9 @@ mod tests {
         on_the_level(&mut app);
         app.world_mut().init_resource::<crate::quickslots::Quickslots>();
         app.world_mut().entity_mut(player).insert(hurt(3));
+        // Other sizes, so the three do not fold into one stack.
         let a = stow(&mut app, item(HEALING_DRAUGHT));
-        let c = stow(&mut app, item(HEALING_DRAUGHT));
+        let c = stow(&mut app, item("Small healing draught"));
         let b = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let belt = inventory.add(item("Belt"));
