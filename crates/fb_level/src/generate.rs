@@ -94,6 +94,14 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
 
 /// The level for level seed `seed` at `depth`, its factions drawn from the pool of `world_seed`.
 pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
+    let mut level = generate_before_niches(world_seed, seed, depth, params);
+    // Niches after everything they keep clear of.
+    level.niches = crate::niches::place_niches(&level);
+    level
+}
+
+/// The level for `seed` as [`generate_for`] lays it out, without its niches.
+pub(crate) fn generate_before_niches(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
     let mut params = *params;
     params.fit();
     let (mut level, layout_seed) = generate_without_creatures_in(world_seed, seed, depth, &params);
@@ -109,8 +117,6 @@ pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams
     level.lights.extend(lit);
     let gems = crate::crystals::place_rough_gems(&level, &mut Mulberry32::new(layout_seed ^ crate::crystals::GEM_SALT));
     level.items.extend(gems);
-    // Niches after everything they keep clear of.
-    level.niches = crate::niches::place_niches(&level);
     level
 }
 

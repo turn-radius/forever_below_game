@@ -217,11 +217,11 @@ mod tests {
     #[test]
     fn niches_move_nothing_else() {
         for (seed, depth) in sweep().take(60) {
+            let params = crate::LevelParams::for_depth(depth);
+            let before = crate::generate::generate_before_niches(seed, seed, depth, &params);
+            assert!(before.niches.is_empty());
             let level = generate(seed, depth);
-            let bare = Level { niches: Vec::new(), ..level.clone() };
-            assert_eq!(bare.banners, level.banners);
-            assert_eq!(bare.props, level.props);
-            assert_eq!(bare.lights, level.lights);
+            assert_eq!(Level { niches: Vec::new(), ..level }, before, "seed {seed} depth {depth}: the niche step moved something");
         }
     }
 }

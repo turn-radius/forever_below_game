@@ -230,6 +230,17 @@ fn rib(span: f32, rng: &mut Mulberry32) -> MeshBuilder {
 /// A skull about two units long, facing +Z: a cranium with its eye sockets and nose pressed
 /// in, and the jaw beneath.
 fn skull(rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
+    let (mut bone, mut sockets) = skull_upright(rng);
+    // Lying as it fell: on its side, or tipped forward, or upright.
+    let (tip, roll) = (rng.range_f32(-0.4, 0.3), if rng.chance(0.4) { rng.range_f32(1.1, 1.5) } else { rng.range_f32(-0.2, 0.2) });
+    for mesh in [&mut bone, &mut sockets] {
+        mesh.rotate_x(tip).rotate_z(roll);
+    }
+    (bone, sockets)
+}
+
+/// The skull upright, facing +Z, jaw closed.
+fn skull_upright(_rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
     let mut cranium = icosphere(1.0, 3);
     cranium.scale([0.68, 0.74, 0.9]);
     // A narrower face under the brow.
@@ -248,11 +259,6 @@ fn skull(rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
     let (mut bone, mut sockets) = carve_hollows(&cranium, &hollows);
     let jaw_path = CatmullRom::centripetal(vec![[-0.45, -0.45, 0.05], [-0.36, -0.68, 0.5], [0.0, -0.74, 0.74], [0.36, -0.68, 0.5], [0.45, -0.45, 0.05]]).sample(14);
     bone.append(&tube(&jaw_path, 8, &SweepOptions::default(), |_| 0.1));
-    // Lying as it fell: on its side, or tipped forward, or upright.
-    let (tip, roll) = (rng.range_f32(-0.4, 0.3), if rng.chance(0.4) { rng.range_f32(1.1, 1.5) } else { rng.range_f32(-0.2, 0.2) });
-    for mesh in [&mut bone, &mut sockets] {
-        mesh.rotate_x(tip).rotate_z(roll);
-    }
     (bone, sockets)
 }
 
@@ -296,10 +302,10 @@ pub fn bones(seed: u32) -> ItemMesh {
 }
 
 /// A skull on its own, resting on its lowest point at the origin and facing +Z, for a niche to
-/// hold: the one `bones` scatters among its long bones.
+/// hold: the one `bones` scatters among its long bones, set upright so its face looks out.
 pub fn lone_skull(seed: u32) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ 0xb0e5_5ca7);
-    let (mut bone, mut sockets) = skull(&mut rng);
+    let (mut bone, mut sockets) = skull_upright(&mut rng);
     let low = bone.bounds().map_or(0.0, |(lo, _)| lo[1]);
     for mesh in [&mut bone, &mut sockets] {
         mesh.translate([0.0, -low, 0.0]);

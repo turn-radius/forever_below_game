@@ -719,8 +719,10 @@ struct NicheCut {
 
 /// How far the blocks stand back from the edge of a niche's opening.
 const FRAME_GAP: f32 = 0.45;
+/// How far the blocks stand back above the arch's crown, a joint's width and a little.
+const FRAME_GAP_TOP: f32 = 0.2;
 /// The least piece of a block worth laying beside a niche.
-const FRAME_LEAST: f32 = 1.2;
+const FRAME_LEAST: f32 = 0.8;
 
 /// `spans` with the part of each inside `[lo, hi]` taken out.
 fn minus(spans: Vec<[f32; 2]>, lo: f32, hi: f32) -> Vec<[f32; 2]> {
@@ -745,7 +747,7 @@ fn minus(spans: Vec<[f32; 2]>, lo: f32, hi: f32) -> Vec<[f32; 2]> {
 impl NicheCut {
     fn at(middle: f32) -> Self {
         let half = niches::WIDTH * 0.5 + FRAME_GAP;
-        NicheCut { s: [middle - half, middle + half], y: [niches::SILL - FRAME_GAP, niches::SPRING + niches::RISE + FRAME_GAP] }
+        NicheCut { s: [middle - half, middle + half], y: [niches::SILL - FRAME_GAP, niches::SPRING + niches::RISE + FRAME_GAP_TOP] }
     }
 
     /// The pieces of a block `ar` along the wall by `br` up that lie outside the cuts, as
@@ -1333,6 +1335,53 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 8);
+    }
+
+    #[test]
+    fn the_shell_is_closed_solid_from_the_arch_up_and_open_only_in_the_arch() {
+        let (mut solid, mut open) = (0, 0);
+        for (level, spot) in niched().into_iter().take(10) {
+            let (centre, u, n) = opening(&spot);
+            let view = CellView::uncobbled(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let walls = part(&mesh, "walls");
+            // The front-facing triangles lying in the wall's plane, as (across, up) triangles.
+            let flat: Vec<[[f32; 2]; 3]> = walls
+                .indices
+                .chunks(3)
+                .filter_map(|t| {
+                    let rel = [0, 1, 2].map(|k| vec3::sub(walls.positions[t[k] as usize], centre));
+                    let lies = rel.iter().all(|r| vec3::dot(*r, n).abs() < 0.01);
+                    let facing = vec3::dot(walls.normals[t[0] as usize], n) > 0.9;
+                    (lies && facing).then(|| rel.map(|r| [vec3::dot(r, u), r[1]]))
+                })
+                .collect();
+            let covers = |p: [f32; 2]| {
+                flat.iter()
+                    .filter(|t| {
+                        let side = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+                        let (d0, d1, d2) = (side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0]));
+                        (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+                    })
+                    .count()
+            };
+            let crown = niches::SPRING + niches::RISE;
+            let wall_top = Vaults::new(&level).height(centre[0], centre[2]).min(level.ceiling) - 0.5;
+            // From the crown to the wall's top, across the width of the niche and a little beyond.
+            for i in 0..=12 {
+                let across = (i as f32 / 12.0 - 0.5) * (niches::WIDTH + 2.0);
+                for k in 0..=6 {
+                    let up = crown + 0.05 + (wall_top - crown - 0.05) * k as f32 / 6.0;
+                    assert_eq!(covers([across, up]), 1, "a gap or an overlap in the shell above the arch at {spot:?}: {across} across, {up} up");
+                    solid += 1;
+                }
+            }
+            // Under the sill too, and the middle of the opening is open.
+            assert_eq!(covers([0.13, niches::SILL * 0.5]), 1);
+            assert_eq!(covers([0.13, niches::SPRING - 0.5]), 0, "the opening is cut out of the shell");
+            open += 1;
+        }
+        assert!(solid > 100 && open >= 5);
     }
 
     #[test]

@@ -36,7 +36,7 @@ const ROOM: [f32; 3] = [4.6, 4.2, 3.2];
 /// size: an urn, a candle with its holder, and a skull.
 const URN_HEIGHT: f32 = 4.0;
 const CANDLE_HEIGHT: f32 = 3.4;
-const SKULL_LENGTH: f32 = 3.0;
+const SKULL_LENGTH: f32 = 3.6;
 /// How far in front of the wall's plane a candle's light hangs, so it reaches the wall round the niche.
 const LIGHT_OUT: f32 = 0.8;
 
