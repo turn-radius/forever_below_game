@@ -21,7 +21,7 @@
 //!   the delver while the panel is open ends the talk (not a parley, which is with such a folk).
 //! - What folk say is written in [`lines`] from the grammars in `data/talk.json`, drawn from the
 //!   folk's own seed, so the same folk always say the same thing.
-//! - Commission, Enchant and Scrap list for the trades that offer them and answer "Not yet."
+//! - Commission and Enchant list for the trades that offer them and answer "Not yet."
 //!   until their screens exist. When one does, [`service_ready`] says so for it and choosing the
 //!   topic sends a [`ServiceChosen`] for that screen to open on.
 //!
@@ -109,10 +109,10 @@ fn reset_talk(mut talk: ResMut<Talk>, mut persuading: ResMut<Persuading>) {
 }
 
 /// Whether a service's screen exists to open: the barter screen ([`crate::barter`]), the
-/// commission screen ([`crate::commission`]) and the enchanter's two ([`crate::enchanter`]).
+/// commission screen ([`crate::commission`]) and the enchanter's bench ([`crate::enchanter`]).
 /// Whatever builds another flips its arm.
 pub fn service_ready(service: Service) -> bool {
-    matches!(service, Service::Barter | Service::Commission | Service::Order | Service::Enchant | Service::Scrap)
+    matches!(service, Service::Barter | Service::Commission | Service::Order | Service::Enchant)
 }
 
 /// The delver chose a service of the folk they talk to, and its screen should open. Sent only for

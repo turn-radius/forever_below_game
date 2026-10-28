@@ -1,4 +1,4 @@
-//! An enchanter's bench: the Enchant and Scrap topics of their talk ([`crate::talk`]) open it.
+//! An enchanter's bench: the Enchant topic of their talk ([`crate::talk`]) opens it.
 //!
 //! - **Enchant.** Pick one of the gear you carry (worn or packed) from the list on the left. The
 //!   right shows its card and what it carries, a Strip button on each affix, the affixes the
@@ -7,13 +7,15 @@
 //!   it spends from the delver's [`Enchanting`] stock and carried purses ([`crate::enchanting`]),
 //!   and the item changes where it lies; its card stays up as the result, with the new history
 //!   line.
-//! - **Scrap.** Pick gear and scrap it into essence and materials ([`crate::enchanting::scrap_item`]);
-//!   what it gave shows as the result.
+//! - **Scrap.** An action on the card, after Strip and Reforge and before the long list of Add, for gear that
+//!   breaks into something ([`fb_items::scrap`]); it shows the essence and materials it would give,
+//!   and scrapping ([`crate::enchanting::scrap_item`]) adds them to the stock and shows what they
+//!   were as the result.
 //! - The screen is laid out for the 1920 by 1080 reference and scales with the window
 //!   ([`crate::ui`]); the mouse is read in the interface's own pixels ([`ui_cursor`]). Back
 //!   returns to the talk; Esc leaves, and the folk's hold is released however it closes
 //!   ([`crate::talk`] treats the bench as the talk going on).
-//! - `FB_ENCHANT_OPEN=<tier>` opens the bench with no talk, for captures; `FB_ENCHANT=<equipped|inventory|select|strip|reforge|offer|legendary|scrap>` fills the delver's pack and stock a few frames in
+//! - `FB_ENCHANT_OPEN=<tier>` opens the bench with no talk, for captures; `FB_ENCHANT=<equipped|inventory|select|strip|reforge|offer|legendary|sword|scrap>` fills the delver's pack and stock a few frames in
 //!   and, once the bench is open (`FB_TALK=1 FB_TALK_TOPIC=<n>` opens it), picks an item and does
 //!   that, for captures.
 
@@ -120,7 +122,6 @@ struct Scrapped {
 /// The bench in use.
 #[derive(Debug)]
 pub struct Open {
-    mode: Service,
     by: Enchanter,
     selected: Option<ItemId>,
     /// The list showing on the left.
@@ -149,7 +150,7 @@ impl Bench {
 }
 
 /// The gear the delver carries that the bench could work on, richest first.
-fn candidates(inventory: &Inventory, mode: Service) -> Vec<ItemId> {
+fn candidates(inventory: &Inventory) -> Vec<ItemId> {
     let mut ids: Vec<ItemId> = inventory
         .ids()
         .filter(|&id| inventory.is_carried(id))
@@ -160,14 +161,16 @@ fn candidates(inventory: &Inventory, mode: Service) -> Vec<ItemId> {
             if !item.is_known() {
                 return false;
             }
-            match mode {
-                Service::Scrap => inventory.holding(id) == 0 && scrap(item).is_some(),
-                _ => enchant::enchantable(item),
-            }
+            enchant::enchantable(item) || can_scrap(inventory, id)
         })
         .collect();
     ids.sort_by_key(|&id| inventory.item(id).map(|i| (std::cmp::Reverse(i.rarity), i.name.clone())));
     ids
+}
+
+/// Whether the bench can scrap `id`: it breaks into something, and nothing is kept inside it.
+fn can_scrap(inventory: &Inventory, id: ItemId) -> bool {
+    inventory.holding(id) == 0 && inventory.item(id).is_some_and(|item| scrap(item).is_some())
 }
 
 /// Whether `id` is worn or held, and not merely carried in something worn.
@@ -176,8 +179,8 @@ fn is_equipped(inventory: &Inventory, id: ItemId) -> bool {
 }
 
 /// The gear the bench could work on, split into what is worn or held and what is packed.
-fn split(inventory: &Inventory, mode: Service) -> (Vec<ItemId>, Vec<ItemId>) {
-    candidates(inventory, mode).into_iter().partition(|&id| is_equipped(inventory, id))
+fn split(inventory: &Inventory) -> (Vec<ItemId>, Vec<ItemId>) {
+    candidates(inventory).into_iter().partition(|&id| is_equipped(inventory, id))
 }
 
 /// The tab an item is listed under.
@@ -195,16 +198,16 @@ fn legend_rows(item: &Item, by: &Enchanter) -> Vec<Option<&'static Affix>> {
     if options.is_empty() { vec![None] } else { options.into_iter().map(Some).collect() }
 }
 
-/// The talk chose Enchant or Scrap: open the bench on the speaker.
+/// The talk chose Enchant: open the bench on the speaker.
 fn open_bench(mut chosen: MessageReader<ServiceChosen>, talk: Res<Talk>, level: Option<Res<crate::play::CurrentLevel>>, inventory: Res<Inventory>, mut bench: ResMut<Bench>, mut open: ResMut<ScreenOpen>, mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>) {
     for ServiceChosen { service, .. } in chosen.read() {
-        if !matches!(service, Service::Enchant | Service::Scrap) {
+        if *service != Service::Enchant {
             continue;
         }
         let Some(speaker) = talk.speaker.as_ref() else { continue };
         let tier = speaker.trade.map_or(enchant::Tier::Novice, |t| tier_of(t.tier));
-        let tab = if split(&inventory, *service).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
-        bench.open = Some(Open { mode: *service, by: Enchanter { name: speaker.name.clone(), tier, faction: speaker.faction.clone() }, selected: None, tab, notice: None, scrapped: None, level: level.as_ref().map_or(0, |l| l.0.depth) });
+        let tab = if split(&inventory).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
+        bench.open = Some(Open { by: Enchanter { name: speaker.name.clone(), tier, faction: speaker.faction.clone() }, selected: None, tab, notice: None, scrapped: None, level: level.as_ref().map_or(0, |l| l.0.depth) });
         bench.changed();
         show_screen(&mut open, Some(Screen::Enchant), cursor.as_deref_mut().map(|c| &mut **c));
     }
@@ -429,7 +432,7 @@ fn build_bench(
     };
     *drawn = Some(bench.revision);
     let purse = wallet(&inventory);
-    let (worn, packed) = split(&inventory, open.mode);
+    let (worn, packed) = split(&inventory);
     let list = if open.tab == BenchTab::Equipped { worn.clone() } else { packed.clone() };
     let by = &open.by;
     commands.entity(root).with_children(|root| {
@@ -456,7 +459,7 @@ fn build_bench(
             // The head: who, and what the delver has to spend.
             panel.spawn(Node { justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::FlexEnd, column_gap: px(24), flex_shrink: 0.0, ..default() }).with_children(|head| {
                 head.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|who| {
-                    line(who, &fonts, if open.mode == Service::Scrap { "Scrap" } else { "Enchant" }, &fonts.display, 34.0, INK);
+                    line(who, &fonts, "Enchant", &fonts.display, 34.0, INK);
                     line(who, &fonts, format!("{}, {} enchanter of {}", by.name, by.tier.label(), by.faction), &fonts.body_italic, 18.0, MUTED);
                 });
                 line(head, &fonts, stock_line(&stock, purse), &fonts.mono, 15.0, ACCENT);
@@ -478,11 +481,9 @@ fn build_bench(
                     });
                     left.spawn((ScrollColumn, ScrollPosition::default(), Node { flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(6), overflow: Overflow::scroll_y(), ..default() })).with_children(|col| {
                     if list.is_empty() {
-                        let none = match (open.mode == Service::Scrap, open.tab) {
-                            (true, BenchTab::Equipped) => "Nothing worn they could take apart.",
-                            (true, BenchTab::Inventory) => "Nothing packed they could take apart.",
-                            (false, BenchTab::Equipped) => "Nothing worn they could work on.",
-                            (false, BenchTab::Inventory) => "Nothing packed they could work on.",
+                        let none = match open.tab {
+                            BenchTab::Equipped => "Nothing worn they could work on.",
+                            BenchTab::Inventory => "Nothing packed they could work on.",
                         };
                         line(col, &fonts, none, &fonts.body_italic, 18.0, MUTED);
                     }
@@ -496,11 +497,7 @@ fn build_bench(
                         row.with_children(|row| {
                             row.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|text| {
                                 line(text, &fonts, item.title().to_string(), &fonts.body_medium, 20.0, rarity_color(item.rarity));
-                                if open.mode == Service::Scrap {
-                                    if let Some(s) = scrap(item) {
-                                        line(text, &fonts, format!("Gives {} essence", s.essence), &fonts.body, 15.0, MUTED);
-                                    }
-                                } else if !item.affixes.is_empty() {
+                                if !item.affixes.is_empty() {
                                     let names: Vec<&str> = item.affixes.iter().map(|a| a.name.as_str()).collect();
                                     line(text, &fonts, names.join(" \u{b7} "), &fonts.body, 15.0, if item.affixes.iter().any(|a| !a.good) { BAD } else { MUTED });
                                 }
@@ -520,10 +517,8 @@ fn build_bench(
                                 line(col, &fonts, done.title.clone(), &fonts.display, 30.0, INK);
                                 line(col, &fonts, format!("It gave {}.", done.gave), &fonts.body, 20.0, OK);
                             } else {
-                                line(col, &fonts, if open.mode == Service::Scrap { "Pick something to take apart." } else { "Pick something to enchant." }, &fonts.body_italic, 20.0, MUTED);
-                                if open.mode == Service::Enchant {
-                                    line(col, &fonts, tier_note(by.tier), &fonts.body, 17.0, MUTED);
-                                }
+                                line(col, &fonts, "Pick something to work on.", &fonts.body_italic, 20.0, MUTED);
+                                line(col, &fonts, tier_note(by.tier), &fonts.body, 17.0, MUTED);
                             }
                         }
                     }
@@ -606,18 +601,6 @@ fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, icons: &mut Icons, op
         line(col, fonts, h.clone(), &fonts.body_italic, 15.0, MUTED);
     }
     col.spawn((Node { height: px(1), margin: UiRect::vertical(px(6)), flex_shrink: 0.0, ..default() }, BackgroundColor(FAINT)));
-    if open.mode == Service::Scrap {
-        let Some(salvage) = scrap(item) else { return };
-        let mut gives = vec![format!("{} essence", salvage.essence)];
-        gives.extend(salvage.materials.iter().map(|m| fb_items::scrap::material_name(&m.id).to_string()));
-        line(col, fonts, "Taking it apart gives", &fonts.mono, 13.0, MUTED);
-        line(col, fonts, gives.join(" \u{b7} "), &fonts.body, 20.0, OK);
-        col.spawn(frame(BenchButton { act: Do::Scrap, enabled: true, scrolls: true })).with_children(|b| {
-            line(b, fonts, "Scrap it", &fonts.body_medium, 21.0, BAD);
-            line(b, fonts, "it cannot be undone", &fonts.body_italic, 15.0, MUTED);
-        });
-        return;
-    }
     let by = &open.by;
     let priced = |work: Work| -> (Option<String>, bool) {
         match quote(item, work, by) {
@@ -656,6 +639,20 @@ fn detail(col: &mut ChildSpawnerCommands, fonts: &UiFonts, icons: &mut Icons, op
         }
         None => {
             line(col, fonts, reforge_note(item, by).unwrap_or(Refusal::TooHigh.reason()), &fonts.body_italic, 17.0, MUTED);
+        }
+    }
+    // Scrap: what taking it apart would give, before it is done.
+    if can_scrap(inventory, id) {
+        if let Some(salvage) = scrap(item) {
+            let mut gives = vec![format!("{} essence", salvage.essence)];
+            gives.extend(salvage.materials.iter().map(|m| format!("{} \u{d7}{}", fb_items::scrap::material_name(&m.id), m.count)));
+            line(col, fonts, "Scrap", &fonts.mono, 13.0, MUTED);
+            col.spawn(frame(BenchButton { act: Do::Scrap, enabled: true, scrolls: true })).with_children(|b| {
+                b.spawn(Node { flex_direction: FlexDirection::Column, ..default() }).with_children(|t| {
+                    line(t, fonts, "Scrap it", &fonts.body_medium, 19.0, BAD);
+                    line(t, fonts, format!("Gives {}. It cannot be undone.", gives.join(" \u{b7} ")), &fonts.body, 15.0, MUTED);
+                });
+            });
         }
     }
     // Add.
@@ -707,8 +704,8 @@ fn open_for_capture(mut bench: ResMut<Bench>, inventory: Res<Inventory>, mut ope
         "master" => enchant::Tier::Master,
         _ => return,
     };
-    let tab = if split(&inventory, Service::Enchant).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
-    bench.open = Some(Open { mode: Service::Enchant, by: Enchanter { name: "Ysolde".into(), tier, faction: "the Ash Rite".into() }, selected: None, tab, notice: None, scrapped: None, level: 1 });
+    let tab = if split(&inventory).0.is_empty() { BenchTab::Inventory } else { BenchTab::Equipped };
+    bench.open = Some(Open { by: Enchanter { name: "Ysolde".into(), tier, faction: "the Ash Rite".into() }, selected: None, tab, notice: None, scrapped: None, level: 1 });
     bench.changed();
     show_screen(&mut open, Some(Screen::Enchant), None);
 }
@@ -718,8 +715,7 @@ fn drive_for_capture(mut bench: ResMut<Bench>, mut inventory: ResMut<Inventory>,
     let Some(open) = bench.open.as_ref() else { return };
     *frames += 1;
     let what = std::env::var("FB_ENCHANT").unwrap_or_default();
-    let mode = open.mode;
-    let pick = |want: &dyn Fn(&Item) -> bool| candidates(&inventory, mode).into_iter().find(|&id| inventory.item(id).is_some_and(want));
+    let pick = |want: &dyn Fn(&Item) -> bool| candidates(&inventory).into_iter().find(|&id| inventory.item(id).is_some_and(want));
     match *frames {
         3 if matches!(what.as_str(), "equipped" | "inventory") => {
             // The lists alone, with nothing picked.
@@ -731,7 +727,7 @@ fn drive_for_capture(mut bench: ResMut<Bench>, mut inventory: ResMut<Inventory>,
             let id = match what.as_str() {
                 "reforge" => pick(&|i| i.base == "Dagger"),
                 "legendary" | "offer" => pick(&|i| i.base == "Cloak"),
-                "scrap" => pick(&|i| i.base == "Sword"),
+                "scrap" | "sword" => pick(&|i| i.base == "Sword"),
                 _ => pick(&|i| i.affixes.iter().any(|a| !a.good)),
             }
             .or_else(|| pick(&|_| true));
@@ -767,9 +763,9 @@ mod tests {
         Enchanter { name: "Ysolde".into(), tier, faction: "the Ash Rite".into() }
     }
 
-    fn bench_with(inventory: &mut Inventory, item: Item, tier: Tier, mode: Service) -> (Bench, ItemId) {
+    fn bench_with(inventory: &mut Inventory, item: Item, tier: Tier) -> (Bench, ItemId) {
         let id = inventory.add(item);
-        let open = Open { mode, by: by(tier), selected: Some(id), tab: BenchTab::default(), notice: None, scrapped: None, level: 1 };
+        let open = Open { by: by(tier), selected: Some(id), tab: BenchTab::default(), notice: None, scrapped: None, level: 1 };
         (Bench { open: Some(open), revision: 0 }, id)
     }
 
@@ -779,7 +775,7 @@ mod tests {
         let sword = inventory.add(roll_item_with("Sword", 5, Odds::default()).unwrap());
         let purse = inventory.add(fb_items::roll_item("Purse", 4).unwrap());
         inventory.equip(sword, fb_items::Slot::Mainhand).unwrap();
-        let list = candidates(&inventory, Service::Enchant);
+        let list = candidates(&inventory);
         assert_eq!(list, vec![sword]);
         assert!(!list.contains(&purse));
     }
@@ -799,7 +795,7 @@ mod tests {
         inventory.equip(belt, fb_items::Slot::Belt).unwrap();
         let ring = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
         inventory.stow(ring).unwrap();
-        let (worn, packed) = split(&inventory, Service::Enchant);
+        let (worn, packed) = split(&inventory);
         assert!(worn.contains(&sword) && worn.contains(&cloak) && !worn.contains(&ring));
         assert_eq!(packed, vec![ring]);
         assert_eq!(tab_of(&inventory, sword), BenchTab::Equipped);
@@ -817,7 +813,7 @@ mod tests {
         inventory.equip(belt, fb_items::Slot::Belt).unwrap();
         let ring = inventory.add(roll_item_with("Ring", 9, Odds::default()).unwrap());
         inventory.stow(ring).unwrap();
-        let mut bench = Bench { open: Some(Open { mode: Service::Enchant, by: by(Tier::Master), selected: None, tab: BenchTab::default(), notice: None, scrapped: None, level: 1 }), revision: 0 };
+        let mut bench = Bench { open: Some(Open { by: by(Tier::Master), selected: None, tab: BenchTab::default(), notice: None, scrapped: None, level: 1 }), revision: 0 };
         act(&mut bench, &mut inventory, &mut stock, Do::Pick(ring));
         assert_eq!(bench.open.as_ref().unwrap().tab, BenchTab::Inventory);
         act(&mut bench, &mut inventory, &mut stock, Do::Pick(sword));
@@ -854,11 +850,20 @@ mod tests {
     }
 
     #[test]
+    fn only_what_breaks_into_something_has_a_scrap_action() {
+        let mut inventory = Inventory::default();
+        let sword = inventory.add(roll_item_with("Sword", 5, Odds::default()).unwrap());
+        let purse = inventory.add(fb_items::roll_item("Purse", 4).unwrap());
+        assert!(can_scrap(&inventory, sword));
+        assert!(!can_scrap(&inventory, purse));
+    }
+
+    #[test]
     fn picking_and_scrapping_through_the_bench() {
         let mut inventory = Inventory::default();
         let mut stock = Enchanting::default();
         let sword = roll_item_with("Sword", 5, Odds::loot(6)).unwrap();
-        let (mut bench, id) = bench_with(&mut inventory, sword, Tier::Novice, Service::Scrap);
+        let (mut bench, id) = bench_with(&mut inventory, sword, Tier::Novice);
         inventory.equip(id, fb_items::Slot::Mainhand).unwrap();
         assert!(!act(&mut bench, &mut inventory, &mut stock, Do::Scrap));
         assert!(inventory.item(id).is_none() && stock.0.essence > 0);
