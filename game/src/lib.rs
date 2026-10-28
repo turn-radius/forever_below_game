@@ -63,6 +63,7 @@ pub mod light;
 pub mod menu;
 pub mod play;
 pub mod player;
+pub mod niches;
 pub mod props;
 pub mod quickslots;
 pub mod reading;

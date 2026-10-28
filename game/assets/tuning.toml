@@ -125,6 +125,10 @@ glowcap_reach = 30.0
 crystal_peak = 0.3
 # How far a lit crystal's light reaches, in world units, for a crystal 3 m tall.
 crystal_reach = 60.0
+# A candle burning in a wall niche: its strength close up (1 = full).
+niche_peak = 0.4
+# How far a niche candle's light reaches, in world units: its recess and a little of the wall round it.
+niche_reach = 22.0
 # How deeply flames flicker (0 = steady, 1 = usual).
 flicker_depth = 1.0
 # The abyss's own light where no flame reaches, in lux.

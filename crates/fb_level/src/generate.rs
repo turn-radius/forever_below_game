@@ -109,6 +109,8 @@ pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams
     level.lights.extend(lit);
     let gems = crate::crystals::place_rough_gems(&level, &mut Mulberry32::new(layout_seed ^ crate::crystals::GEM_SALT));
     level.items.extend(gems);
+    // Niches after everything they keep clear of.
+    level.niches = crate::niches::place_niches(&level);
     level
 }
 
@@ -193,6 +195,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         roles: Vec::new(),
         props: Vec::new(),
         banners: Vec::new(),
+        niches: Vec::new(),
         crystals: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),

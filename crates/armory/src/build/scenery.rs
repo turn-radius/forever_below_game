@@ -295,6 +295,21 @@ pub fn bones(seed: u32) -> ItemMesh {
     parts.finish()
 }
 
+/// A skull on its own, resting on its lowest point at the origin and facing +Z, for a niche to
+/// hold: the one `bones` scatters among its long bones.
+pub fn lone_skull(seed: u32) -> ItemMesh {
+    let mut rng = Mulberry32::new(seed ^ 0xb0e5_5ca7);
+    let (mut bone, mut sockets) = skull(&mut rng);
+    let low = bone.bounds().map_or(0.0, |(lo, _)| lo[1]);
+    for mesh in [&mut bone, &mut sockets] {
+        mesh.translate([0.0, -low, 0.0]);
+    }
+    let mut parts = Parts::new();
+    parts.add_tinted("bones", bone, MaterialKind::Bone, BONE.scaled(rng.range_f32(0.9, 1.0)));
+    parts.add_look("sockets", sockets, crate::build::parts::Look::of(MaterialKind::Bone).tinted(SOCKET).without_outline());
+    parts.finish()
+}
+
 /// A dressed stone column on a stepped square plinth: whole, with a capital bedded in the
 /// ceiling `ceiling` units up, or broken off short with its ragged top and a few chips of it
 /// lying on the plinth.
