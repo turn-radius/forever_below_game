@@ -256,7 +256,7 @@ fn skull_upright(_rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
         Hollow::bite([0.0, 0.0, 0.0], [-0.38, 0.0, 1.0], 0.85, 0.27),
         Hollow::bite([0.0, 0.0, 0.0], [0.0, -0.32, 1.0], 0.85, 0.17),
     ];
-    let (mut bone, mut sockets) = carve_hollows(&cranium, &hollows);
+    let (mut bone, sockets) = carve_hollows(&cranium, &hollows);
     let jaw_path = CatmullRom::centripetal(vec![[-0.45, -0.45, 0.05], [-0.36, -0.68, 0.5], [0.0, -0.74, 0.74], [0.36, -0.68, 0.5], [0.45, -0.45, 0.05]]).sample(14);
     bone.append(&tube(&jaw_path, 8, &SweepOptions::default(), |_| 0.1));
     (bone, sockets)
@@ -468,7 +468,7 @@ mod tests {
                 let mesh = kind.build(seed, CEILING);
                 let (lo, hi) = mesh.bounds().unwrap();
                 assert!(lo[0] >= -hw - 1e-3 && hi[0] <= hw + 1e-3, "{kind:?} {seed}: x {lo:?} {hi:?}");
-                let culprit = mesh.parts.iter().find(|p| p.positions.iter().any(|v| v[2] < -hd - 1e-3 || v[2] > hd + 1e-3)).map(|p| p.name.clone());
+                let culprit = mesh.parts.iter().find(|p| p.positions.iter().any(|v| v[2] < -hd - 1e-3 || v[2] > hd + 1e-3)).map(|p| p.name);
                 assert!(lo[2] >= -hd - 1e-3 && hi[2] <= hd + 1e-3, "{kind:?} {seed}: z {lo:?} {hi:?} in {culprit:?}");
                 if !matches!(kind, Scenery::Table | Scenery::Bunk) {
                     assert!(lo[2] < -hd + 0.3, "{kind:?} {seed}: back at {} not against -Z", lo[2]);
