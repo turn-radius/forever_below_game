@@ -120,6 +120,16 @@ sleep_per_hour = 0.375
 # of its terms' costs, reaches its reach term's range and lasts its duration term's seconds; tier n
 # multiplies all three by n. `known` terms are there from the start; the rest are unlocked by
 # something else (a devotion unlocks a bane).
+# Whether frighten and charm take hold of a creature: each gets a save. The chance is base, less
+# per_size for each size above Tiny, plus per_tier for each tier above the first, between floor and
+# ceiling.
+[casting.influence]
+base = 0.9
+per_tier = 0.1
+per_size = 0.2
+floor = 0.05
+ceiling = 0.95
+
 [casting.terms.light]
 kind = "effect"
 name = "Light"

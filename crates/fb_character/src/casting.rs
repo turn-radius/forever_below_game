@@ -73,6 +73,41 @@ fn term(kind: TermKind, name: &str, school: Casting, cost: f64, range: f64, seco
 #[serde(default)]
 pub struct CastingRules {
     pub terms: BTreeMap<String, TermRules>,
+    /// How often frighten and charm take hold ([`InfluenceRules`]).
+    pub influence: InfluenceRules,
+}
+
+/// Whether a frightened or charmed creature is taken by it: each gets a save, and bigger
+/// creatures resist more often. The chance it takes hold is `base`, less `per_size` for each size
+/// above Tiny, plus `per_tier` for each tier above the first, kept between `floor` and `ceiling`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InfluenceRules {
+    pub base: f64,
+    pub per_tier: f64,
+    pub per_size: f64,
+    pub floor: f64,
+    pub ceiling: f64,
+}
+
+impl Default for InfluenceRules {
+    fn default() -> Self {
+        InfluenceRules { base: 0.9, per_tier: 0.1, per_size: 0.2, floor: 0.05, ceiling: 0.95 }
+    }
+}
+
+impl InfluenceRules {
+    /// The chance it takes hold of a creature `size_steps` above Tiny (Tiny 0, Small 1, Medium 2,
+    /// Large 3) at `tier`.
+    pub fn chance(&self, size_steps: u8, tier: u8) -> f64 {
+        let raw = self.base - self.per_size * f64::from(size_steps) + self.per_tier * f64::from(tier.saturating_sub(1));
+        raw.clamp(self.floor, self.ceiling)
+    }
+
+    /// Whether it takes hold, given a roll from 0 to 1.
+    pub fn takes_hold(&self, size_steps: u8, tier: u8, roll: f64) -> bool {
+        roll < self.chance(size_steps, tier)
+    }
 }
 
 impl Default for CastingRules {
@@ -100,7 +135,7 @@ impl Default for CastingRules {
         .into_iter()
         .map(|(id, t)| (id.to_string(), t))
         .collect();
-        CastingRules { terms }
+        CastingRules { terms, influence: InfluenceRules::default() }
     }
 }
 
@@ -248,6 +283,36 @@ impl Spellbook {
     /// [`Spellbook::unlock_with`] under the default rules.
     pub fn unlock(&mut self, id: &str) -> bool {
         self.unlock_with(defaults(), id)
+    }
+
+    /// The terms a devotion unlocks and a different one takes away again.
+    pub const DEVOTION_TERMS: [&'static str; 3] = ["bane", "frighten", "charm"];
+
+    /// Whether the unlocked devotion terms are exactly those `devotion` grants.
+    pub fn follows_devotion(&self, devotion: Option<crate::devotion::Devotion>) -> bool {
+        let grants = devotion.map_or(&[][..], |d| d.terms());
+        Self::DEVOTION_TERMS.iter().all(|t| self.unlocked.contains(*t) == grants.contains(t))
+    }
+
+    /// Unlocks the terms `devotion` grants and locks the other devotion terms, so changing
+    /// devotion changes what can be written. Prayers already written are kept (one with a locked
+    /// term fails to cast). True if anything changed.
+    pub fn follow_devotion_with(&mut self, rules: &Rules, devotion: Option<crate::devotion::Devotion>) -> bool {
+        let grants = devotion.map_or(&[][..], |d| d.terms());
+        let mut changed = false;
+        for term in Self::DEVOTION_TERMS {
+            if grants.contains(&term) {
+                changed |= self.unlock_with(rules, term);
+            } else {
+                changed |= self.unlocked.remove(term);
+            }
+        }
+        changed
+    }
+
+    /// [`Spellbook::follow_devotion_with`] under the default rules.
+    pub fn follow_devotion(&mut self, devotion: Option<crate::devotion::Devotion>) -> bool {
+        self.follow_devotion_with(defaults(), devotion)
     }
 
     /// The unlocked terms of `kind` for `school`, as (id, term) in id order: the writer's choices.
@@ -488,5 +553,31 @@ mod tests {
         let mut rules = Rules::default();
         rules.casting.terms.get_mut("light").unwrap().cost = 4.0;
         assert_eq!(Written::divine_light().preview_with(&rules, 1).cost, 6.0);
+    }
+
+    #[test]
+    fn a_devotion_unlocks_its_terms_and_changing_it_locks_the_rest() {
+        use crate::devotion::Devotion;
+        use crate::kin::Kin;
+        use fb_items::Foe;
+        let mut book = cleric();
+        let locked = |b: &Spellbook| ["bane", "frighten", "charm"].map(|t| !b.unlocked.contains(t));
+        assert_eq!(locked(&book), [true; 3]);
+        assert!(book.follow_devotion(Some(Devotion::FavoredFoe(Kin::Foe(Foe::Vermin)))));
+        assert_eq!(locked(&book), [false, false, true]);
+        assert!(book.follows_devotion(Some(Devotion::FavoredFoe(Kin::Foe(Foe::Vermin)))));
+        assert!(!book.follow_devotion(Some(Devotion::FavoredFoe(Kin::Foe(Foe::Undead)))), "nothing to change");
+        assert!(book.follow_devotion(Some(Devotion::Aligned(Kin::Foe(Foe::Spider)))));
+        assert_eq!(locked(&book), [true, true, false]);
+        assert!(book.follow_devotion(None));
+        assert_eq!(locked(&book), [true; 3]);
+    }
+
+    #[test]
+    fn bigger_creatures_resist_more_and_tier_helps() {
+        let r = InfluenceRules::default();
+        assert!(r.chance(0, 1) > r.chance(1, 1) && r.chance(1, 1) > r.chance(3, 1));
+        assert!(r.chance(3, 3) > r.chance(3, 1));
+        assert!((0..=3).all(|s| (1..=3).all(|t| (0.05..=0.95).contains(&r.chance(s, t)))));
     }
 }

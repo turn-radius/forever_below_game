@@ -76,6 +76,7 @@ impl Plugin for CastingPlugin {
                     .chain()
                     .in_set(DelveSystems),
             );
+        crate::casting_influence::register(app);
     }
 }
 
@@ -226,7 +227,7 @@ fn bind_ability_hovered(
 }
 
 /// Does each request: spends the mana and sends [`Casted`], or says why not.
-fn cast_requests(
+pub(crate) fn cast_requests(
     mut requests: MessageReader<CastRequest>,
     mut done: MessageWriter<Casted>,
     character: Option<Res<Character>>,

@@ -141,6 +141,16 @@ impl DevotionRules {
 }
 
 impl Devotion {
+    /// The prayer terms it unlocks ([`crate::casting::Spellbook::follow_devotion`]): a favored
+    /// foe gives bane and frighten, an alignment gives charm.
+    pub fn terms(self) -> &'static [&'static str] {
+        match self {
+            Devotion::FavoredFoe(_) => &["bane", "frighten"],
+            Devotion::Aligned(_) => &["charm"],
+            Devotion::Dedicated(_) => &[],
+        }
+    }
+
     /// The family of creature it is about, if it is about one.
     pub fn kin(self) -> Option<Kin> {
         match self {
