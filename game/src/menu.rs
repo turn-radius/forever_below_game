@@ -1178,17 +1178,17 @@ mod tests {
         // The page says so.
         let mut texts = app.world_mut().query::<&Text>();
         assert!(texts.iter(app.world()).any(|t| t.0 == "Press a key..."));
-        press(&mut app, KeyCode::KeyB);
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB)]);
+        press(&mut app, KeyCode::KeyZ);
+        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyZ)]);
         assert_eq!(*app.world().resource::<Rebinding>(), Rebinding::Idle);
         assert!(!app.world().resource::<InputCapture>().0);
-        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::KeyB)], "saved");
+        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::KeyZ)], "saved");
         // A second slot adds a key.
         choose(&mut app, MenuCommand::Capture(Action::Jump, 1));
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Middle);
         app.update();
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB), Input::Mouse(MouseButton::Middle)]);
+        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyZ), Input::Mouse(MouseButton::Middle)]);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1250,7 +1250,7 @@ mod tests {
         keymap.set_slot(Action::Attack, 0, Input::Key(KeyCode::KeyH));
         assert_eq!(keymap.conflicts(Action::Jump, Input::Mouse(MouseButton::Left)), None);
         assert_eq!(keymap.clash(Action::Jump, Input::Mouse(MouseButton::Left)), Some(Action::Stab));
-        assert_eq!(keymap.clash(Action::Jump, Input::Key(KeyCode::KeyB)), None);
+        assert_eq!(keymap.clash(Action::Jump, Input::Key(KeyCode::KeyZ)), None);
     }
 
     #[test]
@@ -1268,11 +1268,11 @@ mod tests {
     #[test]
     fn rows_and_the_whole_list_reset() {
         let (mut app, path) = rebind_app("reset");
-        for (action, key) in [(Action::Jump, KeyCode::KeyB), (Action::Crouch, KeyCode::KeyN)] {
+        for (action, key) in [(Action::Jump, KeyCode::KeyZ), (Action::Crouch, KeyCode::KeyN)] {
             choose(&mut app, MenuCommand::Capture(action, 0));
             press(&mut app, key);
         }
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB)]);
+        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyZ)]);
         choose(&mut app, MenuCommand::ResetKeys(Action::Jump));
         assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::Space)]);
         assert_eq!(inputs(&app, Action::Crouch), vec![Input::Key(KeyCode::KeyN)], "only the row; the slot held both ctrl keys");
@@ -1359,11 +1359,11 @@ mod tests {
     fn a_key_in_the_other_slot_trades_places() {
         let (mut app, path) = rebind_app("trade");
         choose(&mut app, MenuCommand::Capture(Action::Jump, 1));
-        press(&mut app, KeyCode::KeyB);
+        press(&mut app, KeyCode::KeyZ);
         choose(&mut app, MenuCommand::Capture(Action::Jump, 0));
-        press(&mut app, KeyCode::KeyB);
-        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyB), Input::Key(KeyCode::Space)]);
-        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::KeyB), Input::Key(KeyCode::Space)]);
+        press(&mut app, KeyCode::KeyZ);
+        assert_eq!(inputs(&app, Action::Jump), vec![Input::Key(KeyCode::KeyZ), Input::Key(KeyCode::Space)]);
+        assert_eq!(Keymap::load(&path).inputs(Action::Jump), &[Input::Key(KeyCode::KeyZ), Input::Key(KeyCode::Space)]);
         let _ = std::fs::remove_file(&path);
     }
 

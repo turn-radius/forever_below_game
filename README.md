@@ -317,6 +317,7 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[combat]` | `knockback_scale` | 1.0 | How far a blow knocks a creature back, as a multiple of the usual. |
 | `[combat]` | `hit_kick` | 1.0 | How much the view jolts when hit, as a multiple of the usual (0 = no jolt). |
 | `[light]` | `torch_peak` | 1.0 | A torch, lantern or other burning thing's strength close up (1 = full). |
+| `[light]` | `holy_peak` | 0.6 | Divine Light's strength close up, as a share of a torch's (1 = as strong as a torch). |
 | `[light]` | `torch_reach` | 2.0 | How far its light reaches, as a multiple of its bright radius. |
 | `[light]` | `brazier_peak` | 1.5 | A brazier's strength close up (1 = full). |
 | `[light]` | `brazier_reach` | 150.0 | How far a brazier's light reaches, in world units. |
