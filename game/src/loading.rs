@@ -5,7 +5,7 @@
 //! the screen has faded to black ([`crate::travel`]), and a delve begun from the title or
 //! resumed from a save inserts it with the job ([`start_delve`]). [`show_loading`] draws the
 //! screen once the work has lasted [`GRACE_SECONDS`], so a level that is ready at once (the
-//! prefetched one below) is never flashed: the depth to come ("Level 3"), a line of flavour from
+//! prefetched one below) is never flashed: the depth to come ("Depth 3"), a line of flavour from
 //! the grammar in `data/loading.json`, and a row of lamps that keeps chasing along while the
 //! main thread is free. When the level is ready [`LoadingLevel`] goes, and the screen fades away
 //! over the level, which the journey fades in from black beneath it.
@@ -123,7 +123,7 @@ pub fn flavour(run_seed: u32, depth: u32) -> String {
 
 /// The words over the depth to come.
 pub fn level_line(depth: u32) -> String {
-    format!("Level {depth}")
+    format!("Depth {depth}")
 }
 
 /// The root of the screen: how long it has been up, and how long it has been going.
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn the_depth_to_come_is_named_for_the_player() {
-        assert_eq!(level_line(3), "Level 3");
+        assert_eq!(level_line(3), "Depth 3");
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod tests {
         let count = |app: &mut App| app.world_mut().query::<&LoadingScreen>().iter(app.world()).count();
         assert_eq!(count(&mut app), 1);
         let texts: Vec<String> = app.world_mut().query::<&Text>().iter(app.world()).map(|t| t.0.clone()).collect();
-        assert!(texts.contains(&"Level 4".to_string()), "{texts:?}");
+        assert!(texts.contains(&"Depth 4".to_string()), "{texts:?}");
         app.world_mut().remove_resource::<LoadingLevel>();
         // The screen is gone after its fade.
         for _ in 0..16 {
