@@ -867,6 +867,24 @@ mod tests {
     }
 
     #[test]
+    fn mana_affixes_keep_to_their_slots_and_groups() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let (attuned, wellspring, drained) = (by_name("Attuned"), by_name("of the Wellspring"), by_name("Drained"));
+        assert_eq!((attuned.kind, wellspring.kind, drained.kind), (AffixKind::Prefix, AffixKind::Suffix, AffixKind::Prefix));
+        assert_eq!(wellspring.least, Rarity::Rare);
+        assert!([attuned, wellspring, drained].iter().all(|a| a.in_play()));
+        assert!(!attuned.stacks_with(wellspring) && !attuned.stacks_with(drained), "one mana refill at a time");
+        let any = &[Tag::Leather, Tag::Wear][..];
+        for (affix, yes, no) in [
+            (attuned, &[Slot::Head, Slot::Neck, Slot::Charm][..], &[Slot::Body, Slot::Feet][..]),
+            (wellspring, &[Slot::Neck, Slot::Ring1, Slot::Charm][..], &[Slot::Head, Slot::Body][..]),
+            (drained, &[Slot::Head, Slot::Ring1, Slot::Charm][..], &[Slot::Body, Slot::Feet][..]),
+        ] {
+            assert!(yes.iter().all(|s| affix.fits_item(any, Some(*s))) && no.iter().all(|s| !affix.fits_item(any, Some(*s))), "{}", affix.name);
+        }
+    }
+
+    #[test]
     fn the_hawk_and_the_steady_hand_keep_to_their_slots() {
         let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
         let (hawk, steady) = (by_name("of the Hawk"), by_name("of the Steady Hand"));

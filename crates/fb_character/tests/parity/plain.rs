@@ -56,8 +56,8 @@ impl Book for Plain {
     fn mana_max(&self, casting: Casting, attributes: &Attributes) -> f64 {
         Mana::max_for(casting, attributes)
     }
-    fn mana_step(&self, mana: &mut Mana, hours: f64, activity: Activity) {
-        mana.step(hours, activity);
+    fn mana_step(&self, mana: &mut Mana, seconds: f64, activity: Activity) {
+        mana.step(seconds, activity);
     }
     fn visibility(&self, light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64 {
         visibility(light, pace, load, stealth)

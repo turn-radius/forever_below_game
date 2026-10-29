@@ -754,6 +754,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("play::Player", "the delver itself"),
         ("character::Load", "worked out from the pack"),
         ("character::GearStamina", "worked out from the pack"),
+        ("character::GearMana", "worked out from the pack"),
         ("player::GearPace", "worked out from the pack"),
         ("character::DelverVisibility", "worked out from the light and the pace"),
         ("player::Gait", "the step cycle"),

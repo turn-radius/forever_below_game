@@ -289,6 +289,16 @@ impl Loadout {
         e
     }
 
+    /// How fast mana refills, as a multiple of the usual: each item's multiplied. Equals
+    /// [`Gear::mana_refill`].
+    pub fn mana_refill(&self) -> Explained {
+        let mut e = Explained::new("Mana refill", "").base("usual rate", 1.0);
+        for (label, item) in self.worn.iter().filter(|(_, w)| w.mana_refill != 1.0) {
+            e = e.times(label, item.mana_refill);
+        }
+        e
+    }
+
     /// What swinging, blocking and sprinting cost in stamina, as a multiple of the usual: each
     /// item's multiplied. Equals [`Gear::stamina_cost`].
     pub fn stamina_cost(&self) -> Explained {
@@ -524,6 +534,15 @@ mod tests {
     }
 
     #[test]
+    fn mana_refill_multiplies_item_by_item() {
+        let attuned = Worn { mana_refill: 1.25, ..Worn::default() };
+        let wellspring = Worn { mana_refill: 1.2, ..Worn::default() };
+        let loadout = Loadout::new("Human", 0.0).wearing("Attuned Helm", attuned).wearing("Ring of the Wellspring", wellspring);
+        assert_eq!(loadout.mana_refill().line(), "Mana refill 1.5 = usual rate (1) × Attuned Helm (1.25) × Ring of the Wellspring (1.2)");
+        assert!((loadout.gear().mana_refill - 1.5).abs() < 1e-12);
+    }
+
+    #[test]
     fn a_goblin_in_the_mole_sees_the_best_not_the_sum() {
         let e = Loadout::new("Goblin", 60.0).wearing("Belt of the Mole", mole()).darkvision();
         assert_eq!(e.value(), 60.0);
@@ -584,6 +603,7 @@ mod tests {
             assert_eq!(loadout.ranged_to_hit().value(), gear.ranged_to_hit);
             assert!((loadout.attack_rate().value() - gear.attack_rate).abs() < 1e-12);
             assert!((loadout.stamina_refill().value() - gear.stamina_refill).abs() < 1e-12);
+            assert!((loadout.mana_refill().value() - gear.mana_refill).abs() < 1e-12);
             assert!((loadout.stamina_cost().value() - gear.stamina_cost).abs() < 1e-12);
             assert_eq!(loadout.ability("STR").value(), gear.abilities.strength as f64);
             let mut needs = Needs::default();

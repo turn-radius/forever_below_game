@@ -100,6 +100,9 @@ pub struct Stats {
     /// How fast the wearer's stamina refills, as a multiple of normal.
     #[serde(default = "one")]
     pub stamina_refill: f32,
+    /// How fast the wearer's mana refills, as a multiple of normal.
+    #[serde(default = "one")]
+    pub mana_refill: f32,
     /// What swinging, blocking and sprinting cost the wearer in stamina, as a multiple of normal.
     #[serde(default = "one")]
     pub stamina_cost: f32,
@@ -151,6 +154,7 @@ impl Default for Stats {
             bane: [None; Foe::COUNT],
             attack_rate: 1.0,
             stamina_refill: 1.0,
+            mana_refill: 1.0,
             stamina_cost: 1.0,
             grid_rows: 0.0,
         }
@@ -193,17 +197,18 @@ pub enum Stat {
     PoisonResistance,
     AttackRate,
     StaminaRefill,
+    ManaRefill,
     StaminaCost,
     GridRows,
 }
 
 impl Stat {
-    pub const ALL: [Stat; 32] = [
+    pub const ALL: [Stat; 33] = [
         Stat::Weight, Stat::Armour, Stat::DamageBonus, Stat::ToHit, Stat::RangedToHit, Stat::Light, Stat::BurnTime, Stat::BreakChance,
         Stat::Warmth, Stat::Stealth, Stat::Carry, Stat::Darkvision, Stat::HungerRate, Stat::SleepinessRate, Stat::DiseaseRisk,
         Stat::Lockpicking, Stat::HealOnKill, Stat::Speed, Stat::BlockChance, Stat::Luck, Stat::Strength, Stat::Dexterity, Stat::Constitution,
         Stat::Intelligence, Stat::Wisdom, Stat::Charisma, Stat::Recovery, Stat::PoisonResistance, Stat::AttackRate,
-        Stat::StaminaRefill, Stat::StaminaCost, Stat::GridRows,
+        Stat::StaminaRefill, Stat::ManaRefill, Stat::StaminaCost, Stat::GridRows,
     ];
 
     /// Item properties: describe the item itself (Weight, Armour, DamageBonus, ToHit, Light, BurnTime, BreakChance).
@@ -292,6 +297,7 @@ impl Stats {
             Stat::PoisonResistance => &self.poison_resistance,
             Stat::AttackRate => &self.attack_rate,
             Stat::StaminaRefill => &self.stamina_refill,
+            Stat::ManaRefill => &self.mana_refill,
             Stat::StaminaCost => &self.stamina_cost,
             Stat::GridRows => &self.grid_rows,
         }
@@ -329,6 +335,7 @@ impl Stats {
             Stat::PoisonResistance => &mut self.poison_resistance,
             Stat::AttackRate => &mut self.attack_rate,
             Stat::StaminaRefill => &mut self.stamina_refill,
+            Stat::ManaRefill => &mut self.mana_refill,
             Stat::StaminaCost => &mut self.stamina_cost,
             Stat::GridRows => &mut self.grid_rows,
         }

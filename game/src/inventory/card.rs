@@ -289,6 +289,7 @@ pub fn changes(new: &Stats, old: Option<&Stats>) -> Vec<Change> {
     differ(new.speed * 100.0, old.speed * 100.0, "speed", "%", true);
     differ(new.attack_rate * 100.0, old.attack_rate * 100.0, "attack speed", "%", true);
     differ(new.stamina_refill * 100.0, old.stamina_refill * 100.0, "stamina refill", "%", true);
+    differ(new.mana_refill * 100.0, old.mana_refill * 100.0, "mana refill", "%", true);
     differ(new.stamina_cost * 100.0, old.stamina_cost * 100.0, "stamina cost", "%", false);
     differ(new.block_chance * 100.0, old.block_chance * 100.0, "chance to block", "%", true);
     differ(new.luck, old.luck, "luck", "", true);
@@ -437,6 +438,9 @@ pub fn stat_lines(s: &Stats) -> Vec<String> {
     }
     if s.stamina_refill != plain.stamina_refill {
         lines.push(format!("{:+}% stamina refill", ((s.stamina_refill - 1.0) * 100.0).round()));
+    }
+    if s.mana_refill != plain.mana_refill {
+        lines.push(format!("{:+}% mana refill", ((s.mana_refill - 1.0) * 100.0).round()));
     }
     if s.stamina_cost != plain.stamina_cost {
         lines.push(format!("{:+}% stamina cost", ((s.stamina_cost - 1.0) * 100.0).round()));
@@ -1025,6 +1029,22 @@ mod tests {
         inventory.put(bread, pack, super::super::grid::Placement::new(0, 0, false)).unwrap();
         let contents = card_text(inventory.item(pack).unwrap(), Some((&inventory, pack))).contents.unwrap();
         assert!(contents.starts_with("Holds 1 thing \u{b7} "), "{contents}");
+    }
+
+    #[test]
+    fn a_mana_refill_affix_and_its_flaw_show_on_the_card() {
+        let rolled = |name: &str| {
+            let mut item = fb_items::roll_item("Amulet", 4).unwrap();
+            let affix = fb_items::tables::affixes().iter().find(|a| a.name == name).unwrap();
+            affix.apply_to_stats(&mut item.profile.stats);
+            item.affixes.push(affix);
+            card_text(&item, None)
+        };
+        assert!(rolled("Attuned").stats.contains(&"+20% mana refill".to_string()));
+        assert!(rolled("Drained").stats.contains(&"-20% mana refill".to_string()));
+        let plain = Stats::default();
+        let faster = Stats { mana_refill: 1.25, ..Stats::default() };
+        assert!(changes(&faster, Some(&plain)).iter().any(|c| c.text.contains("mana refill") && c.better));
     }
 
     #[test]

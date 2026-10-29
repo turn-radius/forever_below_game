@@ -24,7 +24,7 @@ pub trait Book {
     fn stamina_step(&self, stamina: &mut Stamina, seconds: f64, activity: Activity, load: Burden);
     fn stamina_spend(&self, stamina: &mut Stamina, cost: f64);
     fn mana_max(&self, casting: Casting, attributes: &Attributes) -> f64;
-    fn mana_step(&self, mana: &mut Mana, hours: f64, activity: Activity);
+    fn mana_step(&self, mana: &mut Mana, seconds: f64, activity: Activity);
     fn visibility(&self, light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64;
 }
 
@@ -159,7 +159,7 @@ fn mana<B: Book>(book: &B, out: &mut Vec<f64>) {
             out.push(max);
             let mut mana = Mana { points: max * 0.1, max };
             for (i, activity) in ACTIVITIES.iter().cycle().take(12).enumerate() {
-                book.mana_step(&mut mana, 0.7 * (i + 1) as f64, *activity);
+                book.mana_step(&mut mana, 7.0 * (i + 1) as f64, *activity);
                 out.push(mana.points);
             }
         }

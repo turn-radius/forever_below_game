@@ -336,6 +336,9 @@ pub struct Worn {
     /// Multiple of how fast stamina refills (Tireless, of Second Wind).
     #[serde(default = "default_gear")]
     pub stamina_refill: f64,
+    /// Multiple of how fast mana refills (Attuned, of the Wellspring).
+    #[serde(default = "default_gear")]
+    pub mana_refill: f64,
     /// Multiple of what stamina costs: a swing, a block and a sprint's drain (Light-handed, of
     /// Endurance). Lower is better.
     #[serde(default = "default_gear")]
@@ -344,7 +347,7 @@ pub struct Worn {
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, mana_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
     }
 }
 
@@ -418,6 +421,9 @@ pub struct Gear {
     /// Multiple of how fast stamina refills: the items' multiplied.
     #[serde(default = "default_gear")]
     pub stamina_refill: f64,
+    /// Multiple of how fast mana refills: the items' multiplied.
+    #[serde(default = "default_gear")]
+    pub mana_refill: f64,
     /// Multiple of what swinging, blocking and sprinting cost in stamina: the items' multiplied.
     #[serde(default = "default_gear")]
     pub stamina_cost: f64,
@@ -434,7 +440,7 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, mana_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
         for item in worn {
             gear.to_hit += item.to_hit;
             gear.ranged_to_hit += item.ranged_to_hit;
@@ -450,6 +456,7 @@ impl Gear {
             gear.speed *= item.speed;
             gear.attack_rate *= item.attack_rate;
             gear.stamina_refill *= item.stamina_refill;
+            gear.mana_refill *= item.mana_refill;
             gear.stamina_cost *= item.stamina_cost;
             gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, MAX_BLOCK_CHANCE);
             gear.abilities = gear.abilities.plus(item.abilities);
@@ -989,9 +996,10 @@ pub enum Casting {
 }
 
 /// The pool spells will draw on, in points. Its size comes from INT for [`Casting::Arcane`]
-/// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills
-/// slowly with rest and faster asleep. Nothing spends it yet. Steps in game hours, closed form
-/// for a constant activity, so any step length gives the same result.
+/// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills in
+/// real seconds like stamina but slower, faster standing than walking and fastest asleep. Gear
+/// speeds or slows the refill ([`Gear::mana_refill`]). Nothing spends it yet. Closed form for a
+/// constant activity, so any step length gives the same result.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mana {
     /// Points in the pool now, from 0 to `max`.
@@ -1042,29 +1050,41 @@ impl Mana {
         self.points = max * fraction;
     }
 
-    /// The share of a full pool regained each game hour at `activity`: none while exerting.
-    pub fn refill_per_hour(activity: Activity) -> f64 {
-        Mana::refill_per_hour_with(defaults(), activity)
+    /// The share of a full pool regained each real second at `activity`: none while exerting.
+    pub fn refill_per_second(activity: Activity) -> f64 {
+        Mana::refill_per_second_with(defaults(), activity)
     }
 
-    /// [`Mana::refill_per_hour`] under `rules`.
-    pub fn refill_per_hour_with(rules: &Rules, activity: Activity) -> f64 {
+    /// [`Mana::refill_per_second`] under `rules`.
+    pub fn refill_per_second_with(rules: &Rules, activity: Activity) -> f64 {
+        Mana::refill_per_second_geared(rules, activity, 1.0)
+    }
+
+    /// [`Mana::refill_per_second_with`] for a delver whose gear multiplies the refill by
+    /// `refill` ([`Gear::mana_refill`]).
+    pub fn refill_per_second_geared(rules: &Rules, activity: Activity, refill: f64) -> f64 {
+        let m = &rules.mana;
         match activity {
             Activity::Exerting => 0.0,
-            Activity::Walking => rules.mana.walk_per_hour,
-            Activity::Resting => rules.mana.rest_per_hour,
-            Activity::Sleeping => rules.mana.sleep_per_hour,
+            Activity::Walking => refill / m.walk_refill_seconds,
+            Activity::Resting => refill / m.stand_refill_seconds,
+            Activity::Sleeping => refill * m.sleep_refill_factor / m.stand_refill_seconds,
         }
     }
 
-    /// Advances by `hours` of game time at `activity`.
-    pub fn step(&mut self, hours: f64, activity: Activity) {
-        self.step_with(defaults(), hours, activity);
+    /// Advances by `seconds` of real time at `activity`.
+    pub fn step(&mut self, seconds: f64, activity: Activity) {
+        self.step_with(defaults(), seconds, activity);
     }
 
     /// [`Mana::step`] under `rules`.
-    pub fn step_with(&mut self, rules: &Rules, hours: f64, activity: Activity) {
-        self.points = (self.points + self.max * Mana::refill_per_hour_with(rules, activity) * hours).clamp(0.0, self.max);
+    pub fn step_with(&mut self, rules: &Rules, seconds: f64, activity: Activity) {
+        self.step_geared(rules, seconds, activity, 1.0);
+    }
+
+    /// [`Mana::step_with`] under the gear's `refill` multiple ([`Mana::refill_per_second_geared`]).
+    pub fn step_geared(&mut self, rules: &Rules, seconds: f64, activity: Activity, refill: f64) {
+        self.points = (self.points + self.max * Mana::refill_per_second_geared(rules, activity, refill) * seconds).clamp(0.0, self.max);
     }
 
     /// Spends `cost` points if the pool holds them; returns whether it did.
@@ -1872,12 +1892,32 @@ mod tests {
     }
 
     #[test]
-    fn mana_refills_from_empty_in_eight_hours_of_rest() {
+    fn mana_refills_from_empty_in_under_a_minute_standing_and_slower_than_stamina() {
+        let rules = defaults();
         let mut mana = Mana { points: 0.0, max: 25.0 };
-        mana.step(7.0, Activity::Resting);
+        mana.step(rules.mana.stand_refill_seconds - 1.0, Activity::Resting);
         assert!(mana.fraction() < 1.0);
         mana.step(1.0, Activity::Resting);
         assert!((mana.points - 25.0).abs() < 1e-9);
+        assert!(rules.mana.stand_refill_seconds < 60.0);
+        assert!(rules.mana.stand_refill_seconds > rules.stamina.stand_refill_seconds, "slower than stamina");
+        assert!(rules.mana.walk_refill_seconds > rules.stamina.walk_refill_seconds);
+    }
+
+    #[test]
+    fn mana_refill_gear_scales_every_rate() {
+        let rules = defaults();
+        for activity in [Activity::Walking, Activity::Resting, Activity::Sleeping] {
+            let usual = Mana::refill_per_second_with(rules, activity);
+            assert!(usual > 0.0, "{activity:?}");
+            assert!((Mana::refill_per_second_geared(rules, activity, 1.5) - usual * 1.5).abs() < 1e-12);
+        }
+        let mut quick = Mana { points: 0.0, max: 10.0 };
+        quick.step_geared(rules, 5.0, Activity::Resting, 2.0);
+        let mut usual = Mana { points: 0.0, max: 10.0 };
+        usual.step(10.0, Activity::Resting);
+        assert!((quick.points - usual.points).abs() < 1e-9);
+        assert_eq!(Mana::refill_per_second_geared(rules, Activity::Exerting, 2.0), 0.0);
     }
 
     #[test]
