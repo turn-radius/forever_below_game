@@ -35,13 +35,19 @@ pub struct Rules {
     pub exhaustion: ExhaustionRules,
     pub stamina: StaminaRules,
     pub mana: ManaRules,
+    /// The abilities' costs and durations ([`crate::casting`]).
+    pub casting: crate::casting::CastingRules,
     pub load: LoadRules,
     pub visibility: VisibilityRules,
     pub warmth: WarmthRules,
     /// Sleeping in a set bedroll or tent.
     pub camp: CampRules,
+    /// What a cleric's devotion gives ([`crate::devotion`]).
+    pub devotion: crate::devotion::DevotionRules,
     /// Falling unconscious and coming to ([`crate::revival`]).
     pub revival: crate::revival::RevivalRules,
+    /// A cleric's saving throw against falling ([`crate::protection`]).
+    pub protection: crate::protection::ProtectionRules,
     /// The creatures' numbers by stat block name. A partial entry keeps the rest of that
     /// creature's defaults; a name no species has is a creature of its own, flat zeros where
     /// the entry is silent.
@@ -61,11 +67,14 @@ impl Default for Rules {
             exhaustion: ExhaustionRules::default(),
             stamina: StaminaRules::default(),
             mana: ManaRules::default(),
+            casting: crate::casting::CastingRules::default(),
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
             warmth: WarmthRules::default(),
             camp: CampRules::default(),
+            devotion: crate::devotion::DevotionRules::default(),
             revival: crate::revival::RevivalRules::default(),
+            protection: crate::protection::ProtectionRules::default(),
             creatures: default_creatures(),
             effects: crate::effect::shipped(),
         }
@@ -213,7 +222,7 @@ pub struct CombatRules {
     /// Snake").
     pub venom_save_dc: i32,
     /// The hit die of each class, taken at its highest for a first-level delver (SRD 5.1
-    /// "Hit Points at 1st Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for
+    /// "Hit Points at 1st Level": fighter p. 24, cleric p. 15, wizard p. 52 for
     /// the mage).
     pub hit_dice: HitDice,
     /// What a delver's or a folk's attack roll adds for proficiency with the weapon, a 1st-level
@@ -248,14 +257,13 @@ impl Default for CombatRules {
 #[serde(default)]
 pub struct HitDice {
     pub fighter: u32,
-    pub ranger: u32,
     pub mage: u32,
     pub cleric: u32,
 }
 
 impl Default for HitDice {
     fn default() -> Self {
-        HitDice { fighter: 10, ranger: 10, mage: 6, cleric: 8 }
+        HitDice { fighter: 10, mage: 6, cleric: 8 }
     }
 }
 

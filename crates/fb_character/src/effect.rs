@@ -100,6 +100,12 @@ pub enum Influence {
     HitPointsPerHour { at_full: f64, #[serde(default)] from_stage: usize },
     /// A pale glare washes over the view, up to this much (0 to 1): dazzle.
     Glare { at_full: f64 },
+    /// Saves against venom gain up to this many points.
+    PoisonSave { at_full: f64 },
+    /// The cold's shortfall of warmth is lowered by up to this many points.
+    ColdWard { at_full: f64 },
+    /// Blows from the undead are lessened by up to this fraction (0 to 1).
+    UndeadWard { at_full: f64 },
 }
 
 /// Where an effect came from, as the sheet tells it.
@@ -346,6 +352,21 @@ impl Effects {
             Influence::Glare { at_full } => Some(at_full * intensity),
             _ => None,
         }).fold(0.0, f64::max)
+    }
+
+    /// Points the effects add to saves against venom.
+    pub fn poison_save(&self, defs: &BTreeMap<String, EffectDef>) -> i32 {
+        self.acting(defs).filter_map(|(i, n)| match i { Influence::PoisonSave { at_full } => Some(at_full * n), _ => None }).sum::<f64>().round() as i32
+    }
+
+    /// Points of warmth the effects make up for against the cold.
+    pub fn cold_ward(&self, defs: &BTreeMap<String, EffectDef>) -> f64 {
+        self.acting(defs).filter_map(|(i, n)| match i { Influence::ColdWard { at_full } => Some(at_full * n), _ => None }).sum()
+    }
+
+    /// The fraction the effects take off blows from the undead, 0 to 1.
+    pub fn undead_ward(&self, defs: &BTreeMap<String, EffectDef>) -> f64 {
+        self.acting(defs).filter_map(|(i, n)| match i { Influence::UndeadWard { at_full } => Some(at_full * n), _ => None }).sum::<f64>().clamp(0.0, 1.0)
     }
 
     /// Hit points the effects take per game hour now.

@@ -18,12 +18,17 @@
 //!
 //! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
+pub mod casting;
 pub mod check;
 pub mod combat;
 pub mod conditions;
+pub mod deeds;
+pub mod devotion;
 pub mod effect;
 pub mod explain;
+pub mod kin;
 pub mod poison;
+pub mod protection;
 pub mod recovery;
 pub mod revival;
 pub mod rules;
@@ -329,6 +334,17 @@ pub struct Worn {
     /// The chance each kind of creature never notices the wearer, by [`fb_items::Foe`] index.
     #[serde(default)]
     pub shun: [f64; Foe::COUNT],
+    /// The family a devotion is against ([`devotion`]), with the ward from it and the extra dice
+    /// rolled against it; a weapon's own banes ride on the weapon.
+    #[serde(default)]
+    pub favored: Option<kin::Kin>,
+    #[serde(default)]
+    pub favored_ward: f64,
+    #[serde(default)]
+    pub favored_bane: Option<fb_items::dice::Dice>,
+    /// Whether webs never hold the wearer back (an alignment with spiders).
+    #[serde(default)]
+    pub web_walker: bool,
     /// Multiple of the speed of a swing, a draw and a reload: the weapon in hand's and the
     /// gloves', which the game decides when it builds the [`Worn`].
     #[serde(default = "default_gear")]
@@ -347,7 +363,7 @@ pub struct Worn {
 
 impl Default for Worn {
     fn default() -> Self {
-        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, mana_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] }
+        Worn { carry: 0.0, darkvision: 0.0, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, warmth: 0.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], mana_refill: 1.0, shun: [0.0; Foe::COUNT], favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false }
     }
 }
 
@@ -415,6 +431,17 @@ pub struct Gear {
     /// ([`fb_items::foe::combine_shun`], at most [`MAX_SHUN`](fb_items::foe::MAX_SHUN)).
     #[serde(default)]
     pub shun: [f64; Foe::COUNT],
+    /// The family a devotion is against, with the ward from it and the extra dice rolled against
+    /// it on top of the weapon's own ([`Gear::ward_against`], [`Gear::bane_against`]).
+    #[serde(default)]
+    pub favored: Option<kin::Kin>,
+    #[serde(default)]
+    pub favored_ward: f64,
+    #[serde(default)]
+    pub favored_bane: Option<fb_items::dice::Dice>,
+    /// Whether webs never hold the delver back.
+    #[serde(default)]
+    pub web_walker: bool,
     /// Multiple of the speed of a swing, a draw and a reload: the items' multiplied.
     #[serde(default = "default_gear")]
     pub attack_rate: f64,
@@ -440,7 +467,7 @@ impl Gear {
     /// and carrying `lights`. The light that reaches farthest is the carried one, and its
     /// burn time is the one that counts.
     pub fn new(folk_darkvision: f64, worn: impl IntoIterator<Item = Worn>, lights: impl IntoIterator<Item = CarriedLight>) -> Gear {
-        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, mana_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], shun: [0.0; Foe::COUNT] };
+        let mut gear = Gear { carry: 0.0, darkvision: folk_darkvision, hunger_rate: 1.0, sleepiness_rate: 1.0, stealth: 0.0, light: 0.0, burn_time: 1.0, heal_on_kill: 0.0, speed: 1.0, block_chance: 0.0, abilities: AbilityBonus::default(), disease_risk: 1.0, luck: 0.0, recovery: 0.0, poison_resistance: 0.0, to_hit: 0.0, ranged_to_hit: 0.0, attack_rate: 1.0, stamina_refill: 1.0, stamina_cost: 1.0, ward: [0.0; Foe::COUNT], mana_refill: 1.0, shun: [0.0; Foe::COUNT], favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false };
         for item in worn {
             gear.to_hit += item.to_hit;
             gear.ranged_to_hit += item.ranged_to_hit;
@@ -461,6 +488,12 @@ impl Gear {
             gear.block_chance = (gear.block_chance + item.block_chance).clamp(0.0, MAX_BLOCK_CHANCE);
             gear.abilities = gear.abilities.plus(item.abilities);
             gear.disease_risk *= item.disease_risk;
+            gear.web_walker |= item.web_walker;
+            if item.favored.is_some() {
+                gear.favored = item.favored;
+                gear.favored_ward = item.favored_ward;
+                gear.favored_bane = item.favored_bane;
+            }
             for foe in Foe::ALL {
                 let i = foe.index();
                 gear.ward[i] = (gear.ward[i] + item.ward[i]).clamp(0.0, MAX_WARD as f64);
@@ -474,6 +507,19 @@ impl Gear {
             }
         }
         gear
+    }
+
+    /// The fraction of a blow from `kin` this gear takes off: the items' ward against its group
+    /// and a devotion against its family, added, at most [`MAX_WARD`].
+    pub fn ward_against(&self, kin: kin::Kin) -> f64 {
+        let items = kin.foe().map_or(0.0, |foe| self.ward[foe.index()]);
+        let devoted = if self.favored == Some(kin) { self.favored_ward } else { 0.0 };
+        (items + devoted).clamp(0.0, MAX_WARD as f64)
+    }
+
+    /// The extra dice a devotion rolls against `kin` on top of the weapon's own.
+    pub fn bane_against(&self, kin: kin::Kin) -> Option<fb_items::dice::Dice> {
+        if self.favored == Some(kin) { self.favored_bane } else { None }
     }
 
     /// Carrying capacity in pounds for a delver of `strength` in this gear.
@@ -986,7 +1032,7 @@ impl Stamina {
 /// How a character casts: the pool a spell caster draws on and how big it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Casting {
-    /// Fighters and Rangers: a small flat pool.
+    /// Fighters: a small flat pool.
     #[default]
     Martial,
     /// Mages: the pool follows INT.
@@ -998,7 +1044,7 @@ pub enum Casting {
 /// The pool spells will draw on, in points. Its size comes from INT for [`Casting::Arcane`]
 /// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills in
 /// real seconds like stamina but slower, faster standing than walking and fastest asleep. Gear
-/// speeds or slows the refill ([`Gear::mana_refill`]). Nothing spends it yet. Closed form for a
+/// speeds or slows the refill ([`Gear::mana_refill`]). [`Mana::spend`] spends it in casting ([`casting`]). Closed form for a
 /// constant activity, so any step length gives the same result.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mana {
@@ -1885,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn fighters_and_rangers_have_a_small_flat_pool_and_a_dull_caster_is_floored() {
+    fn fighters_have_a_small_flat_pool_and_a_dull_caster_is_floored() {
         assert_eq!(Mana::max_for(Casting::Martial, &scores(18, 18)), 4.0);
         assert_eq!(Mana::max_for(Casting::Martial, &scores(3, 3)), 4.0);
         assert_eq!(Mana::max_for(Casting::Arcane, &scores(3, 3)), 4.0);

@@ -279,6 +279,9 @@ fn influence_line(influence: &Influence, intensity: f64) -> Option<String> {
         Influence::Noticed { at_full } => format!("{} easier to notice", percent(at_full * intensity)),
         Influence::HitPointsPerHour { at_full, .. } => format!("losing {:.1} HP an hour", at_full * intensity),
         Influence::Glare { .. } => return None,
+        Influence::PoisonSave { at_full } => format!("+{} on saves against venom", (at_full * intensity).round() as i32),
+        Influence::ColdWard { at_full } => format!("the cold bites {:.0} points less", at_full * intensity),
+        Influence::UndeadWard { at_full } => format!("the undead's blows {} weaker", percent(at_full * intensity)),
     })
 }
 
@@ -323,6 +326,18 @@ mod tests {
     /// The conditions with no effects on the character.
     fn conditions(now: &Circumstances) -> Vec<Condition> {
         super::conditions(now, &Effects::default(), &crate::effect::shipped())
+    }
+
+    #[test]
+    fn burning_incense_shows_as_a_good_condition() {
+        let defs = crate::effect::shipped();
+        for (id, name, effect) in [("cedar_ward", "Warded from poison", "+3 on saves against venom"), ("myrrh_ward", "Warded from cold", "The cold bites 2 points less"), ("frankincense_ward", "Warded from the undead", "The undead's blows 30% weaker")] {
+            let mut effects = Effects::default();
+            effects.add(&defs, id, 1.0, None, Source::Surroundings);
+            let shown = super::conditions(&Circumstances::default(), &effects, &defs);
+            assert_eq!(shown.len(), 1);
+            assert_eq!((shown[0].name.as_str(), shown[0].severity, shown[0].effect.as_str()), (name, Severity::Good, effect));
+        }
     }
 
     /// Poisoned by a snake's bite, as venom poisons.

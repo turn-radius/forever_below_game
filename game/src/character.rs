@@ -17,24 +17,24 @@ use crate::inventory::Inventory;
 /// Whether a delver is a woman or a man: what the creator's Sex choice sets. Folk have one too.
 pub use fb_body::Sex;
 
-/// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
+/// The three classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Class {
+    /// Saves from before the Ranger was removed name it `ranger`; it loads as a fighter.
+    #[serde(alias = "ranger")]
     Fighter,
-    Ranger,
     Mage,
     Cleric,
 }
 
 impl Class {
-    pub const ALL: [Class; 4] = [Class::Fighter, Class::Ranger, Class::Mage, Class::Cleric];
+    pub const ALL: [Class; 3] = [Class::Fighter, Class::Mage, Class::Cleric];
 
     /// The class as the factions' likes and hates name it.
     pub fn faction_class(self) -> fb_faction::ClassKind {
         match self {
             Class::Fighter => fb_faction::ClassKind::Fighter,
-            Class::Ranger => fb_faction::ClassKind::Ranger,
             Class::Mage => fb_faction::ClassKind::Mage,
             Class::Cleric => fb_faction::ClassKind::Cleric,
         }
@@ -44,7 +44,6 @@ impl Class {
     pub fn outfit_key(self) -> &'static str {
         match self {
             Class::Fighter => "fighter",
-            Class::Ranger => "ranger",
             Class::Mage => "mage",
             Class::Cleric => "cleric",
         }
@@ -57,23 +56,22 @@ impl Class {
         use fb_faction::Alignment::*;
         match self {
             Class::Fighter => LawfulNeutral,
-            Class::Ranger => NeutralGood,
             Class::Mage => TrueNeutral,
             Class::Cleric => LawfulGood,
         }
     }
 
-    /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
+    /// How the class casts: Mages from INT, Clerics from WIS, Fighters hardly at all.
     pub fn casting(self) -> Casting {
         match self {
-            Class::Fighter | Class::Ranger => Casting::Martial,
+            Class::Fighter => Casting::Martial,
             Class::Mage => Casting::Arcane,
             Class::Cleric => Casting::Divine,
         }
     }
 
-    /// The class's hit die under the default rules: d10 for fighters and rangers, d8 for
-    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, ranger p. 35, cleric p. 15,
+    /// The class's hit die under the default rules: d10 for fighters, d8 for
+    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, cleric p. 15,
     /// wizard, our mage, p. 52).
     pub fn hit_die(self) -> u32 {
         self.hit_die_with(fb_character::rules::defaults())
@@ -84,7 +82,6 @@ impl Class {
         let dice = &rules.combat.hit_dice;
         match self {
             Class::Fighter => dice.fighter,
-            Class::Ranger => dice.ranger,
             Class::Cleric => dice.cleric,
             Class::Mage => dice.mage,
         }
@@ -135,6 +132,11 @@ pub struct Character {
     pub learned: AbilityBonus,
     /// The seeds of the books they have read: each teaches them once.
     pub books_read: Vec<u32>,
+    /// What a cleric has devoted themselves to, chosen on the character sheet and changeable
+    /// ([`fb_character::devotion`]); `None` for the other classes and until they choose.
+    pub devotion: Option<fb_character::devotion::Devotion>,
+    /// What they have done: kills by kind, family and weapon, hits taken in each armour, offers answered ([`fb_character::deeds`]).
+    pub deeds: fb_character::deeds::Tally,
 }
 
 /// What reading a book did ([`Character::read`]).
@@ -193,7 +195,7 @@ impl Character {
         let nudges = Character::roll_nudges(rng);
         let attributes = Character::scores_from(folk, nudges);
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default(), learned: AbilityBonus::default(), books_read: Vec::new() }
+        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default(), learned: AbilityBonus::default(), books_read: Vec::new(), devotion: None, deeds: Default::default() }
     }
 
     /// Five nudges to the folk's ability scores, in order strength, dexterity, constitution,
@@ -357,9 +359,21 @@ impl Character {
         self.loadout(inventory).gear()
     }
 
+    /// [`Character::gear`] with a light cast on them (Divine Light) counted among the carried
+    /// lights: of `spell` feet, if one burns.
+    pub fn gear_with_spell(&self, inventory: &Inventory, spell: Option<f64>) -> Gear {
+        self.loadout_with_spell(inventory, spell).gear()
+    }
+
     /// [`Character::gear`] with each item's name, so the numbers it sums can be explained
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
+        self.loadout_with_spell(inventory, None)
+    }
+
+    /// [`Character::loadout`] with a light of `spell` feet cast on them, which burns as long as
+    /// the spell holds and so adds no burn time of its own.
+    pub fn loadout_with_spell(&self, inventory: &Inventory, spell: Option<f64>) -> Loadout {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
         let equipped = inventory.equipped();
         // Block chance counts only with a shield held in the off hand: the gloves and charms that
@@ -379,11 +393,19 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: Self::warmth_of(item) as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, mana_refill: s.mana_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: Self::warmth_of(item) as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), mana_refill: s.mana_refill as f64, shun: s.shun.map(f64::from), favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false },
             );
+        }
+        // A cleric's devotion counts like one more thing worn, so the sheet can explain it and
+        // choosing another drops the old one's bonuses.
+        if let Some(devotion) = self.devotion.filter(|_| self.class == Class::Cleric) {
+            loadout = loadout.wearing(devotion.label(self.body_seed), devotion.worn(&fb_character::rules::defaults().devotion));
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
+        }
+        if let Some(reach) = spell {
+            loadout = loadout.carrying("Divine Light", CarriedLight { reach, burn_time: 1.0 });
         }
         loadout
     }
@@ -502,11 +524,14 @@ impl Character {
 
 /// [`Character::derive`] under `rules`.
     pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
+        self.derive_lit(rules, inventory, None)
+    }
+
+    /// [`Character::derive_with`] with a light of `spell` feet cast on them ([`Character::gear_with_spell`]).
+    pub fn derive_lit(&self, rules: &Rules, inventory: &Inventory, spell: Option<f64>) -> Derived {
         let equipped = inventory.equipped();
-        // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
-        let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = self.load_explained(inventory).value() as f32;
-        let gear = self.gear(inventory);
+        let gear = self.gear_with_spell(inventory, spell);
         let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
         let load_band = LoadBand::from_load_with(rules, load as f64, capacity as f64);
         Derived {
@@ -514,6 +539,7 @@ impl Character {
             load,
             capacity,
             load_band,
+            // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
             warmth: equipped.iter().map(|(_, item)| Self::warmth_of(item)).fold(0.0, |a, b| a + b),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,
@@ -567,9 +593,18 @@ pub fn character_for(seed: u32) -> Character {
         Some(folk) => Character::roll_folk(folk, seed),
         None => Character::roll(seed),
     };
-    // `FB_CLASS=ranger` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
+    // `FB_CLASS=mage` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
     if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| Class::ALL.into_iter().find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))) {
         character.class = class;
+    }
+    // `FB_DEVOTION=foe:goblin` or `aligned:spider` devotes a cleric, for captures.
+    if let Ok(spec) = std::env::var("FB_DEVOTION") {
+        let kin = |name: &str| fb_character::kin::Kin::all().into_iter().find(|k| k.key().eq_ignore_ascii_case(name));
+        character.devotion = spec.trim().split_once(':').and_then(|(how, name)| match how {
+            "foe" => kin(name).map(fb_character::devotion::Devotion::FavoredFoe),
+            "aligned" => kin(name).map(fb_character::devotion::Devotion::Aligned),
+            _ => None,
+        });
     }
     character
 }

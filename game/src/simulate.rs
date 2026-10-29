@@ -155,7 +155,10 @@ fn step_the_delver(
         // Effects run their course by game time under what keeps acting on the delver (a smoky
         // light in hand), and the component comes on with the first and goes with the last.
         let exposures = exposures.get_or_insert_with(|| {
-            let around = surroundings(&character, &inventory, &rules, at.map_or(Vec3::NAN, |t| t.translation), &fires, level.as_deref().map_or(1, |l| l.0.depth));
+            let mut around = surroundings(&character, &inventory, &rules, at.map_or(Vec3::NAN, |t| t.translation), &fires, level.as_deref().map_or(1, |l| l.0.depth));
+            // Myrrh lowers only the shortfall the cold exposure reads, not the warmth readout
+            // or the HP-loss path.
+            around.shortfall = warded_shortfall(around.shortfall, effects.as_deref().map_or(&fb_character::effect::Effects::default(), |e| &e.0), &rules.effects);
             crate::exposure::exposures(&inventory, &rules.effects, &around)
         });
         match effects {
@@ -180,6 +183,12 @@ fn step_the_delver(
 /// The cold and the fire as they reach a delver standing at `at` on level `depth`: their worn
 /// warmth and any lit flame in hand weighed against their need and the level's chill
 /// ([`fb_character::rules::WarmthRules`]), and whether a brazier's warmth reaches them.
+/// `shortfall` of warmth less what `effects` ward off the cold, a cold shortfall never taken
+/// below nothing (warmth to spare is left as it is).
+pub(crate) fn warded_shortfall(shortfall: f64, effects: &fb_character::effect::Effects, defs: &std::collections::BTreeMap<String, fb_character::effect::EffectDef>) -> f64 {
+    if shortfall > 0.0 { (shortfall - effects.cold_ward(defs)).max(0.0) } else { shortfall }
+}
+
 fn surroundings(character: &Character, inventory: &Inventory, rules: &GameRules, at: Vec3, fires: &Query<(&Transform, &crate::level::FixedLight), Without<Player>>, depth: u32) -> crate::exposure::Surroundings {
     let warmth = &rules.warmth;
     let by_fire = fires.iter().any(|(fire, kind)| matches!(kind, crate::level::FixedLight::Brazier | crate::level::FixedLight::Campfire) && fire.translation.xz().distance(at.xz()) as f64 <= warmth.brazier_reach);

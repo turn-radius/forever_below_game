@@ -294,6 +294,15 @@ impl Strikeable<'_, '_> {
         self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species.foe())
     }
 
+    /// The family `target` belongs to: the group of creature, the folk or the people of the abyss.
+    pub fn kin(&self, target: Entity) -> Option<fb_character::kin::Kin> {
+        self.creatures
+            .get(target)
+            .ok()
+            .map(|(_, critter, ..)| fb_character::kin::Kin::of_species(critter.spot.species))
+            .or_else(|| self.folk.get(target).ok().map(|(_, denizen, ..)| fb_character::kin::Kin::of_folk(denizen.person.spec.folk)))
+    }
+
     /// The bodies of trolls that lie down and may yet rise, which a flame can still reach: fire
     /// stops their regeneration ([`crate::creatures::trolls`]). No other blow finds them.
     pub fn fallen_trolls(&self) -> Vec<Target> {
@@ -436,7 +445,7 @@ fn land_blows(
                 info!("swing: {}", attack.line());
                 if attack.hit {
                     let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
-                    let damage = rolled + super::bane_damage(&swing.weapon.bane, strikeable.foe(target), &mut dice.0);
+                    let damage = rolled + super::bane_damage_with_devotion(&swing.weapon.bane, &swing.weapon.devout, strikeable.kin(target), &mut dice.0);
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
                     if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
                         burned.write(Burned { target });

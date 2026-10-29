@@ -87,6 +87,8 @@ pub enum Refusal {
     NotRare,
     /// A legendary is as it is.
     Legendary,
+    /// A blessing is not an enchanter's to strip.
+    Blessed,
 }
 
 impl Refusal {
@@ -100,6 +102,7 @@ impl Refusal {
             Refusal::NothingToReforge => "Nothing to reforge.",
             Refusal::MasterOnly => "Only a master enchanter can make a legend.",
             Refusal::NotRare => "Only a rare item can be made legendary.",
+            Refusal::Blessed => "A blessing is not theirs to strip.",
             Refusal::Legendary => "A legend cannot be changed.",
         }
     }
@@ -209,7 +212,7 @@ pub fn unchangeable(item: &Item) -> Option<Refusal> {
 }
 
 fn good(item: &Item) -> impl Iterator<Item = &&'static Affix> {
-    item.affixes.iter().filter(|a| a.good)
+    item.affixes.iter().filter(|a| a.good && !a.holy)
 }
 
 fn rarity_of(good_count: usize) -> Rarity {
@@ -226,7 +229,7 @@ fn check_add(item: &Item, affix: &Affix, tier: Tier) -> Result<Rarity, Refusal> 
     if let Some(refusal) = unchangeable(item) {
         return Err(refusal);
     }
-    if !affix.good || !affix.in_play() || !affix.fits_item(&item.profile.tags, item.profile.slot) || item.affixes.iter().any(|a| !affix.stacks_with(a)) {
+    if !affix.good || affix.holy || !affix.in_play() || !affix.fits_item(&item.profile.tags, item.profile.slot) || item.affixes.iter().any(|a| !affix.stacks_with(a)) {
         return Err(Refusal::DoesNotFit);
     }
     let count = good(item).count();
@@ -261,7 +264,7 @@ pub fn removable(item: &Item, tier: Tier) -> Vec<&'static Affix> {
     if !enchantable(item) {
         return vec![];
     }
-    item.affixes.iter().copied().filter(|a| tier >= Tier::Apprentice || !a.good).collect()
+    item.affixes.iter().copied().filter(|a| !a.holy && (tier >= Tier::Apprentice || !a.good)).collect()
 }
 
 /// The item with its affixes replaced: renamed, restyled for its new rarity, stats worked out
@@ -282,7 +285,7 @@ fn rebuilt(item: &Item, affixes: Vec<&'static Affix>, line: String) -> Item {
 fn rebuilt_as(item: &Item, mut affixes: Vec<&'static Affix>, line: String, floor: Rarity) -> Item {
     // Good ones first, so the name takes them before a flaw.
     affixes.sort_by_key(|a| !a.good);
-    let rarity = rarity_of(affixes.iter().filter(|a| a.good).count()).max(floor);
+    let rarity = rarity_of(affixes.iter().filter(|a| a.good && !a.holy).count()).max(floor);
     let mut parts = ItemParts::from(item.clone());
     parts.name = item_name(&noun(&parts.base, &parts.shape), &affixes);
     parts.legend = (rarity == Rarity::Legendary).then(|| item.legend.clone().unwrap_or_else(|| legendize(&mut game_rng(item.seed ^ 0xE4C4), &parts.name, &item.profile.tags)));
@@ -380,6 +383,9 @@ pub fn remove(item: &Item, affix: &Affix, by: &Enchanter) -> Result<Item, Refusa
     if !item.affixes.iter().any(|a| a.name == affix.name) {
         return Err(Refusal::NotCarried);
     }
+    if affix.holy {
+        return Err(Refusal::Blessed);
+    }
     if affix.good && by.tier < Tier::Apprentice {
         return Err(Refusal::TooHigh);
     }
@@ -406,7 +412,8 @@ pub fn reforge(item: &Item, seed: u32, by: &Enchanter) -> Result<Item, Refusal> 
         n.sort();
         n
     };
-    let before = names(&item.affixes);
+    let holy: Vec<&'static Affix> = item.affixes.iter().copied().filter(|a| a.holy).collect();
+    let before = names(&item.affixes.iter().copied().filter(|a| !a.holy).collect::<Vec<_>>());
     let mut rolled = Vec::new();
     for tried in 0..8u32 {
         let mut rng = game_rng(seed.wrapping_add(tried).wrapping_mul(0x9E37_79B1) ^ item.seed);
@@ -416,6 +423,7 @@ pub fn reforge(item: &Item, seed: u32, by: &Enchanter) -> Result<Item, Refusal> 
         }
     }
     // Rolled for the item's rarity, so a slot nothing fits can leave it short: the rarity follows.
+    rolled.extend(holy);
     Ok(rebuilt(item, rolled, format!("Reforged by {}.", by.by())))
 }
 

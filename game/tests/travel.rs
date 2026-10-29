@@ -449,6 +449,7 @@ fn a_fall_on_any_depth_starts_the_next_delve_at_the_first_level_entrance() {
 
     // Fall on the second level, with every revive spent.
     app.insert_resource(forever_below::combat::revival::Revives(u32::MAX));
+    app.insert_resource(forever_below::combat::revival::Prayers(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     run(&mut app, ((LAST_GASP + FALL_TIME) * 60.0) as usize + 30);

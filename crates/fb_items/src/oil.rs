@@ -19,7 +19,7 @@ impl Item {
     /// How much more oil this lantern takes, as a share of a full one; `None` if it is not a
     /// lantern.
     pub fn oil_room(&self) -> Option<f32> {
-        if self.shape.family() != armory::Family::Lantern {
+        if self.shape.family() != armory::Family::Lantern || self.is_censer() {
             return None;
         }
         let capacity = self.fuel_capacity()?.max(1.0);

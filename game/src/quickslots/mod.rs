@@ -17,6 +17,11 @@
 //! when one is used up the slot moves to another of the same base that is carried, and empties
 //! when the last is gone. It moves only to one bound to no other slot, so using one slot never
 //! moves or empties another. Binding an item to a slot takes it from any other slot it was in.
+//!
+//! Each slot has a glow ring round its square ([`SlotGlow`]): pressing the slot's key lights it
+//! for a moment. When something the slot was timing runs out ([`crate::time_left::TimeLeft`],
+//! as Divine Light's time does), a highlight chases round its border to say it is ready again
+//! ([`crate::time_left::ReadyChase`]).
 
 use bevy::{prelude::*, text::FontSize};
 use fb_items::{Item, Slot};
@@ -47,6 +52,8 @@ impl Plugin for QuickslotPlugin {
                     bind_hovered.run_if(inventory_open),
                     fill_slots.after(crate::inventory::build_screen),
                     hint_slots,
+                    press_slots,
+                    glow_slots,
                 )
                     .chain()
                     .in_set(DelveSystems),
@@ -112,7 +119,7 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Consume)
     } else if item.shape.lit().is_some() {
         Some(QuickUse::Light)
-    } else if item.has_oil() {
+    } else if item.has_oil() || item.incense_kind().is_some() {
         Some(QuickUse::Refill)
     } else if item.lesson().is_some() || item.teaching().is_some() || item.words.is_some() {
         Some(QuickUse::Read)
@@ -176,7 +183,7 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
             let said = crate::kindle::refill_and_say(inventory, id);
             // An emptied flask is kept, as a drained waterskin is, but the slot moves to a full one,
             // or empties after the last.
-            if !inventory.item(id).is_some_and(Item::has_oil) {
+            if !inventory.item(id).is_some_and(|item| item.has_oil() || item.incense_kind().is_some()) {
                 match next_of_a_kind(inventory, slots, &base, QuickUse::Refill) {
                     Some(next) => slots.bind(slot, next),
                     None => slots.clear(slot),
@@ -220,8 +227,13 @@ fn use_quickslot(
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
+    abilities: Option<Res<crate::casting::AbilitySlots>>,
 ) {
     let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
+    // A slot holding a prayer or spell casts it ([`crate::casting`]).
+    if abilities.is_some_and(|a| a.get(slot).is_some()) {
+        return;
+    }
     let said = use_slot(slot, &mut slots, &mut inventory, &mut eating, &mut floor_changes);
     toast.say(said, time.map_or(0.0, |t| t.elapsed_secs()));
 }
@@ -229,7 +241,7 @@ fn use_quickslot(
 /// Keys 1 to 0 in the inventory: binds the item under the mouse to that slot, as dropping it
 /// on the strip's slot would, picking it up first if it lies underfoot ([`pick_up_and_bind`]),
 /// and says so (or why not). Nothing under the mouse, nothing happens.
-fn bind_hovered(
+pub(crate) fn bind_hovered(
     input: ActionInput,
     hovered: Res<Hovered>,
     mut slots: ResMut<Quickslots>,
@@ -326,8 +338,93 @@ pub fn spawn_slots(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, style: Sl
                 Node { position_type: PositionType::Absolute, left: px(2), top: px(0), ..default() },
                 Pickable::IGNORE,
             ));
+            // A prayer or spell held in the slot is named here ([`crate::casting`]).
+            square.with_child((
+                crate::casting::AbilityLabel(slot),
+                Text::new(""),
+                TextFont::from_font_size(style.number).with_font(fonts.mono.clone()),
+                TextColor(BRIGHT),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                // Along the bottom edge, clear of the number at the top left.
+                Node { position_type: PositionType::Absolute, left: px(0), right: px(0), bottom: px(1), justify_content: JustifyContent::Center, ..default() },
+                Pickable::IGNORE,
+            ));
+            square.with_child((
+                SlotGlow::new(slot),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(-GLOW_OUT),
+                    right: px(-GLOW_OUT),
+                    top: px(-GLOW_OUT),
+                    bottom: px(-GLOW_OUT),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(5)),
+                    ..default()
+                },
+                BorderColor::all(Color::NONE),
+                BackgroundColor(Color::NONE),
+                Pickable::IGNORE,
+            ));
         }
     });
+}
+
+/// How far the glow ring stands out from a slot's square, pixels.
+const GLOW_OUT: f32 = 2.5;
+/// Seconds a pressed slot stays lit, fading.
+const PRESS_SECONDS: f32 = 0.25;
+/// The glow when a slot is pressed: cream.
+const PRESS_GLOW: Color = Color::srgb(1.0, 0.96, 0.86);
+
+/// A slot's glow ring, a child of its square: how long since its key was pressed, in seconds
+/// (infinite while idle).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct SlotGlow {
+    pub slot: usize,
+    pub pressed: f32,
+}
+
+impl SlotGlow {
+    fn new(slot: usize) -> SlotGlow {
+        SlotGlow { slot, pressed: f32::INFINITY }
+    }
+}
+
+/// How bright a slot pressed `t` seconds ago glows, 1 at the press fading to 0.
+pub fn press_glow(t: f32) -> f32 {
+    if t.is_finite() { (1.0 - t / PRESS_SECONDS).clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// Keys 1 to 0 light their slot on the bar.
+fn press_slots(input: ActionInput, mut rings: Query<(&mut SlotGlow, &ChildOf)>, bar: Query<(), (With<QuickSlot>, Without<QuickslotDrop>)>) {
+    let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
+    for (mut glow, parent) in &mut rings {
+        if glow.slot == slot && bar.contains(parent.parent()) {
+            glow.pressed = 0.0;
+        }
+    }
+}
+
+/// Ages each glow and draws it: the ring lit cream, and the square washed a little, fading.
+fn glow_slots(time: Res<Time>, mut rings: Query<(&mut SlotGlow, &mut BorderColor, &mut BackgroundColor)>) {
+    let dt = time.delta_secs();
+    for (mut glow, mut border, mut fill) in &mut rings {
+        if glow.pressed.is_finite() {
+            glow.pressed += dt;
+            if glow.pressed > PRESS_SECONDS {
+                glow.pressed = f32::INFINITY;
+            }
+        }
+        let press = press_glow(glow.pressed);
+        let colour = PRESS_GLOW.with_alpha(press);
+        if border.top != colour {
+            *border = BorderColor::all(colour);
+        }
+        let wash = PRESS_GLOW.with_alpha(press * 0.18);
+        if fill.0 != wash {
+            fill.0 = wash;
+        }
+    }
 }
 
 /// Whether `id` may be bound to a quickslot: carried, and something a slot can use.
@@ -536,6 +633,29 @@ mod tests {
 
     fn has(app: &App, id: ItemId) -> bool {
         app.world().resource::<Inventory>().item(id).is_some()
+    }
+
+    #[test]
+    fn a_pressed_slot_flashes_and_fades() {
+        assert_eq!(press_glow(0.0), 1.0);
+        assert!(press_glow(PRESS_SECONDS * 0.5) > 0.4 && press_glow(PRESS_SECONDS * 0.5) < 0.6);
+        assert_eq!(press_glow(PRESS_SECONDS), 0.0);
+        assert_eq!(press_glow(f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn a_slot_key_lights_its_ring_and_no_other() {
+        let (mut app, _) = delve();
+        let square = app.world_mut().spawn((QuickSlot(2), crate::time_left::TimeLeft(Some(0.5)))).id();
+        let ring = app.world_mut().spawn((SlotGlow::new(2), Node::default(), BorderColor::all(Color::NONE), BackgroundColor(Color::NONE), ChildOf(square))).id();
+        let other = app.world_mut().spawn((QuickSlot(4), Node::default())).id();
+        let other_ring = app.world_mut().spawn((SlotGlow::new(4), Node::default(), BorderColor::all(Color::NONE), BackgroundColor(Color::NONE), ChildOf(other))).id();
+        app.update();
+        press(&mut app, KeyCode::Digit3);
+        let glow = |app: &App, e: Entity| *app.world().get::<SlotGlow>(e).unwrap();
+        assert!(glow(&app, ring).pressed < PRESS_SECONDS, "3 lights slot 3");
+        assert!(glow(&app, other_ring).pressed.is_infinite(), "and no other");
+        assert!(app.world().get::<BorderColor>(ring).unwrap().top.alpha() > 0.5);
     }
 
     #[test]
@@ -837,7 +957,9 @@ mod tests {
 
     fn slot_nodes(app: &mut App) -> Vec<(usize, usize)> {
         let mut query = app.world_mut().query_filtered::<(&QuickSlot, &Children), Without<QuickslotDrop>>();
-        let mut slots: Vec<_> = query.iter(app.world()).map(|(s, c)| (s.0, c.len())).collect();
+        let mut labels = app.world_mut().query::<&crate::casting::AbilityLabel>();
+        let mut rings = app.world_mut().query::<&SlotGlow>();
+        let mut slots: Vec<_> = query.iter(app.world()).map(|(s, c)| (s.0, c.iter().filter(|&e| labels.get(app.world(), e).is_err() && rings.get(app.world(), e).is_err()).count())).collect();
         slots.sort();
         slots
     }

@@ -101,7 +101,7 @@ Torches and lanterns are Armory families (`armory::families::torch`, `armory::fa
 - Keys, the tinderbox and the bedroll are new; the plate's text names them (lockpicking, "fever took them in their bedroll") but never drew them. A bedroll is the same rolled, strapped blanket a backpack carries (`armory::build::roll`).
 - A candle can stand in a chamberstick, carry runs of wax, burn down and be lit, and `Sundry::light` gives its 5 ft light from the flame. The rope is one twisted rope laid in a coil and tied, not four stacked rings, and the lockpicks are hooks, rakes, diamonds and a tension wrench in an open leather roll.
 
-- **Bandages are held back** (our own) until bandaging exists, like the affixes nothing reads: `armory_base::HELD_BACK` lists them, `find_weight` gives them 0 so no loose spot picks one, crates and the class goods (fighter, ranger and cleric carry them in `data/outfits.json`) skip them when rolling, and they stay in `ARMORY_BASES` and `data/goods.json` so the forge and `roll_item("Bandages", seed)` still make them. The crate's and the outfits' other picks shift with the table, so some existing seeds hold something else.
+- **Bandages are held back** (our own) until bandaging exists, like the affixes nothing reads: `armory_base::HELD_BACK` lists them, `find_weight` gives them 0 so no loose spot picks one, crates and the class goods (fighter and cleric carry them in `data/outfits.json`) skip them when rolling, and they stay in `ARMORY_BASES` and `data/goods.json` so the forge and `roll_item("Bandages", seed)` still make them. The crate's and the outfits' other picks shift with the table, so some existing seeds hold something else.
 
 ### Writing
 
@@ -440,7 +440,7 @@ I opens the plate's inventory leaf over the level (`game/src/inventory/`): a par
 
 ## Classes
 
-`data/outfits.json`: Fighter, Ranger, Mage and Cleric, plus Freshly fallen and Scavenger. Each slot lists candidate bases, optionally with a leading probability. A class's set is rolled once per character, so the outfit you preview is the one you get.
+`data/outfits.json`: Fighter, Mage and Cleric (the Ranger was folded into the Fighter, whose kit now carries a bow and a satchel), plus Freshly fallen and Scavenger. Each slot lists candidate bases, optionally with a leading probability. A class's set is rolled once per character, so the outfit you preview is the one you get.
 
 `fb_items::outfit` reads the table and `Outfit::roll(seed, folk)` rolls one into whole items as the plate's `preparedSet` does: each slot filled at its chance from a picked base, a gnome's pointed hat at 60% when nothing is on its head, and an extra ring (22%), amulet (14%) and charm (14%). Each item's seed is drawn from the outfit's own stream, seeded as the plate's is; the plate rolled every item from one global stream.
 

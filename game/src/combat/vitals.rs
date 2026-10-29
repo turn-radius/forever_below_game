@@ -296,6 +296,7 @@ fn take_bites(
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
     critters: Query<&Critter>,
+    folk: Query<&crate::folk::Denizen>,
     mut players: Query<(Entity, &mut Health, Option<&DelverEffects>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
@@ -319,9 +320,17 @@ fn take_bites(
             if health.is_down() {
                 continue;
             }
+            // Burning incense adds to the save (cedar) and to the ward against the undead (frankincense).
+            let poison_resistance = poison_resistance + effects.map_or(0, |e| e.0.poison_save(&rules.effects));
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), poison_resistance, &mut dice.0);
             // Gear that wards against the attacker's kind takes a fraction off, never the last 1.
-            let ward = bite.species.map_or(0.0, |s| gear.ward[s.foe().index()] as f32);
+            // The family that struck them: a creature's, or a folk's or denizen's by the attacker.
+            let kin = bite.species.map(fb_character::kin::Kin::of_species).or_else(|| folk.get(bite.attacker).ok().map(|d| fb_character::kin::Kin::of_folk(d.person.spec.folk)));
+            let mut ward = kin.map_or(0.0, |k| gear.ward_against(k) as f32);
+            if bite.species.is_some_and(|s| s.foe() == fb_items::Foe::Undead) {
+                let incense = effects.map_or(0.0, |e| e.0.undead_ward(&rules.effects)) as f32;
+                ward = 1.0 - (1.0 - ward) * (1.0 - incense);
+            }
             let damage = fb_items::foe::warded_damage(damage, ward);
             let damage = spared_by_venom(health.hp, bite.damage, damage, bite.species.is_some_and(Species::venom_spares));
             health.hurt(damage);
@@ -427,6 +436,7 @@ fn fall(
     mut screen: Option<ResMut<ScreenOpen>>,
     next: Option<ResMut<NextState<AppState>>>,
     revival: Revival,
+    mut protection: super::revival::Protection,
 ) {
     let (revives, unconscious, rules) = revival;
     // Lying unconscious, the delver waits on the choice ([`super::revival`]).
@@ -457,6 +467,13 @@ fn fall(
         commands.entity(player).insert(Slowed(0.0)).remove::<(Constricted, super::swing::Swing, super::guard::Guard)>();
         if let Some(screen) = screen.as_deref_mut() {
             screen.0 = None;
+        }
+        // A cleric's prayer may save them before they fall at all; it spends no revive.
+        if spent.is_none()
+            && let Some((_, health, _)) = players.iter().find(|(p, ..)| *p == player)
+            && protection.ask(&mut commands, GameRules::of(&rules), player, *health, fonts.as_deref(), view_models.iter().next())
+        {
+            return;
         }
         // Brought down by a blow, a delver with a revive left in this world falls unconscious
         // instead; spent by exhaustion, they do not.
@@ -729,6 +746,43 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 1);
         bite(&mut app, snake, Species::Rat, 1);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 2, "a rat's blow is not warded");
+    }
+
+    #[test]
+    fn cedar_smoke_turns_a_failed_save_against_venom_into_a_good_one() {
+        // A seed whose save fails on the delver's own constitution and passes with cedar's +3.
+        let (app, ..) = delve();
+        let con = app.world().resource::<Character>().constitution();
+        let attack = AttackOnDelver { attacker: Entity::PLACEHOLDER, species: None, damage: 0, poison: 4, attacker_pos: Vec2::ZERO };
+        let poisoned_by = |resistance: i32, seed: u32| bite_damage_with(fb_character::rules::defaults(), &attack, con, resistance, &mut procgen_rng::Mulberry32::new(seed)).1.is_some();
+        let seven = (0..10_000u32).find(|&s| poisoned_by(0, s) && !poisoned_by(3, s)).expect("some save sits within 3 of the line");
+        for (cedar, poisoned) in [(false, true), (true, false)] {
+            let (mut app, player, snake) = delve();
+            app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seven);
+            if cedar {
+                let mut effects = fb_character::effect::Effects::default();
+                effects.add(&fb_character::rules::defaults().effects, crate::exposure::CEDAR_WARD, 1.0, None, fb_character::effect::Source::Surroundings);
+                app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+            }
+            app.update();
+            app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
+            app.update();
+            let poison = app.world().get::<DelverEffects>(player).and_then(|e| e.poisoned_hours());
+            assert_eq!(poison.is_some(), poisoned, "cedar {cedar}");
+        }
+    }
+
+    #[test]
+    fn frankincense_smoke_weakens_a_skeletons_blow() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        let mut effects = fb_character::effect::Effects::default();
+        let defs = &fb_character::rules::defaults().effects;
+        effects.add(defs, crate::exposure::FRANKINCENSE_WARD, 1.0, None, fb_character::effect::Source::Surroundings);
+        app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+        let max = app.world().get::<Health>(player).unwrap().max;
+        bite(&mut app, snake, Species::Skeleton, 10);
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, max - 7, "10 becomes 7");
     }
 
     #[test]

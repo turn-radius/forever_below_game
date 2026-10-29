@@ -59,7 +59,7 @@ fn map_rooms(mut commands: Commands, level: Res<CurrentLevel>) {
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default, Reflect)]
 #[reflect(Component)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina, crate::character::GearMana)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::casting::DelverSpellbook, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina, crate::character::GearMana)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].
@@ -190,8 +190,12 @@ pub enum Screen {
     Talk,
     /// The commission screen ([`crate::commission`]).
     Commission,
+    /// A cleric's offer of a devotion ([`crate::devotion`]).
+    Devotion,
     /// An enchanter's bench, opened from their talk ([`crate::enchanter`]).
     Enchant,
+    /// The spellbook a caster writes prayers in ([`crate::book`]).
+    Book,
 }
 
 /// Which screen, if any, is open over the level. The level keeps drawing behind it, but the
@@ -414,7 +418,7 @@ impl Plugin for PlayPlugin {
         ))
         // Over the plugin tuple's limit.
         .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::camp::CampPlugin, crate::save::SavePlugin, crate::talk::TalkPlugin, crate::dice::DicePlugin, crate::identify::IdentifyPlugin, crate::commission::CommissionPlugin, crate::enchanter::EnchanterPlugin, crate::reading::ReadingPlugin))
-        .add_plugins(crate::sparkle::SparklePlugin);
+        .add_plugins((crate::sparkle::SparklePlugin, crate::casting::CastingPlugin, crate::smoke::SmokePlugin, crate::deeds::DeedsPlugin, crate::devotion::DevotionPlugin, crate::book::BookPlugin, crate::blessing::BlessingPlugin, crate::time_left::TimeLeftPlugin));
         if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
             app.add_plugins(crate::ui::InterfaceScalePlugin);
         }

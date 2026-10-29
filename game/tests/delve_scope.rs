@@ -62,6 +62,7 @@ fn begin_delve(app: &mut App) {
 /// title.
 fn fall(app: &mut App) {
     app.insert_resource(forever_below::combat::revival::Revives(u32::MAX));
+    app.insert_resource(forever_below::combat::revival::Prayers(u32::MAX));
     let world = app.world_mut();
     let player = world.query_filtered::<Entity, With<Player>>().single(world).expect("one delver");
     world.get_mut::<Health>(player).expect("the delver has hit points").hp = 0;

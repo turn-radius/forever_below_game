@@ -8,6 +8,7 @@
 //! `docs/items.md`.
 
 pub mod armory_base;
+pub mod blessing;
 pub mod camp;
 pub mod commission;
 pub mod contents;
@@ -18,6 +19,7 @@ pub mod fittings;
 pub mod foe;
 pub mod footprint;
 pub mod identify;
+pub mod incense;
 pub mod item;
 pub mod jackalope;
 pub mod lesson;
@@ -47,6 +49,7 @@ pub use armory::families::bags::Accessory;
 pub use fittings::{FittingGrid, fitting_grid, fitting_grids, fitting_item};
 pub use item::{FROG_CELLS, STRAP_CELLS, fits_potion_pouch};
 pub use naming::Sex;
+pub use incense::{CENSER, INCENSE};
 pub use oil::LAMP_OIL;
 pub use rarity::Odds;
 pub use provision::{Consume, ELIXIRS, Elixir, Heal, POTIONS, Provision, SWALLOW, elixir, healing_base, provision};

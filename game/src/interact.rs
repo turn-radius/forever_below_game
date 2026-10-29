@@ -337,7 +337,7 @@ pub fn use_of(item: &Item) -> Option<Verb> {
     }
     // A flask of lamp oil fills a lantern; [`item_target`] offers it only while a lantern held
     // or at the hip has room.
-    if item.has_oil() {
+    if item.has_oil() || item.incense_kind().is_some() {
         return Some(Verb::Refill);
     }
     // Light only a light that would catch: a spent torch or an empty lantern will not.
@@ -364,7 +364,7 @@ pub fn item_target(inventory: &Inventory, id: ItemId) -> Option<Target> {
         Location::In { .. } if inventory.is_carried(id) => Place::Carried,
         Location::In { .. } | Location::Loose => Place::Ground,
     };
-    let uses = use_of(item).filter(|&verb| verb != Verb::Refill || inventory.lantern_wants_oil());
+    let uses = use_of(item).filter(|&verb| verb != Verb::Refill || if item.incense_kind().is_some() { inventory.censer_wants_incense() } else { inventory.lantern_wants_oil() });
     let hangs = inventory.location(id) != Some(Location::Worn(fb_items::Slot::Hip)) && inventory.check_wear(id, fb_items::Slot::Hip).is_ok();
     Some(Target::Item { place, uses, equippable: !item.slots().is_empty(), hangs })
 }

@@ -27,10 +27,9 @@ graze_chance = 0.5
 graze_damage = 1
 
 # The sides of each class's hit die, taken at its highest at first level (SRD "Hit Points at 1st
-# Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for the mage).
+# Level": fighter p. 24, cleric p. 15, wizard p. 52 for the mage).
 [combat.hit_dice]
 fighter = 10
-ranger = 10
 mage = 6
 cleric = 8
 
@@ -116,6 +115,164 @@ walk_refill_seconds = 40.0
 # Sleeping refills this many times as fast as standing.
 sleep_refill_factor = 2.0
 
+# Whether frighten and charm take hold of a creature: each gets a save. The chance is base, less
+# per_size for each size above Tiny, plus per_tier for each tier above the first, between floor and
+# ceiling.
+[casting.influence]
+base = 0.9
+per_tier = 0.1
+per_size = 0.2
+floor = 0.05
+ceiling = 0.95
+
+# Prayers are written from terms: an effect, a reach and a duration. A written prayer costs the sum
+# of its terms' costs, reaches its reach term's range and lasts its duration term's seconds; tier n
+# multiplies all three by n. `known` terms are there from the start; the rest are unlocked by
+# something else (a devotion unlocks a bane).
+[casting.terms.light]
+kind = "effect"
+name = "Light"
+school = "Divine"
+cost = 1.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.ward]
+kind = "effect"
+name = "Ward"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.frighten]
+kind = "effect"
+name = "Frighten"
+school = "Divine"
+cost = 3.0
+range = 0.0
+seconds = 0.0
+known = false
+
+[casting.terms.charm]
+kind = "effect"
+name = "Charm"
+school = "Divine"
+cost = 3.0
+range = 0.0
+seconds = 0.0
+known = false
+
+[casting.terms.bane]
+kind = "effect"
+name = "Bane"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = false
+
+[casting.terms.self]
+kind = "reach"
+name = "Self"
+school = "Divine"
+cost = 0.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.around]
+kind = "reach"
+name = "Around you"
+school = "Divine"
+cost = 1.0
+range = 20.0
+seconds = 0.0
+known = true
+
+[casting.terms.touch]
+kind = "reach"
+name = "Touch"
+school = "Divine"
+cost = 0.0
+range = 5.0
+seconds = 0.0
+known = true
+
+[casting.terms.cone]
+kind = "reach"
+name = "Cone"
+school = "Divine"
+cost = 2.0
+range = 30.0
+seconds = 0.0
+known = false
+
+[casting.terms.short]
+kind = "duration"
+name = "Short"
+school = "Divine"
+cost = 1.0
+range = 0.0
+seconds = 600.0
+known = true
+
+[casting.terms.long]
+kind = "duration"
+name = "Long"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 1800.0
+known = true
+
+[casting.terms.arcane_light]
+kind = "effect"
+name = "Light"
+school = "Arcane"
+cost = 1.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_ward]
+kind = "effect"
+name = "Ward"
+school = "Arcane"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_self]
+kind = "reach"
+name = "Self"
+school = "Arcane"
+cost = 0.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_around]
+kind = "reach"
+name = "Around you"
+school = "Arcane"
+cost = 1.0
+range = 20.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_short]
+kind = "duration"
+name = "Short"
+school = "Arcane"
+cost = 1.0
+range = 0.0
+seconds = 600.0
+known = true
+
 [load]
 # Pounds of capacity for each point of STR (SRD p. 79).
 capacity_per_strength = 15.0
@@ -181,6 +338,70 @@ hall_fee = 0.5
 alone_hit_points = 0.25
 # Game hours a delver lies unconscious alone before coming to; hunger and thirst go on.
 hours_alone = 4.0
+
+[protection]
+# Divine Protection: a cleric brought to 0 hit points rolls a Wisdom save (d20 + modifier)
+# against this DC; a pass stands them up instead of falling, and spends no revive.
+dc = 12
+# The Wisdom modifier from which a pass also heals (tier two) and also cleanses (tier three).
+heal_from = 2
+cleanse_from = 3
+# Share of maximum hit points tiers two and three heal them to (tier one: 1 hit point).
+heal_share = 0.75
+# Prayers between sleeps, pass or fail.
+per_rest = 1
+
+[devotion]
+# A cleric devoted against a favored foe: the share of that kind's damage warded off, and the
+# extra dice rolled against it. Our own.
+favored_ward = 0.25
+favored_bane = "1d4"
+# Kills with one kind of weapon (mace, sword, ...) before the cleric is offered to dedicate
+# themselves to it, and kills of one kind of creature before they are offered a favored foe or an
+# alignment. Declining makes the next offer come at double the count. Play-test numbers.
+# How near, in world units (10 cm each), a living creature or a hostile folk may be before an
+# offer waits for a quieter moment; it also waits while the delver is down. Our own.
+quiet_distance = 250.0
+weapon_kills = 50
+creature_kills = 20
+# Kills for each blessing charge a cleric earns; blessing a weapon spends one, hallowing one
+# spends hallow_blessings. Our own.
+blessing_kills = 25
+hallow_blessings = 3
+
+# Aligned with a folk or a denizen people, the factions of that people think better of the cleric
+# (standing added) and a loss of standing with them lands only in part. Against one, they think
+# less (a negative number added). Our own.
+aligned_standing = 15
+aligned_loss_percent = 50
+favored_standing = -15
+
+# A cleric aligned with a creature group takes one of its traits (keys: the group's name). Spiders walk through webs, serpents
+# shrug off venom (points added to the save), vermin seldom sicken (multiple of the chance of a
+# disease), the undead see in the dark (feet).
+[devotion.aligned.beast]
+stealth = 2.0
+text = "+2 Stealth."
+
+[devotion.aligned.troll]
+recovery = 1.0
+text = "+1 recovery."
+
+[devotion.aligned.spider]
+web_walker = true
+text = "Webs never hold you back."
+
+[devotion.aligned.serpent]
+poison_resistance = 3.0
+text = "+3 to saves against venom."
+
+[devotion.aligned.vermin]
+disease_risk = 0.5
+text = "Half as likely to catch a disease."
+
+[devotion.aligned.undead]
+darkvision = 60.0
+text = "See 60 ft in the dark."
 
 [visibility]
 # How visible a delver is in the dark, from 0 to 1: the eye is nearly closed.

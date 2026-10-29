@@ -57,17 +57,23 @@ pub struct Saved {
     learned: AbilityBonus,
     #[serde(default)]
     books_read: Vec<u32>,
+    /// A cleric's devotion; files saved before it have none.
+    #[serde(default)]
+    devotion: Option<fb_character::devotion::Devotion>,
+    /// What they have done, for the offers of a devotion.
+    #[serde(default)]
+    deeds: fb_character::deeds::Tally,
 }
 
 impl From<&Character> for Saved {
     fn from(c: &Character) -> Self {
-        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt, learned: c.learned, books_read: c.books_read.clone() }
+        Saved { name: c.name.clone(), folk: c.folk, class: c.class, attributes: c.attributes, body_seed: c.body_seed, shape: c.shape, sex: c.sex, dirt: c.dirt, learned: c.learned, books_read: c.books_read.clone(), devotion: c.devotion, deeds: c.deeds.clone() }
     }
 }
 
 impl From<Saved> for Character {
     fn from(s: Saved) -> Self {
-        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default(), learned: s.learned, books_read: s.books_read }
+        Character { folk: s.folk, body_seed: s.body_seed, shape: s.shape, sex: s.sex, name: s.name, class: s.class, attributes: s.attributes, dirt: s.dirt.clamp(0.0, 1.0), worn: AbilityBonus::default(), learned: s.learned, books_read: s.books_read, devotion: s.devotion, deeds: s.deeds }
     }
 }
 
@@ -154,6 +160,15 @@ mod tests {
         assert_eq!(load(&path), Some(delver));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"folk\": \"lizard\"") && text.contains("\"class\": \"cleric\""), "{text}");
+    }
+
+    #[test]
+    fn a_delver_saved_as_a_ranger_loads_as_a_fighter() {
+        let path = scratch("ranger");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"name":"Olm","folk":"human","class":"ranger","attributes":{"strength":10,"dexterity":10,"constitution":10,"intelligence":10,"wisdom":10},"body_seed":1,"dirt":0.4}"#).unwrap();
+        let old = load(&path).expect("a ranger saved before the class was removed still loads");
+        assert_eq!(old.class, Class::Fighter);
     }
 
     #[test]

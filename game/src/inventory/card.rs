@@ -767,7 +767,7 @@ pub fn show_card(
     fonts: Res<UiFonts>,
     mut icons: Icons,
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<ItemCard>>,
-    (tuning, time, barter, record): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>, Option<Res<crate::record::WorldRecord>>),
+    (tuning, time, barter, record, character, rules): (Option<Res<crate::tuning::Tuning>>, Option<Res<Time<Real>>>, Option<Res<crate::barter::Barter>>, Option<Res<crate::record::WorldRecord>>, Option<Res<crate::character::Character>>, Option<Res<crate::rules::GameRules>>),
     mut shown: Local<Option<ItemId>>,
     mut hovered_since: Local<Option<(ItemId, f32)>>,
     mut on_screen: ResMut<ShownCard>,
@@ -789,7 +789,7 @@ pub fn show_card(
             *shown = None;
             continue;
         };
-        if *shown != Some(id) || inventory.is_changed() || record.as_ref().is_some_and(|r| r.is_changed()) || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) {
+        if *shown != Some(id) || inventory.is_changed() || record.as_ref().is_some_and(|r| r.is_changed()) || barter.as_ref().is_some_and(|b| b.is_changed()) || keymap.as_ref().is_some_and(|k| k.is_changed()) || character.as_ref().is_some_and(|c| c.is_changed()) {
             let item = inventory.item(id).expect("checked above");
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
@@ -810,6 +810,11 @@ pub fn show_card(
                 text.actions.push((key.label(), "Identify"));
             } else if !item.is_known() {
                 text.note = Some("Try again after resting or a potion of insight".to_string());
+            }
+            if open.is(Screen::Inventory)
+                && let Some(character) = character.as_deref()
+            {
+                text.actions.extend(crate::blessing::card_actions(character, crate::rules::GameRules::of(&rules), item, keymap));
             }
             if inventory.is_carried(id)
                 && let Some(key) = keymap.inputs(Action::Drop).first()

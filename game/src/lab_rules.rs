@@ -316,7 +316,6 @@ const LABELS: &[(&str, &str)] = &[
     ("combat/graze_chance", "Chance a miss grazes"),
     ("combat/graze_damage", "Graze damage"),
     ("combat/hit_dice/fighter", "Fighter hit die"),
-    ("combat/hit_dice/ranger", "Ranger hit die"),
     ("combat/hit_dice/mage", "Mage hit die"),
     ("combat/hit_dice/cleric", "Cleric hit die"),
     ("needs/hunger_hours_to_full", "Hours walking to Starving"),
@@ -346,7 +345,7 @@ const LABELS: &[(&str, &str)] = &[
     ("stamina/second_wind", "Second wind at (share)"),
     ("stamina/swing_cost", "Cost of a swing (share)"),
     ("stamina/block_cost", "Cost of a block (share)"),
-    ("mana/martial_pool", "Mana of a fighter or ranger"),
+    ("mana/martial_pool", "Mana of a fighter"),
     ("mana/caster_base", "Caster mana at modifier 0"),
     ("mana/caster_per_modifier", "Mana per point of modifier"),
     ("mana/caster_floor", "Caster mana at least"),
@@ -407,6 +406,9 @@ fn effect_label(def: &fb_character::effect::EffectDef, rest: &[&str]) -> Option<
                 Influence::Noticed { .. } => "Added to being seen at full".into(),
                 Influence::HitPointsPerHour { .. } => "HP lost per hour at full".into(),
                 Influence::Glare { .. } => "Glare at full".into(),
+                Influence::PoisonSave { .. } => "Save against venom at full (points)".into(),
+                Influence::ColdWard { .. } => "Cold warded at full (points)".into(),
+                Influence::UndeadWard { .. } => "Undead blows lessened at full (share)".into(),
             };
             match *key {
                 "at_full" => what,
@@ -491,6 +493,9 @@ pub fn write_rules_toml(text: &str, rules: &Rules) -> Result<String, String> {
     let mut found = Vec::new();
     let mut root = tree(rules);
     root.remove("effects");
+    // The devotion's numbers hold text and a table of traits the lab has no field for yet: the
+    // file's own stand.
+    root.remove("devotion");
     let root = Value::Table(root);
     add_missing_arrays(doc.as_item_mut(), &root);
     walk(&mut Vec::new(), &root, &mut found);

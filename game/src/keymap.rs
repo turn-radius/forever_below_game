@@ -50,6 +50,14 @@ pub enum Action {
     Light,
     /// Uses the item in a quickslot: its ten keys, 1 to 0, are the slots in order.
     Quickslot,
+    /// Casts the chosen prayer or spell at the chosen tier, spending mana
+    /// (`crate::casting`).
+    Pray,
+    /// Steps the tier a prayer or spell is cast at, 1 to 3 and round again.
+    CastTier,
+    /// Opens and closes the spellbook, where a caster writes prayers from terms
+    /// (`crate::book`).
+    Book,
     /// In the level, drinks the nearest healing draught carried: belt and quickslots, then the
     /// pack, then the bags in it.
     DrinkHealing,
@@ -74,6 +82,10 @@ pub enum Action {
     NewDelve,
     /// In the inventory, rolls to identify the unknown item under the mouse.
     Identify,
+    /// In the inventory, a cleric blesses the weapon under the mouse.
+    Bless,
+    /// In the inventory, a cleric hallows the weapon under the mouse, if it is of the kind they are dedicated to.
+    Hallow,
     MusicQuieter,
     MusicLouder,
 }
@@ -174,7 +186,7 @@ impl Context {
     /// reads as a menu: nothing in it but the keys that swap screens, and so do a talk and a commission.
     pub fn of(app: Option<AppState>, open: Option<Screen>) -> Context {
         match (app, open) {
-            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk | Screen::Commission | Screen::Enchant)) => Context::Menus,
+            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk | Screen::Commission | Screen::Enchant | Screen::Devotion | Screen::Book)) => Context::Menus,
             (_, Some(Screen::Inventory)) => Context::Inventory,
             (_, None) => Context::Level,
         }
@@ -332,6 +344,9 @@ impl Default for Keymap {
                     ],
                 )
                 .in_contexts(ITEMS),
+                bind(Action::Pray, "Pray or cast the chosen ability (a cleric's Divine Light), at the chosen tier", Group::Fighting, &[Key(KeyCode::KeyC)]),
+                bind(Action::CastTier, "Step the tier a prayer or spell is cast at", Group::Fighting, &[Key(KeyCode::KeyV)]),
+                bind(Action::Book, "Open the spellbook to write prayers", Group::Screens, &[Key(KeyCode::KeyB)]).in_contexts(EVERYWHERE),
                 bind(Action::DrinkHealing, "Drink a healing draught", Group::Items, &[Key(KeyCode::KeyH)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
@@ -345,6 +360,8 @@ impl Default for Keymap {
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Menus]),
                 bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]).in_contexts(&[Context::Menus]),
                 bind(Action::Identify, "Identify the unknown item under the mouse", Group::Items, &[Key(KeyCode::KeyY)]).in_contexts(&[Context::Inventory]),
+                bind(Action::Bless, "Bless the weapon under the mouse (a cleric)", Group::Items, &[Key(KeyCode::KeyU)]).in_contexts(&[Context::Inventory]),
+                bind(Action::Hallow, "Hallow the weapon under the mouse (a cleric dedicated to its kind)", Group::Items, &[Key(KeyCode::KeyN)]).in_contexts(&[Context::Inventory]),
                 bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]).in_contexts(EVERYWHERE),
                 bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]).in_contexts(EVERYWHERE),
             ],
@@ -789,7 +806,7 @@ mod tests {
     #[test]
     fn the_spare_keys_are_unbound() {
         let keymap = Keymap::default();
-        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
+        for key in [KeyCode::KeyZ, KeyCode::KeyO, KeyCode::KeyP] {
             assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
         }
     }
@@ -1019,7 +1036,7 @@ mod tests {
     fn binding_jump_to_f_in_the_level_conflicts_with_primary() {
         let keymap = Keymap::default();
         assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyF)), Some(Action::Primary));
-        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyC)), None);
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyN)), None);
         assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::Space)), None, "its own key is no clash");
     }
 

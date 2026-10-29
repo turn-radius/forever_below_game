@@ -16,6 +16,11 @@
 //!   an oil font with a burner, wick and filler cap.
 //! - Lit or not is state. A lit lantern's panes, pierced holes or chimney glow, and
 //!   [`Lantern::light`] says where its light is and how far horn or tin lets it reach.
+//! - The censer is a fourth body ([`LanternStyle::Censer`]): a thurible, a footed bowl of coals and
+//!   incense under a lid pierced with rings of holes, hung on three chains from a crown. It
+//!   burns incense ([`LanternFuel::Incense`], which incense is [`LanternFlame::incense`]), gives a
+//!   small warm light ([`CENSER_FEET`]) and, lit, smoke ([`Lantern::smoke`]). It is the base
+//!   `Censer`, never rolled as a lantern.
 //! - There is no tin material: tin is iron tinted pale, and horn is bone tinted amber. A glass
 //!   chimney is [`MaterialKind::Glass`], as in the food family.
 //!
@@ -35,15 +40,16 @@ use crate::build::parts::{Look, Parts};
 use crate::cond::{Condition, ConditionLimits};
 use crate::families::Generator;
 use crate::families::food::stopper;
+use crate::incense::IncenseKind;
 use crate::geom::{
-    ItemMesh, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cuboid, cylinder, lathe, spline_profile, torus, tube,
-    uv_sphere, vec3,
+    ItemMesh, LatheOptions, MeshBuilder, Shading, SweepOptions, V3, cuboid, cylinder, ellipsoid, icosphere, lathe, spline_profile,
+    torus, tube, uv_sphere, vec3,
 };
 use crate::material::{MaterialKind, Rgb};
 use crate::palette::Palette;
 use crate::slider::{Sliders, sliders};
 
-use MaterialKind::{Bone, Brass, Cord, Glass, Iron};
+use MaterialKind::{Bone, Brass, Cord, Glass, Iron, Stone};
 
 /// The lantern generator.
 pub struct Lantern;
@@ -57,9 +63,14 @@ pub enum LanternStyle {
     Pierced,
     /// Wire guards round a glass chimney, between a base and a domed top.
     Cage,
+    /// A thurible: a bowl of coals under a pierced lid, hung on three chains from a crown. It
+    /// burns incense, not oil or wax, and smokes.
+    Censer,
 }
 
 impl LanternStyle {
+    /// The bodies a lantern rolls. The censer is its own base ([`Lantern::roll_censer`]), so
+    /// it is not among them.
     pub const ALL: [LanternStyle; 3] = [LanternStyle::Horn, LanternStyle::Pierced, LanternStyle::Cage];
 }
 
@@ -101,9 +112,12 @@ pub enum LanternFuel {
     Candle,
     /// An oil font with a burner and a flat wick (`Lamp oil` in `data/goods.json`).
     Oil,
+    /// Incense on coals, the fuel of a censer; which incense is [`LanternFlame::incense`].
+    Incense,
 }
 
 impl LanternFuel {
+    /// The fuels a lantern rolls with; incense is a censer's.
     pub const ALL: [LanternFuel; 2] = [LanternFuel::Candle, LanternFuel::Oil];
 }
 
@@ -169,6 +183,9 @@ impl Default for Bail {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LanternFlame {
     pub fuel: LanternFuel,
+    /// What a censer burns (any other lantern keeps the default).
+    #[serde(default)]
+    pub incense: IncenseKind,
     pub lit: bool,
     /// How much candle is left, or how full the font is, 0..1.
     pub level: f32,
@@ -194,7 +211,7 @@ sliders! {
 impl Default for LanternFlame {
     /// The plate's lantern: alight.
     fn default() -> Self {
-        LanternFlame { fuel: LanternFuel::Candle, lit: true, level: 0.8, flame: 1.0, fuel_left: crate::kindle::LANTERN_SECONDS * 0.8 }
+        LanternFlame { fuel: LanternFuel::Candle, incense: IncenseKind::default(), lit: true, level: 0.8, flame: 1.0, fuel_left: crate::kindle::LANTERN_SECONDS * 0.8 }
     }
 }
 
@@ -253,6 +270,25 @@ impl LanternState {
 /// (https://www.dndbeyond.com/sources/dnd/free-rules/equipment#AdventuringGear).
 pub const LANTERN_FEET: f32 = 30.0;
 
+/// A lit censer's light in feet (`light` of `Censer` in `data/bases.json`): a bowl of embers, a
+/// little more than a candle's 5 ft.
+pub const CENSER_FEET: f32 = 10.0;
+
+/// The warm orange of embers under incense (sRGB).
+pub const EMBER_LIGHT: Rgb = Rgb::hex(0xff8a3c);
+
+/// Where a lit censer's smoke leaves it, in item space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SmokeAnchor {
+    pub position: V3,
+    /// The smoke's colour (sRGB).
+    pub color: Rgb,
+    /// How wide the smoke starts, in item units.
+    pub spread: f32,
+    /// How thick it is, 0..1: it thins as the incense runs low.
+    pub density: f32,
+}
+
 impl Generator for Lantern {
     type State = LanternState;
 
@@ -263,12 +299,16 @@ impl Generator for Lantern {
     }
 
     fn noun(s: &LanternState) -> String {
+        if s.body.style == LanternStyle::Censer {
+            return format!("{} Censer", s.flame.incense.name());
+        }
         match (s.body.style, s.body.metal) {
             (LanternStyle::Horn, _) => "Horn Lantern",
             (LanternStyle::Pierced, LanternMetal::Tin) => "Pierced Tin Lantern",
             (LanternStyle::Pierced, _) => "Pierced Lantern",
             (LanternStyle::Cage, _) if s.flame.fuel == LanternFuel::Oil => "Oil Lantern",
             (LanternStyle::Cage, _) => "Cage Lantern",
+            (LanternStyle::Censer, _) => unreachable!("named above"),
         }
         .to_string()
     }
@@ -288,6 +328,28 @@ impl Lantern {
         compose(&mut rng, seed, style)
     }
 
+    /// A censer burning `kind`, for the base `Censer`: the same stream as [`Lantern::roll_as`]
+    /// with the incense chosen.
+    pub fn roll_censer(seed: u32, kind: IncenseKind) -> LanternState {
+        let mut s = Self::roll_as(seed, LanternStyle::Censer);
+        s.flame.fuel = LanternFuel::Incense;
+        s.flame.incense = kind;
+        s
+    }
+
+    /// Where a lit censer's smoke leaves it: through the lid's top, in the incense's colour.
+    /// `None` for anything that is not a lit censer with incense left.
+    pub fn smoke(s: &LanternState) -> Option<SmokeAnchor> {
+        if s.body.style != LanternStyle::Censer || !s.flame.lit {
+            return None;
+        }
+        let kind = s.flame.incense;
+        let g = Layout::of(s);
+        // Thinner as the incense runs low.
+        let density = (0.4 + 0.6 * s.flame.level).clamp(0.0, 1.0);
+        Some(SmokeAnchor { position: [0.0, g.hood_apex - s.body.width * 0.1, 0.0], color: kind.smoke(), spread: s.body.width * 0.5, density })
+    }
+
     /// Where the lantern gives its light, while lit: the heart of the flame, reaching about the
     /// SRD's hooded lantern's 30 ft of bright light ([`LANTERN_FEET`]). Horn panes warm it, a
     /// pierced drum lets out less, an open cage most; an oil flame reaches farther than a
@@ -299,10 +361,16 @@ impl Lantern {
             return None;
         }
         let g = Layout::of(s);
+        if s.body.style == LanternStyle::Censer {
+            // Embers glowing through the lid: a small, warm light.
+            let at = vec3::add(g.flame_base, [0.0, s.body.width * 0.25, 0.0]);
+            return Some(LightAnchor::feet(at, EMBER_LIGHT, CENSER_FEET * (0.9 + 0.1 * s.flame.flame), 0.3));
+        }
         let (color, share) = match s.body.style {
             LanternStyle::Horn => (HORN_LIGHT, 1.0),
             LanternStyle::Pierced => (CANDLE_LIGHT, 0.92),
             LanternStyle::Cage => (if s.flame.fuel == LanternFuel::Oil { FLAME_LIGHT } else { CANDLE_LIGHT }, 1.1),
+            LanternStyle::Censer => unreachable!("a censer's light is returned above"),
         };
         let fuel = if s.flame.fuel == LanternFuel::Oil { 1.0 } else { 0.92 };
         let feet = LANTERN_FEET * share * fuel * (0.9 + 0.1 * s.flame.flame);
@@ -321,49 +389,60 @@ fn compose(rng: &mut Mulberry32, seed: u32, style: LanternStyle) -> LanternState
         S::Horn => &[(LanternMetal::Tin, 2), (LanternMetal::Brass, 2), (LanternMetal::Iron, 2)][..],
         S::Pierced => &[(LanternMetal::Tin, 4), (LanternMetal::Brass, 1), (LanternMetal::Iron, 1)],
         S::Cage => &[(LanternMetal::Iron, 2), (LanternMetal::Brass, 2), (LanternMetal::Tin, 1)],
+        S::Censer => &[(LanternMetal::Brass, 4), (LanternMetal::Iron, 1), (LanternMetal::Tin, 1)],
     });
     b.sides = match style {
         S::Horn => *rng.weighted(&[(4, 3), (6, 2), (8, 1)]),
         S::Pierced => rng.int(8, 16),
         S::Cage => rng.int(4, 8),
+        S::Censer => 12,
     };
     b.height = match style {
         S::Horn => rng.range_f32(1.1, 1.7),
         S::Pierced => rng.range_f32(1.2, 1.8),
         S::Cage => rng.range_f32(1.0, 1.5),
+        S::Censer => rng.range_f32(1.1, 1.5),
     };
     b.width = match style {
         S::Horn => rng.range_f32(0.36, 0.5),
         S::Pierced => rng.range_f32(0.32, 0.45),
         S::Cage => rng.range_f32(0.34, 0.48),
+        S::Censer => rng.range_f32(0.36, 0.46),
     };
     b.hood = match style {
         S::Horn => rng.range_f32(0.4, 0.9),
         S::Pierced => rng.range_f32(0.6, 1.0),
         S::Cage => rng.range_f32(0.2, 0.45),
+        S::Censer => rng.range_f32(0.7, 1.0),
     };
     b.feet = rng.chance(0.35);
 
     let bl = &mut s.bail;
     bl.links = match style {
         S::Cage => rng.int(0, 3),
+        S::Censer => rng.int(2, 5),
         _ => rng.int(0, 5),
     };
     bl.link = rng.range_f32(0.12, 0.2);
     bl.ring = rng.range_f32(0.14, 0.22);
 
     let f = &mut s.flame;
+    if style == S::Censer {
+        f.incense = *rng.pick(&IncenseKind::ALL);
+    }
     f.fuel = *rng.weighted(match style {
         S::Cage => &[(LanternFuel::Oil, 3), (LanternFuel::Candle, 1)][..],
         S::Horn => &[(LanternFuel::Candle, 3), (LanternFuel::Oil, 1)],
         S::Pierced => &[(LanternFuel::Candle, 4), (LanternFuel::Oil, 1)],
+        S::Censer => &[(LanternFuel::Incense, 1)],
     });
     f.lit = rng.chance(0.55);
     f.level = rng.range_f32(0.3, 1.0);
     f.flame = rng.range_f32(0.75, 1.25);
     s.fit(&LIMITS);
     // The font is as full as the fuel it holds.
-    s.flame.fuel_left = crate::kindle::LANTERN_SECONDS * s.flame.level;
+    let full = if style == S::Censer { crate::kindle::INCENSE_SECONDS } else { crate::kindle::LANTERN_SECONDS };
+    s.flame.fuel_left = full * s.flame.level;
     s
 }
 
@@ -395,13 +474,17 @@ impl Layout {
         let chain = if bl.links == 0 { 0.0 } else { link_pitch(bl.link, chain_wire) * (bl.links as f32 - 1.0) + bl.link - chain_wire * 2.0 };
         let bail_top = ring_bottom - chain;
         let w = b.width;
+        let censer = b.style == LanternStyle::Censer;
         let cap = w * 0.22;
         let hood_h = w * b.hood;
-        let hood_apex = bail_top - w * 0.35 - cap;
+        // A censer hangs a crown and a span of chain below the chain; a lantern a bail and cap.
+        let hood_apex = if censer { bail_top - w * 0.6 } else { bail_top - w * 0.35 - cap };
         let top = hood_apex - hood_h;
-        let bottom = top - b.height;
+        let bottom = if censer { top - censer_depth(s) } else { top - b.height };
         let floor = bottom + w * 0.06;
         let (base_y, flame_h) = match f.fuel {
+            _ if censer => (bottom + censer_depth(s) * 0.55, b.width * 0.1),
+            LanternFuel::Incense => (floor, 0.0),
             LanternFuel::Candle => {
                 let (r, h) = candle_size(s);
                 (floor + w * 0.08 + candle_wick_top(r, h, f.lit || f.level < 0.95), b.height * 0.2)
@@ -419,6 +502,11 @@ impl Layout {
             flame_height: flame_h * f.flame,
         }
     }
+}
+
+/// How deep a censer's bowl is, from its rim down to the foot.
+fn censer_depth(s: &LanternState) -> f32 {
+    s.body.height * 0.45
 }
 
 /// Radius and height of the candle inside.
@@ -444,11 +532,14 @@ fn build_lantern(s: &LanternState) -> ItemMesh {
         LanternStyle::Horn => horn_body(s, &g, &mut frame, &mut parts),
         LanternStyle::Pierced => pierced_body(s, &g, &mut frame, &mut parts),
         LanternStyle::Cage => cage_body(s, &g, &mut frame, &mut parts),
+        LanternStyle::Censer => censer_body(s, &g, &mut frame, &mut parts),
     }
-    base(s, &g, &mut frame);
+    if b.style != LanternStyle::Censer {
+        base(s, &g, &mut frame);
+    }
     parts.add_look("frame", frame, metal);
     fuel(s, &g, &mut parts);
-    if lit {
+    if lit && b.style != LanternStyle::Censer {
         add_flame(&mut parts, g.flame_base, g.flame_height, s.body.width * 0.13 * s.flame.flame.sqrt(), 0.05, s.seed);
     }
     parts.finish()
@@ -467,6 +558,9 @@ fn hanging(s: &LanternState, g: &Layout, parts: &mut Parts, metal: Look) {
         let path: Vec<V3> = (0..bl.links).map(|k| [0.0, start - pitch * k as f32, 0.0]).collect();
         let path = if path.len() == 1 { vec![path[0], [0.0, path[0][1] - 1e-3, 0.0]] } else { path };
         parts.add_look("chain", cable_chain(&path, false, bl.link, chain_wire, bl.links as usize), metal.without_outline());
+    }
+    if s.body.style == LanternStyle::Censer {
+        return;
     }
     // The bail: a wire arch from one side of the hood, up through the chain, to the other.
     let w = s.body.width;
@@ -681,10 +775,146 @@ fn cage_body(s: &LanternState, g: &Layout, frame: &mut MeshBuilder, parts: &mut 
     hood(s, g, 32, Shading::SMOOTH, frame);
 }
 
+/// A thurible: a footed bowl of coals and incense under a domed lid pierced with rings of holes,
+/// hung from a crown on three chains. The lid rides a finger's width above the bowl, so the
+/// heap shows through the gap, and glows when it is lit.
+fn censer_body(s: &LanternState, g: &Layout, frame: &mut MeshBuilder, parts: &mut Parts) {
+    let kind = s.flame.incense;
+    let b = &s.body;
+    let w = b.width;
+    let metal = b.metal.look();
+    let (top, bottom, apex) = (g.top, g.bottom, g.hood_apex);
+    let depth = top - bottom;
+    let lit = s.flame.lit;
+
+    // The bowl: a shell with a wall, a foot ring under it and a beaded rim.
+    let t = w * 0.045;
+    let outer = spline_profile(
+        &[[0.0, bottom], [w * 0.3, bottom], [w * 0.4, bottom + depth * 0.12], [w * 0.75, bottom + depth * 0.4], [w * 0.97, bottom + depth * 0.78], [w * 1.0, top]],
+        36,
+    );
+    let mut shell = outer.clone();
+    shell.extend(outer.iter().rev().map(|&[r, y]| [(r - t).max(0.0), y + t]));
+    let bowl = lathe(&shell, &LatheOptions { facets: 40, shading: Shading::SMOOTH, cap_start: false, cap_end: false, phase: 0.0 });
+    frame.append(&bowl);
+    let mut foot = torus(w * 0.36, w * 0.055, 32, 8, Shading::SMOOTH);
+    foot.translate([0.0, bottom + w * 0.03, 0.0]);
+    frame.append(&foot);
+    let mut rim = torus(w * 1.0, w * 0.05, 40, 8, Shading::SMOOTH);
+    rim.translate([0.0, top, 0.0]);
+    frame.append(&rim);
+    let mut belt = torus(w * 0.8, w * 0.03, 40, 6, Shading::SMOOTH);
+    belt.translate([0.0, bottom + depth * 0.4, 0.0]);
+    frame.append(&belt);
+
+    // The lid: a dome standing off the rim, with a finial, a ring and a bead of metal at its foot.
+    let gap = w * 0.1;
+    let y0 = top + gap;
+    let dome = apex - y0 - w * 0.08;
+    let lid = spline_profile(
+        &[
+            [w * 1.04, y0],
+            [w * 1.06, y0 + dome * 0.08],
+            [w * 0.99, y0 + dome * 0.28],
+            [w * 0.8, y0 + dome * 0.56],
+            [w * 0.5, y0 + dome * 0.8],
+            [w * 0.22, y0 + dome * 0.95],
+            [w * 0.12, y0 + dome],
+            [0.0, y0 + dome * 1.02],
+        ],
+        40,
+    );
+    // A lid with an underside, so the gap shows a lid and not a hollow.
+    let mut cap = vec![[0.0, y0 + w * 0.02], [w * 1.0, y0 + w * 0.02]];
+    cap.extend(lid.iter().copied());
+    frame.append(&lathe(&cap, &LatheOptions { facets: 40, shading: Shading::SMOOTH, cap_start: false, cap_end: false, phase: 0.0 }));
+    let mut lip = torus(w * 1.04, w * 0.04, 40, 8, Shading::SMOOTH);
+    lip.translate([0.0, y0, 0.0]);
+    frame.append(&lip);
+    let mut ball = uv_sphere(w * 0.12, 16, 10);
+    ball.translate([0.0, y0 + dome * 1.02 + w * 0.03, 0.0]);
+    frame.append(&ball);
+    let mut ring = torus(w * 0.11, w * 0.025, 20, 6, Shading::SMOOTH);
+    ring.rotate_x(FRAC_PI_2).translate([0.0, apex - w * 0.02, 0.0]);
+    frame.append(&ring);
+
+    // The pierced pattern: rings of round holes round the dome, staggered ring on ring.
+    let hole = w * 0.048;
+    let mut holes = MeshBuilder::new();
+    let dot = {
+        let mut d = cylinder(hole, w * 0.05, 8, Shading::SMOOTH);
+        d.translate([0.0, -w * 0.025, 0.0]);
+        d
+    };
+    for (row, at) in [0.14, 0.3, 0.46, 0.62, 0.78].into_iter().enumerate() {
+        let i = ((lid.len() - 1) as f32 * at) as usize;
+        let [r, y] = lid[i];
+        let [r2, y2] = lid[i + 1];
+        let normal = vec3::normalize_or([y2 - y, r - r2, 0.0], vec3::Y);
+        let count = ((TAU * r / (hole * 3.6)).round() as u32).max(5);
+        for k in 0..count {
+            let a = TAU * (k as f32 + 0.5 * (row % 2) as f32) / count as f32;
+            let (sa, ca) = a.sin_cos();
+            let dir = [normal[0] * ca, normal[1], -normal[0] * sa];
+            let mut d = dot.clone();
+            d.place([r * ca, y, -r * sa], dir);
+            holes.append(&d);
+        }
+    }
+    let look = if lit { glowing(Rgb::hex(0xffa04a), 0.9) } else { Look::of(Iron).tinted(CHAR).without_outline() };
+    parts.add_look("holes", holes, look);
+
+    // The coals and the incense heaped on them, showing through the gap.
+    let heap_y = top - depth * 0.1;
+    let mut coals = ellipsoid([w * 0.84, w * 0.1, w * 0.84]);
+    coals.translate([0.0, heap_y, 0.0]);
+    let coal_look = if lit { glowing(Rgb::hex(0xff5b1c), 1.0) } else { Look::of(Stone).tinted(Rgb::hex(0x2b2724)) };
+    parts.add_look("coals", coals, coal_look);
+    let tears = 3 + (s.flame.level * 9.0).round() as u32;
+    let mut heap = MeshBuilder::new();
+    for k in 0..tears {
+        let a = k as f32 * 2.399963;
+        let r = w * 0.7 * ((k as f32 + 0.5) / tears as f32).sqrt();
+        let mut tear = icosphere(w * (0.085 + 0.02 * ((k * 7 + s.seed) % 3) as f32), 1);
+        tear.scale([1.0, 0.8, 1.0]).translate([r * a.cos(), heap_y + w * 0.08, -r * a.sin()]);
+        heap.append(&tear);
+    }
+    parts.add_look("incense", heap, Look::of(Stone).tinted(kind.color()));
+
+    // The crown the chains gather in, and the three chains down to lugs on the rim.
+    let crown_h = w * 0.3;
+    let crown_top = g.bail_top;
+    let crown_foot = crown_top - crown_h;
+    let crown = lathe(
+        &spline_profile(&[[0.0, crown_top], [w * 0.1, crown_top - crown_h * 0.05], [w * 0.2, crown_top - crown_h * 0.35], [w * 0.33, crown_top - crown_h * 0.8], [w * 0.3, crown_foot], [0.0, crown_foot]], 20),
+        &LatheOptions::new(24, Shading::SMOOTH),
+    );
+    frame.append(&crown);
+    let rod: Vec<V3> = vec![[0.0, crown_foot, 0.0], [0.0, apex, 0.0]];
+    frame.append(&tube(&rod, 6, &SweepOptions::default(), |_| w * 0.022));
+    let link = w * 0.3;
+    let wire = w * 0.034;
+    let mut chains = MeshBuilder::new();
+    for k in 0..3 {
+        let a = FRAC_PI_2 + TAU * k as f32 / 3.0;
+        let (sa, ca) = a.sin_cos();
+        let at = |r: f32, y: f32| [r * ca, y, -r * sa];
+        let path = [at(w * 0.3, crown_foot + w * 0.02), at(w * 1.14, (crown_foot + top) * 0.5 + w * 0.12), at(w * 1.08, top + w * 0.02)];
+        chains.append(&cable_chain(&path, false, link, wire, 14));
+        let mut lug = uv_sphere(w * 0.075, 12, 8);
+        lug.translate(at(w * 1.03, top));
+        frame.append(&lug);
+    }
+    parts.add_look("chains", chains, metal.without_outline());
+}
+
 /// The candle or oil font standing inside.
 fn fuel(s: &LanternState, g: &Layout, parts: &mut Parts) {
     let w = s.body.width;
     let f = &s.flame;
+    if s.body.style == LanternStyle::Censer {
+        return;
+    }
     match f.fuel {
         LanternFuel::Candle => {
             // A socket cup on the floor, and the candle in it.
@@ -702,6 +932,8 @@ fn fuel(s: &LanternState, g: &Layout, parts: &mut Parts) {
             parts.add_look("candle", wax, Look::of(Bone).tinted(TALLOW));
             parts.add_look("wick", wick, Look::of(Cord).tinted(if burnt { CHAR } else { TALLOW }).without_outline());
         }
+        // A censer's coals and incense are part of its body ([`censer_body`]).
+        LanternFuel::Incense => {}
         LanternFuel::Oil => {
             // A squat font, a burner collar and a flat wick, and a filler cap off to one side.
             let fh = oil_height(s);

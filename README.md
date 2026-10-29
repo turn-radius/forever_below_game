@@ -114,7 +114,7 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 - `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
 - `--seed <n>` rolls the body and the outfit's items; 1207 by default.
 - `--walk` starts the doll walking in place, `--speed <n>` sets its pace as a multiple of its folk's natural one (0 to 1.6, 1 by default). W toggles the walk in the view, and the panel at the top right has the same toggle and a speed slider.
-- `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
+- `--outfit <key>`: fighter (the default), mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
@@ -320,6 +320,7 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[combat]` | `knockback_scale` | 1.0 | How far a blow knocks a creature back, as a multiple of the usual. |
 | `[combat]` | `hit_kick` | 1.0 | How much the view jolts when hit, as a multiple of the usual (0 = no jolt). |
 | `[light]` | `torch_peak` | 1.0 | A torch, lantern or other burning thing's strength close up (1 = full). |
+| `[light]` | `holy_peak` | 0.6 | Divine Light's strength close up, as a share of a torch's (1 = as strong as a torch). |
 | `[light]` | `torch_reach` | 2.0 | How far its light reaches, as a multiple of its bright radius. |
 | `[light]` | `brazier_peak` | 1.5 | A brazier's strength close up (1 = full). |
 | `[light]` | `brazier_reach` | 150.0 | How far a brazier's light reaches, in world units. |

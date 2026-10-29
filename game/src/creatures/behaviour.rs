@@ -60,7 +60,7 @@ impl Plugin for BehaviourPlugin {
             .init_resource::<BlockedCells>()
             .init_resource::<Obstacles>()
             .init_resource::<Tuning>()
-            .add_systems(Update, (wake, behave).chain().before(super::idle).in_set(DelveSystems));
+            .add_systems(Update, (wake, tick_influences, behave).chain().before(super::idle).in_set(DelveSystems));
     }
 }
 
@@ -190,6 +190,58 @@ pub struct Brain {
 /// and chases like any other.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Aroused;
+
+/// Frightened: the creature runs from the delver for this many more seconds, and does not
+/// attack. Put on by the cleric's Frighten prayer ([`crate::casting`]).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Frightened(pub f32);
+
+/// Charmed: the creature takes no notice of the delver and does not attack for this many more
+/// seconds, until the delver strikes it ([`Aroused`]). Not the cleric's alone: the Charm spell
+/// of the mage uses it too.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Charmed(pub f32);
+
+/// How far a frightened creature still sees the delver to run from, world units, and how fast it
+/// runs as a multiple of its walking speed. Our own.
+const FRIGHT_SIGHT: f32 = 60.0;
+const FRIGHT_BOLT: f32 = 1.5;
+
+/// Who is frightened or charmed, and what the delver shuns, for [`behave`].
+#[derive(bevy::ecs::system::SystemParam)]
+struct Influences<'w, 's> {
+    states: Query<'w, 's, (Has<Frightened>, Has<Charmed>)>,
+    shunned: Query<'w, 's, &'static crate::combat::vitals::Shunned, With<Player>>,
+}
+
+impl Influences<'_, '_> {
+    /// Whether `entity` is frightened, and whether it is charmed.
+    fn of(&self, entity: Entity) -> (bool, bool) {
+        self.states.get(entity).unwrap_or_default()
+    }
+}
+
+/// Counts down every frightened and charmed creature, and frees the charmed one that was struck.
+fn tick_influences(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut frightened: Query<(Entity, &mut Frightened)>,
+    mut charmed: Query<(Entity, &mut Charmed, Has<Aroused>)>,
+) {
+    let dt = time.delta_secs().min(0.1);
+    for (entity, mut f) in &mut frightened {
+        f.0 -= dt;
+        if f.0 <= 0.0 {
+            commands.entity(entity).remove::<Frightened>();
+        }
+    }
+    for (entity, mut c, struck) in &mut charmed {
+        c.0 -= dt;
+        if c.0 <= 0.0 || struck {
+            commands.entity(entity).remove::<Charmed>();
+        }
+    }
+}
 
 /// Mixed into a creature's seed for its [`Brain::shun_roll`]. Our own.
 const SHUN_SALT: u32 = 0x5B0A_C3D1;
@@ -469,11 +521,11 @@ fn behave(
     obstacles: Res<Obstacles>,
     doors: Option<Res<crate::doors::Doors>>,
     player: Query<DelverToStrike, (With<Player>, Without<Critter>)>,
-    shunned: Query<&crate::combat::vitals::Shunned, With<Player>>,
     mut creatures: Query<(Entity, &Critter, &mut Brain, &mut Intent, &mut Transform, Option<&mut Flight>, Has<Aroused>)>,
     mut vaults: Local<Option<((u32, u32), Vaults)>>,
     mut attacks: BlowsAtDelver,
     mut commands: Commands,
+    influences: Influences,
     sounds: Option<Res<crate::combat::feedback::CreatureSounds>>,
     bone_sounds: Option<Res<super::skeletons::BoneSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
@@ -489,7 +541,7 @@ fn behave(
     let see = crate::doors::opaque_for(level, &blocked_cells, doors.as_deref(), None);
     let delver_ac = player.iter().next().and_then(|(_, ac)| ac.copied());
     let player = player.iter().next().map(|(t, _)| t.translation.xz());
-    let shunned = shunned.iter().next().copied().unwrap_or_default();
+    let shunned = influences.shunned.iter().next().copied().unwrap_or_default();
     // Every creature's circle, to keep the others out of.
     let bodies: Vec<(Entity, Vec2, f32)> = creatures.iter().map(|(e, c, _, _, t, ..)| (e, t.translation.xz(), body_radius(c))).collect();
     // A stone hall's vaults, worked out once for the level, for the bats that fly under them.
@@ -508,7 +560,8 @@ fn behave(
         let radius = body_radius(critter);
         // A creature whose own roll falls under the delver's shun chance for its kind does not
         // notice them, unless the delver has struck it.
-        let heeds = aroused || !shunned.passes_over(species.foe(), brain.shun_roll);
+        let (frightened, charmed) = influences.of(entity);
+        let heeds = !charmed && (aroused || !shunned.passes_over(species.foe(), brain.shun_roll));
         let sees = player.filter(|p| heeds && p.distance(at) <= notice_range(species, tune.sense_scale) && line_of_sight(grid(at), grid(*p), &see));
         // One seen only through a grate, with no way to them, is soon given up (it stands at the
         // grate pressing on otherwise): after pressing against it, it loses them, and rests a while
@@ -540,6 +593,14 @@ fn behave(
             }
             (Mode::Wander { .. }, None) => {}
         }
+        // A frightened or charmed creature does not give chase or attack.
+        if frightened || charmed {
+            if matches!(brain.mode, Mode::Chase { .. }) {
+                brain.mode = Mode::Wander { target: None, wait: 0.5 };
+            }
+            brain.attack = None;
+        }
+
         // A bat gets going the moment it notices the delver, and goes back to its spot when it
         // loses them.
         if let Some(flight) = flight.as_deref_mut() {
@@ -664,6 +725,31 @@ fn behave(
                             DespawnOnExit(crate::launch::AppState::Delving),
                         ));
                     }
+                }
+            }
+        }
+
+        // A frightened creature runs from the delver to the farthest place it reaches first.
+        if frightened
+            && flight.is_none()
+            && let Some(p) = player.filter(|p| p.distance(at) <= FRIGHT_SIGHT)
+        {
+            brain.flee_in -= dt;
+            if brain.flee_in <= 0.0 || brain.flee.is_some_and(|goal| goal == cell(at)) {
+                brain.flee = flee_goal(cell(at), cell(p), &blocked);
+                brain.flee_in = FLEE_REPLAN;
+                brain.cornered = brain.flee.is_none();
+            }
+            match brain.flee {
+                Some((x, y)) => {
+                    heading = Some((Vec2::new(x as f32, y as f32) + Vec2::splat(0.5)) * CELL);
+                    speed = species.speed() * FRIGHT_BOLT;
+                    face = None;
+                }
+                None => {
+                    heading = None;
+                    speed = 0.0;
+                    face = Some(p);
                 }
             }
         }
@@ -1127,6 +1213,60 @@ mod tests {
             bitten |= attacks(&mut app).iter().any(|a| pack.contains(&a.attacker));
         }
         assert!(bitten, "struck rats chase and bite");
+    }
+
+    /// A lone rat in the big room with the delver `gap` away.
+    fn rat_and_delver(gap: f32) -> (App, Entity, Entity, Vec2) {
+        let (level, middle, _) = big_room();
+        let player_at = middle + Vec2::X * gap;
+        let (app, rat, player) = solo_app(Species::Rat, 5, &level, middle, player_at);
+        (app, rat, player, middle)
+    }
+
+    #[test]
+    fn a_frightened_rat_flees_for_its_duration_then_chases_again() {
+        let (mut app, rat, player, _) = rat_and_delver(8.0);
+        app.world_mut().entity_mut(rat).insert(Frightened(3.0));
+        let start = position(&app, rat).distance(position(&app, player));
+        let mut bitten = false;
+        for _ in 0..120 {
+            app.update();
+            bitten |= attacks(&mut app).iter().any(|a| a.attacker == rat);
+        }
+        let gap = position(&app, rat).distance(position(&app, player));
+        assert!(gap > start + 6.0, "it ran from {start} to only {gap}");
+        assert!(!bitten, "a frightened rat bit");
+        assert!(app.world().get::<Frightened>(rat).is_some());
+        for _ in 0..120 {
+            app.update();
+        }
+        assert!(app.world().get::<Frightened>(rat).is_none(), "the fright wore off");
+        let mut closest = f32::MAX;
+        for _ in 0..360 {
+            app.update();
+            closest = closest.min(position(&app, rat).distance(position(&app, player)));
+        }
+        assert!(closest < gap - 5.0, "it never came back: {closest} against {gap}");
+    }
+
+    #[test]
+    fn a_charmed_rat_does_not_attack_until_struck() {
+        let (mut app, rat, _player, _) = rat_and_delver(6.0);
+        app.world_mut().entity_mut(rat).insert(Charmed(100.0));
+        for _ in 0..300 {
+            app.update();
+            assert!(attacks(&mut app).iter().all(|a| a.attacker != rat), "a charmed rat bit");
+        }
+        assert!(app.world().get::<Charmed>(rat).is_some());
+        app.world_mut().entity_mut(rat).insert(Aroused);
+        app.update();
+        assert!(app.world().get::<Charmed>(rat).is_none(), "a blow ended the charm");
+        let mut bitten = false;
+        for _ in 0..600 {
+            app.update();
+            bitten |= attacks(&mut app).iter().any(|a| a.attacker == rat);
+        }
+        assert!(bitten, "the struck rat bites again");
     }
 
     #[test]

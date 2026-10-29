@@ -626,8 +626,14 @@ fn every_resource_and_component_is_accounted_for() {
         ("enchanting::Enchanting", "enchanting"),
         ("map::explore::ExploredLevels", "explored"),
         ("camp::Asleep", "camp: the delver lies down in it again on resuming"),
+        ("casting::AbilitySlots", "body.ability_slots: the quickslots that hold a prayer"),
+        ("casting::Chosen", "body.chosen: the prayer C casts and its tier"),
     ];
     const NOT_KEPT: &[(&str, &str)] = &[
+        ("combat::revival::Prayers", "Divine Protection's prayer: a save is written on lying down, and sleep renews it"),
+        ("book::Book", "the spellbook screen: open-screen state"),
+        ("devotion::Offered", "an open devotion offer: the deed tally offers it again"),
+        ("smoke::PuffAssets", "the smoke puffs' mesh, made when the app starts"),
         // Set again by the delve that starts, from what the save holds.
         ("save::SaveFile", "where the file is"),
         ("save::Saveable", "whether this delve may save: set by the title"),
@@ -748,7 +754,7 @@ fn every_resource_and_component_is_accounted_for() {
     ];
     const PLAYER_KEPT: &[&str] = &[
         "Transform", "player::Locomotion", "combat::Health", "character::DelverNeeds", "character::DelverStamina", "character::DelverMana", "exhaustion::Exhaustion", "exhaustion::ExhaustionTimes",
-        "character::DelverRecovery", "character::DelverEffects",
+        "character::DelverRecovery", "character::DelverEffects", "casting::DelverSpellbook",
     ];
     const PLAYER_NOT_KEPT: &[(&str, &str)] = &[
         ("play::Player", "the delver itself"),
@@ -812,6 +818,7 @@ fn dying_deletes_the_save_and_the_title_offers_no_resume() {
     assert!(file.exists());
     // Walked on and fell, with every revive spent.
     app.insert_resource(Revives(u32::MAX));
+    app.insert_resource(forever_below::combat::revival::Prayers(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     // The save goes at the lethal blow, in the last gasp, before the fall.

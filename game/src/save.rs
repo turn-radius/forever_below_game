@@ -166,6 +166,15 @@ pub struct SavedBody {
     pub exhaustion_times: fb_character::ExhaustionTimes,
     pub recovery: fb_character::recovery::Recovery,
     pub effects: Option<fb_character::effect::Effects>,
+    /// What the delver has written and can write with; none for a delve saved before prayers.
+    #[serde(default)]
+    pub spellbook: Option<fb_character::casting::Spellbook>,
+    /// The prayer held by each quickslot, by name.
+    #[serde(default)]
+    pub ability_slots: Vec<Option<String>>,
+    /// The prayer and tier chosen to cast.
+    #[serde(default)]
+    pub chosen: Option<(String, u8)>,
 }
 
 /// The cells of one level the map has seen, packed as bits and written in hex.
@@ -399,8 +408,15 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
             exhaustion_times: times.0,
             recovery: recovery.0,
             effects: effects.map(|e| e.0.clone()),
+            spellbook: None,
+            ability_slots: world.resource::<crate::casting::AbilitySlots>().0.to_vec(),
+            chosen: Some({
+                let c = world.resource::<crate::casting::Chosen>();
+                (c.name.clone(), c.tier)
+            }),
         }
     };
+    let body = SavedBody { spellbook: world.query_filtered::<&crate::casting::DelverSpellbook, With<Player>>().iter(world).next().map(|b| b.0.clone()), ..body };
     let mut explored: Vec<SavedExplored> =
         world.resource::<ExploredLevels>().0.iter().map(|(&level_seed, seen)| SavedExplored { level_seed, width: seen.width, height: seen.height, bits: to_hex(&seen.to_bits()) }).collect();
     explored.sort_by_key(|e| e.level_seed);
@@ -586,6 +602,7 @@ pub fn restore_delve(world: &mut World) {
     // The body.
     let body = saved.body;
     let health = Health { hp: body.hit_points, max: body.max_hit_points };
+    let mut restored_casting = None;
     let mut players = world.query_filtered::<Entity, With<Player>>();
     if let Ok(player) = players.single(world) {
         let mut player = world.entity_mut(player);
@@ -599,6 +616,10 @@ pub fn restore_delve(world: &mut World) {
             ExhaustionTimes(body.exhaustion_times),
             DelverRecovery(body.recovery),
         ));
+        if let Some(book) = body.spellbook {
+            player.insert(crate::casting::DelverSpellbook(book));
+        }
+        restored_casting = Some((body.ability_slots, body.chosen));
         match body.effects {
             Some(effects) => {
                 player.insert(DelverEffects(effects));
@@ -609,6 +630,16 @@ pub fn restore_delve(world: &mut World) {
         }
         if let Some(mut locomotion) = player.get_mut::<Locomotion>() {
             *locomotion = Locomotion { yaw: body.yaw, pitch: body.pitch, velocity: Vec2::ZERO };
+        }
+    }
+    if let Some((slots, chosen)) = restored_casting {
+        let mut held = crate::casting::AbilitySlots::default();
+        for (slot, name) in slots.into_iter().take(crate::quickslots::SLOTS).enumerate() {
+            held.0[slot] = name;
+        }
+        *world.resource_mut::<crate::casting::AbilitySlots>() = held;
+        if let Some((name, tier)) = chosen {
+            *world.resource_mut::<crate::casting::Chosen>() = crate::casting::Chosen { name, tier: tier.clamp(1, fb_character::casting::MAX_TIER) };
         }
     }
     world.insert_resource(SettleHitPoints(health));
@@ -705,6 +736,9 @@ pub(crate) fn sample_delve() -> SavedDelve {
             exhaustion_times: default(),
             recovery: default(),
             effects: None,
+            spellbook: Some(fb_character::casting::Spellbook::starting(fb_character::Casting::Divine)),
+            ability_slots: vec![Some("Divine Light".to_string()), None],
+            chosen: Some(("Divine Light".to_string(), 3)),
         },
         clock: GameTime::from_seconds(123_456.789),
         revives: 1,

@@ -22,13 +22,14 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
+use fb_character::protection::{Tier, cleanse, pray};
 use fb_character::revival::{Wound, choose_hall, coin_words, fee, in_copper, pick_wound};
 use fb_level::{CELL as GRID, Level};
 
 use super::feedback::Corpse;
 use super::{Health, RunDice};
 use crate::carry::ViewModelCamera;
-use crate::character::DelverEffects;
+use crate::character::{Character, Class, DelverEffects};
 use crate::creatures::behaviour::{Brain, Mode};
 use crate::folk::Denizen;
 use crate::game_clock::GameClock;
@@ -46,7 +47,13 @@ impl Plugin for RevivalPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Revives>()
             .add_message::<ReviveChosen>()
-            .add_systems(OnEnter(AppState::Delving), |mut revives: ResMut<Revives>| revives.0 = 0)
+            .init_resource::<Prayers>()
+            .init_resource::<crate::camp::Asleep>()
+            .add_systems(OnEnter(AppState::Delving), |mut revives: ResMut<Revives>, mut prayers: ResMut<Prayers>| {
+                revives.0 = 0;
+                prayers.0 = 0;
+            })
+            .add_systems(Update, sleep_renews_prayer.in_set(DelveSystems))
             .add_systems(Update, (choose, come_to, let_go, fade_wake_card).chain().in_set(DelveSystems))
             .add_systems(PreUpdate, hold_the_mouse.run_if(any_with_component::<WakeCard>).after(InputSystems).before(crate::keymap::HoldSet));
         // `FB_FALL=wait|come_to|let_go`, for captures (README, "Debug switches").
@@ -92,6 +99,64 @@ fn debug_fall(time: Res<Time>, mut debug: ResMut<DebugFall>, unconscious: Option
 /// How many times the delver has come to in this world.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Revives(pub u32);
+
+/// Prayers the delver has made since they last slept ([`fb_character::protection`]).
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Prayers(pub u32);
+
+/// Sleep renews the prayer.
+fn sleep_renews_prayer(asleep: Res<crate::camp::Asleep>, mut prayers: ResMut<Prayers>) {
+    if asleep.0.is_some() && prayers.0 > 0 {
+        prayers.0 = 0;
+    }
+}
+
+/// What [`fall`](super::vitals) reads to ask Divine Protection for the delver.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Protection<'w, 's> {
+    character: Option<Res<'w, Character>>,
+    prayers: Option<ResMut<'w, Prayers>>,
+    dice: Option<ResMut<'w, RunDice>>,
+    effects: Query<'w, 's, &'static DelverEffects>,
+}
+
+impl Protection<'_, '_> {
+    /// Asks for Divine Protection for the delver `player` brought to 0: on a passed save,
+    /// stands them up, heals and cleanses by tier, says so on the wake card, and returns true.
+    pub fn ask(&mut self, commands: &mut Commands, rules: &fb_character::rules::Rules, player: Entity, health: Health, fonts: Option<&UiFonts>, camera: Option<Entity>) -> bool {
+        let (Some(character), Some(prayers), Some(dice)) = (self.character.as_deref(), self.prayers.as_deref_mut(), self.dice.as_deref_mut()) else { return false };
+        let mut effects = self.effects.get(player).map_or_else(|_| Default::default(), |e| e.0.clone());
+        let Some((saved, lines)) = answer_prayer(rules, character.class, fb_character::modifier(character.scores().wisdom), &mut prayers.0, &mut dice.0, health, &mut effects) else { return false };
+        info!("Divine Protection saves the delver");
+        commands.entity(player).insert((saved, DelverEffects(effects))).remove::<Slowed>();
+        spawn_wake_card(commands, fonts, camera, &lines);
+        true
+    }
+}
+
+/// A cleric of Wisdom modifier `wisdom` and `health`, brought to 0, prays. `prayed` counts
+/// their prayers since they last slept and goes up by one whenever one is made. On a passed
+/// save the health they stand with, any cleansing done to `effects`, and the lines to tell
+/// them; `None` for anyone but a cleric, with no prayer left, or on a failed save (they fall
+/// as before, and no revive is touched).
+pub fn answer_prayer(rules: &fb_character::rules::Rules, class: Class, wisdom: i32, prayed: &mut u32, rng: &mut procgen_rng::Mulberry32, health: Health, effects: &mut fb_character::effect::Effects) -> Option<(Health, Vec<String>)> {
+    if class != Class::Cleric {
+        return None;
+    }
+    let prayer = pray(rules, wisdom, *prayed, rng)?;
+    *prayed += 1;
+    info!("Divine Protection: {} against DC {}", prayer.save.roll.value(), prayer.save.dc);
+    let tier = prayer.tier?;
+    let mut lines = vec!["Divine Protection.".to_string(), "Your prayer is answered. A hand you cannot see lifts you before you fall.".to_string()];
+    let hp = rules.protection.hit_points(tier, health.max);
+    if tier >= Tier::Heal {
+        lines.push("Warmth closes your wounds.".to_string());
+    }
+    if tier >= Tier::Cleanse && cleanse(effects, rules) > 0 {
+        lines.push("What ailed you is gone.".to_string());
+    }
+    Some((Health { hp, ..health }, lines))
+}
 
 /// The delver lies unconscious, waiting on the choice.
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -362,7 +427,7 @@ fn capitalised(name: &str) -> String {
     letters.next().map(|first| first.to_uppercase().chain(letters).collect()).unwrap_or_default()
 }
 
-fn spawn_wake_card(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Option<Entity>, lines: &[String]) {
+pub(super) fn spawn_wake_card(commands: &mut Commands, fonts: Option<&UiFonts>, camera: Option<Entity>, lines: &[String]) {
     let body = fonts.map(|f| f.body.clone()).unwrap_or_default();
     let mut root = commands.spawn((
         Name::new("Coming to"),
@@ -489,6 +554,104 @@ mod tests {
         let spot = *level.folk.iter().find(|f| level.room_at(f.x as i32, f.y as i32).is_some()).unwrap();
         let room = level.room_at(spot.x as i32, spot.y as i32).unwrap();
         (level, spot, room)
+    }
+
+    /// A delve whose delver is of `class` and Wisdom `wisdom`, praying against a DC of `dc`
+    /// (-100 always passes, 100 always fails).
+    fn prayerful(class: Class, wisdom: i32, dc: i32) -> (App, Entity) {
+        let (mut app, player) = delve();
+        let mut rules = fb_character::rules::Rules::default();
+        rules.protection.dc = dc;
+        app.insert_resource(GameRules(rules));
+        let mut character = app.world_mut().resource_mut::<Character>();
+        character.class = class;
+        character.attributes.wisdom = wisdom;
+        (app, player)
+    }
+
+    fn wake_card_text(app: &mut App) -> String {
+        app.world_mut().query::<&Text>().iter(app.world()).map(|t| t.0.clone()).collect::<Vec<_>>().join(" | ")
+    }
+
+    fn make_ill(app: &mut App, player: Entity) {
+        let rules = app.world().resource::<GameRules>().0.clone();
+        let mut effects = fb_character::effect::Effects::default();
+        effects.add(&rules.effects, "poisoned", 1.0, None, fb_character::effect::Source::Fall);
+        app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+    }
+
+    #[test]
+    fn tier_one_revives_a_cleric_on_one_hit_point_and_spends_no_revive() {
+        let (mut app, player) = prayerful(Class::Cleric, 10, -100);
+        make_ill(&mut app, player);
+        knock_down(&mut app, player);
+        assert!(app.world().get_resource::<Unconscious>().is_none() && app.world().get_resource::<Fallen>().is_none(), "they do not fall");
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 1);
+        assert_eq!(*app.world().resource::<Revives>(), Revives(0));
+        assert_eq!(app.world().get::<DelverEffects>(player).unwrap().0.active.len(), 1, "still ill");
+        assert!(wake_card_text(&mut app).contains("Divine Protection"));
+        assert_eq!(app.world().resource::<Prayers>().0, 1);
+    }
+
+    #[test]
+    fn tier_two_also_heals_three_quarters() {
+        let (mut app, player) = prayerful(Class::Cleric, 14, -100);
+        make_ill(&mut app, player);
+        knock_down(&mut app, player);
+        assert!(app.world().get_resource::<Unconscious>().is_none());
+        let health = *app.world().get::<Health>(player).unwrap();
+        assert_eq!(health.hp, (health.max as f64 * 0.75).round() as i32, "three quarters of the maximum, rounded");
+        assert!(health.hp > 1);
+        assert_eq!(app.world().get::<DelverEffects>(player).unwrap().0.active.len(), 1, "still ill");
+    }
+
+    #[test]
+    fn tier_three_also_clears_what_ails_them() {
+        let (mut app, player) = prayerful(Class::Cleric, 16, -100);
+        make_ill(&mut app, player);
+        knock_down(&mut app, player);
+        let health = *app.world().get::<Health>(player).unwrap();
+        assert_eq!(health.hp, (health.max as f64 * 0.75).round() as i32);
+        assert!(app.world().get::<DelverEffects>(player).unwrap().0.active.is_empty());
+        assert!(wake_card_text(&mut app).contains("What ailed you is gone"));
+    }
+
+    #[test]
+    fn a_failed_save_falls_as_before_and_the_revive_rules_stand() {
+        let (mut app, player) = prayerful(Class::Cleric, 16, 100);
+        knock_down(&mut app, player);
+        assert!(app.world().get_resource::<Unconscious>().is_some(), "falls unconscious");
+        choose(&mut app, ReviveButton::ComeTo);
+        let health = *app.world().get::<Health>(player).unwrap();
+        assert_eq!(health.hp, (health.max as f64 * 0.25).round() as i32, "a quarter, as ever");
+        assert_eq!(*app.world().resource::<Revives>(), Revives(1));
+        // The one prayer was spent on the failure.
+        knock_down(&mut app, player);
+        assert!(app.world().get_resource::<Unconscious>().is_some());
+    }
+
+    #[test]
+    fn only_clerics_pray() {
+        for class in [Class::Fighter, Class::Mage] {
+            let (mut app, player) = prayerful(class, 18, -100);
+            knock_down(&mut app, player);
+            assert!(app.world().get_resource::<Unconscious>().is_some(), "{class:?} falls");
+            assert_eq!(app.world().resource::<Prayers>().0, 0);
+        }
+    }
+
+    #[test]
+    fn one_prayer_between_sleeps() {
+        let (mut app, player) = prayerful(Class::Cleric, 16, -100);
+        knock_down(&mut app, player);
+        assert!(app.world().get_resource::<Unconscious>().is_none());
+        knock_down(&mut app, player);
+        assert!(app.world().get_resource::<Unconscious>().is_some(), "no second prayer");
+        choose(&mut app, ReviveButton::ComeTo);
+        app.world_mut().resource_mut::<Prayers>().0 = 1;
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: player, hit_points: 1, since: 0.0, nap_until: None, began: 0.0 });
+        app.update();
+        assert_eq!(app.world().resource::<Prayers>().0, 0, "sleep renews it");
     }
 
     #[test]

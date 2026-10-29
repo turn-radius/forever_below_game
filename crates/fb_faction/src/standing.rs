@@ -238,6 +238,17 @@ struct KillCount {
     count: u32,
 }
 
+/// What a faction thinks of the delver beyond what they have done to it: a bonus (or penalty) on
+/// its standing and how much of what they lose is lost. A cleric's devotion to a family sets it
+/// for the factions of that family; it is computed from the devotion, never saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Favour {
+    /// Added to the standing read ([`Standings::get`]); negative is a penalty.
+    pub bonus: i32,
+    /// The share of a loss that lands, in percent: 100 is all of it, 50 half.
+    pub loss_percent: u32,
+}
+
 /// The delver's standing with each faction of a world, and which they have met.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Standings {
@@ -246,6 +257,10 @@ pub struct Standings {
     /// Kills counted per faction and liked or hated thing, which only matter to the decay.
     #[serde(default)]
     kills: Vec<KillCount>,
+    /// The favour set on factions ([`Standings::set_favour`]); the standing read and the losses
+    /// follow it. Not saved: whoever sets it sets it again.
+    #[serde(skip)]
+    favour: BTreeMap<Faction, Favour>,
 }
 
 impl Standings {
@@ -273,7 +288,7 @@ impl Standings {
                 (f.id, Standing::new(value))
             })
             .collect();
-        Standings { standing, met: BTreeSet::new(), kills: Vec::new() }
+        Standings { standing, met: BTreeSet::new(), kills: Vec::new(), favour: BTreeMap::new() }
     }
 
     /// The delver has killed `victim`: every faction of `world` that likes or hates it moves
@@ -372,7 +387,28 @@ impl Standings {
 
     /// Standing with `faction`; neutral (0) for one that was never started.
     pub fn get(&self, faction: Faction) -> Standing {
+        self.base(faction).shifted(self.favour.get(&faction).map_or(0, |f| f.bonus))
+    }
+
+    /// Standing with `faction` before its favour.
+    fn base(&self, faction: Faction) -> Standing {
         self.standing.get(&faction).copied().unwrap_or_default()
+    }
+
+    /// Sets the favour on factions, replacing whatever was set before: a faction not in `favour`
+    /// has none.
+    pub fn set_favour(&mut self, favour: BTreeMap<Faction, Favour>) {
+        self.favour = favour;
+    }
+
+    /// Every favour set.
+    pub fn favours(&self) -> &BTreeMap<Faction, Favour> {
+        &self.favour
+    }
+
+    /// The favour on `faction`, if any.
+    pub fn favour(&self, faction: Faction) -> Option<Favour> {
+        self.favour.get(&faction).copied()
     }
 
     pub fn band(&self, faction: Faction) -> Band {
@@ -381,9 +417,13 @@ impl Standings {
 
     /// Moves standing with `faction` by `amount`, kept in range. Returns the new standing.
     pub fn shift(&mut self, faction: Faction, amount: i32) -> Standing {
-        let now = self.get(faction).shifted(amount);
+        let amount = match self.favour.get(&faction) {
+            Some(f) if amount < 0 => (amount as f32 * f.loss_percent as f32 / 100.0).round() as i32,
+            _ => amount,
+        };
+        let now = self.base(faction).shifted(amount);
         self.standing.insert(faction, now);
-        now
+        self.get(faction)
     }
 
     /// The faction has turned on the delver: standing falls to the top of Hostile if it was
@@ -393,7 +433,9 @@ impl Standings {
     }
 
     pub fn turn_hostile_with(&mut self, rules: &StandingRules, faction: Faction) {
-        let now = self.get(faction).value().min(rules.hostile_max);
+        // Read through its favour, it is no higher than hostile.
+        let bonus = self.favour.get(&faction).map_or(0, |f| f.bonus);
+        let now = self.base(faction).value().min(rules.hostile_max - bonus);
         self.standing.insert(faction, Standing::new(now));
         self.met.insert(faction);
     }

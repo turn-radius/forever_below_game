@@ -152,6 +152,8 @@ impl<'r> Setup<'r> {
                     worn: Default::default(),
                     learned: Default::default(),
                     books_read: Vec::new(),
+                    devotion: None,
+                    deeds: Default::default(),
                 };
                 let mut hands = Inventory::default();
                 if let Some(item) = roll_item(base, state.strike_seed) {

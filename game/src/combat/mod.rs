@@ -111,7 +111,7 @@ impl Health {
 
 /// The delver's hit points: a 1st-level character's, the class's hit die at its highest plus
 /// the Constitution modifier (SRD 5.1 "Hit Points at 1st Level": fighter 10 + Con, p. 24;
-/// ranger 10 + Con, p. 35; cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
+/// cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
 /// below 1 (our own floor for a very frail delver).
 pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 {
     first_level_hit_points_explained_with(rules, character).value() as i32
@@ -216,10 +216,31 @@ pub struct Weapon {
     pub to_hit: i32,
     /// The extra dice it rolls against each kind of creature, by [`fb_items::Foe`] index.
     pub bane: Banes,
+    /// The extra dice the delver's devotion rolls against each kind, on top of the weapon's own
+    /// (`Gear::bane`); none for a weapon not yet in their hand.
+    pub devout: Devout,
 }
 
 /// Extra damage dice per kind of creature, as a weapon's stats carry them.
 pub type Banes = [Option<Dice>; fb_items::Foe::COUNT];
+
+/// The family a cleric's devotion is against and the extra dice they roll against it
+/// (`Gear::favored`, `Gear::favored_bane`).
+pub type Devout = Option<(fb_character::kin::Kin, Dice)>;
+
+/// The extra dice a devotion rolls against `kin`, summed: nothing against another family.
+pub fn devout_damage(devout: &Devout, kin: Option<fb_character::kin::Kin>, rng: &mut Mulberry32) -> u32 {
+    match (devout, kin) {
+        (Some((against, dice)), Some(kin)) if *against == kin => (0..dice.count).map(|_| rng.int(1, dice.sides.max(1) as u32)).sum(),
+        _ => 0,
+    }
+}
+
+/// [`bane_damage`] for a blow with a weapon's `banes` and the delver's `devout` dice, against
+/// the target's family `kin`.
+pub fn bane_damage_with_devotion(banes: &Banes, devout: &Devout, kin: Option<fb_character::kin::Kin>, rng: &mut Mulberry32) -> u32 {
+    bane_damage(banes, kin.and_then(|k| k.foe()), rng) + devout_damage(devout, kin, rng)
+}
 
 /// The dice a weapon of `banes` rolls against `foe`, summed: nothing against no kind in
 /// particular (folk), or a kind it holds no bane for. Rolled from the blow's own `rng`, so the
@@ -233,7 +254,7 @@ impl Weapon {
     /// A bare fist: 1 + Strength modifier, bludgeoning (SRD 5.1 p. 95, "Unarmed strike"),
     /// reaching an arm's length.
     pub fn fist() -> Weapon {
-        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true, to_hit: 0, bane: [None; fb_items::Foe::COUNT] }
+        Weapon { kind: SwingKind::Punch, dice: None, bonus: 0, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: true, to_hit: 0, bane: [None; fb_items::Foe::COUNT], devout: None }
     }
 
     /// What the delver's main hand swings. A melee weapon rolls its own damage dice
@@ -248,11 +269,12 @@ impl Weapon {
     /// What the delver swings with `hand`, as [`Weapon::in_hand`] works it out for the main hand.
     pub fn held_in(hand: fb_items::Slot, inventory: &Inventory, character: &Character) -> Weapon {
         // What the worn gear adds to a hit goes on whatever is swung, a fist too.
-        let gear = character.gear(inventory).to_hit.round() as i32;
-        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon { to_hit: gear, ..Weapon::fist() } };
+        let worn = character.gear(inventory);
+        let (gear, devout) = (worn.to_hit.round() as i32, worn.favored.zip(worn.favored_bane));
+        let Some(item) = inventory.worn(hand).and_then(|id| inventory.item(id)) else { return Weapon { to_hit: gear, devout, ..Weapon::fist() } };
         let hold = Hold::of(&item.shape, &fb_body::Body::new(&character.spec()));
         let wielded = Weapon::wielded(Some(item), STATURE);
-        Weapon { hold, to_hit: wielded.to_hit + gear, ..wielded }
+        Weapon { hold, to_hit: wielded.to_hit + gear, devout, ..wielded }
     }
 
     /// What `item` in the main hand of someone `stature` world units tall swings (a fist with
@@ -273,7 +295,7 @@ impl Weapon {
         let melee = is_melee(item.shape.family());
         let stats = &item.profile.stats;
         let dice = if melee { stats.damage.unwrap_or(Dice::new(1, 4)) } else { Dice::new(1, 4) };
-        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee, to_hit: stats.to_hit.round() as i32, bane: stats.bane }
+        Weapon { kind: SwingKind::of(Some(&item.shape)), dice: Some(dice), bonus: stats.damage_bonus.round() as i32, reach: ARM_TO_FINGERTIPS * STATURE, hold: None, bludgeoning: matches!(item.shape.family(), armory::Family::Mace | armory::Family::Club | armory::Family::Staff) || !melee, to_hit: stats.to_hit.round() as i32, bane: stats.bane, devout: None }
     }
 
     /// The range a blow's damage falls in with a Strength modifier of `strength`.
@@ -466,7 +488,6 @@ mod tests {
     #[test]
     fn hit_points_follow_the_srd_at_first_level() {
         assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Fighter, 14)), 12);
-        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Ranger, 10)), 10);
         assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Cleric, 9)), 7);
         assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Mage, 3)), 2);
     }
@@ -511,7 +532,7 @@ mod tests {
     #[test]
     fn damage_rolls_stay_within_their_dice() {
         let mut rng = Mulberry32::new(5);
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0, bane: [None; fb_items::Foe::COUNT] };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(Dice::new(1, 8)), bonus: 1, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0, bane: [None; fb_items::Foe::COUNT], devout: None };
         let greatsword = Weapon { dice: Some(Dice::new(2, 6)), bonus: 0, ..sword };
         let mut seen = std::collections::HashSet::new();
         for _ in 0..2000 {
@@ -533,7 +554,7 @@ mod tests {
         let mut rng = Mulberry32::new(11);
         let inventory_sword = fb_items::roll_item("Sword", 7).unwrap();
         let dice = inventory_sword.profile.stats.damage.unwrap();
-        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0, bane: [None; fb_items::Foe::COUNT] };
+        let sword = Weapon { kind: SwingKind::Slash, dice: Some(dice), bonus: 0, reach: 14.0, hold: None, bludgeoning: false, to_hit: 0, bane: [None; fb_items::Foe::COUNT], devout: None };
         for species in [Species::Rat, Species::GiantRat] {
             let mut most = 0;
             for _ in 0..500 {
@@ -1247,7 +1268,7 @@ mod tests {
             let start = Vec3::from_array(fb_level::Level::world(sx as f32 + 0.5, sy as f32 + 0.5)) + Vec3::Y * 8.0;
             for (i, dir) in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z].into_iter().enumerate() {
                 let item = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Arrow", i as u32).unwrap());
-                let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 0, to_hit: 0, dice: Some((1, 6)), bonus: 0, bane: [None; fb_items::Foe::COUNT], draw: 1.0, odds: fb_character::combat::Odds::Even };
+                let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 0, to_hit: 0, dice: Some((1, 6)), bonus: 0, bane: [None; fb_items::Foe::COUNT], devout: None, draw: 1.0, odds: fb_character::combat::Odds::Even };
                 app.world_mut().spawn((shoot::Projectile { item, velocity: dir * speed, origin: start, age: 0.0, shot, passed: vec![] }, Transform::from_translation(start)));
             }
             frames(&mut app, 600);
@@ -1269,7 +1290,7 @@ mod tests {
         easy_to_hit(&mut app, rat);
         let at = app.world().get::<Transform>(rat).unwrap().translation;
         let arrow = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Arrow", 4).unwrap());
-        let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 3, to_hit: 0, dice: Some((1, 6)), bonus: 0, bane: [None; fb_items::Foe::COUNT], draw: 1.0, odds: fb_character::combat::Odds::Even };
+        let shot = shoot::Shot { range: fb_character::combat::Range::new(80.0, 320.0), close: false, dexterity: 3, to_hit: 0, dice: Some((1, 6)), bonus: 0, bane: [None; fb_items::Foe::COUNT], devout: None, draw: 1.0, odds: fb_character::combat::Odds::Even };
         let origin = at - Vec3::X * 12.0 + Vec3::Y * 1.0;
         app.world_mut().spawn((shoot::Projectile { item: arrow, velocity: Vec3::X * 600.0, origin, age: 0.0, shot, passed: vec![] }, Transform::from_translation(origin)));
         let mut frames_run = 0;

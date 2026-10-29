@@ -96,3 +96,94 @@ fn the_flame_and_its_light_are_inside_the_body() {
         }
     }
 }
+
+// ───────────────────────── The censer ─────────────────────────
+
+use armory::incense::IncenseKind;
+use armory::kindle::INCENSE_SECONDS;
+
+fn censer(seed: u32, kind: IncenseKind, lit: bool) -> LanternState {
+    let mut s = Lantern::roll_censer(seed, kind);
+    s.flame.lit = lit;
+    s
+}
+
+fn glow(m: &ItemMesh, name: &str) -> f32 {
+    part(m, name).unwrap().glow
+}
+
+#[test]
+fn a_censer_is_a_pierced_bowl_on_chains_and_deterministic() {
+    for seed in 1..=64 {
+        for kind in IncenseKind::ALL {
+            let s = censer(seed, kind, seed % 2 == 0);
+            assert_eq!((s.body.style, s.flame.fuel, s.flame.incense), (LanternStyle::Censer, LanternFuel::Incense, kind));
+            let mesh = Lantern::build(&s);
+            assert_eq!(mesh, Lantern::build(&s), "seed {seed}");
+            for p in &mesh.parts {
+                p.validate().unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            }
+            for name in ["ring", "chain", "chains", "frame", "holes", "coals", "incense"] {
+                assert!(part(&mesh, name).is_some(), "seed {seed}: no {name}");
+            }
+            assert!(part(&mesh, "flame").is_none() && part(&mesh, "bail").is_none());
+            // A dense pierced lid: many holes, each a real cylinder.
+            assert!(part(&mesh, "holes").unwrap().positions.len() > 300, "seed {seed}: too few holes");
+            let (ring_lo, ring_hi) = bounds(part(&mesh, "ring").unwrap());
+            let (lo, hi) = bounds(part(&mesh, "frame").unwrap());
+            assert!(ring_lo[1] < 0.0 && ring_hi[1] > 0.0 && hi[1] < ring_lo[1] + 0.05 && lo[1] > -4.5, "seed {seed}: {lo:?}..{hi:?}");
+        }
+    }
+}
+
+#[test]
+fn a_lit_censer_smokes_and_glows_a_small_warm_light() {
+    for kind in IncenseKind::ALL {
+        let lit = censer(3, kind, true);
+        let smoke = Lantern::smoke(&lit).expect("a lit censer smokes");
+        assert_eq!(smoke.color, kind.smoke());
+        let light = Lantern::light(&lit).expect("a lit censer glows");
+        // Warmer and smaller than any lantern's 30 ft.
+        assert!(light.radius < 40.0 && light.color.0 > light.color.2, "{light:?}");
+        let mesh = Lantern::build(&lit);
+        let (flo, fhi) = bounds(part(&mesh, "frame").unwrap());
+        assert!(light.position[1] > flo[1] && light.position[1] < fhi[1]);
+        assert!(smoke.position[1] > light.position[1] && smoke.position[1] <= fhi[1] + 0.2);
+        assert!(glow(&mesh, "holes") > 0.5 && glow(&mesh, "coals") > 0.5);
+
+        let out = censer(3, kind, false);
+        assert!(Lantern::smoke(&out).is_none() && Lantern::light(&out).is_none());
+        let dark = Lantern::build(&out);
+        assert!(glow(&dark, "holes") == 0.0 && glow(&dark, "coals") == 0.0);
+    }
+}
+
+#[test]
+fn each_incense_is_visible_on_the_censer() {
+    let nouns: Vec<String> = IncenseKind::ALL.iter().map(|&k| Lantern::noun(&censer(5, k, false))).collect();
+    assert_eq!(nouns, ["Cedar Censer", "Myrrh Censer", "Frankincense Censer"]);
+    let tint = |k| Lantern::build(&censer(5, k, false)).parts.iter().find(|p| p.name == "incense").unwrap().tint;
+    assert_ne!(tint(IncenseKind::Cedar), tint(IncenseKind::Frankincense));
+    assert_ne!(tint(IncenseKind::Myrrh), tint(IncenseKind::Frankincense));
+}
+
+#[test]
+fn a_censer_burns_its_incense_down_and_goes_out() {
+    use armory::Item;
+    let mut item = Item::Lantern(censer(7, IncenseKind::Myrrh, true));
+    assert_eq!(item.fuel_capacity(), Some(INCENSE_SECONDS));
+    assert!(item.load_incense(IncenseKind::Myrrh));
+    assert_eq!(item.fuel_left(), Some(INCENSE_SECONDS));
+    item.burn(INCENSE_SECONDS * 0.5, INCENSE_SECONDS);
+    assert!((item.fuel_left().unwrap() - INCENSE_SECONDS * 0.5).abs() < 1.0);
+    item.burn(INCENSE_SECONDS, INCENSE_SECONDS);
+    assert_eq!((item.lit(), item.fuel_left(), item.incense()), (Some(false), Some(0.0), None), "used up, it goes out");
+    assert!(item.set_lit(true).is_err(), "no incense, no light");
+    // Oil does not fill it; a load of incense does, and it burns what was loaded.
+    assert_eq!(item.refuel(INCENSE_SECONDS, INCENSE_SECONDS), 0.0);
+    assert!(item.load_incense(IncenseKind::Cedar));
+    assert_eq!(item.incense(), Some(IncenseKind::Cedar));
+    assert!(item.set_lit(true).is_ok());
+    // A plain lantern takes none.
+    assert!(!Item::Lantern(Lantern::roll(2)).load_incense(IncenseKind::Cedar));
+}

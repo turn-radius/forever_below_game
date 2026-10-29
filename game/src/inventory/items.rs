@@ -266,6 +266,33 @@ impl Inventory {
         filled
     }
 
+    /// The censers held or hung at the hip, the main hand's first: the ones a dish of incense loads.
+    pub fn equipped_censers(&self) -> Vec<ItemId> {
+        [Slot::Mainhand, Slot::Offhand, Slot::Hip]
+            .into_iter()
+            .filter_map(|slot| self.worn(slot))
+            .filter(|&id| self.item(id).is_some_and(Item::is_censer))
+            .collect()
+    }
+
+    /// Whether a censer held or at the hip has room for a load of incense.
+    pub fn censer_wants_incense(&self) -> bool {
+        self.equipped_censers().into_iter().any(|id| self.item(id).is_some_and(Item::censer_room))
+    }
+
+    /// Loads the dish of incense `dish` into the first censer held or at the hip with room, and
+    /// uses one dish up ([`Inventory::use_one`]). Returns the censer that took it.
+    pub fn load_censer(&mut self, dish: ItemId) -> Option<ItemId> {
+        let dish_item = self.items.get(&dish)?.clone();
+        dish_item.incense_kind()?;
+        let censer = self.equipped_censers().into_iter().find(|&id| self.item(id).is_some_and(Item::censer_room))?;
+        if !self.items.get_mut(&censer)?.load_from(&dish_item) {
+            return None;
+        }
+        self.use_one(dish);
+        Some(censer)
+    }
+
     /// Burns `seconds` of game time off every lit torch and lantern, wherever it is: in a hand,
     /// at the hip, in a bag or on the floor ([`fb_items::Item::burn`]). Returns whether
     /// anything shown changed: a light's fuel minute on its card, its state, or its char bucket

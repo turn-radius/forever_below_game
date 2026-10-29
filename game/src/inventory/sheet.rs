@@ -284,6 +284,18 @@ fn row_labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str,
     });
 }
 
+/// The sheet's devotion section, for a cleric: what they follow now, read-only. The choice is
+/// offered on a screen of its own when their kills earn one ([`crate::devotion`]).
+fn devotion_section(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character) {
+    heading(sheet, fonts, "devotion");
+    let now = character.devotion;
+    let line = now.map_or_else(|| "None yet. Kills of one kind of creature or with one kind of weapon earn an offer.".to_string(), |d| format!("{}. {}", d.label(character.body_seed), d.effect_text(&rules.devotion)));
+    sheet.spawn((Name::new("Devotion"), Text::new(line), UiFonts::style(&fonts.body, 15.0, if now.is_some() { BRIGHT } else { MUTED }), Node { max_width: percent(100), ..default() }));
+    let left = rules.devotion.blessings_left(&character.deeds);
+    let line = format!("{left} blessing{} to give. One is earned for every {} kills; blessing a weapon takes 1, hallowing one {}.", if left == 1 { "" } else { "s" }, rules.devotion.blessing_kills, rules.devotion.hallow_blessings);
+    sheet.spawn((Name::new("Blessings"), Text::new(line), UiFonts::style(&fonts.body, 15.0, if left > 0 { BRIGHT } else { MUTED }), Node { max_width: percent(100), ..default() }));
+}
+
 /// Builds the character tab's body: the status section.
 #[allow(clippy::too_many_arguments)]
 pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
@@ -294,6 +306,9 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
                 line.spawn((AttributeLine(i), Text::new(text), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
             }
         });
+        if character.class == crate::character::Class::Cleric {
+            devotion_section(sheet, fonts, rules, character);
+        }
         heading(sheet, fonts, "conditions");
         sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
         heading(sheet, fonts, "enchanting");
@@ -341,7 +356,12 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
 /// [`GEAR_ROWS`]: the folk, each item and each affix that gave to it, from the same
 /// [`Character::loadout`] and [`Character::armour_class`] the game plays by.
 pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, row: usize) -> Vec<String> {
-    let loadout = character.loadout(inventory);
+    breakdown_lit(rules, character, inventory, None, row)
+}
+
+/// [`breakdown`] with a light of `spell` feet cast on the delver counted among the carried lights.
+pub fn breakdown_lit(rules: &Rules, character: &Character, inventory: &Inventory, spell: Option<f64>, row: usize) -> Vec<String> {
+    let loadout = character.loadout_with_spell(inventory, spell);
     match row {
         0 => character.load_breakdown(rules, inventory),
         1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
@@ -442,6 +462,7 @@ pub fn show_breakdown(
     inventory: Res<Inventory>,
     rules: Option<Res<GameRules>>,
     fonts: Res<UiFonts>,
+    lights: Query<&crate::casting::DivineLight>,
     mut tips: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, Option<&ComputedUiRenderTargetInfo>), With<BreakdownTip>>,
     mut shown: Local<Option<usize>>,
 ) {
@@ -457,7 +478,7 @@ pub fn show_breakdown(
         if *shown != Some(row) || hovered.is_changed() || character.is_changed() || inventory.is_changed() || rules_changed {
             commands.entity(tip).despawn_children().with_children(|tip| {
                 tip.spawn((Text::new(GEAR_ROWS[row]), UiFonts::style(&fonts.display, 18.0, INK)));
-                for line in breakdown(GameRules::of(&rules), &character, &inventory, row) {
+                for line in breakdown_lit(GameRules::of(&rules), &character, &inventory, crate::casting::spell_light_feet(&lights), row) {
                     tip.spawn((Text::new(line), UiFonts::style(&fonts.mono, 12.0, MUTED)));
                 }
             });
@@ -480,11 +501,15 @@ pub fn update_gear(
     character: Res<Character>,
     inventory: Res<Inventory>,
     rules: Option<Res<GameRules>>,
+    lights: Query<&crate::casting::DivineLight>,
+    new_lights: Query<(), Added<crate::casting::DivineLight>>,
+    mut gone: RemovedComponents<crate::casting::DivineLight>,
     mut attributes: Query<(&AttributeLine, &mut Text), Without<GearLine>>,
     mut gear: Query<(&GearLine, &mut Text, &mut TextColor), Without<AttributeLine>>,
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
-    if !character.is_changed() && !inventory.is_changed() && !rules_changed {
+    let light_changed = !new_lights.is_empty() | (gone.read().count() > 0);
+    if !character.is_changed() && !inventory.is_changed() && !rules_changed && !light_changed {
         return;
     }
     let lines = attribute_lines(&character);
@@ -493,7 +518,7 @@ pub fn update_gear(
             text.0 = lines[*i].clone();
         }
     }
-    let derived = character.derive_with(GameRules::of(&rules), &inventory);
+    let derived = character.derive_lit(GameRules::of(&rules), &inventory, crate::casting::spell_light_feet(&lights));
     let values = gear_values(&character, &derived);
     for (GearLine(i), mut text, mut colour) in &mut gear {
         if text.0 != values[*i] {
