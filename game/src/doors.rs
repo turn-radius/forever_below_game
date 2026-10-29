@@ -604,7 +604,8 @@ fn use_door(
         toasts.say("The grate can't be picked");
     }
 
-    // Picking: a press starts it, holding it runs the clock, the roll comes at the end.
+    // Picking: R held at a door that can be picked runs the clock, the roll comes at the end. The
+    // clock starts over when the aim leaves the door and comes back.
     let locked = door.locked(band) && !inside;
     if pending.0.is_some() || !(locked && lockpicks && !grate && !door.open && input.pressed(Action::Tertiary)) {
         *picking = None;
@@ -612,9 +613,9 @@ fn use_door(
     }
     let held = match *picking {
         Some((at, held)) if at == cell => held,
-        Some(_) => 0.0,
-        None if input.just_pressed(Action::Tertiary) => 0.0,
-        None => return,
+        // Starting over, whether the press began it or the aim came back to the door with R
+        // still down: a slip off the door must not leave the key held for nothing.
+        _ => 0.0,
     };
     let held = held + time.delta_secs();
     if held < PICK_SECONDS {
