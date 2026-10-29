@@ -215,7 +215,7 @@ pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot
 /// `rarity` beside the `taken` affixes. When none does, a second good prefix may stand in its
 /// place: the roll takes one for an empty suffix slot, and the enchanter's bench offers one.
 pub fn good_suffix_fits(tags: &[Tag], slot: Option<Slot>, rarity: Rarity, taken: &[&Affix]) -> bool {
-    affixes().iter().any(|a| a.kind == AffixKind::Suffix && a.good && a.in_play() && a.least <= rarity && a.fits_item(tags, slot) && taken.iter().all(|t| a.stacks_with(t)))
+    affixes().iter().any(|a| a.kind == AffixKind::Suffix && !a.holy && a.good && a.in_play() && a.least <= rarity && a.fits_item(tags, slot) && taken.iter().all(|t| a.stacks_with(t)))
 }
 
 /// Rarity against `odds`, then its affixes, from one stream, for an item in no particular slot.
@@ -274,7 +274,7 @@ mod tests {
                 assert!(good.len() <= rarity as usize && flawed <= 1, "{rarity:?}: {chosen:?}");
                 // Two prefixes only where no good suffix is left that fits (a slot falls back to the other kind).
                 if good.iter().filter(|a| a.kind == AffixKind::Prefix).count() > 1 {
-                    let left = affixes().iter().any(|a| a.good && a.kind == AffixKind::Suffix && a.least <= rarity && a.fits_item(tags, None) && a.in_play() && chosen.iter().all(|c| a.stacks_with(c)));
+                    let left = affixes().iter().any(|a| a.good && !a.holy && a.kind == AffixKind::Suffix && a.least <= rarity && a.fits_item(tags, None) && a.in_play() && chosen.iter().all(|c| a.stacks_with(c)));
                     assert!(!left, "{rarity:?}: {chosen:?} has two prefixes with a suffix left");
                 }
                 assert!(chosen.iter().take(good.len()).all(|a| a.good), "the flaw comes last, so the name keeps the good prefix");
@@ -287,7 +287,7 @@ mod tests {
             }
             // Where every flaw that fits is ungrouped, nothing keeps a flaw from its slot, so each
             // rarity rolls flaws at its chance.
-            let fitting: Vec<_> = affixes().iter().filter(|a| !a.good && a.fits_item(tags, None) && a.in_play()).collect();
+            let fitting: Vec<_> = affixes().iter().filter(|a| !a.good && !a.holy && a.fits_item(tags, None) && a.in_play()).collect();
             if !fitting.is_empty() && fitting.iter().all(|a| a.group.is_none()) {
                 for (i, chance) in FLAW_CHANCE.into_iter().enumerate() {
                     let share = flaws[i] as f64 / items[i].max(1) as f64;
