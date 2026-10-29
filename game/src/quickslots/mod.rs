@@ -19,9 +19,9 @@
 //! moves or empties another. Binding an item to a slot takes it from any other slot it was in.
 //!
 //! Each slot has a glow ring round its square ([`SlotGlow`]): pressing the slot's key lights it
-//! for a moment, and when something the slot was timing runs out
-//! ([`crate::time_left::TimeLeft`], as Divine Light's time does) it pulses gold twice to say the
-//! slot is ready again.
+//! for a moment. When something the slot was timing runs out ([`crate::time_left::TimeLeft`],
+//! as Divine Light's time does), a highlight chases round its border to say it is ready again
+//! ([`crate::time_left::ReadyChase`]).
 
 use bevy::{prelude::*, text::FontSize};
 use fb_items::{Item, Slot};
@@ -53,7 +53,6 @@ impl Plugin for QuickslotPlugin {
                     fill_slots.after(crate::inventory::build_screen),
                     hint_slots,
                     press_slots,
-                    ready_slots,
                     glow_slots,
                 )
                     .chain()
@@ -370,51 +369,30 @@ pub fn spawn_slots(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, style: Sl
     });
 }
 
-/// How far the glow ring stands out from a slot's square, pixels, and how much further it
-/// swells at the height of a ready pulse.
+/// How far the glow ring stands out from a slot's square, pixels.
 const GLOW_OUT: f32 = 2.5;
-const GLOW_SWELL: f32 = 2.5;
 /// Seconds a pressed slot stays lit, fading.
 const PRESS_SECONDS: f32 = 0.25;
-/// Seconds of the ready pulse, and how many times it swells in them.
-const READY_SECONDS: f32 = 1.2;
-const READY_PULSES: f32 = 2.0;
-/// The glow when a slot is pressed, and when it is ready again: cream, and the gold of holy
-/// light.
+/// The glow when a slot is pressed: cream.
 const PRESS_GLOW: Color = Color::srgb(1.0, 0.96, 0.86);
-const READY_GLOW: Color = Color::srgb(1.0, 0.82, 0.4);
 
-/// A slot's glow ring, a child of its square: how long since its key was pressed and since it
-/// became ready again, in seconds (infinite while idle), and whether its slot was timing
-/// something last frame.
+/// A slot's glow ring, a child of its square: how long since its key was pressed, in seconds
+/// (infinite while idle).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct SlotGlow {
     pub slot: usize,
     pub pressed: f32,
-    pub ready: f32,
-    running: bool,
 }
 
 impl SlotGlow {
     fn new(slot: usize) -> SlotGlow {
-        SlotGlow { slot, pressed: f32::INFINITY, ready: f32::INFINITY, running: false }
+        SlotGlow { slot, pressed: f32::INFINITY }
     }
 }
 
 /// How bright a slot pressed `t` seconds ago glows, 1 at the press fading to 0.
 pub fn press_glow(t: f32) -> f32 {
     if t.is_finite() { (1.0 - t / PRESS_SECONDS).clamp(0.0, 1.0) } else { 0.0 }
-}
-
-/// How bright a slot that became ready `t` seconds ago glows: [`READY_PULSES`] swells from
-/// nothing, each a little fainter, over [`READY_SECONDS`].
-pub fn ready_glow(t: f32) -> f32 {
-    if !t.is_finite() || !(0.0..READY_SECONDS).contains(&t) {
-        return 0.0;
-    }
-    let share = t / READY_SECONDS;
-    let swell = 0.5 - 0.5 * (share * READY_PULSES * std::f32::consts::TAU).cos();
-    swell * (1.0 - share * 0.5)
 }
 
 /// Keys 1 to 0 light their slot on the bar.
@@ -427,52 +405,24 @@ fn press_slots(input: ActionInput, mut rings: Query<(&mut SlotGlow, &ChildOf)>, 
     }
 }
 
-/// A slot whose timing has just run out pulses ready.
-fn ready_slots(slots: Query<(&crate::time_left::TimeLeft, &Children)>, mut rings: Query<&mut SlotGlow>) {
-    for (time, children) in &slots {
-        for &child in children {
-            let Ok(mut glow) = rings.get_mut(child) else { continue };
-            let running = time.0.is_some();
-            if glow.running && !running {
-                glow.ready = 0.0;
-            }
-            if glow.running != running {
-                glow.running = running;
-            }
-        }
-    }
-}
-
-/// Ages each glow and draws it: the ring's colour and, at a ready pulse, its swell; a pressed
-/// slot also lights its square a little.
-fn glow_slots(time: Res<Time>, mut rings: Query<(&mut SlotGlow, &mut BorderColor, &mut BackgroundColor, &mut Node)>) {
+/// Ages each glow and draws it: the ring lit cream, and the square washed a little, fading.
+fn glow_slots(time: Res<Time>, mut rings: Query<(&mut SlotGlow, &mut BorderColor, &mut BackgroundColor)>) {
     let dt = time.delta_secs();
-    for (mut glow, mut border, mut fill, mut node) in &mut rings {
-        if glow.pressed.is_finite() || glow.ready.is_finite() {
+    for (mut glow, mut border, mut fill) in &mut rings {
+        if glow.pressed.is_finite() {
             glow.pressed += dt;
-            glow.ready += dt;
             if glow.pressed > PRESS_SECONDS {
                 glow.pressed = f32::INFINITY;
             }
-            if glow.ready > READY_SECONDS {
-                glow.ready = f32::INFINITY;
-            }
         }
-        let (press, ready) = (press_glow(glow.pressed), ready_glow(glow.ready));
-        let colour = if ready > press { READY_GLOW.with_alpha(ready) } else { PRESS_GLOW.with_alpha(press) };
+        let press = press_glow(glow.pressed);
+        let colour = PRESS_GLOW.with_alpha(press);
         if border.top != colour {
             *border = BorderColor::all(colour);
         }
         let wash = PRESS_GLOW.with_alpha(press * 0.18);
         if fill.0 != wash {
             fill.0 = wash;
-        }
-        let out = px(-(GLOW_OUT + GLOW_SWELL * ready));
-        if node.left != out {
-            node.left = out;
-            node.right = out;
-            node.top = out;
-            node.bottom = out;
         }
     }
 }
@@ -686,22 +636,15 @@ mod tests {
     }
 
     #[test]
-    fn a_pressed_slot_flashes_and_a_ready_one_pulses_twice() {
+    fn a_pressed_slot_flashes_and_fades() {
         assert_eq!(press_glow(0.0), 1.0);
         assert!(press_glow(PRESS_SECONDS * 0.5) > 0.4 && press_glow(PRESS_SECONDS * 0.5) < 0.6);
         assert_eq!(press_glow(PRESS_SECONDS), 0.0);
         assert_eq!(press_glow(f32::INFINITY), 0.0);
-        assert_eq!(ready_glow(0.0), 0.0, "it swells from nothing");
-        let pulse = READY_SECONDS / READY_PULSES;
-        let (first, second) = (ready_glow(pulse * 0.5), ready_glow(pulse * 1.5));
-        assert!(first > 0.8 && second > 0.5 && second < first, "two swells, the second fainter: {first} {second}");
-        assert!(ready_glow(pulse) < 0.05, "dark between them");
-        assert_eq!(ready_glow(READY_SECONDS), 0.0);
-        assert_eq!(ready_glow(f32::INFINITY), 0.0);
     }
 
     #[test]
-    fn a_slot_key_lights_its_ring_and_a_finished_timing_pulses_ready() {
+    fn a_slot_key_lights_its_ring_and_no_other() {
         let (mut app, _) = delve();
         let square = app.world_mut().spawn((QuickSlot(2), crate::time_left::TimeLeft(Some(0.5)))).id();
         let ring = app.world_mut().spawn((SlotGlow::new(2), Node::default(), BorderColor::all(Color::NONE), BackgroundColor(Color::NONE), ChildOf(square))).id();
@@ -713,10 +656,6 @@ mod tests {
         assert!(glow(&app, ring).pressed < PRESS_SECONDS, "3 lights slot 3");
         assert!(glow(&app, other_ring).pressed.is_infinite(), "and no other");
         assert!(app.world().get::<BorderColor>(ring).unwrap().top.alpha() > 0.5);
-        assert!(glow(&app, ring).ready.is_infinite(), "not ready while it times");
-        app.world_mut().entity_mut(square).insert(crate::time_left::TimeLeft(None));
-        app.update();
-        assert!(glow(&app, ring).ready < READY_SECONDS, "ready the moment its timing runs out");
     }
 
     #[test]
