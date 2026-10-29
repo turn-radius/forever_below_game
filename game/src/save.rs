@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camp::{PendingBed, SetCamp};
 use crate::carry::FloorItem;
-use crate::character::{Character, ChosenDelver, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
+use crate::character::{Character, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
 use crate::combat::Health;
 use crate::combat::revival::Revives;
 use crate::combat::vitals::{Dying, Fallen};
@@ -62,7 +62,7 @@ use crate::game_clock::GameClock;
 use crate::inventory::{Inventory, ItemId};
 use crate::launch::AppState;
 use crate::map::explore::ExploredLevels;
-use crate::play::{CurrentLevel, DelveSystems, Player};
+use crate::play::{DelveSystems, Player};
 use crate::player::Locomotion;
 use crate::quickslots::{Quickslots, SLOTS};
 use crate::record::{ItemRecord, WorldRecord, record_item, record_level_left, restore_item};
@@ -507,17 +507,12 @@ pub fn begin_players_delve(world: &mut World) {
 pub struct ResumeDelve(pub Box<SavedDelve>);
 
 /// Begins the delve `saved` describes: its depth laid out from the seed and the record as travel
-/// lays one out, its delver chosen, and the delve entered. The rest is put back on the delve's
+/// lays one out, off the main thread under the loading screen ([`crate::loading`]), its delver
+/// chosen, and the delve entered once the level is ready. The rest is put back on the delve's
 /// first frame.
-pub fn begin_resume(commands: &mut Commands, next: &mut NextState<AppState>, saved: SavedDelve) {
-    let mut level = Abyss::new(saved.run_seed).level_at(saved.depth);
-    saved.record.apply_to(&mut level);
-    info!("save: {} resumes on depth {}", saved.delver.name, saved.depth);
-    commands.insert_resource(CurrentLevel(level));
-    commands.insert_resource(ChosenDelver(Character::from(saved.delver.clone())));
+pub fn begin_resume(commands: &mut Commands, saved: SavedDelve) {
     commands.insert_resource(Saveable(true));
-    commands.insert_resource(ResumeDelve(Box::new(saved)));
-    next.set(AppState::Delving);
+    crate::loading::start_delve(commands, saved.run_seed, saved.depth, saved.record.level(saved.depth).cloned(), crate::loading::Opening::Resume(Box::new(saved)));
 }
 
 /// Hit points the first frame of a resumed delve puts back after the delver's maximum has been

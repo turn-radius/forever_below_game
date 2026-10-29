@@ -58,10 +58,10 @@ impl Plugin for PropsPlugin {
             .add_systems(
                 Update,
                 (
-                    lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
-                    lay_out_banners.run_if(resource_exists_and_changed::<CurrentLevel>),
-                    crate::niches::lay_out_niches.run_if(resource_exists_and_changed::<CurrentLevel>),
-                    lay_out_crystals.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    lay_out_props.run_if(crate::loading::laid_out_at(3)),
+                    lay_out_banners.run_if(crate::loading::laid_out_at(3)),
+                    crate::niches::lay_out_niches.run_if(crate::loading::laid_out_at(3)),
+                    lay_out_crystals.run_if(crate::loading::laid_out_at(3)),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
                     prompt_aimed_container.after(crate::carry::aim),
@@ -226,17 +226,25 @@ pub fn banner_transform(spot: &BannerSpot, top: f32) -> Transform {
     Transform::from_translation(Vec3::new(centre.x, top, centre.z)).with_rotation(Quat::from_rotation_y(spot.yaw))
 }
 
-/// Spawns (or respawns, when the level changes) the level's banners.
-fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<BannerPiece>>, mut spawner: ItemSpawner) {
+/// The banner at `spot` shaped and hung: plain data, so it can be made ahead of time
+/// ([`crate::staged`]).
+pub fn banner_piece(level: &Level, spot: &BannerSpot) -> crate::staged::StagedPiece {
+    let (state, top) = banner_hang(spot, level);
+    let item = Item::Banner(state);
+    let name = format!("Banner of {}", level.faction(spot.faction).name);
+    crate::staged::StagedPiece { mesh: item.build(), appearance: appearance_of(&item), name, transform: banner_transform(spot, top) }
+}
+
+/// Spawns (or respawns, when the level changes) the level's banners, made ahead of time if the
+/// level was made in the background.
+fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<BannerPiece>>, mut staged: Option<ResMut<crate::staged::Staged>>, mut spawner: ItemSpawner) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
+    let mut ahead = staged.as_mut().and_then(|s| s.take_banners(&level.0)).map(Vec::into_iter);
     for (index, spot) in level.0.banners.iter().enumerate() {
-        let (state, top) = banner_hang(spot, &level.0);
-        let item = Item::Banner(state);
-        let (mesh, appearance) = (item.build(), appearance_of(&item));
-        let name = format!("Banner of {}", level.0.faction(spot.faction).name);
-        spawner.spawn(&mesh, &appearance).insert((LevelPiece, Name::new(name), banner_transform(spot, top), BannerPiece { index }));
+        let piece = ahead.as_mut().and_then(Iterator::next).unwrap_or_else(|| banner_piece(&level.0, spot));
+        spawner.spawn(&piece.mesh, &piece.appearance).insert((LevelPiece, Name::new(piece.name), piece.transform, BannerPiece { index }));
     }
 }
 
@@ -299,22 +307,31 @@ pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemM
     }
 }
 
-/// Spawns (or respawns, when the level changes) the level's crystals.
-fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<CrystalPiece>>, mut spawner: ItemSpawner) {
+/// The crystal at `spot` shaped and set in the rock: plain data, so it can be made ahead of time
+/// ([`crate::staged`]).
+pub fn crystal_piece(level: &Level, spot: &CrystalSpot) -> crate::staged::StagedPiece {
+    let item = Item::Crystal(crystal_state(spot));
+    let (mesh, mut appearance) = (item.build(), appearance_of(&item));
+    // The rock they grow from is the cavern's own pale stone.
+    if let Some(stone) = level.cavern_stone() {
+        appearance.palette.materials.stone = stone.rgb();
+    }
+    let low = item_points(&mesh).iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let transform = crystal_transform(level, spot, &mesh, low);
+    crate::staged::StagedPiece { mesh, appearance, name: item.noun().to_string(), transform }
+}
+
+/// Spawns (or respawns, when the level changes) the level's crystals, made ahead of time if the
+/// level was made in the background.
+fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<CrystalPiece>>, mut staged: Option<ResMut<crate::staged::Staged>>, mut spawner: ItemSpawner) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
+    let mut ahead = staged.as_mut().and_then(|s| s.take_crystals(&level.0)).map(Vec::into_iter);
     for (index, spot) in level.0.crystals.iter().enumerate() {
-        let item = Item::Crystal(crystal_state(spot));
-        let (mesh, mut appearance) = (item.build(), appearance_of(&item));
-        // The rock they grow from is the cavern's own pale stone.
-        if let Some(stone) = level.0.cavern_stone() {
-            appearance.palette.materials.stone = stone.rgb();
-        }
-        let low = item_points(&mesh).iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-        let name = item.noun();
-        let mut root = spawner.spawn(&mesh, &appearance);
-        root.insert((LevelPiece, Name::new(name), crystal_transform(&level.0, spot, &mesh, low), CrystalPiece { index }));
+        let piece = ahead.as_mut().and_then(Iterator::next).unwrap_or_else(|| crystal_piece(&level.0, spot));
+        let mut root = spawner.spawn(&piece.mesh, &piece.appearance);
+        root.insert((LevelPiece, Name::new(piece.name), piece.transform, CrystalPiece { index }));
         if matches!(spot.surface, CrystalSurface::Floor | CrystalSurface::Foot) {
             root.insert(BlocksTheWay(fb_level::FloorShape::Round(spot.radius)));
         }

@@ -50,11 +50,8 @@ fn headless_game() -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 /// A new delve in level 1207, a second in.
 fn delving() -> App {

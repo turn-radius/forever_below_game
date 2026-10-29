@@ -360,10 +360,17 @@ impl WorldRecord {
     /// floor are those recorded. A level never visited is left as generated.
     pub fn apply_to(&self, level: &mut Level) {
         if let Some(saved) = self.level(level.depth) {
-            level.items = saved.floor.iter().map(|f| f.spot).collect();
-            if let Some(claims) = &saved.claims {
-                level.claims = claims.clone();
-            }
+            saved.apply_to(level);
+        }
+    }
+}
+
+impl LevelRecord {
+    /// Makes `level`, just rebuilt from its seed, the level as it was left by this record.
+    pub fn apply_to(&self, level: &mut Level) {
+        level.items = self.floor.iter().map(|f| f.spot).collect();
+        if let Some(claims) = &self.claims {
+            level.claims = claims.clone();
         }
     }
 }
