@@ -66,6 +66,7 @@ impl Plugin for CastingPlugin {
                     follow_the_caster,
                     fade_the_light,
                     shimmer_baubles.run_if(resource_exists::<Assets<WispMaterial>>),
+                    light_the_hands,
                     spawn_hud,
                     show_chosen,
                     show_slot_labels,
@@ -540,6 +541,70 @@ fn fade_the_light(mut commands: Commands, clock: Option<Res<GameClock>>, time: R
     }
 }
 
+/// How bright the bauble's light on the view model's stage is close up, against a held
+/// torch's there (`crate::carry`'s 1.8, scaled by the tuning's holy against torch peak), and how
+/// far it reaches, view model units.
+const HOLY_STAGE_PEAK: f32 = 1.1;
+const HOLY_STAGE_REACH: f32 = 40.0;
+/// The furthest from the eye the bauble's stage light stands, so what is held is lit about as
+/// a held light lights it however far ahead the bauble floats.
+const HOLY_STAGE_NEAR: f32 = 18.0;
+
+/// The light a [`DivineLight`] casts on the view model's stage, a child of the view model
+/// camera: the level's lights never reach what is held, so without it a cleric with no torch
+/// lit would hold their weapons in the dark.
+#[derive(Component, Clone, Copy, Debug)]
+struct BaubleStageLight {
+    of: Entity,
+    peak: f32,
+}
+
+/// Lights what is held by each bauble ([`BaubleStageLight`]): from where the bauble is, seen
+/// from the eye, and blooming and sputtering with it ([`glow`]). Its light goes when it does.
+#[allow(clippy::type_complexity)]
+fn light_the_hands(
+    mut commands: Commands,
+    time: Res<Time>,
+    clock: Option<Res<GameClock>>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    stages: Query<(Entity, Option<&bevy::camera::Exposure>), With<crate::carry::ViewModelCamera>>,
+    baubles: Query<(Entity, &DivineLight, &GlobalTransform)>,
+    mut lights: Query<(Entity, &BaubleStageLight, &mut PointLight, &mut Transform), Without<DivineLight>>,
+) {
+    let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+    let t = time.elapsed_secs();
+    let eye = eyes.iter().next();
+    for (entity, stage, mut light, mut at) in &mut lights {
+        let Ok((_, bauble, place)) = baubles.get(stage.of) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if let Some(eye) = eye {
+            let seen = eye.affine().inverse().transform_point3(place.translation());
+            at.translation = seen.clamp_length_max(HOLY_STAGE_NEAR);
+        }
+        light.intensity = stage.peak * glow(t - bauble.cast_at, bauble.brightness(now), t).light;
+    }
+    let Some((stage, exposure)) = stages.iter().next() else { return };
+    for (bauble, _, _) in &baubles {
+        if lights.iter().any(|(_, l, _, _)| l.of == bauble) {
+            continue;
+        }
+        let (r, g, b) = (HOLY_LIGHT.0, HOLY_LIGHT.1, HOLY_LIGHT.2);
+        let mut light = crate::light::point_light(Color::srgb(r, g, b), HOLY_STAGE_PEAK, HOLY_STAGE_REACH, &exposure.copied().unwrap_or_default());
+        let peak = light.intensity;
+        light.intensity = 0.0;
+        commands.spawn((
+            Name::new("Divine Light on the hands"),
+            BaubleStageLight { of: bauble, peak },
+            light,
+            Transform::default(),
+            bevy::camera::visibility::RenderLayers::layer(crate::carry::VIEW_MODEL_LAYER),
+            ChildOf(stage),
+        ));
+    }
+}
+
 /// The bauble's glowing heart, a child of its [`DivineLight`].
 #[derive(Component, Clone, Copy, Debug)]
 struct BaubleHeart;
@@ -951,6 +1016,23 @@ mod tests {
         app.update();
         let now = app.world_mut().query_filtered::<&PointLight, With<DivineLight>>().single(app.world()).unwrap().intensity;
         assert!(now > 0.0 && now < bauble.peak * 0.6, "half dimmed: {now} of {}", bauble.peak);
+    }
+
+    #[test]
+    fn the_light_reaches_what_is_held_and_goes_with_it() {
+        let (mut app, _) = delve(true, 10.0);
+        app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER });
+        cast_at_tier(&mut app, 1);
+        app.update();
+        let on_hands = |app: &mut App| app.world_mut().query::<(&BaubleStageLight, &bevy::camera::visibility::RenderLayers)>().iter(app.world()).map(|(l, r)| (l.peak, r.clone())).collect::<Vec<_>>();
+        let lights = on_hands(&mut app);
+        assert_eq!(lights.len(), 1, "one light on the stage");
+        assert!(lights[0].0 > 0.0 && lights[0].1.intersects(&bevy::camera::visibility::RenderLayers::layer(crate::carry::VIEW_MODEL_LAYER)));
+        let expires = lit(&mut app)[0].0.expires;
+        app.world_mut().resource_mut::<GameClock>().advance(expires + 1.0);
+        app.update();
+        app.update();
+        assert!(on_hands(&mut app).is_empty(), "out with the bauble");
     }
 
     #[test]
