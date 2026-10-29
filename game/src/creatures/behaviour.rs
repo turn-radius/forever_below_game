@@ -593,6 +593,14 @@ fn behave(
             }
             (Mode::Wander { .. }, None) => {}
         }
+        // A frightened or charmed creature does not give chase or attack.
+        if frightened || charmed {
+            if matches!(brain.mode, Mode::Chase { .. }) {
+                brain.mode = Mode::Wander { target: None, wait: 0.5 };
+            }
+            brain.attack = None;
+        }
+
         // A bat gets going the moment it notices the delver, and goes back to its spot when it
         // loses them.
         if let Some(flight) = flight.as_deref_mut() {
@@ -622,14 +630,6 @@ fn behave(
             && let Mode::Wander { target: target @ None, .. } = &mut brain.mode
         {
             *target = Some(brain.home);
-        }
-
-        // A frightened or charmed creature does not give chase or attack.
-        if frightened || charmed {
-            if matches!(brain.mode, Mode::Chase { .. }) {
-                brain.mode = Mode::Wander { target: None, wait: 0.5 };
-            }
-            brain.attack = None;
         }
 
         // Where to go, how fast.

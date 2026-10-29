@@ -116,10 +116,6 @@ walk_per_hour = 0.03125
 # Of a full pool, what a sleeping delver regains each game hour.
 sleep_per_hour = 0.375
 
-# Prayers are written from terms: an effect, a reach and a duration. A written prayer costs the sum
-# of its terms' costs, reaches its reach term's range and lasts its duration term's seconds; tier n
-# multiplies all three by n. `known` terms are there from the start; the rest are unlocked by
-# something else (a devotion unlocks a bane).
 # Whether frighten and charm take hold of a creature: each gets a save. The chance is base, less
 # per_size for each size above Tiny, plus per_tier for each tier above the first, between floor and
 # ceiling.
@@ -130,6 +126,10 @@ per_size = 0.2
 floor = 0.05
 ceiling = 0.95
 
+# Prayers are written from terms: an effect, a reach and a duration. A written prayer costs the sum
+# of its terms' costs, reaches its reach term's range and lasts its duration term's seconds; tier n
+# multiplies all three by n. `known` terms are there from the start; the rest are unlocked by
+# something else (a devotion unlocks a bane).
 [casting.terms.light]
 kind = "effect"
 name = "Light"

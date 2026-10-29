@@ -63,7 +63,10 @@ fn influence_creatures(
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
     player: Query<&Transform, With<Player>>,
-    creatures: Query<(Entity, &Critter, &Transform), Without<Player>>,
+    creatures: Query<(Entity, &Critter, &Transform), (Without<Player>, Without<crate::combat::feedback::Corpse>)>,
+    level: Option<Res<crate::play::CurrentLevel>>,
+    blocked_cells: Option<Res<crate::play::BlockedCells>>,
+    doors: Option<Res<crate::doors::Doors>>,
 ) {
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     for Casted(cast) in casts.read() {
@@ -84,12 +87,16 @@ fn influence_creatures(
                 continue;
             }
         };
+        // Only what the cleric can see: a wall or a shut door stops a prayer.
+        let cells = blocked_cells.as_deref().cloned().unwrap_or_default();
+        let see = level.as_ref().map(|l| crate::doors::opaque_for(&l.0, &cells, doors.as_deref(), None));
+        let seen = |p: Vec2| see.as_ref().is_none_or(|see| fb_level::path::line_of_sight((at.x / fb_level::CELL, at.y / fb_level::CELL), (p.x / fb_level::CELL, p.y / fb_level::CELL), see));
         let mut hit: Vec<(f32, Entity, &Critter)> = creatures
             .iter()
             .filter_map(|(e, c, t)| {
                 let to = t.translation.xz() - at;
                 let near = to.length();
-                (near <= range + c.radius && (front < 0.0 || to.normalize_or_zero().dot(ahead) >= front)).then_some((near, e, c))
+                (near <= range + c.radius && seen(t.translation.xz()) && (front < 0.0 || to.normalize_or_zero().dot(ahead) >= front)).then_some((near, e, c))
             })
             .collect();
         hit.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -185,6 +192,66 @@ mod tests {
         cast_at(&mut app, "charm", "around", 3);
         let charmed = near.iter().filter(|&&r| app.world().get::<Charmed>(r).is_some()).count();
         assert!(charmed >= 15 && near.iter().all(|&r| app.world().get::<Charmed>(r).is_some() != app.world().entity(r).contains::<Aroused>()));
+    }
+
+    fn hit(app: &App, e: Entity) -> bool {
+        app.world().get::<Frightened>(e).is_some()
+    }
+
+    #[test]
+    fn a_cone_reaches_the_front_and_a_touch_only_the_nearest_ahead() {
+        // The player faces -Z by default.
+        let (mut app, _) = app_with(Some(Devotion::FavoredFoe(Kin::Foe(Foe::Vermin))));
+        let ahead: Vec<Entity> = (0..12).map(|i| rat(&mut app, Vec3::new(0.0, 0.0, -10.0), i)).collect();
+        let behind: Vec<Entity> = (0..12).map(|i| rat(&mut app, Vec3::new(0.0, 0.0, 10.0), 20 + i)).collect();
+        app.world_mut().resource_mut::<GameRules>().casting.influence.base = 1.0;
+        app.world_mut().resource_mut::<GameRules>().casting.influence.ceiling = 1.0;
+        app.world_mut().resource_mut::<GameRules>().casting.influence.floor = 1.0;
+        let unlocked = ["frighten", "cone", "short"].map(String::from).into();
+        let written = compose(&unlocked, fb_character::Casting::Divine, "Test", "frighten", "cone", "short").unwrap();
+        let p = written.preview(1);
+        app.world_mut().write_message(Casted(Cast { written, tier: 1, cost: p.cost, range: p.range, duration: p.duration }));
+        app.update();
+        assert!(ahead.iter().all(|&r| hit(&app, r)), "the cone reaches ahead");
+        assert!(behind.iter().all(|&r| !hit(&app, r)), "not behind");
+        for &r in &ahead {
+            app.world_mut().entity_mut(r).remove::<Frightened>();
+        }
+        let near = rat(&mut app, Vec3::new(0.0, 0.0, -4.0), 90);
+        cast_at(&mut app, "frighten", "touch", 1);
+        assert!(hit(&app, near));
+        assert_eq!(ahead.iter().filter(|&&r| hit(&app, r)).count(), 0, "only the nearest");
+    }
+
+    #[test]
+    fn a_corpse_is_spared() {
+        let (mut app, _) = app_with(Some(Devotion::FavoredFoe(Kin::Foe(Foe::Vermin))));
+        let dead = rat(&mut app, Vec3::new(5.0, 0.0, 0.0), 1);
+        app.world_mut().entity_mut(dead).insert(crate::combat::feedback::Corpse { since: 0.0, fell: Transform::default() });
+        app.world_mut().resource_mut::<GameRules>().casting.influence.floor = 1.0;
+        app.world_mut().resource_mut::<GameRules>().casting.influence.ceiling = 1.0;
+        cast_at(&mut app, "frighten", "around", 3);
+        assert!(!hit(&app, dead));
+    }
+
+    #[test]
+    fn a_rat_behind_a_wall_is_spared() {
+        let (mut app, _) = app_with(Some(Devotion::FavoredFoe(Kin::Foe(Foe::Vermin))));
+        let level = fb_level::generate(1207, 1);
+        let wall = (0..level.width as i32 * level.height as i32)
+            .map(|i| (i % level.width as i32, i / level.width as i32))
+            .find(|&(x, y)| !level.is_open(x, y) && level.is_open(x - 1, y) && level.is_open(x + 1, y))
+            .expect("a wall with floor on both sides");
+        let cell = fb_level::CELL;
+        let me = Vec3::new((wall.0 - 1) as f32 * cell + cell / 2.0, 0.0, wall.1 as f32 * cell + cell / 2.0);
+        let there = Vec3::new((wall.0 + 1) as f32 * cell + cell / 2.0, 0.0, me.z);
+        app.insert_resource(crate::play::CurrentLevel(level)).init_resource::<crate::play::BlockedCells>();
+        app.world_mut().query::<&mut Transform>().iter_mut(app.world_mut()).for_each(|mut t| t.translation = me);
+        let behind = rat(&mut app, there, 1);
+        app.world_mut().resource_mut::<GameRules>().casting.influence.floor = 1.0;
+        app.world_mut().resource_mut::<GameRules>().casting.influence.ceiling = 1.0;
+        cast_at(&mut app, "frighten", "around", 3);
+        assert!(!hit(&app, behind));
     }
 
     #[test]
