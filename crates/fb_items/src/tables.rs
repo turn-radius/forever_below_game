@@ -329,8 +329,8 @@ mod tests {
 
     #[test]
     fn every_table_parses_with_its_entries() {
-        assert_eq!(bases().len(), 13);
-        assert_eq!(goods().len(), 39);
+        assert_eq!(bases().len(), 14);
+        assert_eq!(goods().len(), 40);
         assert_eq!(affixes().len(), 86);
         assert_eq!(slot_places().len(), 18);
         let head = &slot_places()[0];

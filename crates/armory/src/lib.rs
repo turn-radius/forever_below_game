@@ -24,6 +24,7 @@ pub mod families;
 pub mod gem;
 pub mod geom;
 pub mod heraldry;
+pub mod incense;
 pub mod item;
 pub mod kindle;
 pub mod material;

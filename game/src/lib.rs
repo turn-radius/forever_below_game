@@ -76,6 +76,7 @@ pub mod settings;
 pub mod sight;
 pub mod simulate;
 pub mod soak;
+pub mod smoke;
 pub mod sparkle;
 pub mod staged;
 pub mod status;

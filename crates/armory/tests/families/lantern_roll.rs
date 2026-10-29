@@ -47,6 +47,7 @@ fn rolls_are_coherent() {
             LanternStyle::Horn => assert!(matches!(b.sides, 4 | 6 | 8), "seed {}: {} panes", s.seed, b.sides),
             LanternStyle::Pierced => assert!(b.sides >= 8, "seed {}", s.seed),
             LanternStyle::Cage => assert!((4..=8).contains(&b.sides) && s.bail.links <= 3, "seed {}", s.seed),
+            LanternStyle::Censer => unreachable!("a lantern does not roll a censer"),
         }
     }
 }

@@ -47,6 +47,9 @@ pub fn toggle_and_say(inventory: &mut Inventory, id: ItemId) -> String {
 /// ([`Inventory::refill_lanterns`]), and says so: that they are filled, that the flask ran out
 /// first, or that there is no lantern to fill or room in it.
 pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
+    if inventory.item(flask).is_some_and(|item| item.incense_kind().is_some()) {
+        return load_and_say(inventory, flask);
+    }
     let lanterns = inventory.equipped_lanterns();
     let what = if lanterns.len() > 1 { "lanterns" } else { "lantern" };
     if lanterns.is_empty() {
@@ -63,6 +66,21 @@ pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
         format!("You pour the last of the oil into the {what_filled}")
     } else {
         format!("You fill the {what_filled}")
+    }
+}
+
+/// Heaps the dish of incense `dish` into the censer held or at the hip, and says so: that it is
+/// loaded, or that there is no censer to load or it is full already.
+pub fn load_and_say(inventory: &mut Inventory, dish: ItemId) -> String {
+    if inventory.equipped_censers().is_empty() {
+        return "You hold no censer to load".to_string();
+    }
+    match inventory.load_censer(dish) {
+        Some(censer) => {
+            let kind = inventory.item(censer).and_then(|item| item.shape.incense()).map_or("incense", armory::incense::IncenseKind::name);
+            format!("You heap {} on the coals", kind.to_lowercase())
+        }
+        None => "Your censer is already full".to_string(),
     }
 }
 
@@ -234,6 +252,54 @@ mod tests {
         equip(&mut inventory, lantern_at(1.0), Slot::Offhand);
         assert_eq!(refill_and_say(&mut inventory, flask), "Your lantern is already full");
         assert!(inventory.item(flask).unwrap().has_oil());
+    }
+
+    fn spent_censer() -> fb_items::Item {
+        let mut censer = fb_items::roll_item(fb_items::CENSER, 7).unwrap();
+        censer.shape.load_incense(armory::incense::IncenseKind::Cedar);
+        censer.shape.set_lit(true).unwrap();
+        censer.burn(1.0e9);
+        censer
+    }
+
+    fn dish(kind: armory::incense::IncenseKind) -> fb_items::Item {
+        (1..80).map(|s| fb_items::roll_item(fb_items::INCENSE, s).unwrap()).find(|d| d.incense_kind() == Some(kind)).unwrap()
+    }
+
+    #[test]
+    fn a_censer_hangs_at_the_hip_burns_its_incense_up_and_a_dish_loads_it_again() {
+        use armory::incense::IncenseKind;
+        let mut inventory = Inventory::default();
+        equip(&mut inventory, fb_items::roll_item("Belt", 1).unwrap(), Slot::Belt);
+        let censer = equip(&mut inventory, spent_censer(), Slot::Hip);
+        assert_eq!(toggle_and_say(&mut inventory, censer), "The lantern is out of fuel and will not light");
+        let incense = inventory.add(dish(IncenseKind::Myrrh));
+        assert_eq!(refill_and_say(&mut inventory, incense), "You heap myrrh on the coals");
+        assert!(inventory.item(incense).is_none(), "the dish is used up");
+        assert_eq!(toggle_and_say(&mut inventory, censer), "You light the lantern");
+        assert_eq!(inventory.item(censer).unwrap().burning_incense(), Some(IncenseKind::Myrrh));
+        // Burning uses it up, wherever the censer hangs, and then it goes out.
+        assert!(inventory.burn_lights(armory::kindle::INCENSE_SECONDS * 0.5));
+        assert!((share(&inventory, censer) - 0.5).abs() < 0.01);
+        inventory.burn_lights(armory::kindle::INCENSE_SECONDS);
+        assert_eq!((inventory.item(censer).unwrap().shape.lit(), inventory.item(censer).unwrap().burning_incense()), (Some(false), None));
+        // A full censer takes no more, and a lantern's oil does not fill it.
+        let again = inventory.add(dish(IncenseKind::Cedar));
+        refill_and_say(&mut inventory, again);
+        let spare = inventory.add(dish(IncenseKind::Cedar));
+        assert_eq!(refill_and_say(&mut inventory, spare), "Your censer is already full");
+        let flask = inventory.add(oil(1.0));
+        assert_eq!(refill_and_say(&mut inventory, flask), "You hold no lantern to fill");
+    }
+
+    #[test]
+    fn incense_needs_a_censer_in_hand_or_at_the_hip() {
+        let mut inventory = Inventory::default();
+        let incense = inventory.add(dish(armory::incense::IncenseKind::Cedar));
+        assert_eq!(refill_and_say(&mut inventory, incense), "You hold no censer to load");
+        inventory.add(spent_censer());
+        assert_eq!(refill_and_say(&mut inventory, incense), "You hold no censer to load", "a censer in a bag is not loaded");
+        assert!(crate::interact::use_of(inventory.item(incense).unwrap()) == Some(crate::interact::Verb::Refill));
     }
 
     #[test]

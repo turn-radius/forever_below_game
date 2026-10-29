@@ -86,6 +86,15 @@
   "desc": "Fuel · six hours of lantern light",
   "stack": 3
  },
+ "Incense": {
+  "fp": [
+   1,
+   1
+  ],
+  "wt": 0.2,
+  "desc": "Fuel · one hour of incense smoke",
+  "stack": 3
+ },
  "Candle": {
   "fp": [
    1,

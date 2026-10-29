@@ -112,7 +112,7 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Consume)
     } else if item.shape.lit().is_some() {
         Some(QuickUse::Light)
-    } else if item.has_oil() {
+    } else if item.has_oil() || item.incense_kind().is_some() {
         Some(QuickUse::Refill)
     } else if item.lesson().is_some() || item.teaching().is_some() || item.words.is_some() {
         Some(QuickUse::Read)
@@ -176,7 +176,7 @@ pub fn use_slot(slot: usize, slots: &mut Quickslots, inventory: &mut Inventory, 
             let said = crate::kindle::refill_and_say(inventory, id);
             // An emptied flask is kept, as a drained waterskin is, but the slot moves to a full one,
             // or empties after the last.
-            if !inventory.item(id).is_some_and(Item::has_oil) {
+            if !inventory.item(id).is_some_and(|item| item.has_oil() || item.incense_kind().is_some()) {
                 match next_of_a_kind(inventory, slots, &base, QuickUse::Refill) {
                     Some(next) => slots.bind(slot, next),
                     None => slots.clear(slot),

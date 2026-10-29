@@ -64,7 +64,8 @@ pub fn exposures(inventory: &Inventory, defs: &BTreeMap<String, EffectDef>, arou
     for (slot, item) in inventory.equipped() {
         let held = matches!(slot, Slot::Mainhand | Slot::Offhand);
         // A lit light with the Smoky affix, in hand, puts its smoke in the delver's eyes.
-        if held && item.shape.lit() == Some(true) && item.affixes.iter().any(|a| a.name == SMOKY) {
+        // A censer smokes by design, in a sweet way that stings nothing, whatever its affixes.
+        if held && item.shape.lit() == Some(true) && !item.is_censer() && item.affixes.iter().any(|a| a.name == SMOKY) {
             push(STINGING_EYES, 1.0, Source::Item { name: item.name.clone() });
         }
         // Lice in anything worn (not merely held) get into the delver's clothes and hair. The

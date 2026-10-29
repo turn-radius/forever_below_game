@@ -34,6 +34,7 @@ use crate::build::roll::{roll_straps, rolled_sheet};
 use crate::build::strap::strap;
 use crate::cond::{Condition, ConditionLimits};
 use crate::fabric::{Fabric, FabricPattern};
+use crate::incense::IncenseKind;
 use crate::families::Generator;
 use crate::geom::polygon::P2;
 use crate::geom::{
@@ -65,9 +66,13 @@ pub enum SundryKind {
     Bedroll,
     /// A roll of linen bandage.
     Bandages,
+    /// A tin dish of incense, a load for a censer (`Incense` in `data/goods.json`). Not among the
+    /// sundries that roll at random: it is stocked and found as its own base.
+    Incense,
 }
 
 impl SundryKind {
+    /// The sundries that roll at random.
     pub const ALL: [SundryKind; 7] = [
         SundryKind::Candle, SundryKind::Rope, SundryKind::Lockpicks, SundryKind::Keys, SundryKind::Tinderbox,
         SundryKind::Bedroll, SundryKind::Bandages,
@@ -107,6 +112,9 @@ pub struct Article {
     /// carrying. The same bedroll either way: its colours, weave and wear carry over.
     #[serde(default)]
     pub laid: bool,
+    /// What an incense dish holds.
+    #[serde(default)]
+    pub incense: IncenseKind,
 }
 
 sliders! {
@@ -140,6 +148,7 @@ impl Default for Article {
             lit: false,
             burnt: 0.0,
             laid: false,
+            incense: IncenseKind::default(),
         }
     }
 }
@@ -204,6 +213,7 @@ impl Generator for Sundry {
             SundryKind::Tinderbox => "Tinderbox",
             SundryKind::Bedroll => "Bedroll",
             SundryKind::Bandages => "Bandages",
+            SundryKind::Incense => return format!("{} Incense", a.incense.name()),
         }
         .to_string()
     }
@@ -264,11 +274,16 @@ fn compose(rng: &mut Mulberry32, seed: u32, kind: SundryKind) -> SundryState {
         K::Lockpicks => *rng.pick(&[Rgb::hex(0x4a3226), Rgb::hex(0x5e3b26), Rgb::hex(0x2f2a24)]),
         K::Bedroll => *rng.pick(&Fabric::GARMENT_DYES),
         K::Bandages => LINEN,
-        K::Keys | K::Tinderbox => a.color,
+        K::Keys | K::Tinderbox | K::Incense => a.color,
     };
     if kind == K::Bedroll {
         a.pattern = *rng.weighted(&[(FabricPattern::Plain, 3), (FabricPattern::Stripes, 2), (FabricPattern::Checks, 1), (FabricPattern::Tartan, 1)]);
         a.color2 = *rng.pick(&Fabric::PATTERN_DYES);
+    }
+    if kind == K::Incense {
+        a.incense = *rng.pick(&IncenseKind::ALL);
+        a.material = *rng.weighted(&[(Brass, 2), (Iron, 2)]);
+        a.color = a.incense.color();
     }
     a.holder = kind == K::Candle && rng.chance(0.4);
     a.bow = if kind == K::Keys { *rng.pick(&KeyBow::ALL) } else { KeyBow::Ring };
@@ -293,6 +308,7 @@ fn build_sundry(s: &SundryState) -> ItemMesh {
         SundryKind::Bedroll if s.article.laid => laid_bedroll(s, &mut parts),
         SundryKind::Bedroll => bedroll(s, &mut parts),
         SundryKind::Bandages => bandages(s, &mut parts),
+        SundryKind::Incense => incense(s, &mut parts),
     }
     // Straps, buckles and ties stand a little proud of what they bind. A candle already
     // stands on y = 0, so its light needs no shift.
@@ -660,6 +676,43 @@ pub fn laid_bedroll_parts(parts: &mut Parts, k: f32, color: Rgb, pattern: Fabric
 }
 
 /// A roll of linen with its end unrolled along the ground.
+/// A load of incense: a shallow tin dish with a heap of it, cut shavings of cedar or tears of
+/// resin, in the kind's colour.
+fn incense(s: &SundryState, parts: &mut Parts) {
+    let a = &s.article;
+    let sz = a.size;
+    let r = 0.36 * sz;
+    let dish = lathe(
+        &spline_profile(&[[0.0, 0.0], [r * 0.5, 0.0], [r * 0.62, 0.02 * sz], [r * 1.0, 0.1 * sz], [r * 1.04, 0.14 * sz], [r * 0.94, 0.13 * sz], [r * 0.55, 0.06 * sz], [0.0, 0.05 * sz]], 20),
+        &LatheOptions { facets: 28, shading: Shading::SMOOTH, cap_start: false, cap_end: false, phase: 0.0 },
+    );
+    parts.add("dish", dish, a.material);
+    let mut rng = Mulberry32::new(s.seed ^ 0x1c3e);
+    let mut heap = MeshBuilder::new();
+    for k in 0..16u32 {
+        let ang = k as f32 * 2.399963;
+        let d = r * 0.68 * ((k as f32 + 0.5) / 16.0).sqrt();
+        let h = 0.07 * sz + 0.11 * sz * (1.0 - d / (r * 0.7));
+        let mut bit = match a.incense {
+            // Curled shavings of wood.
+            IncenseKind::Cedar => {
+                let mut b = ellipsoid([0.13 * sz, 0.018 * sz, 0.04 * sz]);
+                b.rotate_z(rng.range_f32(-0.4, 0.4)).rotate_y(rng.range_f32(0.0, TAU));
+                b
+            }
+            // Tears of resin.
+            _ => {
+                let mut b = icosphere(rng.range_f32(0.055, 0.085) * sz, 1).flat_shaded();
+                b.scale([1.0, 0.85, 1.0]);
+                b
+            }
+        };
+        bit.translate([d * ang.cos(), h, -d * ang.sin()]);
+        heap.append(&bit);
+    }
+    parts.add_look("incense", heap, Look::of(Stone).tinted(a.incense.color()));
+}
+
 fn bandages(s: &SundryState, parts: &mut Parts) {
     let a = &s.article;
     let sz = a.size;

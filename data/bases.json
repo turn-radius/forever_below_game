@@ -219,6 +219,24 @@
    "Tallow"
   ]
  },
+ "Censer": {
+  "slot": "offhand",
+  "wt": 2,
+  "fp": [
+   1,
+   2
+  ],
+  "tags": [
+   "light",
+   "metal"
+  ],
+  "light": 10,
+  "mats": [
+   "Brass",
+   "Iron",
+   "Tin"
+  ]
+ },
  "Lantern": {
   "slot": "offhand",
   "wt": 2,

@@ -391,13 +391,14 @@ mod tests {
     #[test]
     fn lantern_choices_list_their_variants() {
         let mut item = Item::roll(Family::Lantern, 7).unwrap();
-        assert_eq!(item.choice_options("body.style"), ["horn", "pierced", "cage"]);
-        assert_eq!(item.choice_options("flame.fuel"), ["candle", "oil"]);
+        assert_eq!(item.choice_options("body.style"), ["horn", "pierced", "cage", "censer"]);
+        assert_eq!(item.choice_options("flame.fuel"), ["candle", "oil", "incense"]);
         item.set_choice("flame.fuel", "candle").unwrap();
         assert_eq!(item.cycle_choice("flame.fuel", 1).unwrap(), "oil");
+        assert_eq!(item.cycle_choice("flame.fuel", 1).unwrap(), "incense");
         assert_eq!(item.cycle_choice("flame.fuel", 1).unwrap(), "candle");
-        assert_eq!(item.cycle_choice("flame.fuel", -1).unwrap(), "oil");
-        assert_eq!(item.choice("flame.fuel").as_deref(), Some("oil"));
+        assert_eq!(item.cycle_choice("flame.fuel", -1).unwrap(), "incense");
+        assert_eq!(item.choice("flame.fuel").as_deref(), Some("incense"));
     }
 
     #[test]

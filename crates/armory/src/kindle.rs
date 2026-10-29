@@ -10,6 +10,8 @@ use crate::item::Item;
 pub const TORCH_SECONDS: f32 = 3_600.0;
 /// How long a full lantern burns, in game seconds: six hours of oil (SRD p. 68).
 pub const LANTERN_SECONDS: f32 = 21_600.0;
+/// How long a censer burns one load of incense, in game seconds: an hour.
+pub const INCENSE_SECONDS: f32 = 3_600.0;
 /// How long a whole candle burns, in game seconds: two hours (data/goods.json). A candle's `burnt` runs from 0 to
 /// [`CANDLE_BURNT_OUT`] over it.
 pub const CANDLE_SECONDS: f32 = 7_200.0;
@@ -25,6 +27,10 @@ pub enum Unlit {
     NotALight,
     /// A lantern with no fuel left, until it is refuelled.
     Empty,
+}
+
+fn is_censer(s: &crate::families::lantern::LanternState) -> bool {
+    s.body.style == crate::families::lantern::LanternStyle::Censer
 }
 
 fn is_candle(s: &crate::families::sundry::SundryState) -> bool {
@@ -59,6 +65,7 @@ impl Item {
     pub fn fuel_capacity(&self) -> Option<f32> {
         match self {
             Item::Torch(_) => Some(TORCH_SECONDS),
+            Item::Lantern(s) if is_censer(s) => Some(INCENSE_SECONDS),
             Item::Lantern(_) => Some(LANTERN_SECONDS),
             Item::Sundry(s) if is_candle(s) => Some(CANDLE_SECONDS),
             _ => None,
@@ -119,6 +126,10 @@ impl Item {
     /// nothing: a torch is not refilled.
     pub fn refuel(&mut self, seconds: f32, capacity: f32) -> f32 {
         let Item::Lantern(s) = self else { return 0.0 };
+        // A censer takes incense, not oil ([`Item::load_incense`]).
+        if is_censer(s) {
+            return 0.0;
+        }
         let f = &mut s.flame;
         let taken = seconds.min(capacity - f.fuel_left).max(0.0);
         if taken > 0.0 {
@@ -126,6 +137,28 @@ impl Item {
             f.level = (f.fuel_left / capacity).clamp(0.1, 1.0);
         }
         taken
+    }
+
+    /// Heaps a load of `kind` incense into a censer, filling it and replacing whatever was left
+    /// burning. Returns whether it took: only a censer does. Whether it is lit is left alone.
+    pub fn load_incense(&mut self, kind: crate::incense::IncenseKind) -> bool {
+        let Item::Lantern(s) = self else { return false };
+        if !is_censer(s) {
+            return false;
+        }
+        s.flame.fuel = crate::families::lantern::LanternFuel::Incense;
+        s.flame.incense = kind;
+        s.flame.fuel_left = INCENSE_SECONDS;
+        s.flame.level = 1.0;
+        true
+    }
+
+    /// The incense a censer burns, if it is one and has any left.
+    pub fn incense(&self) -> Option<crate::incense::IncenseKind> {
+        match self {
+            Item::Lantern(s) if is_censer(s) && s.flame.fuel_left > 0.0 => Some(s.flame.incense),
+            _ => None,
+        }
     }
 
     /// Lights it, or puts it out. Putting out a burning torch leaves it doused, charred and

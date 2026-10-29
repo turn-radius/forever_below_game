@@ -22,6 +22,7 @@ use armory::gem::Gemstone;
 use armory::families::garment::Garment;
 use armory::families::hands::Hands;
 use armory::families::hat::Hats;
+use armory::families::lantern::{Lantern, LanternStyle};
 use armory::families::hood::Hoods;
 use armory::families::legs::Legs;
 use armory::families::sundry::{Sundry, SundryKind};
@@ -48,6 +49,7 @@ pub enum Accept {
     Legs(&'static [LegwearStyle]),
     Hood(&'static [HoodStyle]),
     Hat(&'static [HatStyle]),
+    Lantern(&'static [LanternStyle]),
     Bags(&'static [BagStyle]),
     Food(&'static [FoodStyle]),
     Sundry(&'static [SundryKind]),
@@ -67,6 +69,7 @@ impl Accept {
             Accept::Legs(_) => Family::Legs,
             Accept::Hood(_) => Family::Hood,
             Accept::Hat(_) => Family::Hat,
+            Accept::Lantern(_) => Family::Lantern,
             Accept::Bags(_) => Family::Bags,
             Accept::Food(_) => Family::Food,
             Accept::Sundry(_) => Family::Sundry,
@@ -85,6 +88,7 @@ impl Accept {
             Accept::Legs(s) => Item::Legs(Legs::roll_as(seed, *rng.pick(s))),
             Accept::Hood(s) => Item::Hood(Hoods::roll_as(seed, *rng.pick(s))),
             Accept::Hat(s) => Item::Hat(Hats::roll_as(seed, *rng.pick(s))),
+            Accept::Lantern(s) => Item::Lantern(Lantern::roll_as(seed, *rng.pick(s))),
             Accept::Bags(s) => Item::Bags(Bags::roll_as(seed, *rng.pick(s))),
             Accept::Food(s) => Item::Food(Food::roll_as(seed, *rng.pick(s))),
             Accept::Sundry(s) => Item::Sundry(Sundry::roll_as(seed, *rng.pick(s))),
@@ -103,6 +107,7 @@ impl Accept {
             (Accept::Legs(s), Item::Legs(st)) => s.contains(&st.legwear.style),
             (Accept::Hood(s), Item::Hood(st)) => s.contains(&st.hood.style),
             (Accept::Hat(s), Item::Hat(st)) => s.contains(&st.hat.style),
+            (Accept::Lantern(s), Item::Lantern(st)) => s.contains(&st.body.style),
             (Accept::Bags(s), Item::Bags(st)) => s.contains(&st.bag.style),
             (Accept::Food(s), Item::Food(st)) => s.contains(&st.provision.style),
             (Accept::Sundry(s), Item::Sundry(st)) => s.contains(&st.article.kind),
@@ -184,6 +189,8 @@ pub fn find_weight(name: &str) -> u32 {
     }
     match name {
         "Scroll" | "Note" => 10,
+        // A lantern is found three times as often as a censer, which only clerics keep.
+        "Lantern" => 3,
         _ => 1,
     }
 }
@@ -296,6 +303,7 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Hand axe", ArmoryBase::of(A::Axe(&[AxeArchetype::Hatchet, AxeArchetype::HandAxe, AxeArchetype::Bearded]))),
     ("Torch", ArmoryBase::of(A::Any(Family::Torch))),
     ("Lantern", ArmoryBase::of(A::Any(Family::Lantern))),
+    ("Censer", ArmoryBase::of(A::Lantern(&[LanternStyle::Censer]))),
     // Goods (data/goods.json).
     ("Glowcap", ArmoryBase::of(A::Food(&[FoodStyle::Mushroom])).tweaked(glowcap)),
     ("Waterskin", ArmoryBase::of(A::Food(&[FoodStyle::Waterskin])).tweaked(filled)),
@@ -304,6 +312,7 @@ pub static ARMORY_BASES: &[(&str, ArmoryBase)] = &[
     ("Lockpicks", ArmoryBase::of(A::Sundry(&[SundryKind::Lockpicks]))),
     ("Key", ArmoryBase::of(A::Sundry(&[SundryKind::Keys]))),
     ("Candle", ArmoryBase::of(A::Sundry(&[SundryKind::Candle]))),
+    ("Incense", ArmoryBase::of(A::Sundry(&[SundryKind::Incense]))),
     ("Bandages", ArmoryBase::of(A::Sundry(&[SundryKind::Bandages]))),
     ("Bedroll", ArmoryBase::of(A::Sundry(&[SundryKind::Bedroll]))),
     ("Tinderbox", ArmoryBase::of(A::Sundry(&[SundryKind::Tinderbox]))),
@@ -639,6 +648,7 @@ mod tests {
             A::Legs(s) => s.iter().map(|x| A::Legs(one(x))).collect(),
             A::Hood(s) => s.iter().map(|x| A::Hood(one(x))).collect(),
             A::Hat(s) => s.iter().map(|x| A::Hat(one(x))).collect(),
+            A::Lantern(s) => s.iter().map(|x| A::Lantern(one(x))).collect(),
             A::Bags(s) => s.iter().map(|x| A::Bags(one(x))).collect(),
             A::Food(s) => s.iter().map(|x| A::Food(one(x))).collect(),
             A::Sundry(s) => s.iter().map(|x| A::Sundry(one(x))).collect(),

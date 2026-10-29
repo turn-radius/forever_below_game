@@ -315,7 +315,7 @@ fn give_debug_kit(mut inventory: ResMut<Inventory>, character: Res<Character>, l
         let _ = inventory.wear(satchel, Slot::Satchel);
     }
     let legendary = (1..4_000).filter_map(|s| fb_items::roll_item("Dagger", s)).find(|i| i.rarity == Rarity::Legendary);
-    let things = ["Sword", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese"];
+    let things = ["Sword", "Bread", "Ring", "Lantern", "Apple", "Lockpicks", "Gloves", "Candle", "Amulet", "Cheese", "Censer", "Incense"];
     // Potions in all four sizes: healing, a mana potion of each (the brew the seed rolls, found
     // by looking), and three small healing draughts that stack.
     let sizes = [("Healing vial", "Vial"), ("Small healing draught", "Small potion"), ("Healing draught", "Potion"), ("Large healing draught", "Large potion")];
@@ -419,7 +419,7 @@ fn roll_held(base: &str, seed: u32) -> Option<fb_items::Item> {
     }
     let wanted = |i: &fb_items::Item| crate::carry::item_light(&i.shape).is_some() && (!holder || matches!(&i.shape, armory::Item::Sundry(s) if s.article.holder));
     let lit = (0..500).filter_map(|k| rolled(seed.wrapping_add(k))).find(wanted);
-    lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle")).or_else(|| rolled(seed))
+    lit.filter(|_| matches!(base, "Torch" | "Lantern" | "Candle" | "Censer")).or_else(|| rolled(seed))
 }
 
 /// For captures: the hands hold what `FB_HOLD` names ([`hold_spec`]), whatever the kit gave.

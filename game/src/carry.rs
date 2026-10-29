@@ -187,6 +187,14 @@ pub fn item_light(item: &Item) -> Option<LightAnchor> {
     }
 }
 
+/// The smoke an Armory item gives off while it burns, if it is a lit censer, in the incense's colour.
+pub fn item_smoke(item: &Item) -> Option<crate::smoke::Smoke> {
+    let Item::Lantern(state) = item else { return None };
+    let anchor = Lantern::smoke(state)?;
+    let armory::Rgb(r, g, b) = anchor.color;
+    Some(crate::smoke::Smoke { color: Color::srgb(r, g, b), position: Vec3::from_array(anchor.position), spread: anchor.spread, density: anchor.density })
+}
+
 /// [`item_light`] of a rolled item, its reach scaled by its light affixes (Gleaming, Smoky:
 /// [`fb_items::Item::light_factor`]), as it lights the level.
 pub fn rolled_light(item: &fb_items::Item) -> Option<LightAnchor> {
@@ -933,6 +941,9 @@ pub fn spawn_floor_item_shaped(spawner: &mut ItemSpawner, inventory: &Inventory,
     if let Some(sparkles) = floor_sparkles(item, min, max, tuning) {
         root.insert(sparkles);
     }
+    if let Some(smoke) = item_smoke(&item.shape) {
+        root.insert(smoke);
+    }
     // A bedroll or tent set down covers the floor it was checked against (`crate::camp`), and a
     // tent blocks the way as a prop does, from a child at the middle of what it covers.
     if let Some(camp) = item.camp().filter(|_| item.is_set_camp()) {
@@ -1341,6 +1352,9 @@ pub(crate) fn show_held(
                 Propagate(view_layer.clone()),
                 ChildOf(view_model),
             ));
+            if let Some(smoke) = item_smoke(&hand.item) {
+                root.insert(smoke);
+            }
             carrying.entities.push(root.id());
             if !lit.contains(&hand.hand) {
                 continue;
@@ -1365,6 +1379,9 @@ pub(crate) fn show_held(
             // The lantern and its light go through the spawner's own commands, after the pivot's.
             let mut lantern = spawner.spawn(mesh, &appearance_of(&hip.item));
             lantern.insert((hip.transform, Propagate(NotShadowCaster), ChildOf(pivot)));
+            if let Some(smoke) = item_smoke(&hip.item) {
+                lantern.insert(smoke);
+            }
             if let Some(anchor) = carried {
                 let reach = LightAnchor { radius: anchor.radius * light_factor_in(&inventory, fb_items::Slot::Hip), ..anchor };
                 lantern.with_child((given_light(reach, exposure, &tuning.light),Transform::from_translation(Vec3::from_array(anchor.position))));
@@ -1608,6 +1625,32 @@ pub(crate) fn equip_aimed(
             changes.0.extend(equipped.changes);
         }
         Err(refusal) => toast.say(refusal.reason(), now),
+    }
+}
+
+#[cfg(test)]
+mod censer_tests {
+    use super::*;
+    use armory::incense::IncenseKind;
+
+    fn censer(lit: bool) -> fb_items::Item {
+        let mut item = fb_items::roll_item(fb_items::CENSER, 4).unwrap();
+        item.shape.load_incense(IncenseKind::Frankincense);
+        item.shape.set_lit(lit).unwrap();
+        item
+    }
+
+    #[test]
+    fn a_lit_censer_smokes_and_glows_and_an_unlit_one_does_neither() {
+        let lit = censer(true);
+        let smoke = item_smoke(&lit.shape).expect("a lit censer smokes");
+        assert!(smoke.density > 0.0);
+        let light = rolled_light(&lit).expect("and glows");
+        assert!(light.radius > 0.0 && light.radius < 40.0, "small: {}", light.radius);
+        let out = censer(false);
+        assert!(item_smoke(&out.shape).is_none() && rolled_light(&out).is_none());
+        let lantern = fb_items::roll_item("Lantern", 3).unwrap();
+        assert!(item_smoke(&lantern.shape).is_none(), "a lantern does not smoke");
     }
 }
 

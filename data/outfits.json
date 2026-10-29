@@ -166,12 +166,14 @@
    "offhand": [
     0.7,
     "Shield",
-    "Lantern"
+    "Lantern",
+    "Censer"
    ]
   },
   "goods": [
    "Bandages",
    "Bandages",
+   "Incense",
    "Healing draught",
    "Candle",
    "Bread",
