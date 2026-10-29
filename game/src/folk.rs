@@ -563,14 +563,16 @@ pub struct AimedFolk(pub Option<Entity>);
 pub struct FolkCard;
 
 /// Picks the folk under the crosshair within reach, by their figure's bounds, with the same
-/// buffer round the crosshair as items (`crate::carry::nearest_aimed`).
-fn aim_at_folk(
+/// buffer round the crosshair as items (`crate::carry::nearest_aimed`). Nobody is aimed at
+/// while the wake card shows, so no one is talked to, bartered with or met behind it.
+pub(crate) fn aim_at_folk(
     tuning: Res<crate::tuning::Tuning>,
+    wake: Query<(), With<crate::combat::revival::WakeCard>>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     folk: Query<(Entity, &GlobalTransform, &Denizen), Without<crate::combat::feedback::Corpse>>,
     mut aimed: ResMut<AimedFolk>,
 ) {
-    let hit = eyes.iter().next().and_then(|eye| {
+    let hit = eyes.iter().next().filter(|_| wake.is_empty()).and_then(|eye| {
         let targets = folk.iter().map(|(entity, at, denizen)| (entity, at.compute_transform(), denizen.min, denizen.max));
         nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity)
     });

@@ -270,6 +270,7 @@ pub struct Around<'w, 's> {
     settings: Option<Res<'w, crate::settings::GameSettings>>,
     aimed: Option<Res<'w, crate::carry::Aimed>>,
     fallen: Option<Res<'w, super::vitals::Fallen>>,
+    wake: Query<'w, 's, (), With<super::revival::WakeCard>>,
 }
 
 /// The input of shooting: nocking and drawing a bow, loosing it, firing and reloading a crossbow,
@@ -315,7 +316,7 @@ pub fn shoot(
     }
     let screens = around.screens.as_ref().is_some_and(|s| s.0.is_some()) || around.journey.is_some();
     let Ok((at, health, effects)) = players.single() else { return };
-    if screens || around.fallen.is_some() || health.is_some_and(Health::is_down) {
+    if screens || around.fallen.is_some() || !around.wake.is_empty() || health.is_some_and(Health::is_down) {
         // The screen opened mid-draw: lower the bow and put the arrow back.
         if marksman.draw.is_some() || marksman.reload.is_some() {
             if let Some(nocked) = marksman.nocked.take() {
