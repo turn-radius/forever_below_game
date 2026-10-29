@@ -709,7 +709,8 @@ fn shimmer_baubles(
 /// `FB_PRAY=1` casts once, a moment into the delve; `FB_PRAY_TIER=2` chooses the tier first and
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. `FB_PRAY_TURN=180` turns the
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
-/// the light last only that many game seconds, to see it sputter out. For captures.
+/// the light last only that many game seconds, to see it sputter out. The prayer's quickslot
+/// flashes as if its key were pressed, since captures ignore the keyboard. For captures.
 #[allow(clippy::type_complexity)]
 fn debug_cast(
     mut frames: Local<u32>,
@@ -718,6 +719,8 @@ fn debug_cast(
     mut players: Query<(&mut DelverMana, Option<&mut crate::player::Locomotion>), With<Player>>,
     mut lights: Query<&mut DivineLight, Added<DivineLight>>,
     clock: Option<Res<GameClock>>,
+    slots: Res<AbilitySlots>,
+    mut rings: Query<&mut crate::quickslots::SlotGlow>,
 ) {
     *frames += 1;
     let number = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<f64>().ok());
@@ -747,6 +750,12 @@ fn debug_cast(
     }
     if *frames == 90 && std::env::var("FB_PRAY").is_ok_and(|v| !v.is_empty()) {
         requests.write(CastRequest { name: chosen.name.clone(), tier: chosen.tier });
+        // Captures ignore the keyboard, so the prayer's slot flashes as its key would.
+        for mut ring in &mut rings {
+            if slots.get(ring.slot) == Some(chosen.name.as_str()) {
+                ring.pressed = 0.0;
+            }
+        }
     }
 }
 
