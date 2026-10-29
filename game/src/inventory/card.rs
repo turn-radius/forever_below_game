@@ -1365,6 +1365,10 @@ mod tests {
         app.world_mut().insert_resource(Fallen(1.0));
         assert!(!visible(&mut app), "no card over the fall screen");
         app.world_mut().remove_resource::<Fallen>();
+        let wake = app.world_mut().spawn(crate::combat::revival::WakeCard::default()).id();
+        assert!(!visible(&mut app), "no card over the wake card");
+        app.world_mut().entity_mut(wake).despawn();
+        assert!(visible(&mut app), "the card returns once the wake card is gone");
         app.world_mut().resource_mut::<crate::carry::Aimed>().0 = None;
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         app.world_mut().resource_mut::<Hovered>().0 = Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));

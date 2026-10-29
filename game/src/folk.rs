@@ -1136,6 +1136,11 @@ mod tests {
         assert!(visible(&mut app));
         app.world_mut().insert_resource(Fallen(1.0));
         assert!(!visible(&mut app), "no card over the fall screen");
+        app.world_mut().remove_resource::<Fallen>();
+        let wake = app.world_mut().spawn(crate::combat::revival::WakeCard::default()).id();
+        assert!(!visible(&mut app), "no card over the wake card");
+        app.world_mut().entity_mut(wake).despawn();
+        assert!(visible(&mut app), "the card returns once the wake card is gone");
     }
 
     #[test]
