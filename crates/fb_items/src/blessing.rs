@@ -172,4 +172,36 @@ mod tests {
         let hallowed = hallow(&mace(), "Maren", Family::Mace).unwrap();
         assert_eq!(Item::from_parts(ItemParts::from(hallowed.clone())).unwrap(), hallowed);
     }
+
+    fn rare_mace() -> Item {
+        (0..20_000).filter_map(|s| crate::roll_item_with("Mace", s, crate::Odds::loot(8))).find(|i| i.rarity == Rarity::Rare && i.affixes.iter().all(|a| a.good)).expect("a rare mace")
+    }
+
+    fn master() -> crate::enchant::Enchanter {
+        crate::enchant::Enchanter { name: "Ysolde".into(), tier: crate::enchant::Tier::Master, faction: "the Ash Rite".into() }
+    }
+
+    #[test]
+    fn an_enchanter_cannot_strip_a_blessing() {
+        let blessed = bless(&rare_mace(), "Maren").unwrap();
+        assert!(crate::enchant::removable(&blessed, crate::enchant::Tier::Master).iter().all(|a| !a.holy));
+        let holy = blessed.affixes.iter().copied().find(|a| a.holy).unwrap();
+        assert_eq!(crate::enchant::remove(&blessed, holy, &master()), Err(crate::enchant::Refusal::Blessed));
+    }
+
+    #[test]
+    fn reforging_keeps_the_blessing() {
+        let hallowed = hallow(&rare_mace(), "Maren", Family::Mace).unwrap();
+        let again = crate::enchant::reforge(&hallowed, 5, &master()).unwrap();
+        assert!(is_hallowed(&again));
+        assert_eq!(again.rarity, hallowed.rarity.max(again.rarity));
+        assert!(again.history.iter().any(|l| l.starts_with("Hallowed")));
+    }
+
+    #[test]
+    fn a_blessing_adds_nothing_to_what_scrap_gives() {
+        let plain = rare_mace();
+        let blessed = bless(&plain, "Maren").unwrap();
+        assert_eq!(crate::scrap::scrap(&blessed), crate::scrap::scrap(&plain));
+    }
 }

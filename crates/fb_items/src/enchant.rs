@@ -87,6 +87,8 @@ pub enum Refusal {
     NotRare,
     /// A legendary is as it is.
     Legendary,
+    /// A blessing is not an enchanter's to strip.
+    Blessed,
 }
 
 impl Refusal {
@@ -100,6 +102,7 @@ impl Refusal {
             Refusal::NothingToReforge => "Nothing to reforge.",
             Refusal::MasterOnly => "Only a master enchanter can make a legend.",
             Refusal::NotRare => "Only a rare item can be made legendary.",
+            Refusal::Blessed => "A blessing is not theirs to strip.",
             Refusal::Legendary => "A legend cannot be changed.",
         }
     }
@@ -256,7 +259,7 @@ pub fn removable(item: &Item, tier: Tier) -> Vec<&'static Affix> {
     if !enchantable(item) {
         return vec![];
     }
-    item.affixes.iter().copied().filter(|a| tier >= Tier::Apprentice || !a.good).collect()
+    item.affixes.iter().copied().filter(|a| !a.holy && (tier >= Tier::Apprentice || !a.good)).collect()
 }
 
 /// The item with its affixes replaced: renamed, restyled for its new rarity, stats worked out
@@ -375,6 +378,9 @@ pub fn remove(item: &Item, affix: &Affix, by: &Enchanter) -> Result<Item, Refusa
     if !item.affixes.iter().any(|a| a.name == affix.name) {
         return Err(Refusal::NotCarried);
     }
+    if affix.holy {
+        return Err(Refusal::Blessed);
+    }
     if affix.good && by.tier < Tier::Apprentice {
         return Err(Refusal::TooHigh);
     }
@@ -401,7 +407,8 @@ pub fn reforge(item: &Item, seed: u32, by: &Enchanter) -> Result<Item, Refusal> 
         n.sort();
         n
     };
-    let before = names(&item.affixes);
+    let holy: Vec<&'static Affix> = item.affixes.iter().copied().filter(|a| a.holy).collect();
+    let before = names(&item.affixes.iter().copied().filter(|a| !a.holy).collect::<Vec<_>>());
     let mut rolled = Vec::new();
     for tried in 0..8u32 {
         let mut rng = game_rng(seed.wrapping_add(tried).wrapping_mul(0x9E37_79B1) ^ item.seed);
@@ -411,6 +418,7 @@ pub fn reforge(item: &Item, seed: u32, by: &Enchanter) -> Result<Item, Refusal> 
         }
     }
     // Rolled for the item's rarity, so a slot nothing fits can leave it short: the rarity follows.
+    rolled.extend(holy);
     Ok(rebuilt(item, rolled, format!("Reforged by {}.", by.by())))
 }
 

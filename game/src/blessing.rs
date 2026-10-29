@@ -113,6 +113,9 @@ fn give_the_blessing(input: ActionInput, hovered: Res<Hovered>, mut inventory: R
     };
     let Some((id, _)) = hovered.0 else { return };
     let Some(item) = inventory.item(id).cloned() else { return };
+    if can(&character, GameRules::of(&rules), &item, rite).is_none() {
+        return;
+    }
     match perform(&mut character, GameRules::of(&rules), &item, rite) {
         Ok(done) => {
             let line = format!("You {} the {}", rite.verb().to_lowercase(), done.title().to_lowercase());

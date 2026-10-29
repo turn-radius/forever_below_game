@@ -77,7 +77,7 @@ pub fn scrap(item: &Item) -> Option<Salvage> {
     }
     let t = &*TABLE;
     let mut essence = f64::from(t.essence[&item.rarity]);
-    for a in item.affixes.iter().filter(|a| a.good) {
+    for a in item.affixes.iter().filter(|a| a.good && !a.holy) {
         essence += f64::from(t.per_good_affix[&a.least]);
     }
     for _ in item.affixes.iter().filter(|a| !a.good) {
@@ -85,7 +85,7 @@ pub fn scrap(item: &Item) -> Option<Salvage> {
     }
     let mut materials = Vec::new();
     if item.profile.tags.contains(&Tag::Weapon) && item.rarity >= Rarity::Rare {
-        let good_groups: Vec<&str> = item.affixes.iter().filter(|a| a.good).filter_map(|a| a.group.as_deref()).collect();
+        let good_groups: Vec<&str> = item.affixes.iter().filter(|a| a.good && !a.holy).filter_map(|a| a.group.as_deref()).collect();
         for m in &t.materials {
             let has = m.from.tag.is_some_and(|tag| item.profile.tags.contains(&tag))
                 || m.from.group.as_deref().is_some_and(|g| good_groups.contains(&g))
