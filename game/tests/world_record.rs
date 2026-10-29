@@ -547,6 +547,10 @@ fn urn_with_goods(app: &mut App) -> Option<(usize, Container)> {
 fn what_is_taken_from_an_urn_in_a_niche_stays_taken_after_round_trips() {
     // World 6 has an urn with something in it on its second level.
     let mut app = delving_in(6);
+    // Too hardy for the level's rats to down between stairs: a fallen delver takes no stair, and
+    // what bites where moves whenever a level's layout or furnishing does.
+    let delver = player(&mut app);
+    *app.world_mut().get_mut::<Health>(delver).expect("the delver has hit points") = Health::full(10_000);
     // Down the levels until a niche holds an urn with something in it.
     let mut levels = 0;
     let (index, urn) = loop {
