@@ -17,24 +17,24 @@ use crate::inventory::Inventory;
 /// Whether a delver is a woman or a man: what the creator's Sex choice sets. Folk have one too.
 pub use fb_body::Sex;
 
-/// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
+/// The three classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Class {
+    /// Saves from before the Ranger was removed name it `ranger`; it loads as a fighter.
+    #[serde(alias = "ranger")]
     Fighter,
-    Ranger,
     Mage,
     Cleric,
 }
 
 impl Class {
-    pub const ALL: [Class; 4] = [Class::Fighter, Class::Ranger, Class::Mage, Class::Cleric];
+    pub const ALL: [Class; 3] = [Class::Fighter, Class::Mage, Class::Cleric];
 
     /// The class as the factions' likes and hates name it.
     pub fn faction_class(self) -> fb_faction::ClassKind {
         match self {
             Class::Fighter => fb_faction::ClassKind::Fighter,
-            Class::Ranger => fb_faction::ClassKind::Ranger,
             Class::Mage => fb_faction::ClassKind::Mage,
             Class::Cleric => fb_faction::ClassKind::Cleric,
         }
@@ -44,7 +44,6 @@ impl Class {
     pub fn outfit_key(self) -> &'static str {
         match self {
             Class::Fighter => "fighter",
-            Class::Ranger => "ranger",
             Class::Mage => "mage",
             Class::Cleric => "cleric",
         }
@@ -57,23 +56,22 @@ impl Class {
         use fb_faction::Alignment::*;
         match self {
             Class::Fighter => LawfulNeutral,
-            Class::Ranger => NeutralGood,
             Class::Mage => TrueNeutral,
             Class::Cleric => LawfulGood,
         }
     }
 
-    /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
+    /// How the class casts: Mages from INT, Clerics from WIS, Fighters hardly at all.
     pub fn casting(self) -> Casting {
         match self {
-            Class::Fighter | Class::Ranger => Casting::Martial,
+            Class::Fighter => Casting::Martial,
             Class::Mage => Casting::Arcane,
             Class::Cleric => Casting::Divine,
         }
     }
 
-    /// The class's hit die under the default rules: d10 for fighters and rangers, d8 for
-    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, ranger p. 35, cleric p. 15,
+    /// The class's hit die under the default rules: d10 for fighters, d8 for
+    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, cleric p. 15,
     /// wizard, our mage, p. 52).
     pub fn hit_die(self) -> u32 {
         self.hit_die_with(fb_character::rules::defaults())
@@ -84,7 +82,6 @@ impl Class {
         let dice = &rules.combat.hit_dice;
         match self {
             Class::Fighter => dice.fighter,
-            Class::Ranger => dice.ranger,
             Class::Cleric => dice.cleric,
             Class::Mage => dice.mage,
         }
@@ -394,7 +391,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from), favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: Self::warmth_of(item) as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from), favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false },
             );
         }
         // A cleric's devotion counts like one more thing worn, so the sheet can explain it and
@@ -517,7 +514,13 @@ impl Character {
         self.derive_with(fb_character::rules::defaults(), inventory)
     }
 
-    /// [`Character::derive`] under `rules`.
+    /// The warmth an equipped item gives: a light's own (of the Ember, of the Furnace) only while it
+    /// burns, so an unlit lantern at the hip warms no one.
+    fn warmth_of(item: &fb_items::Item) -> f32 {
+        if item.shape.lit() == Some(false) { 0.0 } else { item.profile.stats.warmth }
+    }
+
+/// [`Character::derive`] under `rules`.
     pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
         self.derive_lit(rules, inventory, None)
     }
@@ -536,7 +539,7 @@ impl Character {
             load,
             capacity,
             load_band,
-            warmth: sum(|s| s.warmth),
+            warmth: equipped.iter().map(|(_, item)| Self::warmth_of(item)).fold(0.0, |a, b| a + b),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,
             hunger_rate: gear.hunger_rate as f32,
@@ -588,7 +591,7 @@ pub fn character_for(seed: u32) -> Character {
         Some(folk) => Character::roll_folk(folk, seed),
         None => Character::roll(seed),
     };
-    // `FB_CLASS=ranger` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
+    // `FB_CLASS=mage` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
     if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| Class::ALL.into_iter().find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))) {
         character.class = class;
     }
@@ -942,6 +945,21 @@ mod tests {
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
         item
+    }
+
+    #[test]
+    fn a_lantern_of_the_ember_warms_only_while_it_burns() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let warmth = |lit: bool| {
+            let mut lantern = with_affix("Lantern", 7, "of the Ember");
+            lantern.shape.set_lit(lit).unwrap();
+            let mut inventory = Inventory::default();
+            let id = inventory.add(lantern);
+            inventory.wear(id, Slot::Offhand).unwrap();
+            delver.derive(&inventory).warmth
+        };
+        assert_eq!(warmth(true) - warmth(false), 2.0, "of the Ember gives +2 while lit, nothing unlit");
     }
 
     #[test]

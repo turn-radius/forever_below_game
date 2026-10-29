@@ -59,7 +59,7 @@ impl Plugin for CreaturesPlugin {
         }
         app.add_plugins((behaviour::BehaviourPlugin, skeletons::SkeletonsPlugin, trolls::TrollsPlugin))
             .init_resource::<Tuning>()
-            .add_systems(Update, (spawn_creatures.run_if(resource_exists_and_changed::<CurrentLevel>), size_creatures, idle, animate).chain().in_set(DelveSystems));
+            .add_systems(Update, (spawn_creatures.run_if(crate::loading::laid_out_at(4)), size_creatures, idle, animate).chain().in_set(DelveSystems));
     }
 }
 
@@ -399,7 +399,7 @@ const GRIME: (f32, f32) = (0.15, 0.4);
 /// face +Z and the spot's yaw is a camera's (0 faces -Z), as for folk.
 pub fn stand_at(level: &Level, spot: &CreatureSpot) -> Transform {
     let [x, _, z] = Level::world(spot.x, spot.y);
-    let y = Relief::new(level).floor_height(x, z);
+    let y = Relief::new(level).rest_height(x, z);
     Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 

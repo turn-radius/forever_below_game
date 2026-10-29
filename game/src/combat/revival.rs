@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn only_clerics_pray() {
-        for class in [Class::Fighter, Class::Ranger, Class::Mage] {
+        for class in [Class::Fighter, Class::Mage] {
             let (mut app, player) = prayerful(class, 18, -100);
             knock_down(&mut app, player);
             assert!(app.world().get_resource::<Unconscious>().is_some(), "{class:?} falls");
@@ -633,7 +633,7 @@ mod tests {
         assert!(app.world().get_resource::<Unconscious>().is_some(), "no second prayer");
         choose(&mut app, ReviveButton::ComeTo);
         app.world_mut().resource_mut::<Prayers>().0 = 1;
-        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: player, hit_points: 1, since: 0.0, began: 0.0 });
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: player, hit_points: 1, since: 0.0, nap_until: None, began: 0.0 });
         app.update();
         assert_eq!(app.world().resource::<Prayers>().0, 0, "sleep renews it");
     }

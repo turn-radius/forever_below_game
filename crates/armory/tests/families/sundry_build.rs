@@ -115,7 +115,7 @@ fn a_laid_bedroll_is_the_same_bedroll_unrolled_on_the_floor() {
         let (lo, hi) = bounds(&laid.parts);
         assert!(lo[1].abs() < 1e-3, "seed {}: rests on the floor at {}", state.seed, lo[1]);
         assert!(hi[1] < 1.3, "seed {}: {} high", state.seed, hi[1]);
-        let parts: Vec<_> = laid.parts.iter().map(|p| (p.name.clone(), bounds([p]))).collect();
+        let parts: Vec<_> = laid.parts.iter().map(|p| (p.name, bounds([p]))).collect();
         assert!(hi[0].max(-lo[0]) <= LAID_BEDROLL_HALF.0 && hi[2].max(-lo[2]) <= LAID_BEDROLL_HALF.1, "seed {}: {lo:?} {hi:?} {parts:?}", state.seed);
         assert!(hi[0] - lo[0] > 12.0, "seed {}: about a person long", state.seed);
         // Laying it out does not change what it is: the rolled one comes back from the same state.

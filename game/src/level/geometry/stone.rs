@@ -24,7 +24,7 @@ use armory::{
     },
     geom::{LatheOptions, MeshBuilder, Shading, V3, lathe, value_noise3, vec3},
 };
-use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle, WallFinish};
+use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle, NicheSpot, NicheStyle, WallFinish, dais::RISE, niches};
 use procgen_rng::Mulberry32;
 
 use super::{
@@ -451,6 +451,7 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
     let has_face = |x: i32, y: i32, f: Facing| drawn(x, y) && view.cell(x + f.step().0, y + f.step().1) == Cell::Rock;
 
     let (mut floor, mut ceiling, mut walls, mut damp) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let mut risers = MeshBuilder::new();
     let mut cobbles = super::cobble::Stones::default();
     let (mut ink, mut joints) = (Ink::default(), Ink::default());
     let flat = Relief::new(level);
@@ -464,7 +465,8 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
             // Where a stair goes through (`crate::level::stairs`), no floor under a way down and
             // no vault over a way up, as in the rough rock.
             let stair = level.stair_at(x, y);
-            if super::is_floored(level, view.passage(), x, y) {
+            // A dais lays its own floor, wholly: steps, treads and flagstones ([`dais_stone`]).
+            if super::is_floored(level, view.passage(), x, y) && !level.on_dais(x, y) {
                 Face {
                     origin: corner,
                     u: [1.0, 0.0, 0.0],
@@ -493,7 +495,8 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                 let (ux, uz) = unit_step(u);
                 // Upright ink where the wall turns a corner rather than running on.
                 let corners = [!has_face(x - ux, y - uz, facing), !has_face(x + ux, y + uz, facing)];
-                wall_shell(&vaults, (x, y), facing, corners, &mut walls, &mut ink);
+                let niche = level.niches.iter().find(|n| (n.x, n.y) == (x, y) && n.facing == facing);
+                wall_shell(&vaults, (x, y), facing, corners, niche, &mut walls, &mut ink);
                 // Each run is laid once per stretch: from its first face in this range.
                 if !(in_range(x - ux, y - uz) && has_face(x - ux, y - uz, facing)) {
                     let run = find_run(view, (x, y), facing, level.seed, &has_face);
@@ -506,15 +509,30 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
                         let i = ((s / CELL).floor() as i32).clamp(0, run.cells - 1);
                         view.finishes().at(run.start.0 + ux * i, run.start.1 + uz * i).is_some_and(|f| f.walls == WallFinish::Rubble)
                     };
-                    lay_blocks(&run, &vaults, &courses, &owns, &rubble_at, (&mut walls, &mut damp), &mut joints);
+                    let cuts: Vec<NicheCut> = level
+                        .niches
+                        .iter()
+                        .filter(|n| n.facing == facing)
+                        .filter_map(|n| {
+                            let i = (n.x - run.start.0) * ux + (n.y - run.start.1) * uz;
+                            let in_line = n.x - run.start.0 == ux * i && n.y - run.start.1 == uz * i;
+                            (in_line && (0..run.cells).contains(&i)).then(|| NicheCut::at((i as f32 + 0.5) * CELL, n))
+                        })
+                        .collect();
+                    lay_blocks(&run, &vaults, &courses, &cuts, &owns, &rubble_at, (&mut walls, &mut damp), &mut joints);
                 }
             }
         }
     }
     vault_ribs(&vaults, &|x, y| in_range(x, y), &mut joints);
+    // Each dais is laid by the stretch holding its first cell.
+    for dais in level.daises.iter().filter(|d| in_range(d.x as i32, d.y as i32)) {
+        dais_stone(dais, level.seed, &mut floor, &mut risers, &mut ink);
+    }
     let mut parts = Parts::new();
     let stone = |tint: Rgb| Look::of(MaterialKind::Stone).tinted(tint).without_outline();
     parts.add_look("floor", floor, stone(FLOOR_STONE));
+    parts.add_look("risers", risers, stone(Rgb(FLOOR_STONE.0 * 0.42, FLOOR_STONE.1 * 0.42, FLOOR_STONE.2 * 0.42)));
     parts.add_look("walls", walls, stone(WALL_STONE));
     parts.add_look("damp", damp, stone(DAMP_STONE));
     cobbles.add_parts(&mut parts, super::cobble::stone_look);
@@ -553,7 +571,7 @@ fn find_run(view: &CellView, at: (i32, i32), facing: Facing, seed: u32, has_face
 
 /// One cell's face of a wall: the shell from the floor to the ceiling, flat on the cell's
 /// plane, and the ink along its top and its upright `corners` (start and end).
-fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [bool; 2], walls: &mut MeshBuilder, ink: &mut Ink) {
+fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [bool; 2], niche: Option<&NicheSpot>, walls: &mut MeshBuilder, ink: &mut Ink) {
     let (u, n) = wall_axes(facing);
     let (dx, dy) = facing.step();
     // The wall's grid points, in order along `u`: the plane is a whole number of cells, the
@@ -573,10 +591,51 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
             [px, vaults.height(px, pz), pz]
         })
         .collect();
+    // A niche is cut out of the shell as an opening of its own outline, and the recess behind it
+    // built round the same points, so nothing leaks at its edge.
+    let hole = niche.map(NicheShape::new);
+    let across = |p: V3| vec3::dot(p, u);
+    let centre = [(x as f32 + 0.5) * CELL + dx as f32 * CELL * 0.5, 0.0, (y as f32 + 0.5) * CELL + dy as f32 * CELL * 0.5];
+    let at_centre = across(centre);
     for j in 0..SEGMENTS {
         let (a, b) = ([tops[j][0], 0.0, tops[j][2]], [tops[j + 1][0], 0.0, tops[j + 1][2]]);
-        let quad = [a, b, tops[j + 1], tops[j]];
-        walls.push_flat_quad(quad, quad.map(uv), n);
+        let (ta, tb) = (across(a), across(b));
+        let Some(hole) = hole.as_ref().filter(|h| ta < at_centre + h.half && tb > at_centre - h.half) else {
+            let quad = [a, b, tops[j + 1], tops[j]];
+            walls.push_flat_quad(quad, quad.map(uv), n);
+            continue;
+        };
+        // The strip's bottom and top at `t` along the wall. Only the stone under the arch's crown
+        // is cut about the opening; above it the strip is one quad to the ceiling's own grid
+        // points, so the wall's top stays on the ceiling's grid.
+        let along = |t: f32| (t - ta) / (tb - ta);
+        let low = |t: f32, y: f32| [a[0] + (b[0] - a[0]) * along(t), y, a[2] + (b[2] - a[2]) * along(t)];
+        let (t0, t1) = (at_centre - hole.half, at_centre + hole.half);
+        let crown = hole.crown();
+        let mut piece = |corners: [V3; 4]| {
+            walls.push_flat_quad(corners, corners.map(uv), n);
+        };
+        piece([low(ta, crown), low(tb, crown), tops[j + 1], tops[j]]);
+        if ta < t0 {
+            piece([a, low(t0, 0.0), low(t0, crown), low(ta, crown)]);
+        }
+        if tb > t1 {
+            piece([low(t1, 0.0), b, low(tb, crown), low(t1, crown)]);
+        }
+        // Between the jambs: stone under the sill, and over the arch up to its crown.
+        let (m0, m1) = (ta.max(t0), tb.min(t1));
+        let mut stops = vec![m0];
+        stops.extend(hole.columns().map(|(off, _)| at_centre + off).filter(|&t| t > m0 + 1e-3 && t < m1 - 1e-3));
+        stops.push(m1);
+        for pair in stops.windows(2) {
+            let (p, q) = (pair[0], pair[1]);
+            piece([low(p, 0.0), low(q, 0.0), low(q, hole.sill), low(p, hole.sill)]);
+            piece([low(p, hole.height(p - at_centre)), low(q, hole.height(q - at_centre)), low(q, crown), low(p, crown)]);
+        }
+    }
+    if let Some(hole) = &hole {
+        hole.recess(centre, u, n, walls);
+        hole.moulding(centre, u, n, walls);
     }
 
     // Where the wall meets the ceiling, a ribbon on each.
@@ -591,6 +650,222 @@ fn wall_shell(vaults: &Vaults, (x, y): (i32, i32), facing: Facing, corners: [boo
         let rows = (top[1] / 4.0).ceil().max(1.0) as usize;
         let upright: Vec<V3> = (0..=rows).map(|r| [top[0], top[1] * r as f32 / rows as f32, top[2]]).collect();
         ink.ribbon_lifted(&upright, &vec![n; upright.len()], CORNER_INK_LIFT);
+    }
+}
+
+/// The outline of a niche's opening, measured across the wall from its middle: the jambs rise to
+/// the springing, and a shallow segmental arch carries on over them. The arch is a polyline of
+/// [`ARCH_STEPS`] columns, and every surface of the niche is built on its points.
+struct NicheShape {
+    half: f32,
+    radius: f32,
+    centre: f32,
+    sill: f32,
+    spring: f32,
+    style: NicheStyle,
+}
+
+const ARCH_STEPS: usize = 8;
+
+impl NicheShape {
+    fn new(spot: &NicheSpot) -> Self {
+        let (half, rise) = (niches::WIDTH * 0.5, niches::RISE);
+        let radius = (half * half + rise * rise) / (2.0 * rise);
+        NicheShape { half, radius, centre: spot.spring + rise - radius, sill: spot.sill, spring: spot.spring, style: spot.style }
+    }
+
+    /// The arch's height `off` across from the middle.
+    fn arch(&self, off: f32) -> f32 {
+        self.centre + (self.radius * self.radius - off * off).max(0.0).sqrt()
+    }
+
+    /// The opening's top edge at `off` across from the middle, as the polyline the surfaces are
+    /// built on draws it.
+    fn height(&self, off: f32) -> f32 {
+        let step = self.half * 2.0 / ARCH_STEPS as f32;
+        let k = (((off + self.half) / step).floor().max(0.0) as usize).min(ARCH_STEPS - 1);
+        let (o0, o1) = (-self.half + step * k as f32, -self.half + step * (k + 1) as f32);
+        let (h0, h1) = (self.arch(o0), self.arch(o1));
+        h0 + (h1 - h0) * ((off - o0) / step).clamp(0.0, 1.0)
+    }
+
+    /// The height of the arch's crown: the shell is cut about the opening only up to here.
+    fn crown(&self) -> f32 {
+        self.spring + niches::RISE
+    }
+
+    /// The columns of the arch, `(offset, height)` from the left jamb to the right.
+    fn columns(&self) -> impl Iterator<Item = (f32, f32)> + '_ {
+        (0..=ARCH_STEPS).map(|i| {
+            let off = -self.half + self.half * 2.0 * i as f32 / ARCH_STEPS as f32;
+            (off, self.arch(off))
+        })
+    }
+
+    /// The recess behind the opening: a sill, jambs, the arch's soffit and the back, cut
+    /// `niches::DEPTH` into the wall whose plane passes through `centre` (on the floor), along
+    /// `u` and facing `n`.
+    fn recess(&self, centre: V3, u: V3, n: V3, mesh: &mut MeshBuilder) {
+        let at = |off: f32, y: f32, depth: f32| vec3::add(vec3::add(vec3::add(centre, vec3::scale(u, off)), [0.0, y, 0.0]), vec3::scale(n, -depth));
+        let uv = |p: V3| [vec3::dot(p, u) / CELL, p[1] / CELL];
+        let mut quad = |corners: [V3; 4], facing: V3| {
+            mesh.push_flat_quad(corners, corners.map(uv), facing);
+        };
+        let (sill, d) = (self.sill, niches::DEPTH);
+        let cols: Vec<(f32, f32)> = self.columns().collect();
+        let (left, right) = (cols[0], cols[ARCH_STEPS]);
+        quad([at(left.0, sill, 0.0), at(right.0, sill, 0.0), at(right.0, sill, d), at(left.0, sill, d)], [0.0, 1.0, 0.0]);
+        quad([at(left.0, sill, 0.0), at(left.0, left.1, 0.0), at(left.0, left.1, d), at(left.0, sill, d)], u);
+        quad([at(right.0, sill, 0.0), at(right.0, right.1, 0.0), at(right.0, right.1, d), at(right.0, sill, d)], vec3::neg(u));
+        for w in cols.windows(2) {
+            let ((o0, h0), (o1, h1)) = (w[0], w[1]);
+            quad([at(o0, sill, d), at(o1, sill, d), at(o1, h1, d), at(o0, h0, d)], n);
+            quad([at(o0, h0, 0.0), at(o1, h1, 0.0), at(o1, h1, d), at(o0, h0, d)], [0.0, -1.0, 0.0]);
+        }
+    }
+}
+
+impl NicheShape {
+    /// The surround of a moulded niche, standing proud of the wall's plane: an architrave band
+    /// round the arch and down both jambs, a ledge under the sill and, in a grand niche, a
+    /// keystone over the crown. Plain niches have none. Built of the same stone as the walls.
+    fn moulding(&self, centre: V3, u: V3, n: V3, mesh: &mut MeshBuilder) {
+        if self.style == NicheStyle::Plain {
+            return;
+        }
+        // `depth` is how far out of the plane a point stands (the recess goes negative).
+        let at = |off: f32, y: f32, out: f32| vec3::add(vec3::add(vec3::add(centre, vec3::scale(u, off)), [0.0, y, 0.0]), vec3::scale(n, out));
+        let uv = |p: V3| [vec3::dot(p, u) / CELL, p[1] / CELL];
+        let mut quad = |corners: [V3; 4], facing: V3| {
+            mesh.push_flat_quad(corners, corners.map(uv), facing);
+        };
+        let (m, proud, h) = (niches::MOULD, niches::MOULD_PROUD, self.half);
+        let cols: Vec<(f32, f32)> = self.columns().collect();
+        let (left, right) = (cols[0], cols[ARCH_STEPS]);
+        // The jambs' bands, from the sill up to the top band's springing.
+        for (inner, outer, towards) in [(-h, -h - m, vec3::neg(u)), (h, h + m, u)] {
+            let top = if inner < 0.0 { left.1 } else { right.1 } + m;
+            quad([at(inner, self.sill, proud), at(outer, self.sill, proud), at(outer, top, proud), at(inner, top, proud)], n);
+            // Its outer edge, and its reveal beside the opening.
+            quad([at(outer, self.sill, 0.0), at(outer, top, 0.0), at(outer, top, proud), at(outer, self.sill, proud)], towards);
+            quad([at(inner, self.sill, 0.0), at(inner, top - m, 0.0), at(inner, top - m, proud), at(inner, self.sill, proud)], vec3::neg(towards));
+        }
+        // The band over the arch, its outer edge a step above the opening's.
+        for w in cols.windows(2) {
+            let ((o0, h0), (o1, h1)) = (w[0], w[1]);
+            quad([at(o0, h0, proud), at(o1, h1, proud), at(o1, h1 + m, proud), at(o0, h0 + m, proud)], n);
+            quad([at(o0, h0 + m, 0.0), at(o1, h1 + m, 0.0), at(o1, h1 + m, proud), at(o0, h0 + m, proud)], [0.0, 1.0, 0.0]);
+            quad([at(o0, h0, 0.0), at(o1, h1, 0.0), at(o1, h1, proud), at(o0, h0, proud)], [0.0, -1.0, 0.0]);
+        }
+        // The ledge under the sill, reaching out a little further than the architrave.
+        let (ledge, out, wide) = (niches::LEDGE, proud + 0.5, h + m);
+        quad([at(-wide, self.sill - ledge, out), at(wide, self.sill - ledge, out), at(wide, self.sill, out), at(-wide, self.sill, out)], n);
+        quad([at(-wide, self.sill, 0.0), at(wide, self.sill, 0.0), at(wide, self.sill, out), at(-wide, self.sill, out)], [0.0, 1.0, 0.0]);
+        quad([at(-wide, self.sill - ledge, 0.0), at(wide, self.sill - ledge, 0.0), at(wide, self.sill - ledge, out), at(-wide, self.sill - ledge, out)], [0.0, -1.0, 0.0]);
+        for (side, towards) in [(-wide, vec3::neg(u)), (wide, u)] {
+            quad([at(side, self.sill - ledge, 0.0), at(side, self.sill, 0.0), at(side, self.sill, out), at(side, self.sill - ledge, out)], towards);
+        }
+        if self.style == NicheStyle::Grand {
+            // The keystone, a block standing proud of the band over the crown.
+            let (k, bottom, top, out) = (niches::KEY_HALF, self.crown() - 0.2, self.crown() + m + niches::KEY_HEIGHT - 1.0, niches::KEY_PROUD);
+            quad([at(-k, bottom, out), at(k, bottom, out), at(k, top, out), at(-k, top, out)], n);
+            quad([at(-k, top, 0.0), at(k, top, 0.0), at(k, top, out), at(-k, top, out)], [0.0, 1.0, 0.0]);
+            quad([at(-k, bottom, 0.0), at(k, bottom, 0.0), at(k, bottom, out), at(-k, bottom, out)], [0.0, -1.0, 0.0]);
+            for (side, towards) in [(-k, vec3::neg(u)), (k, u)] {
+                quad([at(side, bottom, 0.0), at(side, top, 0.0), at(side, top, out), at(side, bottom, out)], towards);
+            }
+        }
+    }
+}
+
+/// The room a niche takes in a run of wall, along it and up, in the run's own coordinates: the
+/// opening and a joint's width all round it, so no block runs across it and the blocks stand
+/// round it as a frame.
+#[derive(Clone, Copy, Debug)]
+struct NicheCut {
+    s: [f32; 2],
+    y: [f32; 2],
+}
+
+/// How far the blocks stand back from the edge of a niche's opening.
+const FRAME_GAP: f32 = 0.45;
+/// How far the blocks stand back above the arch's crown, a joint's width and a little.
+const FRAME_GAP_TOP: f32 = 0.2;
+/// The least piece of a block worth laying beside a niche.
+const FRAME_LEAST: f32 = 0.8;
+
+/// `spans` with the part of each inside `[lo, hi]` taken out.
+fn minus(spans: Vec<[f32; 2]>, lo: f32, hi: f32) -> Vec<[f32; 2]> {
+    spans
+        .into_iter()
+        .flat_map(|[a, b]| {
+            if b <= lo || a >= hi {
+                return vec![[a, b]];
+            }
+            let mut out = Vec::new();
+            if lo > a {
+                out.push([a, lo]);
+            }
+            if hi < b {
+                out.push([hi, b]);
+            }
+            out
+        })
+        .collect()
+}
+
+impl NicheCut {
+    fn at(middle: f32, spot: &NicheSpot) -> Self {
+        // A moulded niche's surround is part of what the blocks stand back from.
+        let (side, below, above) = match spot.style {
+            NicheStyle::Plain => (0.0, 0.0, 0.0),
+            NicheStyle::Moulded => (niches::MOULD, niches::LEDGE, niches::MOULD),
+            NicheStyle::Grand => (niches::MOULD, niches::LEDGE, niches::MOULD + niches::KEY_HEIGHT - 1.0),
+        };
+        let half = niches::WIDTH * 0.5 + FRAME_GAP + side;
+        NicheCut { s: [middle - half, middle + half], y: [spot.sill - FRAME_GAP - below, spot.crown() + FRAME_GAP_TOP + above] }
+    }
+
+    /// The pieces of a block `ar` along the wall by `br` up that lie outside the cuts, as
+    /// `(ar, br)`: the block itself if it clears them.
+    fn around(cuts: &[NicheCut], ar: [f32; 2], br: [f32; 2]) -> Vec<([f32; 2], [f32; 2])> {
+        let mut pieces = vec![(ar, br)];
+        for cut in cuts {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|(a, b)| {
+                    if a[1] <= cut.s[0] || a[0] >= cut.s[1] || b[1] <= cut.y[0] || b[0] >= cut.y[1] {
+                        return vec![(a, b)];
+                    }
+                    let mut out = Vec::new();
+                    if cut.s[0] - a[0] >= FRAME_LEAST {
+                        out.push(([a[0], cut.s[0]], b));
+                    }
+                    if a[1] - cut.s[1] >= FRAME_LEAST {
+                        out.push(([cut.s[1], a[1]], b));
+                    }
+                    let mid = [a[0].max(cut.s[0]), a[1].min(cut.s[1])];
+                    if cut.y[0] - b[0] >= FRAME_LEAST {
+                        out.push((mid, [b[0], cut.y[0]]));
+                    }
+                    if b[1] - cut.y[1] >= FRAME_LEAST {
+                        out.push((mid, [cut.y[1], b[1]]));
+                    }
+                    out
+                })
+                .collect();
+        }
+        pieces
+    }
+
+    /// The stretches of the line from `lo` to `hi` along the wall at height `y` outside every cut.
+    fn clear_along(cuts: &[NicheCut], lo: f32, hi: f32, y: f32) -> Vec<[f32; 2]> {
+        cuts.iter().filter(|c| y > c.y[0] && y < c.y[1]).fold(vec![[lo, hi]], |spans, c| minus(spans, c.s[0], c.s[1]))
+    }
+
+    /// The stretches of the upright line at `s` from `bottom` to `top` outside every cut.
+    fn clear_up(cuts: &[NicheCut], s: f32, bottom: f32, top: f32) -> Vec<[f32; 2]> {
+        cuts.iter().filter(|c| s > c.s[0] && s < c.s[1]).fold(vec![[bottom, top]], |spans, c| minus(spans, c.y[0], c.y[1]))
     }
 }
 
@@ -637,6 +912,7 @@ fn lay_blocks(
     run: &Run,
     vaults: &Vaults,
     courses: &[(f32, f32)],
+    cuts: &[NicheCut],
     owns: &impl Fn(f32) -> bool,
     rubble_at: &impl Fn(f32) -> bool,
     (mesh, damp): (&mut MeshBuilder, &mut MeshBuilder),
@@ -658,6 +934,13 @@ fn lay_blocks(
         list.get(k).copied().filter(|&(y0, _)| y0 + 1.4 < tallest)
     };
     let count = courses.len().max(rubble_courses.len());
+    // The blocks stand round each niche as a frame: ink along the edge of the frame, so the
+    // masonry above the arch reads as laid blocks and not as bare wall.
+    for cut in cuts.iter().filter(|c| owns((c.s[0] + c.s[1]) * 0.5)) {
+        let at = |s: f32, y: f32| vec3::add(run.point(s), [0.0, y, 0.0]);
+        let ring = [at(cut.s[0], cut.y[0]), at(cut.s[0], cut.y[1]), at(cut.s[1], cut.y[1]), at(cut.s[1], cut.y[0])];
+        joints.ribbon_lifted(&ring, &[run.n; 4], JOINT_INK_LIFT);
+    }
     let mut through: Vec<Through> = Vec::new();
     for k in 0..count {
         if course(false, k).is_none() && course(true, k).is_none() {
@@ -730,7 +1013,7 @@ fn lay_blocks(
             }
             // Only rubble has uneven chamfers and corners drawn in, and not so far as to leave
             // nothing of a small stone or a half of one.
-            let dress = |out: &mut MeshBuilder, ar: [f32; 2], br: [f32; 2], depth: f32| {
+            let dress_whole = |out: &mut MeshBuilder, ar: [f32; 2], br: [f32; 2], depth: f32| {
                 if !rubble {
                     return slab(out, &frame, ar, br, depth, CHAMFER, true);
                 }
@@ -739,17 +1022,31 @@ fn lay_blocks(
                 let tame = (room * 0.22 / RUBBLE_CUT).min(1.0);
                 slab_rough(out, &frame, ar, br, depth, chamfer, true, cut.map(|c| c * tame));
             };
+            // A block over a niche is laid in pieces round it, so none runs across its opening.
+            let dress = |out: &mut MeshBuilder, ar: [f32; 2], br: [f32; 2], depth: f32| {
+                for (pa, pb) in NicheCut::around(cuts, ar, br) {
+                    dress_whole(out, pa, pb, depth);
+                }
+            };
+            // Ink along a course or a joint stops at a niche's opening rather than crossing it.
+            let across = |joints: &mut Ink, a: f32, b: f32, y: f32, lift: f32| {
+                for [from, to] in NicheCut::clear_along(cuts, a, b, y) {
+                    joints.ribbon_lifted(&line(from, to, y), &[run.n; 2], lift);
+                }
+            };
             // The ink in the joint below this block (the base of the wall for the lowest), and the
             // upright one before it.
             if k == 0 {
                 let lift = if rubble { RUBBLE_BASE_INK } else { BASE_INK.1 };
-                joints.ribbon_lifted(&line(lo, hi, BASE_INK.0), &[run.n; 2], lift);
+                across(joints, lo, hi, BASE_INK.0, lift);
             } else {
-                joints.ribbon_lifted(&line(lo, hi, y0), &[run.n; 2], JOINT_INK_LIFT);
+                across(joints, lo, hi, y0, JOINT_INK_LIFT);
             }
             if a > 1e-3 {
                 let at = |y: f32| vec3::add(run.point(a), [0.0, y, 0.0]);
-                joints.ribbon_lifted(&[at(bottom), at(top)], &[run.n; 2], JOINT_INK_LIFT);
+                for [from, to] in NicheCut::clear_up(cuts, a, bottom, top) {
+                    joints.ribbon_lifted(&[at(from), at(to)], &[run.n; 2], JOINT_INK_LIFT);
+                }
             }
             let out = if k == 0 { &mut *damp } else { &mut *mesh };
             if let Some(wedge) = pin {
@@ -760,7 +1057,7 @@ fn lay_blocks(
             // Now and then a rubble stone is two, one on the other.
             if rubble && r_split < RUBBLE_SPLIT && top - bottom > 2.6 {
                 let mid = (bottom + top) * 0.5 + (r_drop - 0.5) * 0.6;
-                joints.ribbon_lifted(&line(lo, hi, mid), &[run.n; 2], JOINT_INK_LIFT);
+                across(joints, lo, hi, mid, JOINT_INK_LIFT);
                 let (lower, upper) = ((bottom, mid - joint * 0.5), (mid + joint * 0.5, top));
                 for (b0, b1) in [lower, upper] {
                     dress(out, [lo, hi], [b0, b1], proud);
@@ -880,6 +1177,95 @@ pub fn flag_top(seed: u32, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> f32 {
                     top = top.max(flag.raise);
                 }
             }
+        }
+    }
+    top
+}
+
+// ---------------------------------------------------------------------------------------------
+// Daises
+// ---------------------------------------------------------------------------------------------
+
+/// How far a step's nosing is chamfered.
+const NOSING: f32 = 0.35;
+/// How far the ink along a step's nosing stands off the stone.
+const DAIS_INK_LIFT: f32 = 0.1;
+/// The width a clipped flagstone must keep to be laid at all.
+const MIN_FLAG: f32 = 0.4;
+
+/// The stone of a dais, in the floor's own stone: each tread a slab with a chamfered nosing, the
+/// flagstones of [`flag_layout`] laid on it clipped to its edge, and for a sunk floor the dressed
+/// stone of its rim, down to the bottom. Walking, resting and the camera read the same steps
+/// ([`fb_level::dais`]).
+fn dais_stone(dais: &fb_level::Dais, seed: u32, mesh: &mut MeshBuilder, risers: &mut MeshBuilder, ink: &mut Ink) {
+    let bottom = if dais.sunk { dais.top_height() } else { 0.0 };
+    let base = Frame { origin: [0.0, bottom, 0.0], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    for tread in dais.treads() {
+        let [x0, x1, z0, z1] = tread.rect;
+        let depth = tread.top - bottom;
+        if depth > 0.05 {
+            let ch = NOSING.min(depth * 0.5);
+            // The top and its chamfered nosing in the floor's stone, the riser faces below it in
+            // a darker one, and an ink line along the nosing, so each step reads at a glance.
+            slab(mesh, &base, [x0, x1], [z0, z1], depth, ch, false);
+            let rim = bottom + depth - ch;
+            let mut quad = |corners: [V3; 4], facing: V3| {
+                let uvs = corners.map(|p| [(p[0] + p[2]) / CELL, p[1] / CELL]);
+                risers.push_flat_quad(corners, uvs, facing);
+            };
+            quad([[x0, bottom, z0], [x1, bottom, z0], [x1, rim, z0], [x0, rim, z0]], [0.0, 0.0, -1.0]);
+            quad([[x0, bottom, z1], [x1, bottom, z1], [x1, rim, z1], [x0, rim, z1]], [0.0, 0.0, 1.0]);
+            quad([[x0, bottom, z0], [x0, bottom, z1], [x0, rim, z1], [x0, rim, z0]], [-1.0, 0.0, 0.0]);
+            quad([[x1, bottom, z0], [x1, bottom, z1], [x1, rim, z1], [x1, rim, z0]], [1.0, 0.0, 0.0]);
+            let edge: Vec<V3> = [[x0, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0]].iter().map(|&[x, z]| [x, tread.top, z]).collect();
+            ink.ribbon_lifted(&edge, &vec![[0.0, 1.0, 0.0]; edge.len()], DAIS_INK_LIFT);
+        }
+        let (cx0, cx1) = ((x0 / CELL).floor() as i32, ((x1 - 0.01) / CELL).floor() as i32);
+        let (cy0, cy1) = ((z0 / CELL).floor() as i32, ((z1 - 0.01) / CELL).floor() as i32);
+        for cy in cy0..=cy1 {
+            for cx in cx0..=cx1 {
+                let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+                let frame = Frame { origin: [ox, tread.top, oz], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+                for flag in flag_layout(seed, cx, cy) {
+                    let a = [(x0 - ox).max(flag.a[0]), (x1 - ox).min(flag.a[1])];
+                    let b = [(z0 - oz).max(flag.b[0]), (z1 - oz).min(flag.b[1])];
+                    if a[1] - a[0] >= MIN_FLAG && b[1] - b[0] >= MIN_FLAG {
+                        slab(mesh, &frame, a, b, flag.raise, FLAG_CHAMFER.min(flag.raise * 0.9), false);
+                    }
+                }
+            }
+        }
+    }
+    if dais.sunk {
+        let [x0, x1, z0, z1] = dais.rect();
+        // The bottom, and the walls of the pit from the top tread up to the floor round it.
+        let (rim, top) = (-RISE, 0.0);
+        let uv = |p: V3, along: usize| if along == 1 { [p[0] / CELL, p[2] / CELL] } else { [p[along] / CELL, p[1] / CELL] };
+        let floor_quad = [[x0, bottom, z0], [x1, bottom, z0], [x1, bottom, z1], [x0, bottom, z1]];
+        mesh.push_flat_quad(floor_quad, floor_quad.map(|p| uv(p, 1)), [0.0, 1.0, 0.0]);
+        let mut wall = |corners: [V3; 4], along: usize, facing: V3| {
+            risers.push_flat_quad(corners, corners.map(|p| uv(p, along)), facing);
+        };
+        wall([[x0, rim, z0], [x1, rim, z0], [x1, top, z0], [x0, top, z0]], 0, [0.0, 0.0, 1.0]);
+        wall([[x1, rim, z1], [x0, rim, z1], [x0, top, z1], [x1, top, z1]], 0, [0.0, 0.0, -1.0]);
+        wall([[x0, rim, z1], [x0, rim, z0], [x0, top, z0], [x0, top, z1]], 2, [1.0, 0.0, 0.0]);
+        wall([[x1, rim, z0], [x1, rim, z1], [x1, top, z1], [x1, top, z0]], 2, [-1.0, 0.0, 0.0]);
+        // The rim's edge in ink, where the floor drops away.
+        let lip: Vec<V3> = [[x0, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0]].iter().map(|&[x, z]| [x, 0.0, z]).collect();
+        ink.ribbon_lifted(&lip, &vec![[0.0, 1.0, 0.0]; lip.len()], DAIS_INK_LIFT);
+    }
+}
+
+/// How high the dais's drawn treads stand over the world rectangle `x` by `z`, with the flagstones
+/// laid on them: the highest part of the dais under any of it, `None` where it lies off the dais.
+pub fn dais_top(seed: u32, dais: &fb_level::Dais, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> Option<f32> {
+    let mut top: Option<f32> = None;
+    for tread in dais.treads() {
+        let [tx0, tx1, tz0, tz1] = tread.rect;
+        let (cx, cz) = ([x0.max(tx0), x1.min(tx1)], [z0.max(tz0), z1.min(tz1)]);
+        if cx[0] < cx[1] && cz[0] < cz[1] || (cx[0] <= cx[1] && cz[0] <= cz[1] && x0 == x1 && z0 == z1) {
+            let here = tread.top + flag_top(seed, cx, cz);
+            top = Some(top.map_or(here, |t| t.max(here)));
         }
     }
     top
@@ -1119,7 +1505,12 @@ mod tests {
     fn halls(seed: u32) -> Level {
         let level = fb_level::generate(seed, 2);
         assert_eq!(level.style, LevelStyle::StoneHalls);
-        Level { stairs: Vec::new(), ..level }
+        Level { stairs: Vec::new(), daises: Vec::new(), ..level }
+    }
+
+    /// As [`halls`], with the daises the level has.
+    fn halls_with_daises(seed: u32) -> Level {
+        Level { stairs: Vec::new(), ..fb_level::generate(seed, 2) }
     }
 
     #[test]
@@ -1166,6 +1557,44 @@ mod tests {
             }
         }
         assert!(checked > 20);
+    }
+
+    #[test]
+    fn a_dais_is_drawn_up_or_down_its_steps_and_things_rest_on_its_treads() {
+        let (mut raised, mut sunk) = (0, 0);
+        for seed in [3, 8, 16, 39, 21, 27] {
+            let level = halls_with_daises(seed);
+            let view = CellView::uncobbled(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let floor = part(&mesh, "floor");
+            // No face of the floor, dais included, looks down.
+            for tri in floor.indices.as_chunks::<3>().0 {
+                let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| floor.positions[i as usize]);
+                let face = vec3::normalize_or(vec3::cross(vec3::sub(b, a), vec3::sub(c, a)), [0.0; 3]);
+                let centre = vec3::scale(vec3::add(vec3::add(a, b), c), 1.0 / 3.0);
+                assert!(face[1] > -0.01, "seed {seed}: a floor face looks down at {centre:?}");
+            }
+            for dais in &level.daises {
+                let [x0, x1, z0, z1] = dais.rect();
+                let over: Vec<f32> = floor.positions.iter().filter(|p| p[0] >= x0 && p[0] <= x1 && p[2] >= z0 && p[2] <= z1).map(|p| p[1]).collect();
+                let top = dais.top_height();
+                if dais.sunk {
+                    sunk += 1;
+                    let lowest = over.iter().copied().fold(f32::MAX, f32::min);
+                    assert!((lowest - top).abs() < 1e-4, "seed {seed}: the pit bottoms at {lowest}, not {top}");
+                } else {
+                    raised += 1;
+                    let highest = over.iter().copied().fold(f32::MIN, f32::max);
+                    assert!(highest >= top && highest <= top + FLAG_RAISE.1 + 1e-4, "seed {seed}: the platform tops at {highest}, not {top}");
+                }
+                // A thing on the middle rests on the top tread's flags.
+                let (cx, cz) = ((x0 + x1) * 0.5, (z0 + z1) * 0.5);
+                let rest = dais_top(level.seed, dais, [cx - 1.0, cx + 1.0], [cz - 1.0, cz + 1.0]).unwrap();
+                assert!(rest >= top - 1e-4 && rest <= top + FLAG_RAISE.1 + 1e-4, "seed {seed}: rests at {rest}");
+                assert!(dais_top(level.seed, dais, [x0 - 30.0, x0 - 20.0], [z0 - 30.0, z0 - 20.0]).is_none());
+            }
+        }
+        assert!(raised > 0 && sunk > 0, "{raised} raised, {sunk} sunk");
     }
 
     #[test]
@@ -1232,6 +1661,181 @@ mod tests {
 
     fn level_mesh(view: &CellView, range: (i32, i32, i32, i32)) -> LevelMesh {
         super::super::level_mesh(view, range)
+    }
+
+    /// Every niche of the first levels of stone halls that have one: its level, and the niche.
+    fn niched() -> Vec<(Level, fb_level::NicheSpot)> {
+        let mut out = Vec::new();
+        for seed in 1..=12 {
+            let level = fb_level::generate(seed, 2);
+            out.extend(level.niches.iter().map(|n| (level.clone(), *n)));
+        }
+        // And a few tall ones, which stand to the vault.
+        let mut tall = 0;
+        for seed in 13..=120 {
+            let level = fb_level::generate(seed, 2);
+            if level.niches.iter().any(is_tall) && tall < 3 {
+                out.extend(level.niches.iter().filter(|n| is_tall(n)).map(|n| (level.clone(), *n)));
+                tall += 1;
+            }
+        }
+        assert!(out.len() >= 8 && tall > 0, "{} niches, {tall} tall levels", out.len());
+        out
+    }
+
+    /// Whether the niche is taller than the ordinary ones can be.
+    fn is_tall(n: &fb_level::NicheSpot) -> bool {
+        n.crown() > niches::CROWN_LIMIT + 1e-3
+    }
+
+    /// The niche's opening on its wall: the plane's middle on the floor, the wall's `u` and out
+    /// `n`, as the stone draws them.
+    fn opening(spot: &fb_level::NicheSpot) -> (V3, V3, V3) {
+        let (u, n) = wall_axes(spot.facing);
+        let (dx, dy) = spot.facing.step();
+        (vec3::add(super::super::cell_centre(spot.x, spot.y), [dx as f32 * CELL * 0.5, 0.0, dy as f32 * CELL * 0.5]), u, n)
+    }
+
+    #[test]
+    fn blocks_frame_a_niche_and_none_runs_across_its_opening() {
+        let mut checked = 0;
+        for (level, spot) in niched() {
+            let (centre, u, n) = opening(&spot);
+            let view = CellView::uncobbled(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let (mut standing, mut round) = (0, 0);
+            for name in ["walls", "damp"] {
+                for p in &part(&mesh, name).positions {
+                    let rel = vec3::sub(*p, centre);
+                    let (across, up, out) = (vec3::dot(rel, u), p[1], vec3::dot(rel, n));
+                    // In front of the plane, over the opening: nothing of any block.
+                    let over = across.abs() < niches::WIDTH * 0.5 - 0.05 && up > spot.sill + 0.05 && up < spot.spring - 0.05;
+                    assert!(!(over && out > 0.05 && out < 1.2), "a block runs across the niche at {spot:?}: {rel:?}");
+                    standing += (out > 0.3 && out < 1.2 && across.abs() < niches::WIDTH * 0.5 + 2.5 && up > spot.sill && up < spot.spring) as u32;
+                    // The recess itself, behind the plane, reaches its depth.
+                    round += (out < -niches::DEPTH + 0.01 && across.abs() < niches::WIDTH * 0.5 && up > spot.sill - 0.01 && up < spot.spring + niches::RISE).then_some(1).unwrap_or(0);
+                }
+            }
+            assert!(standing > 0, "blocks stand either side of the niche at {spot:?}");
+            assert!(round > 0, "the recess is cut {} deep at {spot:?}", niches::DEPTH);
+            checked += 1;
+        }
+        assert!(checked >= 8);
+    }
+
+    #[test]
+    fn the_shell_is_closed_solid_from_the_arch_up_and_open_only_in_the_arch() {
+        let (mut solid, mut open) = (0, 0);
+        for (level, spot) in niched().into_iter().take(10) {
+            let (centre, u, n) = opening(&spot);
+            let view = CellView::uncobbled(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let walls = part(&mesh, "walls");
+            // The front-facing triangles lying in the wall's plane, as (across, up) triangles.
+            let flat: Vec<[[f32; 2]; 3]> = walls
+                .indices
+                .chunks(3)
+                .filter_map(|t| {
+                    let rel = [0, 1, 2].map(|k| vec3::sub(walls.positions[t[k] as usize], centre));
+                    let lies = rel.iter().all(|r| vec3::dot(*r, n).abs() < 0.01);
+                    let facing = vec3::dot(walls.normals[t[0] as usize], n) > 0.9;
+                    (lies && facing).then(|| rel.map(|r| [vec3::dot(r, u), r[1]]))
+                })
+                .collect();
+            let covers = |p: [f32; 2]| {
+                flat.iter()
+                    .filter(|t| {
+                        let side = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+                        let (d0, d1, d2) = (side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0]));
+                        (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+                    })
+                    .count()
+            };
+            let crown = spot.crown();
+            let wall_top = Vaults::new(&level).height(centre[0], centre[2]).min(level.ceiling) - 0.5;
+            // From the crown to the wall's top, across the width of the niche and a little beyond.
+            for i in 0..=12 {
+                let across = (i as f32 / 12.0 - 0.5) * (niches::WIDTH + 2.0);
+                for k in 0..=6 {
+                    let up = crown + 0.05 + (wall_top - crown - 0.05) * k as f32 / 6.0;
+                    assert_eq!(covers([across, up]), 1, "a gap or an overlap in the shell above the arch at {spot:?}: {across} across, {up} up");
+                    solid += 1;
+                }
+            }
+            // Under the sill too, and the middle of the opening is open.
+            assert_eq!(covers([0.13, spot.sill * 0.5]), 1);
+            assert_eq!(covers([0.13, spot.spring - 0.5]), 0, "the opening is cut out of the shell");
+            open += 1;
+        }
+        assert!(solid > 100 && open >= 5);
+    }
+
+    #[test]
+    fn the_dressing_covers_the_wall_right_down_to_the_arch() {
+        let mut checked = 0;
+        // The levels with niches already looked at, and the first few with a tall one.
+        let tall_seeds: Vec<u32> = (21..=120u32).filter(|&seed| crate::travel::Abyss::new(seed).level_at(2).niches.iter().any(is_tall)).take(3).collect();
+        assert!(!tall_seeds.is_empty(), "tall niches turn up");
+        for seed in [2, 36, 3, 11, 1, 4, 6, 12, 15, 20].into_iter().chain(tall_seeds) {
+            let level = crate::travel::Abyss::new(seed).level_at(2);
+            let view = CellView::new(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            for spot in &level.niches {
+                let (centre, u, n) = opening(spot);
+                // Every block face standing proud of the wall's plane here, as (across, up) triangles.
+                let mut faces: Vec<[[f32; 2]; 3]> = Vec::new();
+                for name in ["walls", "damp"] {
+                    let part = part(&mesh, name);
+                    for t in part.indices.chunks(3) {
+                        let rel = [0, 1, 2].map(|k| vec3::sub(part.positions[t[k] as usize], centre));
+                        let level_with = rel.iter().all(|r| (vec3::dot(*r, n) - vec3::dot(rel[0], n)).abs() < 0.01);
+                        if level_with && vec3::dot(rel[0], n) > 0.2 && vec3::dot(rel[0], n) < 1.2 {
+                            faces.push(rel.map(|r| [vec3::dot(r, u), r[1]]));
+                        }
+                    }
+                }
+                let covered = |p: [f32; 2]| {
+                    faces.iter().any(|t| {
+                        let side = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+                        let (d0, d1, d2) = (side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0]));
+                        (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+                    })
+                };
+                let above = match spot.style { NicheStyle::Plain => 0.0, NicheStyle::Moulded => niches::MOULD, NicheStyle::Grand => niches::MOULD + niches::KEY_HEIGHT - 1.0 };
+                let crown = spot.crown() + above;
+                // Joints and chamfers between blocks are narrow (even where four meet); a point is bare
+                // when it and the ring of points round it 1.3 off are all uncovered, so a joint is not a gap.
+                let bare = |p: [f32; 2]| !covered(p) && (0..8).all(|k| { let a = k as f32 * std::f32::consts::FRAC_PI_4; !covered([p[0] + 1.3 * a.cos(), p[1] + 1.3 * a.sin()]) });
+                let wall_top = (Vaults::new(&level).height(centre[0], centre[2]) - 3.0).min(crown + 7.0);
+                for i in 0..=10 {
+                    let across = (i as f32 / 10.0 - 0.5) * niches::WIDTH * 0.9;
+                    for k in 0..=8 {
+                        let up = crown + 0.8 + (wall_top - crown - 0.8) * k as f32 / 8.0;
+                        assert!(!bare([across, up]), "bare wall above the arch at seed {seed} {spot:?}: {across} across, {up} up");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 200);
+    }
+
+    #[test]
+    fn a_niche_leaves_the_rest_of_the_stone_laid_as_it_was() {
+        // The same level with its niches taken out draws the same walls beyond a niche's reach.
+        let (level, spot) = niched().remove(0);
+        let bare = Level { niches: Vec::new(), ..level.clone() };
+        let (a, b) = (CellView::uncobbled(&level), CellView::uncobbled(&bare));
+        let (with, without) = (level_mesh(&a, a.bounds()), level_mesh(&b, b.bounds()));
+        assert_ne!(part(&with, "walls").positions.len(), part(&without, "walls").positions.len());
+        let (centre, _, _) = opening(&spot);
+        let far = |p: &&[f32; 3]| (p[0] - centre[0]).hypot(p[2] - centre[2]) > CELL * 3.0;
+        let kept = |m: &LevelMesh| {
+            let mut v: Vec<[i64; 3]> = part(m, "damp").positions.iter().filter(far).map(key).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(kept(&with), kept(&without), "blocks far from a niche stay where they were");
     }
 
     #[test]
@@ -1321,6 +1925,14 @@ mod tests {
     fn check_wall_faces(seeds: std::ops::RangeInclusive<u32>) {
         for (seed, depth, level, meshes) in wall_chunks(seeds) {
             let view = CellView::new(&level);
+            // A niche's recess is cut that deep into the rock.
+            let in_niche = |q: &[f32; 3]| {
+                level.niches.iter().any(|spot| {
+                    let (centre, u, n) = opening(spot);
+                    let rel = vec3::sub(*q, centre);
+                    vec3::dot(rel, u).abs() <= niches::WIDTH * 0.5 + 0.01 && vec3::dot(rel, n) >= -niches::DEPTH - 0.01 && vec3::dot(rel, n) <= 0.01 && q[1] >= spot.sill - 0.01 && q[1] <= spot.spring + niches::RISE + 0.01
+                })
+            };
             let in_reach = |q: &[f32; 3]| {
                 let (cx, cz) = ((q[0] / CELL).floor() as i32, (q[2] / CELL).floor() as i32);
                 (-1..=1).any(|dy| {
@@ -1334,7 +1946,7 @@ mod tests {
             };
             for mesh in &meshes {
                 for p in mesh.surfaces.parts.iter().filter(|p| p.name == "walls" || p.name == "damp") {
-                    let far = p.positions.iter().find(|q| !in_reach(q));
+                    let far = p.positions.iter().find(|q| !in_reach(q) && !in_niche(q));
                     assert!(far.is_none(), "seed {seed} depth {depth}: a wall vertex stands out in the rock at {far:?}");
                 }
                 let overlaps = coplanar_overlaps(mesh, &["walls", "damp"]);

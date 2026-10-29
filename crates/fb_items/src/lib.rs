@@ -43,7 +43,7 @@ pub mod value;
 
 pub use foe::Foe;
 pub use identify::Known;
-pub use contents::{container_item, roll_contents};
+pub use contents::{container_item, roll_contents, roll_urn_contents};
 pub use item::{Coins, Item, ItemParts, roll_item, roll_item_with, roll_loot, stack_up};
 pub use armory::families::bags::Accessory;
 pub use fittings::{FittingGrid, fitting_grid, fitting_grids, fitting_item};

@@ -36,7 +36,7 @@ docs/                   design, rendering, items, body
 ## Game decisions already made
 
 - First person. Death ends the delve, and the next delver starts in a new world. A possible ending retires the character.
-- Classes: Fighter, Ranger, Mage, Cleric. Freshly fallen and Scavenger are starting looks.
+- Classes: Fighter, Mage, Cleric. Freshly fallen and Scavenger are starting looks.
 - Folk: human, dwarf, gnome, goblin, lizardfolk, pigfolk. Enemies are classic D&D monsters. D&D coinage. No mining.
 - Diablo-style rarity and affixes that can raise or lower any parameter, survival ones included.
 - Cataclysm-style simulation for every character: light, warmth, food, water, sleep, dirt, disease, limb health, encumbrance.

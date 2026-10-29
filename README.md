@@ -114,7 +114,7 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 - `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
 - `--seed <n>` rolls the body and the outfit's items; 1207 by default.
 - `--walk` starts the doll walking in place, `--speed <n>` sets its pace as a multiple of its folk's natural one (0 to 1.6, 1 by default). W toggles the walk in the view, and the panel at the top right has the same toggle and a speed slider.
-- `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
+- `--outfit <key>`: fighter (the default), mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 
@@ -251,6 +251,9 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_SETTINGS=<file.json>` | reads and writes settings from another file |
 | `FB_KEYBINDINGS=<file.toml>` | reads and writes keybindings from another file; default `keybindings.toml` beside the settings file |
 | `FB_FRAME_TIME=<frames>` | prints Bevy's smoothed frame time at each listed frame (`240,270,300`) and quits after the last; with `FB_DEBUG_POSE`, measures a view's frame rate in the window at vsync |
+| `FB_SLOW_FRAMES=<ms>` | prints the number of every frame that took longer than that, to find what stalls a new delve or a journey (with `FB_NO_VSYNC=1`) |
+| `FB_TAKE_STAIR=<down\|up>[,<seconds>]` | that many seconds into the delve (1 by default), takes the level's stair as if F had been pressed at it, once; `up` needs a level below the first (`FB_DEPTH=2`) |
+| `FB_HOLD_LOADING=<seconds>` | holds every load (a new delve, a resumed one, a stair) on the loading screen at least that long after the work starts, for captures of the screen; with `FB_NEW_DELVE=1 --title` or `FB_TAKE_STAIR=down` |
 | `FB_SOAK=<seconds>` | plays the level by itself for that long, then quits: walks random paths, fights the creatures it meets, picks up, equips and drops things, opens containers, the inventory and the menu, and logs a `soak:` line to stderr every 10 s (entities, meshes, images, materials, cameras, readbacks, icons, render phases, frame time). With `--title` it begins a new delve from the title, and after a death begins another, a second after the title shows, first logging a `soak: title` line with the entities on it, which should read the same after every death. For finding crashes and leaks that only show after a long session |
 | `FB_SOAK_SEED=<n>` | with `FB_SOAK`, seeds the autopilot's choices (1 by default), so parallel soaks on one level take different ways |
 | `FB_SOAK_CHURN=1` | with `FB_SOAK`, forgets every inventory icon at each report, so they are all drawn again by fresh icon cameras |
@@ -325,6 +328,8 @@ The inspector is the `inspector` feature, part of `dev`, which is on by default,
 | `[light]` | `glowcap_reach` | 30.0 | How far glowcaps' light reaches, in world units. |
 | `[light]` | `crystal_peak` | 0.3 | A lit crystal's strength close up (1 = full). |
 | `[light]` | `crystal_reach` | 60.0 | How far a lit crystal's light reaches, in world units, for a crystal 3 m tall. |
+| `[light]` | `niche_peak` | 0.4 | A candle burning in a wall niche: its strength close up (1 = full). |
+| `[light]` | `niche_reach` | 22.0 | How far a niche candle's light reaches, in world units: its recess and a little of the wall round it. |
 | `[light]` | `flicker_depth` | 1.0 | How deeply flames flicker (0 = steady, 1 = usual). |
 | `[light]` | `ambient_lux` | 4.0 | The abyss's own light where no flame reaches, in lux. |
 | `[light]` | `fog_start` | 40.0 | Where the dark starts to swallow far stone, in world units. |

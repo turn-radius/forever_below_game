@@ -321,6 +321,11 @@ pub struct LightTuning {
     /// shadows, so they take none of the shadow budget (`shadowed_lights`).
     pub crystal_peak: f32,
     pub crystal_reach: f32,
+    /// A candle burning in a wall niche: strength close up, and a reach of about a cell, enough
+    /// to light its own recess and a little of the wall round it. Casts no shadow, so it takes
+    /// none of the shadow budget (`shadowed_lights`).
+    pub niche_peak: f32,
+    pub niche_reach: f32,
     /// How deeply flames flicker, as a multiple of each flame's own (0 holds them steady, 1 the
     /// prototype's curve, `crate::light::Torch::flicker`).
     pub flicker_depth: f32,
@@ -351,6 +356,8 @@ impl Default for LightTuning {
             glowcap_reach: 30.0,
             crystal_peak: 0.3,
             crystal_reach: 60.0,
+            niche_peak: 0.4,
+            niche_reach: 22.0,
             flicker_depth: 1.0,
             ambient_lux: 4.0,
             fog_start: 40.0,

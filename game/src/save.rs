@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camp::{PendingBed, SetCamp};
 use crate::carry::FloorItem;
-use crate::character::{Character, ChosenDelver, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
+use crate::character::{Character, DelverEffects, DelverMana, DelverNeeds, DelverRecovery, DelverStamina};
 use crate::combat::Health;
 use crate::combat::revival::Revives;
 use crate::combat::vitals::{Dying, Fallen};
@@ -62,7 +62,7 @@ use crate::game_clock::GameClock;
 use crate::inventory::{Inventory, ItemId};
 use crate::launch::AppState;
 use crate::map::explore::ExploredLevels;
-use crate::play::{CurrentLevel, DelveSystems, Player};
+use crate::play::{DelveSystems, Player};
 use crate::player::Locomotion;
 use crate::quickslots::{Quickslots, SLOTS};
 use crate::record::{ItemRecord, WorldRecord, record_item, record_level_left, restore_item};
@@ -134,6 +134,10 @@ pub struct SavedDelve {
     /// again ([`Inventory::lashed_out`]).
     #[serde(default)]
     pub lashed: bool,
+    /// The game hour the nap they lay down in ends, when they lay down rested; none for a sleep
+    /// until rested.
+    #[serde(default)]
+    pub nap_until: Option<f64>,
 }
 
 /// What the delver wears and carries.
@@ -363,6 +367,7 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
     let floor = world.get::<FloorItem>(bed).ok_or(SaveError::Missing("camp on the floor"))?;
     let (camp, bed_id) = (floor.spot, floor.id);
     let lashed = world.resource::<Inventory>().lashed_out == Some(bed_id);
+    let nap_until = world.get_resource::<crate::camp::Asleep>().and_then(|a| a.0).and_then(|s| s.nap_until);
     // The current level is recorded as if just left. The record the game goes on with is the one
     // it had: leaving the level writes it again.
     let before = world.resource::<WorldRecord>().clone();
@@ -431,6 +436,7 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
         signatures,
         camp,
         lashed,
+        nap_until,
     })
 }
 
@@ -523,17 +529,12 @@ pub fn begin_players_delve(world: &mut World) {
 pub struct ResumeDelve(pub Box<SavedDelve>);
 
 /// Begins the delve `saved` describes: its depth laid out from the seed and the record as travel
-/// lays one out, its delver chosen, and the delve entered. The rest is put back on the delve's
+/// lays one out, off the main thread under the loading screen ([`crate::loading`]), its delver
+/// chosen, and the delve entered once the level is ready. The rest is put back on the delve's
 /// first frame.
-pub fn begin_resume(commands: &mut Commands, next: &mut NextState<AppState>, saved: SavedDelve) {
-    let mut level = Abyss::new(saved.run_seed).level_at(saved.depth);
-    saved.record.apply_to(&mut level);
-    info!("save: {} resumes on depth {}", saved.delver.name, saved.depth);
-    commands.insert_resource(CurrentLevel(level));
-    commands.insert_resource(ChosenDelver(Character::from(saved.delver.clone())));
+pub fn begin_resume(commands: &mut Commands, saved: SavedDelve) {
     commands.insert_resource(Saveable(true));
-    commands.insert_resource(ResumeDelve(Box::new(saved)));
-    next.set(AppState::Delving);
+    crate::loading::start_delve(commands, saved.run_seed, saved.depth, saved.record.level(saved.depth).cloned(), crate::loading::Opening::Resume(Box::new(saved)));
 }
 
 /// Hit points the first frame of a resumed delve puts back after the delver's maximum has been
@@ -642,7 +643,7 @@ pub fn restore_delve(world: &mut World) {
         }
     }
     world.insert_resource(SettleHitPoints(health));
-    world.insert_resource(PendingBed { spot: saved.camp, lashed: saved.lashed, waited: 0 });
+    world.insert_resource(PendingBed { spot: saved.camp, lashed: saved.lashed, nap_until: saved.nap_until, waited: 0 });
 }
 
 /// Puts the delver's hit points back once the fitting of their maximum to their Constitution has
@@ -746,6 +747,7 @@ pub(crate) fn sample_delve() -> SavedDelve {
         explored: vec![SavedExplored { level_seed: 7, width: 8, height: 8, bits: to_hex(&[0xff, 0x00, 0x0f, 0, 0, 0, 0, 1]) }],
         camp: fb_level::ItemSpot { x: 4.5, y: 9.25, yaw: 0.5, family: bed.shape.family(), seed: bed.seed },
         lashed: true,
+        nap_until: Some(123_457.5),
     }
 }
 

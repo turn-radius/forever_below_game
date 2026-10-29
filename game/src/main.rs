@@ -129,6 +129,9 @@ fn main() -> AppExit {
     if let Some(probe) = FrameTimeProbe::from_env() {
         app.add_plugins(probe);
     }
+    if let Some(ms) = forever_below::frame_time::slow_frame_threshold() {
+        app.add_plugins(forever_below::frame_time::SlowFrames(ms));
+    }
     if let Some(soak) = SoakPlugin::from_env() {
         app.add_plugins(soak);
     }

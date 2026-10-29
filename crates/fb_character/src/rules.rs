@@ -222,7 +222,7 @@ pub struct CombatRules {
     /// Snake").
     pub venom_save_dc: i32,
     /// The hit die of each class, taken at its highest for a first-level delver (SRD 5.1
-    /// "Hit Points at 1st Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for
+    /// "Hit Points at 1st Level": fighter p. 24, cleric p. 15, wizard p. 52 for
     /// the mage).
     pub hit_dice: HitDice,
     /// What a delver's or a folk's attack roll adds for proficiency with the weapon, a 1st-level
@@ -257,14 +257,13 @@ impl Default for CombatRules {
 #[serde(default)]
 pub struct HitDice {
     pub fighter: u32,
-    pub ranger: u32,
     pub mage: u32,
     pub cleric: u32,
 }
 
 impl Default for HitDice {
     fn default() -> Self {
-        HitDice { fighter: 10, ranger: 10, mage: 6, cleric: 8 }
+        HitDice { fighter: 10, mage: 6, cleric: 8 }
     }
 }
 
@@ -592,11 +591,13 @@ pub struct CampRules {
     /// Sleepiness (0 rested to 1 spent) the delver must have reached to fall asleep: the
     /// Tired band begins here.
     pub tired_from: f64,
+    /// Game hours a rested delver naps in a set camp before waking, since they lay down not tired.
+    pub nap_hours: f64,
 }
 
 impl Default for CampRules {
     fn default() -> Self {
-        CampRules { bedroll_rest: 1.0, tent_rest: 1.5, sleep_clock_ratio: 900.0, wake_distance: 80.0, tired_from: 0.25 }
+        CampRules { bedroll_rest: 1.0, tent_rest: 1.5, sleep_clock_ratio: 900.0, wake_distance: 80.0, tired_from: 0.25, nap_hours: 1.0 }
     }
 }
 

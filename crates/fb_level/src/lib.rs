@@ -206,6 +206,9 @@ pub struct Level {
     /// Faction banners hung on the walls of claimed rooms and beside their doors ([`banners`]).
     #[serde(default)]
     pub banners: Vec<BannerSpot>,
+    /// Arched recesses cut into some walls of a level of stone halls ([`niches`]).
+    #[serde(default)]
+    pub niches: Vec<NicheSpot>,
     /// Crystals growing in a crystal cavern ([`crystals`]); none on any other level.
     #[serde(default)]
     pub crystals: Vec<CrystalSpot>,
@@ -221,6 +224,10 @@ pub struct Level {
     /// What each room of [`Level::rooms`] was built for, indexed by room ([`past`]).
     #[serde(default)]
     pub purposes: Vec<Option<Purpose>>,
+    /// The daises: parts of a stone hall's floor stepped up or sunk ([`dais`]). Banners, niches
+    /// and the like keep clear of them.
+    #[serde(default)]
+    pub daises: Vec<Dais>,
 }
 
 impl Level {
@@ -370,7 +377,10 @@ impl Level {
 }
 
 pub mod banners;
+pub mod niches;
+mod walls;
 pub mod crystals;
+pub mod dais;
 pub mod claims;
 pub mod doorkind;
 pub mod creatures;
@@ -392,6 +402,7 @@ pub mod webs;
 pub mod wild;
 pub use creatures::{CreatureSpot, GIANTS_FROM_DEPTH};
 pub use banners::{BannerSite, BannerSpot};
+pub use niches::{NicheContents, NicheSpot, NicheStyle};
 pub use crystals::{CavernStone, CrystalSpot, CrystalSurface, crystal_state};
 pub use claims::{Claim, ClaimRules, settle_claims};
 pub use folk::{DenizenBody, DenizenKind, Faction, FactionSpec, FolkSpot, Trade};
@@ -401,6 +412,7 @@ pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
 pub use past::{Past, Purpose};
+pub use dais::Dais;
 pub use doorkind::{DoorKind, STEEL_PICK_PENALTY, SwitchKind};
 pub use roles::{ClaimDoor, RoomRole};
 pub use rooms::RoomGraph;

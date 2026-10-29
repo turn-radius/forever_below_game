@@ -230,6 +230,17 @@ fn rib(span: f32, rng: &mut Mulberry32) -> MeshBuilder {
 /// A skull about two units long, facing +Z: a cranium with its eye sockets and nose pressed
 /// in, and the jaw beneath.
 fn skull(rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
+    let (mut bone, mut sockets) = skull_upright(rng);
+    // Lying as it fell: on its side, or tipped forward, or upright.
+    let (tip, roll) = (rng.range_f32(-0.4, 0.3), if rng.chance(0.4) { rng.range_f32(1.1, 1.5) } else { rng.range_f32(-0.2, 0.2) });
+    for mesh in [&mut bone, &mut sockets] {
+        mesh.rotate_x(tip).rotate_z(roll);
+    }
+    (bone, sockets)
+}
+
+/// The skull upright, facing +Z, jaw closed.
+fn skull_upright(_rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
     let mut cranium = icosphere(1.0, 3);
     cranium.scale([0.68, 0.74, 0.9]);
     // A narrower face under the brow.
@@ -241,18 +252,13 @@ fn skull(rng: &mut Mulberry32) -> (MeshBuilder, MeshBuilder) {
     }
     cranium.recompute_smooth_normals();
     let hollows = [
-        Hollow::bite([0.0, 0.0, 0.0], [0.38, 0.0, 1.0], 0.85, 0.2),
-        Hollow::bite([0.0, 0.0, 0.0], [-0.38, 0.0, 1.0], 0.85, 0.2),
-        Hollow::bite([0.0, 0.0, 0.0], [0.0, -0.32, 1.0], 0.85, 0.12),
+        Hollow::bite([0.0, 0.0, 0.0], [0.38, 0.0, 1.0], 0.85, 0.27),
+        Hollow::bite([0.0, 0.0, 0.0], [-0.38, 0.0, 1.0], 0.85, 0.27),
+        Hollow::bite([0.0, 0.0, 0.0], [0.0, -0.32, 1.0], 0.85, 0.17),
     ];
-    let (mut bone, mut sockets) = carve_hollows(&cranium, &hollows);
+    let (mut bone, sockets) = carve_hollows(&cranium, &hollows);
     let jaw_path = CatmullRom::centripetal(vec![[-0.45, -0.45, 0.05], [-0.36, -0.68, 0.5], [0.0, -0.74, 0.74], [0.36, -0.68, 0.5], [0.45, -0.45, 0.05]]).sample(14);
     bone.append(&tube(&jaw_path, 8, &SweepOptions::default(), |_| 0.1));
-    // Lying as it fell: on its side, or tipped forward, or upright.
-    let (tip, roll) = (rng.range_f32(-0.4, 0.3), if rng.chance(0.4) { rng.range_f32(1.1, 1.5) } else { rng.range_f32(-0.2, 0.2) });
-    for mesh in [&mut bone, &mut sockets] {
-        mesh.rotate_x(tip).rotate_z(roll);
-    }
     (bone, sockets)
 }
 
@@ -288,6 +294,21 @@ pub fn bones(seed: u32) -> ItemMesh {
         let span = rng.range_f32(1.4, 2.2);
         let piece = place(rib(span, &mut rng), span * 0.6, &mut rng);
         bone.append(&piece);
+    }
+    let mut parts = Parts::new();
+    parts.add_tinted("bones", bone, MaterialKind::Bone, BONE.scaled(rng.range_f32(0.9, 1.0)));
+    parts.add_look("sockets", sockets, crate::build::parts::Look::of(MaterialKind::Bone).tinted(SOCKET).without_outline());
+    parts.finish()
+}
+
+/// A skull on its own, resting on its lowest point at the origin and facing +Z, for a niche to
+/// hold: the one `bones` scatters among its long bones, set upright so its face looks out.
+pub fn lone_skull(seed: u32) -> ItemMesh {
+    let mut rng = Mulberry32::new(seed ^ 0xb0e5_5ca7);
+    let (mut bone, mut sockets) = skull_upright(&mut rng);
+    let low = bone.bounds().map_or(0.0, |(lo, _)| lo[1]);
+    for mesh in [&mut bone, &mut sockets] {
+        mesh.translate([0.0, -low, 0.0]);
     }
     let mut parts = Parts::new();
     parts.add_tinted("bones", bone, MaterialKind::Bone, BONE.scaled(rng.range_f32(0.9, 1.0)));
@@ -447,7 +468,7 @@ mod tests {
                 let mesh = kind.build(seed, CEILING);
                 let (lo, hi) = mesh.bounds().unwrap();
                 assert!(lo[0] >= -hw - 1e-3 && hi[0] <= hw + 1e-3, "{kind:?} {seed}: x {lo:?} {hi:?}");
-                let culprit = mesh.parts.iter().find(|p| p.positions.iter().any(|v| v[2] < -hd - 1e-3 || v[2] > hd + 1e-3)).map(|p| p.name.clone());
+                let culprit = mesh.parts.iter().find(|p| p.positions.iter().any(|v| v[2] < -hd - 1e-3 || v[2] > hd + 1e-3)).map(|p| p.name);
                 assert!(lo[2] >= -hd - 1e-3 && hi[2] <= hd + 1e-3, "{kind:?} {seed}: z {lo:?} {hi:?} in {culprit:?}");
                 if !matches!(kind, Scenery::Table | Scenery::Bunk) {
                     assert!(lo[2] < -hd + 0.3, "{kind:?} {seed}: back at {} not against -Z", lo[2]);
