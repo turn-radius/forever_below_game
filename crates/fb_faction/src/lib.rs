@@ -113,7 +113,6 @@ impl Outfit {
     pub fn of(class: ClassKind) -> Outfit {
         match class {
             ClassKind::Fighter => Outfit::Fighter,
-            
             ClassKind::Mage => Outfit::Mage,
             ClassKind::Cleric => Outfit::Cleric,
         }
@@ -123,7 +122,6 @@ impl Outfit {
     pub fn class(self) -> Option<ClassKind> {
         match self {
             Outfit::Fighter => Some(ClassKind::Fighter),
-            
             Outfit::Mage => Some(ClassKind::Mage),
             Outfit::Cleric => Some(ClassKind::Cleric),
             Outfit::Scavenger => None,
@@ -133,7 +131,6 @@ impl Outfit {
     pub fn key(self) -> &'static str {
         match self {
             Outfit::Fighter => "fighter",
-            
             Outfit::Mage => "mage",
             Outfit::Cleric => "cleric",
             Outfit::Scavenger => "scavenger",
@@ -770,7 +767,7 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
     FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, looks, insular, denizen: None }
 }
 
-/// The classes a name's `class` tag says its members are: `cleric`, `fighter` or `fighter`. Empty
+/// The classes a name's `class` tag says its members are: `cleric` or `fighter`. Empty
 /// for no tag, or one this crate does not know.
 fn named_classes(tag: Option<&str>) -> Vec<ClassKind> {
     match tag {
