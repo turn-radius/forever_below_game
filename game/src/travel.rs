@@ -317,7 +317,11 @@ pub(crate) fn begin_the_run(level: Option<Res<CurrentLevel>>, character: Option<
 }
 
 /// Leaving the delve leaves the abyss.
-fn end_the_run(mut commands: Commands, mut abyss: ResMut<Abyss>, mut staged: ResMut<Staged>, mut prepared: ResMut<PreparedStone>) {
+fn end_the_run(mut commands: Commands, mut abyss: ResMut<Abyss>, mut staged: ResMut<Staged>, mut prepared: ResMut<PreparedStone>, journey: Option<Res<Journey>>, clock: Option<ResMut<Time<Virtual>>>) {
+    // A journey ended by a fall holds the world's clock still: let it go.
+    if let (Some(_), Some(mut clock)) = (journey, clock) {
+        clock.unpause();
+    }
     *abyss = Abyss::default();
     *staged = Staged::default();
     prepared.clear();
@@ -498,7 +502,13 @@ fn start_level_load(
     mut below: Option<ResMut<Below>>,
     character: Option<Res<crate::character::Character>>,
     inventory: Option<Res<crate::inventory::Inventory>>,
+    clock: Option<ResMut<Time<Virtual>>>,
 ) {
+    // The world holds still while the screen is black and the level is made: nothing acts, burns
+    // or hungers behind the delver's back. The fades and the loading screen run on the real clock.
+    if let Some(mut clock) = clock {
+        clock.pause();
+    }
     let to = depth_after(abyss.depth, journey.by);
     let key = (abyss.run_seed, to);
     // (A level with a record is never started ahead, and its record sets its floor: the loot
@@ -601,7 +611,8 @@ fn swap_level(
 #[allow(clippy::too_many_arguments)]
 fn step_journey(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
+    clock: Option<ResMut<Time<Virtual>>>,
     journey: Option<ResMut<Journey>>,
     turns: Res<crate::loading::LayoutTurn>,
     mut fades: Query<&mut BackgroundColor>,
@@ -620,6 +631,9 @@ fn step_journey(
             if journey.laid_after.is_some_and(|before| turns.generation() > before) && turns.done() {
                 // The loading screen, if it was drawn, fades away over the level as the black does.
                 commands.remove_resource::<LoadingLevel>();
+                if let Some(mut clock) = clock {
+                    clock.unpause();
+                }
                 journey.phase = Phase::FadingIn;
                 journey.seconds = 0.0;
             }

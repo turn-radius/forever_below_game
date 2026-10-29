@@ -326,6 +326,67 @@ fn the_loading_screen_stands_while_the_level_is_made_and_the_frames_go_on() {
     assert_eq!(count::<LoadingScreen>(&mut app), 0, "the screen has faded away");
 }
 
+/// Starts a journey down and steps to its loading, holding the load up so the wait is seen.
+fn into_the_loading(app: &mut App) {
+    let down = *level(app).stair(StairKind::Down).expect("a way down");
+    stand(app, down.approach(), down.facing.yaw());
+    run(app, 2);
+    press_f(app);
+    let started = std::time::Instant::now();
+    while !app.world().get_resource::<Journey>().is_some_and(|j| j.phase == Phase::Loading) {
+        assert!(started.elapsed().as_secs() < 120, "the journey did not reach its loading");
+        app.update();
+    }
+    app.world_mut().resource_mut::<LoadingLevel>().hold_for(1.5);
+}
+
+/// The world holds still while the screen is black: no hit points lost, no need grown, and the
+/// world's clock does not move, through the load and the frames that lay the level out.
+#[test]
+fn the_world_holds_still_while_the_level_is_made() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    into_the_loading(&mut app);
+    let body = player(&mut app);
+    let snap = |app: &App| (app.world().resource::<Time<Virtual>>().elapsed(), format!("{:?}", app.world().get::<Health>(body)), format!("{:?}", app.world().get::<forever_below::character::DelverNeeds>(body)));
+    let before = snap(&app);
+    assert!(app.world().resource::<Time<Virtual>>().is_paused());
+    let started = std::time::Instant::now();
+    while app.world().get_resource::<Journey>().is_some_and(|j| matches!(j.phase, Phase::Loading | Phase::Settling)) {
+        assert!(started.elapsed().as_secs() < 120);
+        assert_eq!(snap(&app), before, "the world moved while the screen was black");
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!app.world().resource::<Time<Virtual>>().is_paused(), "the clock runs again as the screen fades in");
+    run(&mut app, 120);
+    assert!(app.world().get_resource::<Journey>().is_none());
+}
+
+/// A fall that ends the delve mid-journey leaves no loading screen or load behind.
+#[test]
+fn ending_the_delve_mid_journey_leaves_no_loading_screen() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    into_the_loading(&mut app);
+    app.world_mut().resource_mut::<LoadingLevel>().hold_for(30.0);
+    let started = std::time::Instant::now();
+    while count::<LoadingScreen>(&mut app) == 0 {
+        assert!(started.elapsed().as_secs() < 120, "the screen was never drawn");
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+    run(&mut app, 3);
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+    assert_eq!(count::<LoadingScreen>(&mut app), 0);
+    assert!(app.world().get_resource::<LoadingLevel>().is_none());
+    assert!(app.world().get_resource::<Journey>().is_none());
+    assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+}
+
 /// A level that is ready at once (the prefetched one below) never shows the screen.
 #[test]
 fn a_level_ready_at_once_does_not_flash_the_loading_screen() {

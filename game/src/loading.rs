@@ -269,6 +269,14 @@ fn finish_starting(
     next.set(AppState::Delving);
 }
 
+/// The delve ends (a fall) while a level is being made: no load or screen outlasts it.
+fn end_loading(mut commands: Commands, screens: Query<Entity, With<LoadingScreen>>) {
+    commands.remove_resource::<LoadingLevel>();
+    for screen in &screens {
+        commands.entity(screen).despawn();
+    }
+}
+
 /// The delve has laid its first level out (the frame it opened on): the loading screen can go.
 fn end_start_loading(mut commands: Commands, starting: Option<Res<StartingDelve>>, journey: Option<Res<crate::travel::Journey>>, loading: Option<Res<LoadingLevel>>, turns: Res<LayoutTurn>) {
     if starting.is_none() && journey.is_none() && turns.done() && loading.is_some_and(|l| !l.held()) {
@@ -277,11 +285,15 @@ fn end_start_loading(mut commands: Commands, starting: Option<Res<StartingDelve>
 }
 
 /// Draws the screen once the load has lasted its grace. The screen is not drawn twice.
-fn show_loading(mut commands: Commands, loading: Option<Res<LoadingLevel>>, fonts: Option<Res<UiFonts>>, mut screens: Query<&mut LoadingScreen>, view: Query<Entity, With<crate::carry::ViewModelCamera>>) {
+fn show_loading(mut commands: Commands, loading: Option<Res<LoadingLevel>>, fonts: Option<Res<UiFonts>>, mut screens: Query<(Entity, &mut LoadingScreen, Has<UiTargetCamera>)>, view: Query<Entity, With<crate::carry::ViewModelCamera>>) {
     let Some(loading) = loading else { return };
     // A screen on its way out is called back by a load that begins before it is gone.
-    if let Some(mut screen) = screens.iter_mut().next() {
+    if let Some((entity, mut screen, targeted)) = screens.iter_mut().next() {
         screen.leaving = None;
+        // Begun on the title, the screen is retargeted once the delve has the HUD's camera.
+        if !targeted && let Some(camera) = view.iter().next() {
+            commands.entity(entity).insert(UiTargetCamera(camera));
+        }
         return;
     }
     if !loading.shows() {
@@ -408,6 +420,7 @@ impl Plugin for LoadingPlugin {
             .init_resource::<FolkFigures>()
             .init_resource::<LayoutTurn>()
             .add_systems(PreUpdate, track_layout)
+            .add_systems(OnExit(AppState::Delving), end_loading)
             .add_systems(Update, (finish_starting.run_if(resource_exists::<StartingDelve>), show_loading, fade_loading, paint_loading).chain())
             .add_systems(Update, end_start_loading.run_if(in_state(AppState::Delving)).after(DelveSystems));
     }
@@ -470,6 +483,19 @@ mod tests {
         let quick = LoadingLevel::after_black(2, 1207);
         assert!(!quick.shows(), "a level ready at once is not flashed");
         assert!(LoadingLevel::from_title(1, 1207).shows(), "the title has nothing to hide behind");
+    }
+
+    #[test]
+    fn a_screen_begun_on_the_title_is_retargeted_to_the_delves_camera() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<UiFonts>().add_systems(Update, show_loading);
+        app.insert_resource(LoadingLevel::from_title(1, 1207));
+        app.update();
+        let screen = app.world_mut().query_filtered::<Entity, With<LoadingScreen>>().single(app.world()).unwrap();
+        assert!(app.world().get::<UiTargetCamera>(screen).is_none(), "no camera of the delve yet");
+        let camera = app.world_mut().spawn(crate::carry::ViewModelCamera { follows: Entity::PLACEHOLDER }).id();
+        app.update();
+        assert_eq!(app.world().get::<UiTargetCamera>(screen).map(|t| t.entity()), Some(camera), "the HUD's camera draws it, so the HUD is under it");
     }
 
     #[test]
