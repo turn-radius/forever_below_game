@@ -12,8 +12,11 @@
 //! a style for all of its niches ([`NicheStyle`]): plain cut in a plain room, moulded in a claimed
 //! one, with a keystone in a hall. Corridors take niches too, plain.
 //!
-//! A level is rebuilt from its seed and its niches with it, so a niche is not saved. What one
-//! holds is scenery, not loot: nothing in a niche can be taken.
+//! Some niches in moulded and grand rooms stand tall, up to about a human height ([`TALL_RANGE`]).
+//!
+//! A level is rebuilt from its seed and its niches with it, so a niche is not saved. A candle,
+//! a skull and bones are scenery; an urn is a container the delver opens, and what is taken from
+//! it is kept in the level record (`game::niches`).
 //!
 //! The game cuts the recess into the wall's blocks (`level::geometry::stone`) and draws what
 //! it holds; a candle's recess is lit by a small point light of its own.
@@ -50,8 +53,23 @@ pub const DEPTH: f32 = 4.2;
 /// sill to springing, least and most, in world units.
 pub const SILL_RANGE: (f32, f32) = (6.0, 9.0);
 pub const OPENING_RANGE: (f32, f32) = (3.8, 8.8);
-/// The highest a niche's arch crown may reach, under the vault and clear of its moulding.
-const CROWN_LIMIT: f32 = 17.5;
+/// How tall the opening of a tall niche is, least and most: it reaches about a human height
+/// (17 units) and over the delver's head. Only moulded and grand rooms have them, for the top
+/// [`TALL_SHARE`] of the rolls that set a niche's height.
+pub const TALL_RANGE: (f32, f32) = (8.8, 17.0);
+const TALL_SHARE: f64 = 0.4;
+/// The highest the arch crown of a niche of the ordinary height may reach, under the vault and clear
+/// of its moulding.
+pub const CROWN_LIMIT: f32 = 17.5;
+/// How far under the level's ceiling a tall niche's crown stops, in world units: the vaults spring
+/// from the ceiling, so the wall stands at least that high, and the keystone and the blocks
+/// over the arch need the room below it.
+pub const TALL_HEADROOM: f32 = 4.0;
+
+/// The highest the crown of a tall niche may stand in a level whose ceiling is `ceiling`.
+pub fn tall_crown_limit(ceiling: f32) -> f32 {
+    (ceiling - TALL_HEADROOM).max(CROWN_LIMIT)
+}
 /// A moulded surround: how wide the architrave is round the opening, how far it and the sill
 /// ledge stand proud of the wall, how far the ledge reaches out to each side and down.
 pub const MOULD: f32 = 1.0;
@@ -169,10 +187,18 @@ fn roll(rng: &mut Mulberry32) -> Rolls {
 }
 
 impl Rolls {
-    fn spot(&self, cell: (i32, i32), wall: (i32, i32), style: NicheStyle) -> NicheSpot {
+    fn spot(&self, cell: (i32, i32), wall: (i32, i32), style: NicheStyle, ceiling: f32) -> NicheSpot {
         let sill = SILL_RANGE.0 + (SILL_RANGE.1 - SILL_RANGE.0) * self.sill as f32;
-        let opening = OPENING_RANGE.0 + (OPENING_RANGE.1 - OPENING_RANGE.0) * self.opening as f32;
-        let spring = (sill + opening).min(CROWN_LIMIT - RISE);
+        // The height roll is one draw, as it always was: the top of its range, in a moulded or
+        // grand room, is a tall niche rather than a higher shelf.
+        let tall_from = 1.0 - TALL_SHARE;
+        let (opening, limit) = if style != NicheStyle::Plain && self.opening >= tall_from {
+            let t = ((self.opening - tall_from) / TALL_SHARE) as f32;
+            (TALL_RANGE.0 + (TALL_RANGE.1 - TALL_RANGE.0) * t, tall_crown_limit(ceiling))
+        } else {
+            (OPENING_RANGE.0 + (OPENING_RANGE.1 - OPENING_RANGE.0) * self.opening as f32, CROWN_LIMIT)
+        };
+        let spring = (sill + opening).min(limit - RISE);
         NicheSpot { x: cell.0, y: cell.1, facing: facing_of(wall), contents: contents_for(self.pick), seed: self.seed, sill, spring, style }
     }
 }
@@ -220,7 +246,7 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
             if !takes_niche(level, &finishes, cell, wall) {
                 continue;
             }
-            let spot = rolled.spot(cell, wall, style);
+            let spot = rolled.spot(cell, wall, style, level.ceiling);
             if fits(&niches, &spot) {
                 niches.push(spot);
                 made += 1;
@@ -239,7 +265,7 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
         if rolled.chance >= CORRIDOR_CHANCE || !takes_niche(level, &finishes, cell, wall) {
             continue;
         }
-        let spot = rolled.spot(cell, wall, NicheStyle::Plain);
+        let spot = rolled.spot(cell, wall, NicheStyle::Plain, level.ceiling);
         if fits(&niches, &spot) {
             niches.push(spot);
             made += 1;
@@ -248,14 +274,14 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
     niches
 }
 
-/// What a niche holds, from a roll of `0..1`: more than half stand empty.
+/// What a niche holds, from a roll of `0..1`: over two in five stand empty and one in five holds an urn.
 fn contents_for(pick: f64) -> NicheContents {
     const TABLE: [(NicheContents, f64); 5] = [
-        (NicheContents::Empty, 0.55),
+        (NicheContents::Empty, 0.44),
         (NicheContents::Candle, 0.2),
         (NicheContents::Skull, 0.08),
         (NicheContents::Bones, 0.08),
-        (NicheContents::Urn, 0.09),
+        (NicheContents::Urn, 0.20),
     ];
     let mut edge = 0.0;
     for (contents, share) in TABLE {
@@ -307,7 +333,7 @@ mod tests {
                 assert!(takes_niche(&level, &finishes, (n.x, n.y), wall), "{tag}");
                 assert!(!crowds_a_banner(&level.banners, at), "{tag}");
                 assert!(!near_light_or_prop(&level, at.0, at.1, CLEAR), "{tag}");
-                                assert!(level.niches.iter().all(|o| o == n || (o.x - n.x).abs().max((o.y - n.y).abs()) >= APART), "{tag}");
+                assert!(level.niches.iter().all(|o| o == n || (o.x - n.x).abs().max((o.y - n.y).abs()) >= APART), "{tag}");
             }
         }
     }
@@ -334,10 +360,11 @@ mod tests {
     fn niches_vary_in_height_and_stay_under_the_vault() {
         let (mut lo, mut hi, mut total) = (f32::MAX, f32::MIN, 0);
         for (seed, depth) in sweep() {
-            for n in &generate(seed, depth).niches {
+            let level = generate(seed, depth);
+            for n in &level.niches {
                 let opening = n.spring - n.sill;
                 assert!((SILL_RANGE.0..=SILL_RANGE.1).contains(&n.sill), "{n:?}");
-                assert!(opening >= 2.0 && n.crown() <= CROWN_LIMIT + 1e-3, "{n:?}");
+                assert!(opening >= 2.0 && n.crown() <= tall_crown_limit(level.ceiling) + 1e-3, "{n:?}");
                 (lo, hi, total) = (lo.min(opening), hi.max(opening), total + 1);
             }
         }
@@ -368,5 +395,28 @@ mod tests {
             assert!(level.niches.iter().filter(|n| !level.rooms.iter().any(|r| r.contains(n.x, n.y))).count() <= MOST_IN_CORRIDORS);
         }
         assert!(moulded > 5 && grand > 3 && plain_rooms > 5 && corridor > 10, "{moulded} moulded, {grand} grand, {plain_rooms} plain rooms, {corridor} corridor niches");
+    }
+
+    #[test]
+    fn only_moulded_and_grand_rooms_have_tall_niches_and_they_stay_under_the_vault() {
+        let (mut tall, mut grand_tall, mut highest) = (0, 0, 0.0f32);
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for n in &level.niches {
+                let opening = n.spring - n.sill;
+                if n.crown() > CROWN_LIMIT + 1e-3 || opening > OPENING_RANGE.1 + 1e-3 {
+                    assert_ne!(n.style, NicheStyle::Plain, "seed {seed} depth {depth}: {n:?}");
+                    assert!(n.crown() <= level.ceiling - TALL_HEADROOM + 1e-3 && opening <= TALL_RANGE.1 + 1e-3, "seed {seed} depth {depth}: {n:?}");
+                    tall += 1;
+                    grand_tall += (n.style == NicheStyle::Grand) as u32;
+                    highest = highest.max(opening);
+                }
+                if n.style == NicheStyle::Plain {
+                    assert!(opening <= OPENING_RANGE.1 + 1e-3 && n.crown() <= CROWN_LIMIT + 1e-3, "{n:?}");
+                }
+            }
+        }
+        assert!(tall >= 10 && grand_tall >= 3, "{tall} tall niches, {grand_tall} grand");
+        assert!(highest >= 12.0, "the tallest opening is {highest}");
     }
 }

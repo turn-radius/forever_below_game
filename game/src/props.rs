@@ -350,8 +350,14 @@ pub fn stock_container(inventory: &mut Inventory, spot: &PropSpot, odds: fb_item
 pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec<fb_items::Item>) -> Option<ItemId> {
     let Prop::Container { style, seed, .. } = prop else { return None };
     let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
+    fill_container(inventory, container, contents);
+    Some(container)
+}
+
+/// Puts `contents` in `container`, each at its first free spot, upright first and then turned,
+/// and anything with no room left out. What is found in a container is unknown if it is magic.
+pub fn fill_container(inventory: &mut Inventory, container: ItemId, contents: Vec<fb_items::Item>) {
     for item in contents {
-        // What is found in a container is unknown if it is magic.
         let id = inventory.add(crate::identify::found_unknown(item));
         let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
         let at = inventory.grid(container).and_then(|g| g.first_free(footprint));
@@ -359,7 +365,6 @@ pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec
             inventory.forget(id);
         }
     }
-    Some(container)
 }
 
 /// Spawns (or respawns, when the level changes) every prop the level lays out, each container
@@ -451,6 +456,7 @@ fn open_aimed_container(
     input: ActionInput,
     mut aimed: ResMut<Aimed>,
     containers: Query<(&PropPiece, &Container)>,
+    urns: Query<&Container, With<crate::niches::NicheUrn>>,
     level: Res<CurrentLevel>,
     mut open: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
@@ -462,6 +468,13 @@ fn open_aimed_container(
         return;
     }
     let Some(entity) = aimed.0 else { return };
+    // An urn in a niche has no lid to raise: its grid goes up and that is all.
+    if let Ok(urn) = urns.get(entity) {
+        aimed.0 = None;
+        showing.0 = Some(urn.id);
+        show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+        return;
+    }
     let Ok((piece, &container)) = containers.get(entity) else { return };
     aimed.0 = None;
     let cursor = cursor.as_deref_mut().map(|c| &mut **c);
@@ -497,6 +510,7 @@ pub(crate) fn prompt_aimed_container(
 fn open_for_capture(
     mut commands: Commands,
     containers: Query<(Entity, &PropPiece, &Container)>,
+    urns: Query<(&crate::niches::NichePiece, &Container), With<crate::niches::NicheUrn>>,
     level: Res<CurrentLevel>,
     mut open: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
@@ -507,6 +521,14 @@ fn open_for_capture(
 ) {
     *frames += 1;
     if *frames != 4 {
+        return;
+    }
+    // `FB_OPEN_CONTAINER=urn` opens the level's first urn in a niche.
+    if std::env::var("FB_OPEN_CONTAINER").is_ok_and(|v| v == "urn") {
+        if let Some((_, urn)) = urns.iter().min_by_key(|(piece, _)| piece.index) {
+            showing.0 = Some(urn.id);
+            show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+        }
         return;
     }
     let n: usize = std::env::var("FB_OPEN_CONTAINER").ok().and_then(|v| v.parse().ok()).unwrap_or(0);

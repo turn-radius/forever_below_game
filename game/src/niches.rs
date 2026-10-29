@@ -2,9 +2,14 @@
 //! bones or a small urn, standing on the sill of the recess the stone cuts into the wall
 //! (`level::geometry::stone`).
 //!
+//! An urn is a container, opened with the pick-up key like a chest: it is kept in the
+//! [`Inventory`] as the amphora it is, holding what its niche's seed rolls
+//! (`fb_items::roll_urn_contents`), and what is taken stays taken in the level record
+//! (`record::LevelRecord::urns`), across leaving and returning and across a save.
+//!
 //! Each is built by the generator that already draws it: the Armory's candle, the skull and
 //! bones of the level's scenery, and the amphora of its containers, fitted to the recess and
-//! turned to face out of it. They are scenery: they block nothing and cannot be taken. A candle
+//! turned to face out of it. None blocks the way, and only an urn can be opened. A candle
 //! lights its recess with a small point light of its own that casts no shadow, so it takes none
 //! of the shadow budget.
 
@@ -18,9 +23,12 @@ use bevy::prelude::*;
 use fb_level::{Level, NicheContents, NicheSpot, chest_state, niches};
 
 use crate::carry::appearance_of;
+use crate::inventory::Inventory;
 use crate::level::{EXPOSURE, LevelPiece, fixture_appearance};
 use crate::light::{Torch, point_light};
 use crate::play::CurrentLevel;
+use crate::props::Container;
+use crate::record::{WorldRecord, restore_contents};
 use crate::render::{ItemAppearance, ItemSpawner};
 use crate::tuning::{LightTuning, Tuning};
 
@@ -28,6 +36,13 @@ use crate::tuning::{LightTuning, Tuning};
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NichePiece {
     pub index: usize,
+}
+
+/// On an urn in a niche, which is a [`Container`] too: its item-space bounds, for looking at it.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct NicheUrn {
+    pub min: Vec3,
+    pub max: Vec3,
 }
 
 /// The room a thing has in a niche, in world units: across, up and deep.
@@ -88,17 +103,48 @@ pub fn niche_light(tuning: &LightTuning) -> PointLight {
     Torch::flickering(point_light(Torch::COLOR, tuning.niche_peak, tuning.niche_reach, &EXPOSURE), tuning.flicker_depth)
 }
 
+/// Keeps track of the urn in `spot` in `inventory`, loose, holding what was `left` in it if the
+/// level was visited before, and else what its niche's seed rolls against `odds`.
+pub fn stock_urn(inventory: &mut Inventory, spot: &NicheSpot, odds: fb_items::Odds, left: Option<&[crate::record::Stowed]>) -> crate::inventory::ItemId {
+    let container = inventory.add(fb_items::container_item(chest_state(ChestStyle::Amphora, spot.seed, false)));
+    match left {
+        Some(left) => restore_contents(inventory, container, left),
+        None => crate::props::fill_container(inventory, container, fb_items::roll_urn_contents(spot.seed, odds)),
+    }
+    container
+}
+
 /// Spawns (or respawns, when the level changes) what the level's niches hold.
-pub fn lay_out_niches(mut commands: Commands, level: Res<CurrentLevel>, tuning: Option<Res<Tuning>>, old: Query<Entity, With<NichePiece>>, mut spawner: ItemSpawner) {
-    for entity in &old {
+#[allow(clippy::too_many_arguments)]
+pub fn lay_out_niches(
+    mut commands: Commands,
+    level: Res<CurrentLevel>,
+    tuning: Option<Res<Tuning>>,
+    old: Query<(Entity, Option<&Container>), With<NichePiece>>,
+    mut inventory: ResMut<Inventory>,
+    record: Option<Res<WorldRecord>>,
+    character: Option<Res<crate::character::Character>>,
+    mut spawner: ItemSpawner,
+) {
+    for (entity, container) in &old {
+        if let Some(container) = container {
+            inventory.forget(container.id);
+        }
         commands.entity(entity).despawn();
     }
     let light = tuning.map(|t| t.light.clone()).unwrap_or_default();
+    let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
+    let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
     for (index, spot) in level.0.niches.iter().enumerate() {
         let Some((mesh, appearance, flame, longest)) = contents_of(spot, level.0.ceiling) else { continue };
         let Some(bounds) = mesh.bounds() else { continue };
         let transform = on_the_sill(spot, bounds, longest);
-        spawner.spawn(&mesh, &appearance).insert((LevelPiece, Name::new(format!("niche {:?}", spot.contents)), transform, NichePiece { index }));
+        let mut root = spawner.spawn(&mesh, &appearance);
+        root.insert((LevelPiece, Name::new(format!("niche {:?}", spot.contents)), transform, NichePiece { index }));
+        if spot.contents == NicheContents::Urn {
+            let id = stock_urn(&mut inventory, spot, odds, saved.and_then(|l| l.urns.get(&index)).map(|c| c.contents.as_slice()));
+            root.insert((Container { id, opened: false }, NicheUrn { min: Vec3::from_array(bounds.0), max: Vec3::from_array(bounds.1) }));
+        }
         if let Some(flame) = flame {
             let (dx, dy) = spot.facing.step();
             let out = Vec3::new(-dx as f32, 0.0, -dy as f32);
@@ -115,6 +161,7 @@ pub fn lay_out_niches(mut commands: Commands, level: Res<CurrentLevel>, tuning: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::travel::Abyss;
     use std::collections::HashMap;
 
     /// A niche of each kind of contents, from stone halls levels of the game's own delve.
@@ -177,5 +224,29 @@ mod tests {
         let light = niche_light(&tuning);
         assert!(!light.shadow_maps_enabled, "a niche's candle takes no slot of the shadow budget");
         assert!(light.range >= 12.0 && light.range <= fb_level::CELL * 1.5, "reaches a cell at most: {}", light.range);
+    }
+
+    #[test]
+    fn an_urn_holds_what_its_niche_rolls_the_same_each_time_and_what_was_left_replaces_it() {
+        let odds = fb_items::Odds::loot(2);
+        let mut found = None;
+        'seeds: for seed in 1..=120 {
+            for spot in Abyss::new(seed).level_at(2).niches.iter().filter(|n| n.contents == NicheContents::Urn) {
+                if !fb_items::roll_urn_contents(spot.seed, odds).is_empty() {
+                    found = Some(*spot);
+                    break 'seeds;
+                }
+            }
+        }
+        let spot = found.expect("an urn that holds something turns up");
+        let mut inventory = Inventory::default();
+        let kept = |inventory: &Inventory, urn| {
+            inventory.grid(urn).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect::<Vec<_>>()
+        };
+        let (a, b) = (stock_urn(&mut inventory, &spot, odds, None), stock_urn(&mut inventory, &spot, odds, None));
+        assert!(!kept(&inventory, a).is_empty());
+        assert_eq!(kept(&inventory, a), kept(&inventory, b), "the same niche rolls the same goods");
+        let emptied = stock_urn(&mut inventory, &spot, odds, Some(&[]));
+        assert!(kept(&inventory, emptied).is_empty(), "what was left is what is there, not what it rolled");
     }
 }
