@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn only_clerics_pray() {
-        for class in [Class::Fighter, Class::Ranger, Class::Mage] {
+        for class in [Class::Fighter, Class::Mage] {
             let (mut app, player) = prayerful(class, 18, -100);
             knock_down(&mut app, player);
             assert!(app.world().get_resource::<Unconscious>().is_some(), "{class:?} falls");

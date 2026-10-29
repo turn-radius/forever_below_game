@@ -222,7 +222,7 @@ pub struct CombatRules {
     /// Snake").
     pub venom_save_dc: i32,
     /// The hit die of each class, taken at its highest for a first-level delver (SRD 5.1
-    /// "Hit Points at 1st Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for
+    /// "Hit Points at 1st Level": fighter p. 24, cleric p. 15, wizard p. 52 for
     /// the mage).
     pub hit_dice: HitDice,
     /// What a delver's or a folk's attack roll adds for proficiency with the weapon, a 1st-level
@@ -257,14 +257,13 @@ impl Default for CombatRules {
 #[serde(default)]
 pub struct HitDice {
     pub fighter: u32,
-    pub ranger: u32,
     pub mage: u32,
     pub cleric: u32,
 }
 
 impl Default for HitDice {
     fn default() -> Self {
-        HitDice { fighter: 10, ranger: 10, mage: 6, cleric: 8 }
+        HitDice { fighter: 10, mage: 6, cleric: 8 }
     }
 }
 

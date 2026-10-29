@@ -5,6 +5,8 @@
 //! Adding `FB_SCREENSHOT_FRAMES=120..136` saves a run of consecutive frames instead, as
 //! `path_120.png` up to `path_135.png`, to compare frame by frame; `FB_SCREENSHOT_EVERY=30` saves
 //! only every 30th of them, for a long run such as a fall, the title and the next delve.
+//! `FB_SCREENSHOT_FPS=30` steps time by a thirtieth of a second each frame, however long a
+//! frame takes to save, so a run of frames plays back at its real pace (for GIFs).
 //!
 //! A capture shows exactly what its command line and environment ask for. The window still
 //! opens, and on macOS it takes focus, so keys typed meant for a terminal (two W presses step
@@ -126,6 +128,9 @@ pub fn parse_frames(spec: &str) -> Result<Range<u32>, String> {
 
 impl Plugin for FrameCapturePlugin {
     fn build(&self, app: &mut App) {
+        if let Some(fps) = std::env::var("FB_SCREENSHOT_FPS").ok().and_then(|f| f.trim().parse::<f32>().ok()).filter(|f| *f > 0.0) {
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / fps)));
+        }
         app.insert_resource(self.clone())
             .add_plugins(IgnoreInput)
             .add_systems(PostStartup, retarget_cameras)

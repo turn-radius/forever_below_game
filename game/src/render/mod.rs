@@ -9,6 +9,7 @@ mod item;
 mod outline;
 mod screen_ink;
 mod toon;
+mod wisp;
 
 pub use item::{
     ArmoryItem, ArmoryPart, InkOutline, ItemAppearance, ItemPalette, ItemSpawner, OutlineMaterials,
@@ -16,6 +17,7 @@ pub use item::{
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
 pub use screen_ink::{InkStyle, ScreenInk, ScreenInkExempt};
+pub use wisp::{WispMaterial, wisp_card};
 pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
 
 use bevy::{asset::embedded_asset, light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};
@@ -37,8 +39,9 @@ impl Plugin for ArmoryRenderPlugin {
         load_shader_library!(app, "toon.wesl");
         load_shader_library!(app, "outline.wesl");
         embedded_asset!(app, "screen_ink.wesl");
+        embedded_asset!(app, "wisp.wesl");
 
-        app.add_plugins((MaterialPlugin::<ToonMaterial>::default(), MaterialPlugin::<OutlineMaterial>::default()))
+        app.add_plugins((MaterialPlugin::<ToonMaterial>::default(), MaterialPlugin::<OutlineMaterial>::default(), MaterialPlugin::<WispMaterial>::default()))
             .init_resource::<OutlineMaterials>()
             .add_systems(Startup, cluster_lights_on_the_cpu)
             .add_systems(Update, flame::flicker_flames);

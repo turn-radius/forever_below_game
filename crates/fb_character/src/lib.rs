@@ -1032,7 +1032,7 @@ impl Stamina {
 /// How a character casts: the pool a spell caster draws on and how big it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Casting {
-    /// Fighters and Rangers: a small flat pool.
+    /// Fighters: a small flat pool.
     #[default]
     Martial,
     /// Mages: the pool follows INT.
@@ -1931,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn fighters_and_rangers_have_a_small_flat_pool_and_a_dull_caster_is_floored() {
+    fn fighters_have_a_small_flat_pool_and_a_dull_caster_is_floored() {
         assert_eq!(Mana::max_for(Casting::Martial, &scores(18, 18)), 4.0);
         assert_eq!(Mana::max_for(Casting::Martial, &scores(3, 3)), 4.0);
         assert_eq!(Mana::max_for(Casting::Arcane, &scores(3, 3)), 4.0);

@@ -489,7 +489,8 @@ mod against_a_fresh_delver {
         let delvers = delvers();
         let (kits, _) = guards(fb_items::undead::FIRST_HALLS, 8);
         let blows = blows_to_down(&delvers, &kits);
-        assert!(blows >= 4.0, "down on blow {blows:.2} on average, so not three survived");
+        // Three classes now (#741), so the mean die is a little smaller than with four.
+        assert!(blows >= 3.9, "down on blow {blows:.2} on average, so not three survived");
         let hits = delver_hits(&delvers, &kits);
         assert!(hits >= 0.5, "hits {:.0}%", hits * 100.0);
     }

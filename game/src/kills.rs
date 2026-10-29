@@ -51,7 +51,7 @@ fn kind_from_word(word: &str) -> Option<CreatureKind> {
 /// What a folk is to the factions that weigh their death: their faction, folk and class.
 pub fn victim_of(denizen: &Denizen) -> Victim {
     let person = &denizen.person;
-    let class = [Outfit::Fighter, Outfit::Ranger, Outfit::Mage, Outfit::Cleric, Outfit::Scavenger].into_iter().find(|o| o.key() == person.outfit).and_then(Outfit::class);
+    let class = [Outfit::Fighter, Outfit::Mage, Outfit::Cleric, Outfit::Scavenger].into_iter().find(|o| o.key() == person.outfit).and_then(Outfit::class);
     // A denizen is not one of the folk the factions like or hate: only its faction hears.
     let folk = if person.spot.denizen.is_some() { None } else { Some(person.spec.folk) };
     Victim::Member { faction: person.faction.id, folk, class }
