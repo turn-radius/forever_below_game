@@ -21,10 +21,14 @@
 //!   bedroll and `tent_rest` times that in a tent. A light they carry is put out first. They
 //!   wake ([`wake_up`]) rested, or early when something hostile comes within `wake_distance`,
 //!   when hunger or thirst reaches the Famished band, when they are hurt, or at a key press. They
-//!   cannot lie down while tired too little, hungry or thirsty, or with something hostile near.
+//!   cannot lie down while hungry or thirsty, or with something hostile near, nor out of a camp
+//!   while tired too little. In a camp a rested delver may lie down anyway and nap for the camp
+//!   rules' `nap_hours` (an hour), waking "from a short rest" at the nap's end ([`Sleeping::nap_until`]),
+//!   or early for the usual reasons.
 //! - Lying down in a set camp is the one place the delve is saved ([`crate::save`], "Your delve is
 //!   saved."), before the sleep goes on. A resumed delve puts the delver back to sleep in the camp
-//!   they saved in ([`PendingBed`]), and they wake as any sleeper does.
+//!   they saved in ([`PendingBed`]), and they wake as any sleeper does; a nap keeps its end hour
+//!   in the save.
 //!
 //! Camp goods are drawn at their own size on the floor, not the tuning's larger floor scale: a
 //! tent or bedroll set at 115% would no longer fit the room it was checked against.
@@ -430,6 +434,8 @@ pub struct Sleeping {
     pub hit_points: i32,
     /// The game hour they lay down.
     pub since: f64,
+    /// The game hour a nap ends, for a delver who lay down rested: they do not wake rested.
+    pub nap_until: Option<f64>,
     /// The real second they lay down, so the key press that began the sleep does not end it.
     pub began: f32,
 }
@@ -454,9 +460,10 @@ impl Watchers<'_, '_> {
 }
 
 /// What keeps a delver from lying down, if anything: something hostile `watched` near, hunger or
-/// thirst at the Famished band (the sleep would be broken, `exhaustion.famished_at`), or too little
-/// sleepiness (`camp.tired_from`).
-pub fn cannot_sleep(rules: &fb_character::rules::Rules, needs: &fb_character::Needs, watched: bool) -> Option<&'static str> {
+/// thirst at the Famished band (the sleep would be broken, `exhaustion.famished_at`), or, out of a
+/// camp (`in_camp` false), too little sleepiness (`camp.tired_from`). In a camp a rested delver may
+/// lie down anyway and nap ([`Sleeping::nap_until`]).
+pub fn cannot_sleep(rules: &fb_character::rules::Rules, needs: &fb_character::Needs, watched: bool, in_camp: bool) -> Option<&'static str> {
     if watched {
         return Some("You cannot sleep with something so near.");
     }
@@ -466,16 +473,17 @@ pub fn cannot_sleep(rules: &fb_character::rules::Rules, needs: &fb_character::Ne
     if needs.thirst.value >= rules.exhaustion.famished_at {
         return Some("You are too thirsty to sleep.");
     }
-    if needs.sleepiness.value < rules.camp.tired_from {
+    if !in_camp && needs.sleepiness.value < rules.camp.tired_from {
         return Some("You are not tired enough to sleep.");
     }
     None
 }
 
 /// Why a delver asleep should wake now, if they should: hurt (fewer hit points than they lay down
-/// with), something hostile `watched` near, hunger or thirst at the Famished band, or rested. A
-/// key press is not here: it is the input's ([`wake_up`]).
-pub fn reason_to_wake(rules: &fb_character::rules::Rules, needs: &fb_character::Needs, hit_points: i32, began_with: i32, watched: bool) -> Option<&'static str> {
+/// with), something hostile `watched` near, hunger or thirst at the Famished band, or rested (not
+/// for a `napping` delver, who wakes at the nap's end instead, [`wake_up`]). A key press is not
+/// here: it is the input's.
+pub fn reason_to_wake(rules: &fb_character::rules::Rules, needs: &fb_character::Needs, hit_points: i32, began_with: i32, watched: bool, napping: bool) -> Option<&'static str> {
     if hit_points < began_with {
         return Some("You wake in pain.");
     }
@@ -488,7 +496,7 @@ pub fn reason_to_wake(rules: &fb_character::rules::Rules, needs: &fb_character::
     if needs.thirst.value >= rules.exhaustion.famished_at {
         return Some("Thirst wakes you.");
     }
-    if needs.sleepiness.value <= 0.0 {
+    if !napping && needs.sleepiness.value <= 0.0 {
         return Some("You wake rested.");
     }
     None
@@ -533,7 +541,7 @@ fn go_to_sleep(
     let Ok((body, needs, mut locomotion, health)) = players.single_mut() else { return };
     let now = time.map_or(0.0, |t| t.elapsed_secs());
     let watched = watchers.near(body.translation.xz(), rules.camp.wake_distance as f32);
-    if let Some(reason) = cannot_sleep(&rules, &needs.0, watched) {
+    if let Some(reason) = cannot_sleep(&rules, &needs.0, watched, true) {
         toast.say(reason, now);
         return;
     }
@@ -545,7 +553,10 @@ fn go_to_sleep(
         }
     }
     locomotion.velocity = Vec2::ZERO;
-    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    // Lying down rested is a nap of `nap_hours`; tired, they sleep until rested.
+    let since = clock.time.hours();
+    let nap_until = (needs.0.sleepiness.value < rules.camp.tired_from).then_some(since + rules.camp.nap_hours);
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since, nap_until, began: now });
     toast.say(format!("You lie down in the {}", camp_name(camp.camp)), now);
     // Lying down in a camp is the one place the delve is saved (`crate::save`), before the sleep
     // goes on; it says so, or that it could not, over the line above.
@@ -560,6 +571,8 @@ pub struct PendingBed {
     /// Frames spent looking for the camp.
     /// Whether it was laid out from the pack's lashing ([`Inventory::lashed_out`]).
     pub lashed: bool,
+    /// The game hour the nap they saved in ends, if it was one.
+    pub nap_until: Option<f64>,
     pub waited: u32,
 }
 
@@ -597,7 +610,7 @@ fn resume_in_bed(
     }
     let Ok((mut locomotion, health)) = players.single_mut() else { return };
     locomotion.velocity = Vec2::ZERO;
-    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), began: now });
+    asleep.0 = Some(Sleeping { camp: camp.camp, bed, hit_points: health.map_or(0, |h| h.hp), since: clock.time.hours(), nap_until: pending.nap_until, began: now });
 }
 
 /// For captures (`FB_LIE_DOWN`): a while after a camp is laid out (`FB_LAY_OUT`), tires the delver
@@ -654,7 +667,8 @@ fn wake_up(
     let pressed = keys.is_some_and(|k| k.get_just_pressed().next().is_some()) || mouse.is_some_and(|m| m.get_just_pressed().next().is_some());
     let keyed = now - sleep.began > KEY_GRACE && (screen.0.is_some() || pressed);
     let hit_points = health.map_or(sleep.hit_points, |h| h.hp);
-    let reason = reason_to_wake(&rules, &needs.0, hit_points, sleep.hit_points, watched)
+    let reason = reason_to_wake(&rules, &needs.0, hit_points, sleep.hit_points, watched, sleep.nap_until.is_some())
+        .or_else(|| sleep.nap_until.filter(|&end| clock.time.hours() >= end).map(|_| "You wake from a short rest."))
         .or_else(|| (!beds.contains(sleep.bed)).then_some("Your bed is gone, and you wake."))
         .or_else(|| keyed.then_some("You wake."));
     let Some(reason) = reason else {
@@ -1173,17 +1187,20 @@ mod tests {
     #[test]
     fn a_delver_lies_down_only_when_tired_fed_watered_and_alone() {
         let rules = rules();
-        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.5), false), None);
-        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.1), false), Some("You are not tired enough to sleep."));
-        assert_eq!(cannot_sleep(&rules, &needs(0.8, 0.1, 0.9), false), Some("You are too hungry to sleep."));
-        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.8, 0.9), false), Some("You are too thirsty to sleep."));
-        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.9), true), Some("You cannot sleep with something so near."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.5), false, false), None);
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.1), false, false), Some("You are not tired enough to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.1), false, true), None, "a rested delver may nap in a camp");
+        assert_eq!(cannot_sleep(&rules, &needs(0.8, 0.1, 0.1), false, true), Some("You are too hungry to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.1), true, true), Some("You cannot sleep with something so near."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.8, 0.1, 0.9), false, false), Some("You are too hungry to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.8, 0.9), false, false), Some("You are too thirsty to sleep."));
+        assert_eq!(cannot_sleep(&rules, &needs(0.1, 0.1, 0.9), true, false), Some("You cannot sleep with something so near."));
     }
 
     #[test]
     fn a_sleeper_wakes_rested_hurt_hungry_thirsty_or_disturbed() {
         let rules = rules();
-        let wakes = |n: fb_character::Needs, hp: i32, watched: bool| reason_to_wake(&rules, &n, hp, 10, watched);
+        let wakes = |n: fb_character::Needs, hp: i32, watched: bool| reason_to_wake(&rules, &n, hp, 10, watched, false);
         assert_eq!(wakes(needs(0.1, 0.1, 0.4), 10, false), None, "still tired, nothing amiss");
         assert_eq!(wakes(needs(0.1, 0.1, 0.0), 10, false), Some("You wake rested."));
         assert_eq!(wakes(needs(0.1, 0.1, 0.4), 9, false), Some("You wake in pain."));
@@ -1239,12 +1256,56 @@ mod tests {
     }
 
     #[test]
-    fn a_rested_delver_cannot_lie_down_and_is_told_why() {
+    fn a_rested_delver_lies_down_in_a_camp_and_naps_an_hour() {
         let (mut app, delver, _) = sleeper("Bedroll");
         app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.05;
         press(&mut app, KeyCode::KeyF);
+        let sleep = app.world().resource::<Asleep>().0.expect("lies down");
+        assert_eq!(sleep.nap_until, Some(sleep.since + 1.0));
+        assert!(app.world().resource::<Toast>().text.starts_with("You lie down in the bedroll"));
+        // Not rested-woken on the next frames, though sleepiness is empty.
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.0;
+        app.update();
+        app.update();
+        assert!(app.world().resource::<Asleep>().0.is_some(), "a nap does not wake on frame one");
+        // Half an hour on, still napping; at the hour, awake with the line.
+        app.world_mut().resource_mut::<GameClock>().time = fb_character::GameTime::from_seconds((sleep.since + 0.5) * 3600.0);
+        app.update();
+        assert!(app.world().resource::<Asleep>().0.is_some());
+        app.world_mut().resource_mut::<GameClock>().time = fb_character::GameTime::from_seconds((sleep.since + 1.0) * 3600.0);
+        app.update();
         assert_eq!(app.world().resource::<Asleep>().0, None);
-        assert_eq!(app.world().resource::<Toast>().text, "You are not tired enough to sleep.");
+        assert!(app.world().resource::<Toast>().text.starts_with("You wake from a short rest."), "{}", app.world().resource::<Toast>().text);
+    }
+
+    #[test]
+    fn a_tired_delver_sleeps_until_rested_not_a_nap() {
+        let (mut app, _, _) = sleeper("Bedroll");
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0.expect("asleep").nap_until, None);
+    }
+
+    #[test]
+    fn a_nap_is_cut_short_by_pain() {
+        let (mut app, delver, _) = sleeper("Bedroll");
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.0;
+        press(&mut app, KeyCode::KeyF);
+        app.world_mut().get_mut::<Health>(delver).unwrap().hp = 6;
+        app.update();
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert!(app.world().resource::<Toast>().text.starts_with("You wake in pain."));
+    }
+
+    #[test]
+    fn a_rested_delver_with_something_near_still_cannot_lie_down() {
+        let (mut app, delver, _) = sleeper("Bedroll");
+        app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.0;
+        let spot = *fb_level::generate(1207, 1).creatures.first().expect("a creature");
+        let near = Transform::from_xyz(40.0, 0.0, 0.0);
+        app.world_mut().spawn((crate::creatures::Critter::new(spot, spot.creature()), near, GlobalTransform::from(near)));
+        press(&mut app, KeyCode::KeyF);
+        assert_eq!(app.world().resource::<Asleep>().0, None);
+        assert_eq!(app.world().resource::<Toast>().text, "You cannot sleep with something so near.");
     }
 
     #[test]
