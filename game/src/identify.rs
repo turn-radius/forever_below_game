@@ -219,7 +219,7 @@ mod tests {
         let item = app.world().resource::<Inventory>().item(id).unwrap().clone();
         assert!(!item.is_known() && !item.can_identify(app.world().resource::<WorldRecord>().identify_epoch()));
         // Sleeping and waking is one rest.
-        app.world_mut().resource_mut::<Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: Entity::PLACEHOLDER, hit_points: 1, since: 0.0, began: 0.0 });
+        app.world_mut().resource_mut::<Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: Entity::PLACEHOLDER, hit_points: 1, since: 0.0, nap_until: None, began: 0.0 });
         app.update();
         assert_eq!(app.world().resource::<WorldRecord>().rests, 0);
         app.world_mut().resource_mut::<Asleep>().0 = None;

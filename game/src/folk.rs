@@ -56,7 +56,7 @@ impl Plugin for FolkPlugin {
             .add_systems(
                 Update,
                 (
-                    spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    spawn_folk.run_if(crate::loading::laid_out_at(5)),
                     idle_folk,
                     turn_heads,
                     (aim_at_folk, meet_aimed_folk, spawn_folk_card, show_folk_card).chain(),

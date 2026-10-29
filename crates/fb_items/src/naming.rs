@@ -15,10 +15,15 @@ pub fn noun(base: &str, shape: &armory::Item) -> String {
     }
 }
 
-/// `<prefix> <noun> <suffix>`, from the first prefix and first suffix among `affixes`.
+/// `<prefix> <noun> <suffix>`: every good prefix in order (an item may have two where no suffix
+/// fits), or the first prefix when none is good, and the first suffix among `affixes`.
 pub fn item_name(noun: &str, affixes: &[&Affix]) -> String {
-    let first = |k: AffixKind| affixes.iter().find(|a| a.kind == k).map(|a| a.name.as_str());
-    [first(AffixKind::Prefix), Some(noun), first(AffixKind::Suffix)].into_iter().flatten().collect::<Vec<_>>().join(" ")
+    let mut prefixes: Vec<&str> = affixes.iter().filter(|a| a.kind == AffixKind::Prefix && a.good).map(|a| a.name.as_str()).collect();
+    if prefixes.is_empty() {
+        prefixes.extend(affixes.iter().find(|a| a.kind == AffixKind::Prefix).map(|a| a.name.as_str()));
+    }
+    let suffix = affixes.iter().find(|a| a.kind == AffixKind::Suffix).map(|a| a.name.as_str());
+    prefixes.into_iter().chain([noun]).chain(suffix).collect::<Vec<_>>().join(" ")
 }
 
 /// Whether someone is a woman or a man: what the delver's creator chooses, and what a
@@ -189,6 +194,7 @@ mod tests {
         assert_eq!(item_name("Longsword", &[affix("Keen")]), "Keen Longsword");
         assert_eq!(item_name("Longsword", &[affix("of the Ox")]), "Longsword of the Ox");
         assert_eq!(item_name("Longsword", &[affix("Keen"), affix("of the Ox"), affix("of Plenty")]), "Keen Longsword of the Ox");
+        assert_eq!(item_name("Lantern", &[affix("Gleaming"), affix("Long-burning")]), "Gleaming Long-burning Lantern");
     }
 
     #[test]

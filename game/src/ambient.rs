@@ -56,7 +56,7 @@ impl Plugin for AmbientPlugin {
             .add_systems(OnEnter(AppState::Delving), spawn_rumble_schedule)
             .add_systems(OnExit(AppState::Delving), end_rumble_schedule)
             // Each level the delver comes to drips from its own spots.
-            .add_systems(Update, (clear_drips, spawn_ambient_emitters).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems))
+            .add_systems(Update, (clear_drips, spawn_ambient_emitters).chain().run_if(crate::loading::laid_out_at(6)).in_set(DelveSystems))
             .add_systems(Update, (play_drips, play_rumbles, turn_ambience_volume).in_set(DelveSystems));
     }
 }

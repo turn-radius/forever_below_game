@@ -582,11 +582,13 @@ pub struct CampRules {
     /// Sleepiness (0 rested to 1 spent) the delver must have reached to fall asleep: the
     /// Tired band begins here.
     pub tired_from: f64,
+    /// Game hours a rested delver naps in a set camp before waking, since they lay down not tired.
+    pub nap_hours: f64,
 }
 
 impl Default for CampRules {
     fn default() -> Self {
-        CampRules { bedroll_rest: 1.0, tent_rest: 1.5, sleep_clock_ratio: 900.0, wake_distance: 80.0, tired_from: 0.25 }
+        CampRules { bedroll_rest: 1.0, tent_rest: 1.5, sleep_clock_ratio: 900.0, wake_distance: 80.0, tired_from: 0.25, nap_hours: 1.0 }
     }
 }
 

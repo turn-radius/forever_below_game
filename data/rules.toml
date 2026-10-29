@@ -166,6 +166,8 @@ sleep_clock_ratio = 900.0
 wake_distance = 80.0
 # Sleepiness, from 0 rested to 1 spent, the delver must have reached to fall asleep.
 tired_from = 0.25
+# Game hours a delver who lies down in a camp without being tired naps before waking.
+nap_hours = 1.0
 
 [revival]
 # Times a delver brought to 0 hit points may come to in one world; the next fall ends the run.

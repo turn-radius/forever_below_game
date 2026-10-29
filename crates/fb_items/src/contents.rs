@@ -159,6 +159,24 @@ pub fn roll_contents(style: ChestStyle, loot: u32, odds: crate::Odds) -> Vec<Ite
     contents
 }
 
+/// What an urn in a wall niche holds, from the niche's `seed`: nothing at all, a few coins in a
+/// purse or a ring, each rolled through [`roll_item_with`] against `odds` like any loot. (The
+/// ashes of the dead are not a good of ours, so an urn holds none.) Pure in its arguments.
+pub fn roll_urn_contents(seed: u32, odds: crate::Odds) -> Vec<Item> {
+    let mut rng = Mulberry32::new(seed ^ 0x0A5E_5BE1);
+    let base = match rng.next_f64() {
+        p if p < URN_EMPTY => return Vec::new(),
+        p if p < URN_EMPTY + URN_COINS => "Purse",
+        _ => "Ring",
+    };
+    let item_seed = (rng.next_f64() * 4_294_967_296.0) as u32;
+    roll_item_with(base, item_seed, odds).into_iter().collect()
+}
+
+/// The shares of urns that hold nothing and that hold coin; the rest hold a ring.
+const URN_EMPTY: f64 = 0.3;
+const URN_COINS: f64 = 0.45;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +288,21 @@ mod tests {
         }
         // Barrels hold food and no stone.
         assert!((1..200).all(|loot| roll_contents(ChestStyle::Barrel, loot, crate::Odds::default()).iter().all(|i| crate::armory_base::rough_stone(&i.base).is_none())));
+    }
+
+    #[test]
+    fn an_urn_holds_nothing_coins_or_a_ring_and_the_same_every_time() {
+        let (mut empty, mut purses, mut rings) = (0, 0, 0);
+        for seed in 0..300u32 {
+            let a = roll_urn_contents(seed.wrapping_mul(2_654_435_761), crate::Odds::default());
+            assert_eq!(a, roll_urn_contents(seed.wrapping_mul(2_654_435_761), crate::Odds::default()));
+            match a.as_slice() {
+                [] => empty += 1,
+                [one] if one.coins.is_some() => purses += 1,
+                [one] if one.base == "Ring" => rings += 1,
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(empty > 40 && purses > 80 && rings > 40, "{empty} empty, {purses} purses, {rings} rings");
     }
 }

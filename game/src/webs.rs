@@ -25,7 +25,7 @@ pub struct WebsPlugin;
 
 impl Plugin for WebsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (hang_webs.run_if(resource_exists_and_changed::<CurrentLevel>), veil_webs).chain().in_set(DelveSystems));
+        app.add_systems(Update, (hang_webs.run_if(crate::loading::laid_out_at(6)), veil_webs).chain().in_set(DelveSystems));
     }
 }
 
@@ -53,7 +53,7 @@ pub fn web_appearance(seed: u32) -> ItemAppearance {
 /// The webs' transform: on the floor under the spot, turned to its yaw.
 pub fn web_transform(relief: &Relief, spot: &WebSpot) -> Transform {
     let [x, _, z] = Level::world(spot.x, spot.y);
-    Transform::from_xyz(x, relief.floor_height(x, z), z).with_rotation(Quat::from_rotation_y(spot.yaw))
+    Transform::from_xyz(x, relief.rest_height(x, z), z).with_rotation(Quat::from_rotation_y(spot.yaw))
 }
 
 /// Spawns every web the level has, clearing the last level's.

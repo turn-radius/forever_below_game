@@ -176,7 +176,10 @@ const FLAW_CHANCE: [f64; 4] = [0.3, 0.2, 0.1, 0.05];
 /// The affixes a `rarity` rolls on an item with `tags` worn in `slot`. Common: no good affix.
 /// Magic: one good prefix or suffix, even odds, or the other when nothing of the one drawn fits
 /// (a ring has no prefix), so a magic item always does something. Rare: a good prefix and a good
-/// suffix. Legendary: a good prefix and two good suffixes. Then a flaw prefix, at
+/// suffix. Legendary: a good prefix and two good suffixes. A rare or legendary suffix slot with
+/// no suffix that fits takes a second good prefix instead ([`good_suffix_fits`]), never an affix
+/// already chosen nor one of its group; a prefix slot with nothing stays empty, so a ring still
+/// rolls one good affix fewer than its rarity. A pool that was not empty draws exactly as it did. Then a flaw prefix, at
 /// [`FLAW_CHANCE`] for the rarity, after the good ones so it never takes their place or their
 /// name, and never of a group they have. Slots with nothing that fits stay empty.
 pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
@@ -191,8 +194,10 @@ pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot
     let mut chosen = Vec::new();
     for kind in good {
         let picked = pick_affix(rng, rolling, kind, true, &chosen).or_else(|| {
+            // Magic falls back both ways; a rare or legendary slot only from a suffix to a prefix, so
+            // a ring, which has no good prefix, still rolls one good affix fewer than its rarity.
             let other = if kind == Prefix { Suffix } else { Prefix };
-            (rarity == Rarity::Magic).then(|| pick_affix(rng, rolling, other, true, &chosen)).flatten()
+            (rarity == Rarity::Magic || kind == Suffix).then(|| pick_affix(rng, rolling, other, true, &chosen)).flatten()
         });
         if let Some(a) = picked {
             chosen.push(a);
@@ -204,6 +209,13 @@ pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot
         chosen.push(a);
     }
     chosen
+}
+
+/// Whether some good suffix that is in play still fits an item with `tags` worn in `slot` at
+/// `rarity` beside the `taken` affixes. When none does, a second good prefix may stand in its
+/// place: the roll takes one for an empty suffix slot, and the enchanter's bench offers one.
+pub fn good_suffix_fits(tags: &[Tag], slot: Option<Slot>, rarity: Rarity, taken: &[&Affix]) -> bool {
+    affixes().iter().any(|a| a.kind == AffixKind::Suffix && a.good && a.in_play() && a.least <= rarity && a.fits_item(tags, slot) && taken.iter().all(|t| a.stacks_with(t)))
 }
 
 /// Rarity against `odds`, then its affixes, from one stream, for an item in no particular slot.
@@ -260,7 +272,11 @@ mod tests {
                 let good: Vec<_> = chosen.iter().filter(|a| a.good).collect();
                 let flawed = chosen.len() - good.len();
                 assert!(good.len() <= rarity as usize && flawed <= 1, "{rarity:?}: {chosen:?}");
-                assert!(good.iter().filter(|a| a.kind == AffixKind::Prefix).count() <= 1);
+                // Two prefixes only where no good suffix is left that fits (a slot falls back to the other kind).
+                if good.iter().filter(|a| a.kind == AffixKind::Prefix).count() > 1 {
+                    let left = affixes().iter().any(|a| a.good && a.kind == AffixKind::Suffix && a.least <= rarity && a.fits_item(tags, None) && a.in_play() && chosen.iter().all(|c| a.stacks_with(c)));
+                    assert!(!left, "{rarity:?}: {chosen:?} has two prefixes with a suffix left");
+                }
                 assert!(chosen.iter().take(good.len()).all(|a| a.good), "the flaw comes last, so the name keeps the good prefix");
                 assert!(chosen.iter().filter(|a| !a.good).all(|a| a.kind == AffixKind::Prefix), "flaws are prefixes");
                 items[rarity as usize] += 1;
@@ -412,11 +428,217 @@ mod tests {
     fn of_thieves_rolls_again_now_that_picks_count_lockpicking() {
         let thieves = affixes().iter().find(|a| a.name == "of Thieves").expect("of Thieves is in the table");
         assert!(thieves.in_play(), "a pick rolls lockpicking as a line of its own");
-        let rolled: Vec<_> = (0..3_000).filter(|&seed| roll_rarity(&mut game_rng(seed), SWORD, &Odds::loot(6)).1.iter().any(|a| a.name == "of Thieves")).collect();
-        assert!(!rolled.is_empty(), "of Thieves rolls on some sword");
+        let gloves = &[Tag::Leather, Tag::Wear][..];
+        let rolled: Vec<_> = (0..3_000).filter(|&seed| roll_rarity_for(&mut game_rng(seed), gloves, Some(Slot::Hands), &Odds::loot(6)).1.iter().any(|a| a.name == "of Thieves")).collect();
+        assert!(!rolled.is_empty(), "of Thieves rolls on some glove");
         // And it gives the item the lockpicking its card shows and a pick counts.
         let item = (0..20_000).filter_map(|seed| crate::roll_item_with("Gloves", seed, Odds::loot(8))).find(|i| i.affixes.iter().any(|a| a.name == "of Thieves")).expect("gloves of Thieves turn up");
         assert!(item.profile.stats.lockpicking >= 1.0, "{:?}", item.profile.stats.lockpicking);
+    }
+
+    /// The roll as it was before a rare or legendary slot could fall back to the other kind.
+    fn roll_before_the_fallback(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot: Option<Slot>) -> Vec<&'static Affix> {
+        use AffixKind::{Prefix, Suffix};
+        let good: Vec<AffixKind> = match rarity {
+            Rarity::Common => vec![],
+            Rarity::Magic => vec![if rng.chance(0.5) { Prefix } else { Suffix }],
+            Rarity::Rare => vec![Prefix, Suffix],
+            Rarity::Legendary => vec![Prefix, Suffix, Suffix],
+        };
+        let rolling = Rolling { tags, slot, rarity };
+        let mut chosen = Vec::new();
+        for kind in good {
+            let picked = pick_affix(rng, rolling, kind, true, &chosen).or_else(|| {
+                let other = if kind == Prefix { Suffix } else { Prefix };
+                (rarity == Rarity::Magic).then(|| pick_affix(rng, rolling, other, true, &chosen)).flatten()
+            });
+            if let Some(a) = picked {
+                chosen.push(a);
+            }
+        }
+        if rng.chance(FLAW_CHANCE[rarity as usize]) && let Some(a) = pick_affix(rng, rolling, Prefix, false, &chosen) {
+            chosen.push(a);
+        }
+        chosen
+    }
+
+    const RARITIES: [Rarity; 4] = [Rarity::Common, Rarity::Magic, Rarity::Rare, Rarity::Legendary];
+
+    fn lantern() -> (Vec<Tag>, Option<Slot>) {
+        let item = crate::roll_item_with("Lantern", 1, Odds::default()).expect("a lantern rolls");
+        (item.profile.tags.clone(), item.profile.slot)
+    }
+
+    #[test]
+    fn of_thieves_rolls_only_on_thieves_gear() {
+        let names = |tags: &[Tag], slot: Option<Slot>| -> std::collections::HashSet<&'static str> {
+            let mut seen = std::collections::HashSet::new();
+            for seed in 0..1_500 {
+                for rarity in RARITIES {
+                    seen.extend(roll_affixes_for(&mut game_rng(seed), rarity, tags, slot).iter().map(|a| a.name.as_str()));
+                }
+            }
+            seen
+        };
+        let (tags, slot) = lantern();
+        assert!(!names(&tags, slot).contains("of Thieves"), "a lantern rolls no of Thieves");
+        for (tags, slot) in [(&[Tag::Leather, Tag::Wear][..], Slot::Hands), (&[Tag::Trinket][..], Slot::Ring1), (&[Tag::Trinket][..], Slot::Ring2), (&[Tag::Trinket][..], Slot::Neck), (&[Tag::Trinket][..], Slot::Charm), (&[Tag::Leather, Tag::Wear][..], Slot::Belt)] {
+            assert!(names(tags, Some(slot)).contains("of Thieves"), "{slot:?} can roll of Thieves");
+        }
+        assert!(!names(SWORD, Some(Slot::Mainhand)).contains("of Thieves"), "a sword rolls none");
+    }
+
+    #[test]
+    fn a_legendary_lantern_can_be_gleaming_and_long_burning() {
+        let (tags, slot) = lantern();
+        let mut both = 0;
+        for seed in 0..2_000 {
+            let chosen = roll_affixes_for(&mut game_rng(seed), Rarity::Legendary, &tags, slot);
+            let mut names: Vec<&str> = chosen.iter().map(|a| a.name.as_str()).collect();
+            let n = names.len();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len(), n, "seed {seed}: no affix twice");
+            for (i, a) in chosen.iter().enumerate() {
+                assert!(chosen[i + 1..].iter().all(|b| a.stacks_with(b)), "seed {seed}: groups stay apart");
+            }
+            both += (names.contains(&"Gleaming") && names.contains(&"Long-burning")) as u32;
+        }
+        assert!(both > 0, "some legendary lantern is both");
+    }
+
+    #[test]
+    fn items_whose_pools_did_not_change_roll_what_they_rolled() {
+        let wanted = |r: Rarity| match r {
+            Rarity::Common => 0,
+            Rarity::Magic => 1,
+            Rarity::Rare => 2,
+            Rarity::Legendary => 3,
+        };
+        // Rings, amulets and charms roll exactly as they did (a ring, with no good prefix, at most one good affix when rare and two when legendary).
+        for slot in [Slot::Ring1, Slot::Ring2, Slot::Neck, Slot::Charm] {
+            for seed in 0..2_000 {
+                for rarity in RARITIES {
+                    let tags = &[Tag::Trinket][..];
+                    let now = roll_affixes_for(&mut game_rng(seed), rarity, tags, Some(slot));
+                    assert_eq!(now, roll_before_the_fallback(&mut game_rng(seed), rarity, tags, Some(slot)), "{slot:?} {rarity:?} seed {seed}");
+                    let good = now.iter().filter(|a| a.good).count();
+                    let most = match rarity {
+                        Rarity::Common => 0,
+                        Rarity::Magic | Rarity::Rare => 1,
+                        Rarity::Legendary => 2,
+                    };
+                    // Only a ring has no good prefix at all.
+                    assert!(good <= most || slot != Slot::Ring1 && slot != Slot::Ring2, "{slot:?} {rarity:?}: {good} good");
+                }
+            }
+        }
+        // Gloves and belts roll as they did wherever every good slot was filled.
+        let mut compared = 0;
+        for (tags, slot) in [(&[Tag::Leather, Tag::Wear][..], Slot::Hands), (&[Tag::Leather, Tag::Wear][..], Slot::Belt)] {
+            for seed in 0..2_000 {
+                for rarity in RARITIES {
+                    let before = roll_before_the_fallback(&mut game_rng(seed), rarity, tags, Some(slot));
+                    if before.iter().filter(|a| a.good).count() == wanted(rarity) {
+                        assert_eq!(roll_affixes_for(&mut game_rng(seed), rarity, tags, Some(slot)), before, "{slot:?} {rarity:?} seed {seed}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        assert!(compared > 1_000, "{compared}");
+    }
+
+    #[test]
+    fn a_legendary_sword_can_still_be_of_carnage_and_of_precision() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..600 {
+            seen.extend(roll_affixes_for(&mut game_rng(seed), Rarity::Legendary, SWORD, Some(Slot::Mainhand)).iter().map(|a| a.name.as_str()));
+        }
+        assert!(seen.contains("of Carnage") && seen.contains("of Precision"), "{seen:?}");
+    }
+
+    fn lantern_rolls(rarity: Rarity, seeds: u32) -> Vec<Vec<&'static Affix>> {
+        let (tags, slot) = lantern();
+        (0..seeds).map(|seed| roll_affixes_for(&mut game_rng(seed), rarity, &tags, slot)).collect()
+    }
+
+    #[test]
+    fn lantern_light_tiers_come_by_rarity_and_never_stack() {
+        let tier_names = ["Radiant", "Blazing", "Enduring", "Everlasting", "of the Furnace"];
+        for rarity in [Rarity::Common, Rarity::Magic] {
+            for chosen in lantern_rolls(rarity, 500) {
+                assert!(chosen.iter().all(|a| !tier_names.contains(&a.name.as_str())), "{rarity:?}: {chosen:?}");
+            }
+        }
+        for rarity in [Rarity::Rare, Rarity::Legendary] {
+            let rolls = lantern_rolls(rarity, 500);
+            for name in ["Radiant", "Enduring", "of the Furnace"] {
+                assert!(rolls.iter().flatten().any(|a| a.name == name), "{rarity:?} lantern rolls {name}");
+            }
+        }
+        for name in ["Blazing", "Everlasting"] {
+            assert!(!lantern_rolls(Rarity::Rare, 500).iter().flatten().any(|a| a.name == name), "{name} waits for legendary");
+            assert!(lantern_rolls(Rarity::Legendary, 500).iter().flatten().any(|a| a.name == name), "a legendary lantern rolls {name}");
+        }
+        for rarity in RARITIES {
+            for chosen in lantern_rolls(rarity, 500) {
+                for (i, a) in chosen.iter().enumerate() {
+                    assert!(chosen[i + 1..].iter().all(|b| a.stacks_with(b)), "{rarity:?}: {chosen:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rare_lanterns_differ_and_legendary_lanterns_carry_three_good_affixes() {
+        let combos: std::collections::HashSet<Vec<&str>> = lantern_rolls(Rarity::Rare, 500).iter().map(|c| c.iter().map(|a| a.name.as_str()).collect()).collect();
+        assert!(combos.len() > 3, "{combos:?}");
+        for chosen in lantern_rolls(Rarity::Rare, 500) {
+            assert_eq!(chosen.iter().filter(|a| a.good).count(), 2, "{chosen:?}");
+        }
+        for chosen in lantern_rolls(Rarity::Legendary, 500) {
+            assert_eq!(chosen.iter().filter(|a| a.good).count(), 3, "{chosen:?}");
+        }
+    }
+
+    #[test]
+    fn the_light_and_burn_time_the_game_reads_follow_the_tier() {
+        let plain = crate::roll_item_with("Lantern", 1, Odds::default()).expect("a lantern");
+        let (light0, burn0) = (plain.profile.stats.light - plain.affixes.iter().flat_map(|a| &a.fx).filter_map(|m| match *m { crate::modifier::Modifier::Add { stat: crate::stats::Stat::Light, by } => Some(by), _ => None }).sum::<f32>(), 1.0);
+        let (mut blazing, mut everlasting) = (false, false);
+        for seed in 0..800 {
+            let Some(item) = crate::roll_item_with("Lantern", seed, Odds::loot(14)) else { continue };
+            let has = |n: &str| item.affixes.iter().any(|a| a.name == n);
+            if has("Blazing") && !has("Smoky") && !has("Gleaming") {
+                blazing = true;
+                assert!((item.profile.stats.light - (light0 + 30.0)).abs() < 1e-3 && item.light_factor() > 1.0, "{:?}", item.profile.stats.light);
+            }
+            if has("Everlasting") && !has("Long-burning") {
+                everlasting = true;
+                assert!((item.profile.stats.burn_time - burn0 * 4.0).abs() < 1e-3, "{:?}", item.profile.stats.burn_time);
+            }
+        }
+        assert!(blazing && everlasting, "a Blazing and an Everlasting lantern turn up");
+    }
+
+    #[test]
+    fn what_has_no_good_suffix_at_legendary() {
+        let mut none = Vec::new();
+        for (base, _) in crate::armory_base::ARMORY_BASES.iter() {
+            let Some(item) = crate::roll_item_with(base, 1, Odds::loot(14)) else { continue };
+            let mut slots: Vec<Option<Slot>> = item.slots().into_iter().map(Some).collect();
+            if slots.is_empty() {
+                slots.push(None);
+            }
+            for slot in slots {
+                if !good_suffix_fits(&item.profile.tags, slot, Rarity::Legendary, &[]) {
+                    none.push(format!("{base} ({})", slot.map_or("no slot".to_string(), |s| format!("{s:?}"))));
+                }
+            }
+        }
+        eprintln!("NOSUFFIX {none:?}");
+        assert!(!none.iter().any(|n| n.starts_with("Lantern") || n.starts_with("Torch")), "{none:?}");
     }
 
     #[test]
@@ -477,7 +699,7 @@ mod tests {
                 }
             }
         }
-        for name in ["Fleet", "of Haste", "Vicious", "of Carnage", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail", "of the Hare", "of Mending", "of Purity"] {
+        for name in ["Fleet", "of Haste", "Vicious", "Accurate", "of Precision", "Reinforced", "of the Bulwark", "of Deflection", "of the Rampart", "of the Owl", "of the Bat", "of Might", "of the Giant", "of Vigour", "of the Bear", "Sluggish", "Frail", "of the Hare", "of Mending", "of Purity"] {
             assert!(seen.contains(name), "{name} never rolled");
         }
     }

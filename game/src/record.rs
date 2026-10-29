@@ -153,6 +153,9 @@ pub struct LevelRecord {
     pub floor: Vec<FloorRecord>,
     /// Each container prop, by its index in the level's props.
     pub containers: BTreeMap<usize, ContainerRecord>,
+    /// Each urn standing in a wall niche, by its index in the level's niches (#832).
+    #[serde(default)]
+    pub urns: BTreeMap<usize, ContainerRecord>,
     /// Each creature, by its index in the level's creatures.
     pub creatures: BTreeMap<usize, CreatureRecord>,
     /// Each folk, by their index in the level's folk.
@@ -360,10 +363,17 @@ impl WorldRecord {
     /// floor are those recorded. A level never visited is left as generated.
     pub fn apply_to(&self, level: &mut Level) {
         if let Some(saved) = self.level(level.depth) {
-            level.items = saved.floor.iter().map(|f| f.spot).collect();
-            if let Some(claims) = &saved.claims {
-                level.claims = claims.clone();
-            }
+            saved.apply_to(level);
+        }
+    }
+}
+
+impl LevelRecord {
+    /// Makes `level`, just rebuilt from its seed, the level as it was left by this record.
+    pub fn apply_to(&self, level: &mut Level) {
+        level.items = self.floor.iter().map(|f| f.spot).collect();
+        if let Some(claims) = &self.claims {
+            level.claims = claims.clone();
         }
     }
 }
@@ -501,6 +511,7 @@ pub fn record_level_left(
     mut record: ResMut<WorldRecord>,
     floor: Query<&FloorItem>,
     containers: Query<(&PropPiece, &Container)>,
+    urns: Query<(&crate::niches::NichePiece, &Container)>,
     creatures: Query<(&Critter, &Transform, Option<&Health>, Option<&Corpse>, Option<&crate::creatures::scorch::Scorch>, Option<&crate::remains::BodyStock>)>,
     folk: Query<(&Denizen, &Transform, Option<&Health>, Option<&Hostility>, Option<&Corpse>, Option<&crate::shelf::Shelf>, Option<&crate::remains::BodyStock>)>,
     doors: Option<Res<crate::doors::Doors>>,
@@ -512,6 +523,9 @@ pub fn record_level_left(
     left.floor = lying.into_iter().filter_map(|f| Some(FloorRecord { spot: f.spot, item: record_item(&inventory, f.id)? })).collect();
     for (piece, container) in &containers {
         left.containers.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
+    }
+    for (piece, container) in &urns {
+        left.urns.insert(piece.index, ContainerRecord { opened: container.opened, contents: record_contents(&inventory, container.id) });
     }
     for (critter, transform, health, corpse, scorch, body) in &creatures {
         let Some(index) = level.0.creatures.iter().position(|s| *s == critter.spot) else { continue };

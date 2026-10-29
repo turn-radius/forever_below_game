@@ -44,11 +44,8 @@ fn headless_game() -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 fn state(app: &App) -> AppState {
     *app.world().resource::<State<AppState>>().get()

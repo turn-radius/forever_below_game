@@ -31,7 +31,8 @@ use forever_below::{
     render::ArmoryRenderPlugin,
     settings::SettingsPlugin,
     title::{NewDelveSeed, TitlePlugin, creator::CreatorCommand},
-    travel::{Abyss, Arrival, Below, DepthTitle, Journey, LeavingLevel, UseStair},
+    loading::{LoadingLevel, LoadingScreen},
+    travel::{Abyss, Arrival, Below, DepthTitle, Journey, LeavingLevel, Phase, UseStair},
     tuning::TuningPlugin,
 };
 
@@ -51,11 +52,8 @@ fn headless_game() -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 fn begin_delve(app: &mut App) {
     run(app, 30);
@@ -257,6 +255,8 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     let down = *first.stair(StairKind::Down).expect("a way down");
     assert_eq!(app.world().get_resource::<Below>().map(Below::key), Some((1207, 2)), "the level below is being made");
     let built_here = app.world().resource::<FolkFigures>().built_here;
+    // (The first level's stone came from the background too.)
+    let stone_used = app.world().resource::<PreparedStone>().used;
     stand(&mut app, down.approach(), down.facing.yaw());
     run(&mut app, 2);
     press_f(&mut app);
@@ -266,10 +266,10 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
     assert_eq!(app.world().get_resource::<Below>().map(Below::key), Some((1207, 3)), "the one below this is started in turn");
 
     // Everything laid out came from the background: no folk figure was built here, and the
-    // stone, creatures, items, props and fixtures were each taken once.
+    // stone, creatures, items, props, fixtures, banners and crystals were each taken once.
     assert_eq!(app.world().resource::<FolkFigures>().built_here, built_here);
-    assert_eq!(app.world().resource::<PreparedStone>().used, 1);
-    assert_eq!(app.world().resource::<Staged>().taken, 4);
+    assert_eq!(app.world().resource::<PreparedStone>().used, stone_used + 1);
+    assert_eq!(app.world().resource::<Staged>().taken, 6);
 
     let second = level(&app).clone();
     assert_eq!(second, forever_below::travel::Abyss::new(1207).level_at(2), "the level made in the background is the one made in place");
@@ -284,6 +284,132 @@ fn going_down_at_once_waits_for_the_level_made_in_the_background() {
         assert_eq!(stone_named(&mut app, name), expected(name), "{name}");
     }
     assert!(!app.world().resource::<PreparedStone>().is_kept());
+}
+
+/// The frames go on while the next level is made: the journey waits at black in its own phase
+/// over many frames, the loading screen is drawn once the wait is long enough, and the screen
+/// fades away over the level once it is laid out.
+#[test]
+fn the_loading_screen_stands_while_the_level_is_made_and_the_frames_go_on() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    let down = *level(&app).stair(StairKind::Down).expect("a way down");
+    stand(&mut app, down.approach(), down.facing.yaw());
+    run(&mut app, 2);
+    press_f(&mut app);
+    let started = std::time::Instant::now();
+    let (mut waiting, mut screens_seen, mut held) = (0, 0, false);
+    while app.world().get_resource::<Journey>().is_none_or(|j| matches!(j.phase, Phase::FadingOut | Phase::Leaving | Phase::Loading)) {
+        assert!(started.elapsed().as_secs() < 120, "the level was not made in two minutes");
+        app.update();
+        if app.world().get_resource::<Journey>().is_some_and(|j| j.phase == Phase::Loading) {
+            if !held {
+                // However quickly the level is made, the wait lasts long enough to be seen.
+                app.world_mut().resource_mut::<LoadingLevel>().hold_for(0.6);
+                held = true;
+            }
+            waiting += 1;
+            screens_seen = screens_seen.max(count::<LoadingScreen>(&mut app));
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    assert!(held, "the journey waited for the level");
+    assert!(waiting >= 30, "the main thread went on drawing frames while it waited: {waiting}");
+    assert_eq!(screens_seen, 1, "the loading screen was drawn once");
+    // Laid out and faded in, the screen goes with the black.
+    let depth = app.world().resource::<Abyss>().depth;
+    assert_eq!(depth, 2);
+    run(&mut app, 120);
+    assert!(app.world().get_resource::<Journey>().is_none());
+    assert!(app.world().get_resource::<LoadingLevel>().is_none());
+    assert_eq!(count::<LoadingScreen>(&mut app), 0, "the screen has faded away");
+}
+
+/// Starts a journey down and steps to its loading, holding the load up so the wait is seen.
+fn into_the_loading(app: &mut App) {
+    let down = *level(app).stair(StairKind::Down).expect("a way down");
+    stand(app, down.approach(), down.facing.yaw());
+    run(app, 2);
+    press_f(app);
+    let started = std::time::Instant::now();
+    while !app.world().get_resource::<Journey>().is_some_and(|j| j.phase == Phase::Loading) {
+        assert!(started.elapsed().as_secs() < 120, "the journey did not reach its loading");
+        app.update();
+    }
+    app.world_mut().resource_mut::<LoadingLevel>().hold_for(1.5);
+}
+
+/// The world holds still while the screen is black: no hit points lost, no need grown, and the
+/// world's clock does not move, through the load and the frames that lay the level out.
+#[test]
+fn the_world_holds_still_while_the_level_is_made() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    into_the_loading(&mut app);
+    let body = player(&mut app);
+    let snap = |app: &App| (app.world().resource::<Time<Virtual>>().elapsed(), format!("{:?}", app.world().get::<Health>(body)), format!("{:?}", app.world().get::<forever_below::character::DelverNeeds>(body)));
+    let before = snap(&app);
+    assert!(app.world().resource::<Time<Virtual>>().is_paused());
+    let started = std::time::Instant::now();
+    while app.world().get_resource::<Journey>().is_some_and(|j| matches!(j.phase, Phase::Loading | Phase::Settling)) {
+        assert!(started.elapsed().as_secs() < 120);
+        assert_eq!(snap(&app), before, "the world moved while the screen was black");
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!app.world().resource::<Time<Virtual>>().is_paused(), "the clock runs again as the screen fades in");
+    run(&mut app, 120);
+    assert!(app.world().get_resource::<Journey>().is_none());
+}
+
+/// A fall that ends the delve mid-journey leaves no loading screen or load behind.
+#[test]
+fn ending_the_delve_mid_journey_leaves_no_loading_screen() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    run(&mut app, 60);
+    into_the_loading(&mut app);
+    app.world_mut().resource_mut::<LoadingLevel>().hold_for(30.0);
+    let started = std::time::Instant::now();
+    while count::<LoadingScreen>(&mut app) == 0 {
+        assert!(started.elapsed().as_secs() < 120, "the screen was never drawn");
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Title);
+    run(&mut app, 3);
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Title);
+    assert_eq!(count::<LoadingScreen>(&mut app), 0);
+    assert!(app.world().get_resource::<LoadingLevel>().is_none());
+    assert!(app.world().get_resource::<Journey>().is_none());
+    assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+}
+
+/// A level that is ready at once (the prefetched one below) never shows the screen.
+#[test]
+fn a_level_ready_at_once_does_not_flash_the_loading_screen() {
+    let mut app = headless_game();
+    begin_delve(&mut app);
+    // Let the one below be made.
+    let started = std::time::Instant::now();
+    while app.world().get_resource::<Below>().is_none_or(|below| !below.is_ready()) {
+        assert!(started.elapsed().as_secs() < 120, "the level below was not made");
+        run(&mut app, 1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let down = *level(&app).stair(StairKind::Down).expect("a way down");
+    stand(&mut app, down.approach(), down.facing.yaw());
+    run(&mut app, 2);
+    press_f(&mut app);
+    let mut drawn = false;
+    for _ in 0..200 {
+        run(&mut app, 1);
+        drawn |= count::<LoadingScreen>(&mut app) > 0;
+    }
+    assert_eq!(app.world().resource::<Abyss>().depth, 2);
+    assert!(!drawn, "the screen was flashed for a level that was ready");
 }
 
 #[test]

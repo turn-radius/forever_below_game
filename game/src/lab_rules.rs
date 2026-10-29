@@ -377,6 +377,7 @@ const LABELS: &[(&str, &str)] = &[
     ("camp/sleep_clock_ratio", "Game seconds a second asleep"),
     ("camp/wake_distance", "Wakes when hostile this near (units)"),
     ("camp/tired_from", "Tired enough to sleep from"),
+    ("camp/nap_hours", "Hours a rested delver naps in a camp"),
     ("revival/revives", "Times a delver may come to"),
     ("revival/hall_hit_points", "Hit points healed in a hall (share)"),
     ("revival/hall_fee", "Coin a faction takes (share)"),

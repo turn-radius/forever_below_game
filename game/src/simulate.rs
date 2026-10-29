@@ -801,7 +801,7 @@ mod tests {
         let delver = app.world_mut().spawn((Player, Transform::default(), Locomotion { velocity: Vec2::new(30.0, 0.0), ..default() })).id();
         app.update();
         app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = sleepiness;
-        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp, bed: Entity::PLACEHOLDER, hit_points: 0, since: 0.0, began: 0.0 });
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp, bed: Entity::PLACEHOLDER, hit_points: 0, since: 0.0, nap_until: None, began: 0.0 });
         delver
     }
 

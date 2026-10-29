@@ -94,6 +94,16 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
 
 /// The level for level seed `seed` at `depth`, its factions drawn from the pool of `world_seed`.
 pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
+    let mut level = generate_before_niches(world_seed, seed, depth, params);
+    // Daises after everything else, so they keep clear of what is placed and move none of it.
+    level.daises = crate::dais::place_daises(&level);
+    // Niches after everything they keep clear of.
+    level.niches = crate::niches::place_niches(&level);
+    level
+}
+
+/// The level for `seed` as [`generate_for`] lays it out, without its niches.
+pub(crate) fn generate_before_niches(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
     let mut params = *params;
     params.fit();
     let (mut level, layout_seed) = generate_without_creatures_in(world_seed, seed, depth, &params);
@@ -193,12 +203,14 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         roles: Vec::new(),
         props: Vec::new(),
         banners: Vec::new(),
+        niches: Vec::new(),
         crystals: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
         webs: Vec::new(),
         past: None,
         purposes: Vec::new(),
+        daises: Vec::new(),
     };
     // The past first, so a prison can make cell blocks of its great halls; columns keep out of them.
     crate::past::settle_past(&mut level, layout_seed, p);
