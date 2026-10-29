@@ -1,19 +1,22 @@
-//! Bags and containers opened as windows on the inventory screen. Clicking a carried pack (in
-//! its doll slot, or in a grid) pops its grid out of the left column into a window the delver
-//! drags by its title bar and closes with the cross; clicking it again closes it, and a closed
-//! bag goes back to the column. Windows float over the ledger, so two or more can sit side by
-//! side and items go between them, each grid being a drop target by its laid-out rectangle
-//! ([`super::target_under`]).
+//! Bags and containers opened as windows on the inventory screen. Double-clicking a bag the
+//! delver carries (the pack on the back, the satchel, the belt pouch, a sack inside one) opens
+//! its grid as a window to the right of the doll, and double-clicking it again, or its cross,
+//! closes it. A bag set down underfoot or standing in the level opens on a single click. Windows
+//! lay out in columns beside the doll, never over it or each other; with no room for another
+//! the oldest closes ([`column_layout`]). Each grid is a drop target by its laid-out rectangle
+//! ([`super::target_under`]), so items go between windows.
 //!
 //! The screen is rebuilt whenever the inventory changes, so what is open and where it sits is
-//! kept in [`BagWindows`]. Positions are in the interface's logical pixels (the same as
-//! [`crate::ui::node_rect`], so they scale with the window) and are kept inside the screen.
+//! kept in [`BagWindows`], which lives for the delve: closing the inventory and opening it again
+//! shows the same windows. Positions are in the interface's logical pixels (the same as
+//! [`crate::ui::node_rect`], so they scale with the window).
 
 use std::collections::HashMap;
 
 use bevy::{prelude::*, window::PrimaryWindow};
 
 use super::{Dragging, Inventory, ItemId, Screen, ScreenOpen, grid_size};
+use crate::play::SheetTab;
 use crate::keymap::{Action, ActionInput};
 use crate::tuning::Tuning;
 use crate::ui::{node_rect, ui_cursor};
@@ -30,27 +33,22 @@ pub(super) const GAP_PX: f32 = 4.0;
 /// The narrowest a window's contents are, so the name and the cross fit over a small pouch.
 const MIN_CONTENT_PX: f32 = 200.0;
 
-// Where a new window goes, logical pixels.
-/// Top left of the first window of a cascade, used only when no free place is left: just under
-/// the header, clear of the screen's edge.
-const FIRST_AT: Vec2 = Vec2::new(24.0, 70.0);
-/// How far a window is offset from the one before when there is no free space left.
-const CASCADE_PX: f32 = 36.0;
-/// The step the search for a free place moves by.
-const SEARCH_STEP_PX: f32 = 24.0;
-/// Space kept between a new window and what it must not cover.
-const MARGIN_PX: f32 = 8.0;
+// Where the windows go, logical pixels.
+/// Space between one window and the next, in a column and between columns.
+const WINDOW_GAP_PX: f32 = 12.0;
+/// Space kept between the doll and the first column, and between the last column and the screen's edge.
+const AREA_MARGIN_PX: f32 = 16.0;
 
 /// Which containers are open as windows, and where each sits.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
 pub struct BagWindows {
     /// Back to front: the last is on top.
     pub order: Vec<ItemId>,
-    /// Each window's top left, in the interface's logical pixels.
+    /// Each window's top left, in the interface's logical pixels, as [`place_windows`] last laid it out.
     pub at: HashMap<ItemId, Vec2>,
-    /// A click on a bag that has not yet been told from the first half of a double-click: the
-    /// bag and when it was clicked. It opens or closes its window once the interval is over
-    /// ([`settle_click`]).
+    /// A click on a bag lying underfoot or in the level that has not yet been told from the first
+    /// half of a double-click (which takes it up): the bag and when it was clicked. It opens or
+    /// closes its window once the interval is over ([`settle_click`]).
     pub pending: Option<(ItemId, f32)>,
 }
 
@@ -87,7 +85,7 @@ impl BagWindows {
 #[derive(Component, Debug)]
 pub struct BagWindow(pub ItemId);
 
-/// A window's title bar, which drags it.
+/// A window's title bar.
 #[derive(Component, Debug)]
 pub struct BagTitle(pub ItemId);
 
@@ -164,55 +162,51 @@ fn ui_size(window: &Window, scale: Option<&UiScale>, cameras: &Query<&Camera, Or
     view.unwrap_or_else(|| Vec2::new(window.width(), window.height())) / scale.map_or(1.0, |s| s.0.max(f32::EPSILON))
 }
 
-/// A free place for a window of `size`, scanning from the top left; the first fit. It keeps
-/// clear of the `hard` obstacles (the header, the doll and the windows already placed) and, if it
-/// can, of the `soft` ones too (the grids docked in the column), which a window may cover when
-/// no other room is left. With no place even so, the `n`th window cascades from the top left so
-/// every title bar stays showing.
-pub fn free_place(size: Vec2, hard: &[Rect], soft: &[Rect], screen: Vec2, n: usize) -> Vec2 {
-    let scan = |obstacles: &[&[Rect]]| {
-        let mut y = 0.0;
-        while y + size.y <= screen.y {
-            let mut x = 0.0;
-            while x + size.x <= screen.x {
-                let at = Vec2::new(x, y);
-                let rect = Rect::from_corners(at, at + size);
-                if obstacles.iter().all(|set| set.iter().all(|o| o.inflate(MARGIN_PX).intersect(rect).is_empty())) {
-                    return Some(at);
-                }
-                x += SEARCH_STEP_PX;
-            }
-            y += SEARCH_STEP_PX;
-        }
-        None
-    };
-    scan(&[hard, soft]).or_else(|| scan(&[hard])).unwrap_or_else(|| clamp_window(FIRST_AT + Vec2::splat(CASCADE_PX) * n as f32, size, screen))
+/// Where the windows' columns lie on a screen of `screen` interface pixels: from just right of the
+/// doll (the ledger sits at the screen's left in the inventory, [`super::LEDGER_PAD_PX`] in, its leaf and
+/// the doll one after the other) and from the ledger's top to its bottom, to the screen's right edge.
+pub fn windows_area(screen: Vec2) -> Rect {
+    let doll_right = super::LEDGER_PAD_PX + super::SOLO_LEAF_PX + super::LEDGER_GAP_PX + super::doll::FRAME.x;
+    let (top, bottom) = (screen.y * (1.0 - super::LEDGER_HEIGHT) / 2.0 + super::LEDGER_PAD_PX, screen.y * (1.0 + super::LEDGER_HEIGHT) / 2.0 - super::LEDGER_PAD_PX);
+    Rect::from_corners(Vec2::new(doll_right + AREA_MARGIN_PX, top), Vec2::new(screen.x - AREA_MARGIN_PX, bottom.max(top)))
 }
 
-/// Where the fixed panels of the inventory page are, in logical pixels, as (the header and the
-/// doll with its quickslots, every grid docked in the column).
-pub fn fixed_rects(
-    leaf: &Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
-    column: &Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
-    dolls: &Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
-    grids: &Query<(&super::GridView, &ComputedNode, &UiGlobalTransform)>,
-    frames: &[Rect],
-) -> Option<(Vec<Rect>, Vec<Rect>)> {
-    let leaf = leaf.iter().next().map(|(n, t)| node_rect(n, t))?;
-    let column = column.iter().next().map(|(n, t)| node_rect(n, t))?;
-    let doll = dolls.iter().next().map(|(n, t)| node_rect(n, t))?;
-    if leaf.width() <= 0.0 || doll.width() <= 0.0 {
-        return None;
-    }
-    let hard = vec![Rect::from_corners(leaf.min, Vec2::new(leaf.max.x, column.min.y)), doll];
-    let mut soft = Vec::new();
-    for (_, n, t) in grids {
-        let rect = node_rect(n, t);
-        if !frames.iter().any(|f| f.contains(rect.center())) {
-            soft.push(rect);
+/// Lays windows of the given `sizes`, oldest first, in columns inside `area`: each window under the
+/// one before it, and a new column to the right when the next would run past the bottom. When they
+/// do not all fit the oldest are left out, one at a time, until the rest do; the count left out
+/// comes first, then where each of the others sits. The newest alone, too big for the area or
+/// not, is always placed, at its corner.
+pub fn column_layout(sizes: &[(ItemId, Vec2)], area: Rect) -> (usize, Vec<(ItemId, Vec2)>) {
+    let fill = |sizes: &[(ItemId, Vec2)]| {
+        let mut placed = Vec::with_capacity(sizes.len());
+        let (mut x, mut y, mut wide) = (area.min.x, area.min.y, 0.0f32);
+        for &(id, size) in sizes {
+            if y > area.min.y && y + size.y > area.max.y {
+                x += wide + WINDOW_GAP_PX;
+                (y, wide) = (area.min.y, 0.0);
+            }
+            if x + size.x > area.max.x || y + size.y > area.max.y {
+                return None;
+            }
+            placed.push((id, Vec2::new(x, y)));
+            y += size.y + WINDOW_GAP_PX;
+            wide = wide.max(size.x);
+        }
+        Some(placed)
+    };
+    for skip in 0..sizes.len().saturating_sub(1) {
+        if let Some(placed) = fill(&sizes[skip..]) {
+            return (skip, placed);
         }
     }
-    Some((hard, soft))
+    let last = sizes.len().saturating_sub(1);
+    (last, sizes.get(last).map(|&(id, _)| (id, area.min)).into_iter().collect())
+}
+
+/// Whether a double-click on `id` opens its window rather than wearing or taking it off: any
+/// container the delver carries, worn or inside a worn one. Wearing and taking off a bag is by dragging.
+pub fn opens_by_double_click(inventory: &Inventory, id: ItemId) -> bool {
+    inventory.grid(id).is_some() && inventory.is_carried(id)
 }
 
 /// The doll, quickslots and help column of the page, which windows keep off.
@@ -226,9 +220,9 @@ pub fn reachable(inventory: &Inventory, underfoot: &[ItemId], opened: Option<Ite
     inventory.is_carried(id) || underfoot.iter().chain(opened.iter()).any(|&root| inventory.holds(root, id))
 }
 
-/// Opens or closes the window of a bag clicked once, when the double-click interval has passed
-/// without a second click, so a double-click (wear, take off) never toggles a window and
-/// reflows the column under the second click.
+/// Opens or closes the window of a bag lying underfoot or in the level, clicked once, when the
+/// double-click interval has passed without a second click, so a double-click (take it up) never
+/// toggles a window. A bag the delver carries opens on a double-click instead ([`opens_by_double_click`]).
 pub fn settle_click(time: Res<Time<Real>>, mut windows: ResMut<BagWindows>, inventory: Res<Inventory>, barter: Res<crate::barter::Barter>) {
     let Some((id, at)) = windows.pending else { return };
     if time.elapsed_secs() - at <= super::DOUBLE_CLICK_SECONDS {
@@ -240,8 +234,9 @@ pub fn settle_click(time: Res<Time<Real>>, mut windows: ResMut<BagWindows>, inve
     }
 }
 
-/// Drops windows whose container is out of reach, places new ones where nothing sits, and keeps every
-/// window inside the screen, whatever size it becomes.
+/// Drops windows whose container is out of reach and, while the inventory page shows them, lays
+/// the open ones out in columns beside the doll, closing the oldest when they do not all fit.
+#[allow(clippy::too_many_arguments)]
 pub fn place_windows(
     mut windows: ResMut<BagWindows>,
     inventory: Res<Inventory>,
@@ -249,11 +244,7 @@ pub fn place_windows(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
     (underfoot, showing, barter, bodies): (Res<super::Underfoot>, Res<super::OpenContainer>, Res<crate::barter::Barter>, Option<Res<crate::remains::NearBodies>>),
-    leaf: Query<(&ComputedNode, &UiGlobalTransform), With<super::LeafPage>>,
-    column: Query<(&ComputedNode, &UiGlobalTransform), With<super::ScrollColumn>>,
-    dolls: Query<(&ComputedNode, &UiGlobalTransform), With<DollColumn>>,
-    grids: Query<(&super::GridView, &ComputedNode, &UiGlobalTransform)>,
-    frames: Query<(&BagWindow, &ComputedNode, &UiGlobalTransform)>,
+    (open, tab): (Res<ScreenOpen>, Res<SheetTab>),
     cameras: Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>,
 ) {
     let cell = tuning.interface.cell_size;
@@ -266,102 +257,44 @@ pub fn place_windows(
     for id in gone {
         windows.close(id);
     }
+    // Windows are laid out only where they are drawn: the inventory page, with no barter.
+    if !open.is(Screen::Inventory) || *tab != SheetTab::Inventory || barter.active() {
+        return;
+    }
     let Some(window) = window else { return };
     let screen = ui_size(&window, ui_scale.as_deref(), &cameras);
     if screen.x < 1.0 || screen.y < 1.0 {
         return;
     }
-    let frame_rects: Vec<Rect> = frames.iter().map(|(_, n, t)| node_rect(n, t)).collect();
-    let fixed = fixed_rects(&leaf, &column, &dolls, &grids, &frame_rects);
-    let size_of = |id: ItemId| window_size(&inventory, id, cell);
-    // New windows wait for the page to be laid out, to know where its panels are.
-    let waiting = windows.order.iter().any(|id| !windows.at.contains_key(id));
-    if waiting && fixed.is_none() {
-        return;
+    let sizes: Vec<(ItemId, Vec2)> = windows.order.iter().filter_map(|&id| Some((id, window_size(&inventory, id, cell)?))).collect();
+    let (skipped, placed) = column_layout(&sizes, windows_area(screen));
+    for &(id, _) in &sizes[..skipped] {
+        windows.close(id);
     }
-    let (mut placed, soft) = fixed.unwrap_or_default();
-    placed.extend(windows.order.iter().filter_map(|id| Some(Rect::from_corners(*windows.at.get(id)?, *windows.at.get(id)? + size_of(*id)?))));
-    let mut fixes: Vec<(ItemId, Vec2)> = Vec::new();
-    let mut fresh = 0;
-    for &id in &windows.order {
-        let Some(size) = size_of(id) else { continue };
-        let want = match windows.at.get(&id) {
-            Some(&at) => clamp_window(at, size, screen),
-            // A new window is placed once the page has been built with it popped out of the
-            // column, so the grids it left have reflowed and the free space is the real one.
-            None if !frames.iter().any(|(w, n, _)| w.0 == id && n.size.x > 0.0) => continue,
-            None => {
-                let at = free_place(size, &placed, &soft, screen, fresh);
-                fresh += 1;
-                placed.push(Rect::from_corners(at, at + size));
-                at
-            }
-        };
-        if windows.at.get(&id) != Some(&want) {
-            fixes.push((id, want));
+    for (id, at) in placed {
+        if windows.at.get(&id) != Some(&at) {
+            windows.at.insert(id, at);
         }
-    }
-    for (id, at) in fixes {
-        windows.at.insert(id, at);
     }
 }
 
-/// Raises the window pressed, drags one by its title bar and closes one with its cross.
-#[allow(clippy::too_many_arguments)]
-pub fn drag_windows(
+/// Closes a window with its cross.
+pub fn close_windows(
     open: Res<ScreenOpen>,
     input: ActionInput,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
     dragging: Res<Dragging>,
-    inventory: Res<Inventory>,
-    tuning: Res<Tuning>,
     mut windows: ResMut<BagWindows>,
-    frames: Query<(Entity, &BagWindow, &ComputedNode, &UiGlobalTransform)>,
-    titles: Query<(&BagTitle, &ComputedNode, &UiGlobalTransform)>,
     closes: Query<(&BagClose, &ComputedNode, &UiGlobalTransform)>,
-    mut nodes: Query<&mut Node, With<BagWindow>>,
-    cameras: Query<&Camera, Or<(With<crate::carry::ViewModelCamera>, With<bevy::ui::IsDefaultUiCamera>)>>,
-    mut held: Local<Option<(ItemId, Vec2)>>,
 ) {
-    if !open.is(Screen::Inventory) {
-        *held = None;
+    if !open.is(Screen::Inventory) || !input.just_pressed(Action::DragItem) || dragging.0.is_some_and(|d| d.active) {
         return;
     }
     let Some(window) = window else { return };
     let Some(point) = ui_cursor(&window, ui_scale.as_deref()) else { return };
-    if input.just_pressed(Action::DragItem) && !dragging.0.is_some_and(|d| d.active) {
-        // The front window under the mouse takes the press.
-        let hit = windows.order.iter().rev().copied().find(|id| frames.iter().any(|(_, w, n, t)| w.0 == *id && node_rect(n, t).contains(point)));
-        if let Some(id) = hit {
-            if closes.iter().any(|(c, n, t)| c.0 == id && node_rect(n, t).contains(point)) {
-                windows.close(id);
-                return;
-            }
-            if let Some((_, n, t)) = titles.iter().find(|(b, n, t)| b.0 == id && node_rect(n, t).contains(point)) {
-                *held = Some((id, point - node_rect(n, t).min));
-            }
-            // Only a change of order marks the windows changed, which rebuilds the screen.
-            if windows.order.last() != Some(&id) {
-                windows.raise(id);
-            }
-        }
-    }
-    let Some((id, grab)) = *held else { return };
-    if !input.pressed(Action::DragItem) {
-        *held = None;
-        return;
-    }
-    let Some(size) = window_size(&inventory, id, tuning.interface.cell_size) else { return };
-    let Some((entity, ..)) = frames.iter().find(|(_, w, ..)| w.0 == id) else { return };
-    let screen = ui_size(&window, ui_scale.as_deref(), &cameras);
-    // The title bar starts inside the border and padding, so `grab` is from there.
-    let to = clamp_window(point - grab - Vec2::splat(PAD_PX + BORDER_PX), size, screen);
-    // Not through change detection: the screen is not rebuilt for a move, only the node moves.
-    windows.bypass_change_detection().at.insert(id, to);
-    if let Ok(mut node) = nodes.get_mut(entity) {
-        node.left = px(to.x);
-        node.top = px(to.y);
+    if let Some((close, ..)) = closes.iter().find(|(_, n, t)| node_rect(n, t).contains(point)) {
+        windows.close(close.0);
     }
 }
 
@@ -415,50 +348,80 @@ mod tests {
         assert_eq!(windows.order, vec![a]);
     }
 
-    /// What the page occupies: the header, the doll column and the docked grids.
-    fn layout(screen: Vec2) -> Vec<Rect> {
-        let r = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_corners(Vec2::new(x0, y0), Vec2::new(x1, y1));
-        if screen.x > 1500.0 {
-            vec![r(336.0, 60.0, 956.0, 230.0), r(984.0, 90.0, 1580.0, 920.0), r(336.0, 285.0, 770.0, 500.0), r(336.0, 560.0, 626.0, 850.0)]
-        } else {
-            vec![r(20.0, 20.0, 400.0, 130.0), r(800.0, 30.0, 1260.0, 690.0), r(20.0, 150.0, 330.0, 300.0)]
-        }
+    fn ids(n: u32) -> Vec<ItemId> {
+        (1..=n).map(ItemId).collect()
     }
 
-    #[test]
-    fn new_windows_keep_off_the_panels_and_each_other() {
-        let sizes = [Vec2::new(312.0, 300.0), Vec2::new(312.0, 220.0), Vec2::new(250.0, 200.0)];
-        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(1280.0, 720.0)] {
-            let fixed = layout(screen);
-            for count in [2, 3] {
-                let mut placed: Vec<Rect> = Vec::new();
-                for (n, &size) in sizes.iter().take(count).enumerate() {
-                    let mut obstacles = fixed.clone();
-                    obstacles.extend(placed.iter().copied());
-                    let at = free_place(size, &obstacles, &[], screen, n);
-                    let rect = Rect::from_corners(at, at + size);
-                    assert!(Rect::from_corners(Vec2::ZERO, screen).contains(rect.min) && Rect::from_corners(Vec2::ZERO, screen).contains(rect.max), "{screen} #{n} on screen");
-                    for o in &obstacles {
-                        assert!(o.intersect(rect).is_empty(), "{screen} {count} windows: #{n} at {at} covers {o:?}");
-                    }
-                    placed.push(rect);
-                }
+    fn no_overlap(placed: &[(ItemId, Vec2)], sizes: &[(ItemId, Vec2)], area: Rect) {
+        let rects: Vec<Rect> = placed.iter().map(|(id, at)| Rect::from_corners(*at, *at + sizes.iter().find(|(s, _)| s == id).unwrap().1)).collect();
+        for (n, rect) in rects.iter().enumerate() {
+            assert!(rect.min.x >= area.min.x && rect.min.y >= area.min.y && rect.max.x <= area.max.x && rect.max.y <= area.max.y, "#{n} {rect:?} inside {area:?}");
+            for other in &rects[..n] {
+                assert!(other.intersect(*rect).is_empty(), "{rect:?} overlaps {other:?}");
             }
         }
     }
 
     #[test]
-    fn a_window_covers_a_docked_grid_before_it_covers_the_header_or_the_doll() {
-        let screen = Vec2::new(1000.0, 600.0);
-        let size = Vec2::new(300.0, 300.0);
-        let r = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_corners(Vec2::new(x0, y0), Vec2::new(x1, y1));
-        let hard = [r(0.0, 0.0, 1000.0, 100.0), r(500.0, 0.0, 1000.0, 600.0)];
-        let soft = [r(0.0, 100.0, 450.0, 600.0)];
-        let at = free_place(size, &hard, &soft, screen, 0);
-        let rect = Rect::from_corners(at, at + size);
-        assert!(hard.iter().all(|h| h.intersect(rect).is_empty()), "{at} keeps off the header and the doll");
-        assert!(!soft[0].intersect(rect).is_empty(), "and takes the docked grid's space, there being no other");
-        assert_eq!(free_place(size, &hard, &[], screen, 0), at, "with nothing docked it is the same place");
+    fn windows_stack_down_a_column_and_start_the_next_when_it_is_full() {
+        let area = Rect::from_corners(Vec2::new(1000.0, 100.0), Vec2::new(1900.0, 900.0));
+        let sizes: Vec<(ItemId, Vec2)> = ids(3).into_iter().zip([Vec2::new(312.0, 300.0), Vec2::new(250.0, 400.0), Vec2::new(280.0, 200.0)]).collect();
+        let (skipped, placed) = column_layout(&sizes, area);
+        assert_eq!(skipped, 0);
+        assert_eq!(placed[0].1, Vec2::new(1000.0, 100.0), "the first at the area's corner");
+        assert_eq!(placed[1].1, Vec2::new(1000.0, 100.0 + 300.0 + WINDOW_GAP_PX), "the next under it");
+        assert_eq!(placed[2].1, Vec2::new(1000.0 + 312.0 + WINDOW_GAP_PX, 100.0), "the third does not fit under, so starts a column");
+        no_overlap(&placed, &sizes, area);
+    }
+
+    #[test]
+    fn the_oldest_window_closes_when_there_is_no_room_for_another() {
+        let area = Rect::from_corners(Vec2::new(1000.0, 100.0), Vec2::new(1700.0, 500.0));
+        let sizes: Vec<(ItemId, Vec2)> = ids(4).into_iter().map(|id| (id, Vec2::new(300.0, 350.0))).collect();
+        // Two columns of one fit.
+        let (skipped, placed) = column_layout(&sizes[..2], area);
+        assert_eq!((skipped, placed.len()), (0, 2));
+        // A third has nowhere to go: the first closes and the others shift into its place.
+        let (skipped, placed) = column_layout(&sizes[..3], area);
+        assert_eq!(skipped, 1);
+        assert_eq!(placed.iter().map(|p| p.0).collect::<Vec<_>>(), vec![ItemId(2), ItemId(3)]);
+        no_overlap(&placed, &sizes, area);
+        let (skipped, _) = column_layout(&sizes, area);
+        assert_eq!(skipped, 2);
+    }
+
+    #[test]
+    fn a_window_too_big_for_the_area_is_still_shown_alone() {
+        let area = Rect::from_corners(Vec2::new(1000.0, 100.0), Vec2::new(1100.0, 200.0));
+        let sizes = vec![(ItemId(1), Vec2::new(50.0, 50.0)), (ItemId(2), Vec2::new(500.0, 500.0))];
+        assert_eq!(column_layout(&sizes, area), (1, vec![(ItemId(2), area.min)]));
+        assert_eq!(column_layout(&[], area), (0, vec![]));
+    }
+
+    #[test]
+    fn the_area_beside_the_doll_fits_a_pack_a_satchel_and_a_pouch_at_any_window_size() {
+        let cell = 72.0;
+        let (inventory, pack, inner, _) = bags();
+        let sizes: Vec<(ItemId, Vec2)> = [pack, inner, pack].into_iter().filter_map(|id| Some((id, window_size(&inventory, id, cell)?))).collect();
+        // The interface is laid out in 1920 by 1080 whatever the window (1280 by 720, 1920 by 1080).
+        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2560.0, 1080.0), Vec2::new(1920.0, 1440.0)] {
+            let area = windows_area(screen);
+            assert!(area.min.x > super::super::SOLO_LEAF_PX + super::super::doll::FRAME.x, "{screen}: right of the doll");
+            let (skipped, placed) = column_layout(&sizes[..2], area);
+            assert_eq!((skipped, placed.len()), (0, 2), "{screen}: {sizes:?} in {area:?}");
+            no_overlap(&placed, &sizes, area);
+        }
+    }
+
+    #[test]
+    fn only_a_carried_bag_opens_on_a_double_click() {
+        let (mut inventory, pack, inner, loose) = bags();
+        assert!(opens_by_double_click(&inventory, pack), "a worn pack");
+        assert!(opens_by_double_click(&inventory, inner), "a sack in the pack");
+        assert!(!opens_by_double_click(&inventory, loose), "a sack lying about is taken up");
+        inventory.take_out(pack);
+        assert!(!opens_by_double_click(&inventory, pack), "a pack taken off is not carried");
+        assert!(!opens_by_double_click(&inventory, inner), "nor is what is inside it");
     }
 
     use crate::inventory::{OpenContainer, Placement, Underfoot};
@@ -492,6 +455,8 @@ mod tests {
             .init_resource::<Underfoot>()
             .init_resource::<OpenContainer>()
             .init_resource::<crate::barter::Barter>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<SheetTab>()
             .insert_resource(inventory)
             .add_systems(Update, place_windows);
         app
@@ -516,28 +481,39 @@ mod tests {
     }
 
     #[test]
-    fn a_window_is_pulled_back_in_when_the_screen_shrinks_or_the_scale_grows() {
-        let (inventory, pack, ..) = bags();
+    fn windows_sit_beside_the_doll_and_stay_open_while_the_inventory_is_closed() {
+        let (inventory, pack, inner, _) = bags();
         let mut app = place_app(inventory);
         let mut window = Window::default();
-        window.resolution.set(1920.0, 1080.0);
-        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
-        let size = window_size(app.world().resource::<Inventory>(), pack, app.world().resource::<Tuning>().interface.cell_size).unwrap();
-        {
-            let mut windows = app.world_mut().resource_mut::<BagWindows>();
-            windows.order = vec![pack];
-            windows.at.insert(pack, Vec2::new(900.0, 300.0));
-        }
+        window.resolution.set(1280.0, 720.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        // 1280 wide at two thirds is the 1920 by 1080 the interface is laid out in.
+        app.world_mut().insert_resource(UiScale(1280.0 / 1920.0));
+        app.world_mut().resource_mut::<BagWindows>().order = vec![pack, inner];
         app.update();
-        assert_eq!(app.world().resource::<BagWindows>().at[&pack], Vec2::new(900.0, 300.0), "fits, stays put");
-        app.world_mut().get_mut::<Window>(window).unwrap().resolution.set(1000.0, 600.0);
+        assert!(app.world().resource::<BagWindows>().at.is_empty(), "nothing is laid out while the inventory is closed");
+        assert_eq!(app.world().resource::<BagWindows>().order, vec![pack, inner], "but they stay open for when it opens");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         app.update();
-        assert_eq!(app.world().resource::<BagWindows>().at[&pack], clamp_window(Vec2::new(900.0, 300.0), size, Vec2::new(1000.0, 600.0)));
-        assert_ne!(app.world().resource::<BagWindows>().at[&pack], Vec2::new(900.0, 300.0), "it had to move");
-        app.world_mut().insert_resource(UiScale(2.0));
+        let windows = app.world().resource::<BagWindows>();
+        let area = windows_area(Vec2::new(1920.0, 1080.0));
+        assert_eq!(windows.order, vec![pack, inner]);
+        assert_eq!(windows.at[&pack], area.min, "the first window is the area's corner, right of the doll");
+        assert_ne!(windows.at[&inner], windows.at[&pack]);
+    }
+
+    #[test]
+    fn the_oldest_window_closes_when_the_screen_has_no_room_beside_the_doll() {
+        let (inventory, pack, inner, _) = bags();
+        let mut app = place_app(inventory);
+        let mut window = Window::default();
+        window.resolution.set(1280.0, 720.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        // At a scale of 1, 1280 pixels leave nothing right of the doll.
+        app.world_mut().resource_mut::<BagWindows>().order = vec![pack, inner];
         app.update();
-        let at = app.world().resource::<BagWindows>().at[&pack];
-        assert!(at.x + size.x <= 500.0 + 0.01 || at == Vec2::ZERO, "{at}: inside a 500 by 300 interface, or in its corner");
+        assert_eq!(app.world().resource::<BagWindows>().order, vec![inner], "the newest stays");
     }
 
     #[test]

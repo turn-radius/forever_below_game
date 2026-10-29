@@ -654,7 +654,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("folk::FolkFigures", "folk figures made ahead"),
         ("travel::Below", "the level below being made"),
         ("travel::Journey", "a journey between levels: none while asleep"),
-        ("inventory::bags::BagWindows", "which bags are open as windows: screen state, closed with the screen"),
+        ("inventory::bags::BagWindows", "which bags are open as windows: screen state kept for the delve, not saved"),
         ("remains::NearBodies", "the bodies in reach, found again each frame"),
         // The moment.
         ("play::ScreenOpen", "no screen is open to lie down"),
