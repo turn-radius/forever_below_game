@@ -50,7 +50,7 @@ impl Plugin for BookPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Book>().add_systems(OnExit(crate::launch::AppState::Delving), |mut book: ResMut<Book>| *book = Book::default()).add_systems(
             Update,
-            (open_for_capture, toggle_book, type_name, click_book, forget_when_closed, build_book, hover_book).chain().in_set(DelveSystems),
+            (open_for_capture, toggle_book, type_name, click_book, forget_when_closed, build_book, hover_book, own_the_keyboard).chain().in_set(DelveSystems),
         );
     }
 }
@@ -111,8 +111,8 @@ impl Draft {
 /// What unlocks a term the caster does not have yet.
 pub fn unlocked_by(id: &str) -> &'static str {
     match id {
-        "bane" => "unlocked by a favored foe",
-        "frighten" | "charm" | "cone" => "unlocked by devotion",
+        "bane" | "frighten" => "unlocked by a favored foe",
+        "charm" => "unlocked by an alignment",
         _ => "not yet unlocked",
     }
 }
@@ -339,9 +339,16 @@ fn toggle_book(
 }
 
 /// Typing goes into the name field while it has the focus.
-fn type_name(mut keys: MessageReader<KeyboardInput>, open: Res<ScreenOpen>, mut book: ResMut<Book>) {
+fn type_name(mut keys: MessageReader<KeyboardInput>, raw: Res<ButtonInput<KeyCode>>, open: Res<ScreenOpen>, mut book: ResMut<Book>) {
     if !open.is(Screen::Book) || !book.focus {
         keys.clear();
+        return;
+    }
+    // Esc leaves the field first; with it unfocused, the next Esc closes the book.
+    if raw.just_pressed(KeyCode::Escape) {
+        keys.clear();
+        book.focus = false;
+        book.changed();
         return;
     }
     let mut changed = false;
@@ -373,6 +380,13 @@ fn type_name(mut keys: MessageReader<KeyboardInput>, open: Res<ScreenOpen>, mut 
     if changed {
         book.changed();
     }
+}
+
+/// While the name field has the focus no action fires, so typing "-" or a letter that opens a
+/// screen does nothing else. Runs last, so the frame an Esc unfocuses the field still reads as
+/// captured and does not also close the book.
+fn own_the_keyboard(book: Res<Book>, open: Res<ScreenOpen>, mut capture: ResMut<crate::keymap::InputCapture>) {
+    capture.set_if_neq(crate::keymap::InputCapture(book.focus && open.is(Screen::Book)));
 }
 
 /// A click on a button.
@@ -453,6 +467,8 @@ fn button_colours(button: &BookButton, over: bool) -> (Color, Color) {
 /// The terms of `kind` for the book: those the caster has first, then the locked ones.
 fn ordered<'a>(rules: &'a Rules, book: &Spellbook, school: Casting, kind: TermKind) -> impl Iterator<Item = (&'a String, &'a TermRules)> {
     let mut terms: Vec<_> = rules.casting.terms.iter().filter(|(_, t)| t.kind == kind && t.school == school).collect();
+    // A term nothing grants (cone) stays out of the picker until something does.
+    terms.retain(|(id, _)| book.unlocked.contains(*id) || Spellbook::DEVOTION_TERMS.contains(&id.as_str()));
     terms.sort_by_key(|(id, _)| !book.unlocked.contains(*id));
     terms.into_iter()
 }
@@ -700,7 +716,7 @@ mod tests {
             assert!(matches!(draft.pick(&rules, &book, Casting::Divine, kind, id), Err(ComposeError::Locked(_))), "{id}");
         }
         assert_eq!(draft, before, "the draft is as it was");
-        assert!(unlocked_by("bane").contains("favored foe"));
+        assert!(unlocked_by("frighten").contains("favored foe"));
     }
 
     #[test]
@@ -738,6 +754,37 @@ mod tests {
             assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Err(ComposeError::Unnamed));
         }
         assert_eq!(book.written.len(), 1);
+    }
+
+    #[test]
+    fn esc_with_the_field_focused_keeps_the_book_and_the_name() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::keymap::InputCapture>()
+            .insert_resource(ScreenOpen(Some(Screen::Book)))
+            .insert_resource(Book { draft: Draft { name: "Hand".into(), ..default() }, focus: true, open: true, ..default() })
+            .add_systems(Update, (type_name, own_the_keyboard).chain());
+        app.update();
+        assert!(app.world().resource::<crate::keymap::InputCapture>().0, "actions stand still while typing");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        let book = app.world().resource::<Book>();
+        assert!(!book.focus);
+        assert_eq!(book.draft.name, "Hand");
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Book));
+        assert!(!app.world().resource::<crate::keymap::InputCapture>().0);
+    }
+
+    #[test]
+    fn a_term_nothing_grants_is_left_out_of_the_picker() {
+        let (rules, book) = cleric();
+        let ids: Vec<_> = ordered(&rules, &book, Casting::Divine, TermKind::Reach).map(|(id, _)| id.as_str()).collect();
+        assert!(!ids.contains(&"cone"));
+        let effects: Vec<_> = ordered(&rules, &book, Casting::Divine, TermKind::Effect).map(|(id, _)| id.as_str()).collect();
+        assert!(effects.contains(&"charm"), "a devotion term shows locked");
+        assert_eq!(unlocked_by("charm"), "unlocked by an alignment");
     }
 
     #[test]

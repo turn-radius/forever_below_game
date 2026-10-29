@@ -486,6 +486,10 @@ fn sync_capture(open: Res<ScreenOpen>, mut rebinding: ResMut<Rebinding>, mut cap
     if !open.is(Screen::Menu) {
         rebinding.set_if_neq(Rebinding::Idle);
     }
+    // The spellbook's name field holds the capture itself while it is open ([`crate::book`]).
+    if open.is(Screen::Book) {
+        return;
+    }
     capture.set_if_neq(InputCapture(matches!(*rebinding, Rebinding::Capturing { .. })));
 }
 
