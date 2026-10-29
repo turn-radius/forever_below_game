@@ -219,7 +219,7 @@ pub(crate) fn begin_routines(
     for (entity, denizen) in &new {
         // Someone who stands on a dais stands on its steps.
         if let (Some(level), Ok(mut at)) = (level.as_deref(), transforms.get_mut(entity)) {
-            at.translation.y += level.0.dais_height(at.translation.x, at.translation.z);
+            at.translation.y += level.0.dais_floor(at.translation.x, at.translation.z);
         }
         let mut rng = Mulberry32::new(denizen.person.spot.seed ^ ROUTINE_SALT);
         let first = rng.range_f32(0.0, tuning.folk.pause_max.max(tuning.folk.pause_min));

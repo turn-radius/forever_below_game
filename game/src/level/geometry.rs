@@ -205,8 +205,8 @@ const DIRECTIONS: [Facing; 4] = [Facing::North, Facing::East, Facing::South, Fac
 
 /// The rock's relief: every drawn vertex is moved by one smooth field of world position, so
 /// faces that meet share their moved edges and the stone stays closed at every seam.
-#[derive(Clone, Debug)]
-pub struct Relief {
+#[derive(Clone, Copy, Debug)]
+pub struct Relief<'a> {
     seed: u32,
     ceiling: f32,
     /// Whether the stone wanders at all: dressed stone is true to the grid.
@@ -215,12 +215,12 @@ pub struct Relief {
     /// heaves in long swells, where a cave's is nearly level.
     floor_scale: f32,
     /// The level's daises, which lift the floor to walk on over their steps.
-    daises: Vec<fb_level::Dais>,
+    daises: &'a [fb_level::Dais],
 }
 
-impl Relief {
-    pub fn new(level: &Level) -> Self {
-        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling, rough: level.style.is_rock(), floor_scale: if level.style == LevelStyle::CrystalCavern { CAVERN_FLOOR_SCALE } else { 1.0 }, daises: level.daises.clone() }
+impl<'a> Relief<'a> {
+    pub fn new(level: &'a Level) -> Self {
+        Relief { seed: level.seed ^ 0x5701_e5ed, ceiling: level.ceiling, rough: level.style.is_rock(), floor_scale: if level.style == LevelStyle::CrystalCavern { CAVERN_FLOOR_SCALE } else { 1.0 }, daises: &level.daises }
     }
 
     /// Two octaves of value noise in -0.5..0.5 for channel `channel`.
@@ -233,6 +233,13 @@ impl Relief {
     /// The height of the drawn floor over world `(x, z)`: the grid floor point's height once
     /// moved. The point also moves a little sideways, a fraction of the relief's metre-long
     /// wavelength, so this is the floor's height to within a couple of centimetres.
+    /// The height a thing set down or spawned at world `(x, z)` rests at: the drawn tread of a
+    /// dais under it, crisp, where [`Relief::floor_height`] is the floor a moving body walks on,
+    /// smoothed up each riser.
+    pub fn rest_height(&self, x: f32, z: f32) -> f32 {
+        self.displace([x, 0.0, z])[1] + self.daises.iter().map(|d| d.crisp_at(x, z)).find(|&h| h != 0.0).unwrap_or(0.0)
+    }
+
     pub fn floor_height(&self, x: f32, z: f32) -> f32 {
         self.displace([x, 0.0, z])[1] + self.daises.iter().map(|d| d.height_at(x, z)).find(|&h| h != 0.0).unwrap_or(0.0)
     }
@@ -1061,7 +1068,8 @@ mod tests {
     fn relief_is_gentle_and_seeded() {
         let level = level();
         let relief = Relief::new(&level);
-        let other = Relief::new(&Level { seed: level.seed + 1, ..level.clone() });
+        let shifted = Level { seed: level.seed + 1, ..level.clone() };
+        let other = Relief::new(&shifted);
         let mut moved = 0;
         for i in 0..200 {
             let p = [i as f32 * 1.7, (i % 30) as f32, i as f32 * 0.9];
@@ -1281,6 +1289,14 @@ mod tests {
                 let rest = drawn.height_under(&level, [cx, cz], [0.5, 0.5]);
                 assert!(rest >= top - 1e-4 && rest < top + 0.3, "seed {seed}: a thing rests at {rest}, not {top}");
                 assert_eq!(floor_under(&level, [cx, cz], [0.5, 0.5]), rest);
+                // A prop or a body spawned just inside the first riser stands on the tread, not on
+                // the walking floor that is still climbing it.
+                let edge = if dais.stepped[3] { Some((x0 + 0.2, cz)) } else if dais.stepped[1] { Some((x1 - 0.2, cz)) } else { None };
+                if let Some((ex, ez)) = edge {
+                    assert_eq!(relief.rest_height(ex, ez), dais.crisp_at(ex, ez));
+                    assert!((relief.rest_height(ex, ez) - dais.top_height().signum() * fb_level::dais::RISE).abs() < 1e-4);
+                    assert!(relief.floor_height(ex, ez).abs() < relief.rest_height(ex, ez).abs());
+                }
                 if dais.sunk { sunk += 1 } else { raised += 1 }
             }
             // Away from every dais the floor is the level floor.

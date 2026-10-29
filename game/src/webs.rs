@@ -53,7 +53,7 @@ pub fn web_appearance(seed: u32) -> ItemAppearance {
 /// The webs' transform: on the floor under the spot, turned to its yaw.
 pub fn web_transform(relief: &Relief, spot: &WebSpot) -> Transform {
     let [x, _, z] = Level::world(spot.x, spot.y);
-    Transform::from_xyz(x, relief.floor_height(x, z), z).with_rotation(Quat::from_rotation_y(spot.yaw))
+    Transform::from_xyz(x, relief.rest_height(x, z), z).with_rotation(Quat::from_rotation_y(spot.yaw))
 }
 
 /// Spawns every web the level has, clearing the last level's.

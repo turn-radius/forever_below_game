@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CELL, Cell, Facing, Level, LevelStyle};
 
-/// How high one step rises, in world units (16 cm).
-pub const RISE: f32 = 1.6;
+/// How high one step rises, in world units (20 cm).
+pub const RISE: f32 = 2.0;
 /// How deep one step's tread is, in world units (50 cm).
 pub const TREAD: f32 = 5.0;
 /// The run over which the walking height climbs a riser, just inside it.
@@ -301,7 +301,12 @@ fn sunk_floor(level: &Level, room: usize, steps: u32) -> Option<Dais> {
     if rect[2] - rect[0] < 2 || rect[3] - rect[1] < 2 {
         return None;
     }
-    fit(level, room, rect, false).then(|| build(level, rect, steps, true))
+    if !fit(level, room, rect, false) {
+        return None;
+    }
+    // Every side of a pit is stepped (open floor beyond it), so its rim wall is drawn all round.
+    let dais = build(level, rect, steps, true);
+    dais.stepped.iter().all(|&s| s).then_some(dais)
 }
 
 #[cfg(test)]
@@ -407,6 +412,33 @@ mod tests {
         }
         // The side against the wall is flush: full height right to its edge.
         assert!((up.height_at(x0 + 40.0, z0 + 0.1) - 3.0 * RISE).abs() < 1e-5);
+    }
+
+    #[test]
+    fn every_sunk_floor_is_stepped_on_all_four_sides() {
+        let mut sunk = 0;
+        for level in stone_levels() {
+            for d in level.daises.iter().filter(|d| d.sunk) {
+                assert_eq!(d.stepped, [true; 4], "seed {}", level.seed);
+                sunk += 1;
+            }
+        }
+        assert!(sunk > 0);
+    }
+
+    #[test]
+    fn a_thing_set_down_rests_on_the_tread_at_its_front_edge() {
+        let up = Dais { x: 2, y: 2, w: 5, h: 3, steps: 3, sunk: false, stepped: [false, true, true, true] };
+        let [x0, _, z0, z1] = up.rect();
+        let z = (z0 + z1) * 0.5;
+        // Just inside each riser the drawn tread is the whole rise; the walking floor is still climbing.
+        for k in 0..3 {
+            let x = x0 + k as f32 * TREAD + 0.1;
+            assert_eq!(up.crisp_at(x, z), (k + 1) as f32 * RISE);
+            assert!(up.height_at(x, z) < up.crisp_at(x, z) - 0.5 * RISE);
+        }
+        let down = Dais { sunk: true, ..up };
+        assert_eq!(down.crisp_at(x0 + 0.1, z), -RISE);
     }
 
     #[test]

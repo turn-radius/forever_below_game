@@ -451,6 +451,7 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
     let has_face = |x: i32, y: i32, f: Facing| drawn(x, y) && view.cell(x + f.step().0, y + f.step().1) == Cell::Rock;
 
     let (mut floor, mut ceiling, mut walls, mut damp) = (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    let mut risers = MeshBuilder::new();
     let mut cobbles = super::cobble::Stones::default();
     let (mut ink, mut joints) = (Ink::default(), Ink::default());
     let flat = Relief::new(level);
@@ -526,11 +527,12 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
     vault_ribs(&vaults, &|x, y| in_range(x, y), &mut joints);
     // Each dais is laid by the stretch holding its first cell.
     for dais in level.daises.iter().filter(|d| in_range(d.x as i32, d.y as i32)) {
-        dais_stone(dais, level.seed, &mut floor);
+        dais_stone(dais, level.seed, &mut floor, &mut risers, &mut ink);
     }
     let mut parts = Parts::new();
     let stone = |tint: Rgb| Look::of(MaterialKind::Stone).tinted(tint).without_outline();
     parts.add_look("floor", floor, stone(FLOOR_STONE));
+    parts.add_look("risers", risers, stone(Rgb(FLOOR_STONE.0 * 0.42, FLOOR_STONE.1 * 0.42, FLOOR_STONE.2 * 0.42)));
     parts.add_look("walls", walls, stone(WALL_STONE));
     parts.add_look("damp", damp, stone(DAMP_STONE));
     cobbles.add_parts(&mut parts, super::cobble::stone_look);
@@ -1186,6 +1188,8 @@ pub fn flag_top(seed: u32, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> f32 {
 
 /// How far a step's nosing is chamfered.
 const NOSING: f32 = 0.35;
+/// How far the ink along a step's nosing stands off the stone.
+const DAIS_INK_LIFT: f32 = 0.1;
 /// The width a clipped flagstone must keep to be laid at all.
 const MIN_FLAG: f32 = 0.4;
 
@@ -1193,14 +1197,28 @@ const MIN_FLAG: f32 = 0.4;
 /// flagstones of [`flag_layout`] laid on it clipped to its edge, and for a sunk floor the dressed
 /// stone of its rim, down to the bottom. Walking, resting and the camera read the same steps
 /// ([`fb_level::dais`]).
-fn dais_stone(dais: &fb_level::Dais, seed: u32, mesh: &mut MeshBuilder) {
+fn dais_stone(dais: &fb_level::Dais, seed: u32, mesh: &mut MeshBuilder, risers: &mut MeshBuilder, ink: &mut Ink) {
     let bottom = if dais.sunk { dais.top_height() } else { 0.0 };
     let base = Frame { origin: [0.0, bottom, 0.0], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
     for tread in dais.treads() {
         let [x0, x1, z0, z1] = tread.rect;
         let depth = tread.top - bottom;
         if depth > 0.05 {
-            slab(mesh, &base, [x0, x1], [z0, z1], depth, NOSING.min(depth * 0.5), true);
+            let ch = NOSING.min(depth * 0.5);
+            // The top and its chamfered nosing in the floor's stone, the riser faces below it in
+            // a darker one, and an ink line along the nosing, so each step reads at a glance.
+            slab(mesh, &base, [x0, x1], [z0, z1], depth, ch, false);
+            let rim = bottom + depth - ch;
+            let mut quad = |corners: [V3; 4], facing: V3| {
+                let uvs = corners.map(|p| [(p[0] + p[2]) / CELL, p[1] / CELL]);
+                risers.push_flat_quad(corners, uvs, facing);
+            };
+            quad([[x0, bottom, z0], [x1, bottom, z0], [x1, rim, z0], [x0, rim, z0]], [0.0, 0.0, -1.0]);
+            quad([[x0, bottom, z1], [x1, bottom, z1], [x1, rim, z1], [x0, rim, z1]], [0.0, 0.0, 1.0]);
+            quad([[x0, bottom, z0], [x0, bottom, z1], [x0, rim, z1], [x0, rim, z0]], [-1.0, 0.0, 0.0]);
+            quad([[x1, bottom, z0], [x1, bottom, z1], [x1, rim, z1], [x1, rim, z0]], [1.0, 0.0, 0.0]);
+            let edge: Vec<V3> = [[x0, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0]].iter().map(|&[x, z]| [x, tread.top, z]).collect();
+            ink.ribbon_lifted(&edge, &vec![[0.0, 1.0, 0.0]; edge.len()], DAIS_INK_LIFT);
         }
         let (cx0, cx1) = ((x0 / CELL).floor() as i32, ((x1 - 0.01) / CELL).floor() as i32);
         let (cy0, cy1) = ((z0 / CELL).floor() as i32, ((z1 - 0.01) / CELL).floor() as i32);
@@ -1222,15 +1240,19 @@ fn dais_stone(dais: &fb_level::Dais, seed: u32, mesh: &mut MeshBuilder) {
         let [x0, x1, z0, z1] = dais.rect();
         // The bottom, and the walls of the pit from the top tread up to the floor round it.
         let (rim, top) = (-RISE, 0.0);
-        let mut quad = |corners: [V3; 4], along: usize, facing: V3| {
-            let uvs = corners.map(|p| if along == 1 { [p[0] / CELL, p[2] / CELL] } else { [p[along] / CELL, p[1] / CELL] });
-            mesh.push_flat_quad(corners, uvs, facing);
+        let uv = |p: V3, along: usize| if along == 1 { [p[0] / CELL, p[2] / CELL] } else { [p[along] / CELL, p[1] / CELL] };
+        let floor_quad = [[x0, bottom, z0], [x1, bottom, z0], [x1, bottom, z1], [x0, bottom, z1]];
+        mesh.push_flat_quad(floor_quad, floor_quad.map(|p| uv(p, 1)), [0.0, 1.0, 0.0]);
+        let mut wall = |corners: [V3; 4], along: usize, facing: V3| {
+            risers.push_flat_quad(corners, corners.map(|p| uv(p, along)), facing);
         };
-        quad([[x0, bottom, z0], [x1, bottom, z0], [x1, bottom, z1], [x0, bottom, z1]], 1, [0.0, 1.0, 0.0]);
-        quad([[x0, rim, z0], [x1, rim, z0], [x1, top, z0], [x0, top, z0]], 0, [0.0, 0.0, 1.0]);
-        quad([[x1, rim, z1], [x0, rim, z1], [x0, top, z1], [x1, top, z1]], 0, [0.0, 0.0, -1.0]);
-        quad([[x0, rim, z1], [x0, rim, z0], [x0, top, z0], [x0, top, z1]], 2, [1.0, 0.0, 0.0]);
-        quad([[x1, rim, z0], [x1, rim, z1], [x1, top, z1], [x1, top, z0]], 2, [-1.0, 0.0, 0.0]);
+        wall([[x0, rim, z0], [x1, rim, z0], [x1, top, z0], [x0, top, z0]], 0, [0.0, 0.0, 1.0]);
+        wall([[x1, rim, z1], [x0, rim, z1], [x0, top, z1], [x1, top, z1]], 0, [0.0, 0.0, -1.0]);
+        wall([[x0, rim, z1], [x0, rim, z0], [x0, top, z0], [x0, top, z1]], 2, [1.0, 0.0, 0.0]);
+        wall([[x1, rim, z0], [x1, rim, z1], [x1, top, z1], [x1, top, z0]], 2, [-1.0, 0.0, 0.0]);
+        // The rim's edge in ink, where the floor drops away.
+        let lip: Vec<V3> = [[x0, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0]].iter().map(|&[x, z]| [x, 0.0, z]).collect();
+        ink.ribbon_lifted(&lip, &vec![[0.0, 1.0, 0.0]; lip.len()], DAIS_INK_LIFT);
     }
 }
 
