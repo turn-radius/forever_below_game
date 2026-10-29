@@ -59,7 +59,7 @@ fn map_rooms(mut commands: Commands, level: Res<CurrentLevel>) {
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default, Reflect)]
 #[reflect(Component)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina, crate::character::GearMana)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].
@@ -203,6 +203,24 @@ impl ScreenOpen {
     /// Whether `screen` is the one open.
     pub fn is(&self, screen: Screen) -> bool {
         self.0 == Some(screen)
+    }
+}
+
+/// Whether something covers the level's inspect cards: the map or the pause menu, the "You fall
+/// unconscious" overlay ([`crate::combat::revival`]) or the fall screen ([`crate::combat::vitals`]) or the wake card after it.
+/// The cards come back when it closes, if they are still aimed at. The inventory does not cover
+/// them: it shows the hovered item's own card.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CardsCovered<'w, 's> {
+    open: Option<Res<'w, ScreenOpen>>,
+    unconscious: Option<Res<'w, crate::combat::revival::Unconscious>>,
+    fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
+    wake: Query<'w, 's, (), With<crate::combat::revival::WakeCard>>,
+}
+
+impl CardsCovered<'_, '_> {
+    pub fn is_covered(&self) -> bool {
+        self.open.as_ref().is_some_and(|o| o.is(Screen::Menu) || o.is(Screen::Map)) || self.unconscious.is_some() || self.fallen.is_some() || !self.wake.is_empty()
     }
 }
 

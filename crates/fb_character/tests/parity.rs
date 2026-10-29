@@ -21,8 +21,8 @@ use scenario::{Book, run};
 /// The digest of the scenario's 3028 numbers on the code before the move. Taken again from
 /// main's plain functions when main added the proficiency bonus to attacks (#359): the rules
 /// file must play as main does, not as the code did before that change. Taken again when load pace
-/// and sprint drain became a curve of the load rather than steps by band, and again when walking stamina followed the load.
-const GOLDEN: u64 = 0xff34_485f_05d4_5411;
+/// and sprint drain became a curve of the load rather than steps by band, and again when walking stamina followed the load, and when mana began refilling in real seconds.
+const GOLDEN: u64 = 0x94ca_ca3d_b4a0_5dad;
 const GOLDEN_LEN: usize = 3028;
 
 /// The scenario through the `_with` functions, under a rules table.
@@ -77,8 +77,8 @@ impl Book for With {
     fn mana_max(&self, casting: Casting, attributes: &Attributes) -> f64 {
         Mana::max_for_with(&self.0, casting, attributes)
     }
-    fn mana_step(&self, mana: &mut Mana, hours: f64, activity: Activity) {
-        mana.step_with(&self.0, hours, activity);
+    fn mana_step(&self, mana: &mut Mana, seconds: f64, activity: Activity) {
+        mana.step_with(&self.0, seconds, activity);
     }
     fn visibility(&self, light: f64, pace: f64, load: LoadBand, stealth: f64) -> f64 {
         visibility_with(&self.0, light, pace, load, stealth)

@@ -438,17 +438,17 @@ pub struct ManaRules {
     pub caster_per_modifier: f64,
     /// A caster's pool is never smaller than this.
     pub caster_floor: f64,
-    /// Of a full pool, what a Resting delver regains each game hour.
-    pub rest_per_hour: f64,
-    /// Of a full pool, what a walking delver regains each game hour.
-    pub walk_per_hour: f64,
-    /// Of a full pool, what a sleeping delver regains each game hour.
-    pub sleep_per_hour: f64,
+    /// Real seconds to refill from empty standing still.
+    pub stand_refill_seconds: f64,
+    /// Real seconds to refill from empty while walking.
+    pub walk_refill_seconds: f64,
+    /// Sleeping refills this many times as fast as standing.
+    pub sleep_refill_factor: f64,
 }
 
 impl Default for ManaRules {
     fn default() -> Self {
-        ManaRules { martial_pool: 4.0, caster_base: 10.0, caster_per_modifier: 5.0, caster_floor: 4.0, rest_per_hour: 1.0 / 8.0, walk_per_hour: 1.0 / 32.0, sleep_per_hour: 3.0 / 8.0 }
+        ManaRules { martial_pool: 4.0, caster_base: 10.0, caster_per_modifier: 5.0, caster_floor: 4.0, stand_refill_seconds: 20.0, walk_refill_seconds: 40.0, sleep_refill_factor: 2.0 }
     }
 }
 
