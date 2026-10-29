@@ -190,6 +190,8 @@ pub enum Screen {
     Talk,
     /// The commission screen ([`crate::commission`]).
     Commission,
+    /// A cleric's offer of a devotion ([`crate::devotion`]).
+    Devotion,
     /// An enchanter's bench, opened from their talk ([`crate::enchanter`]).
     Enchant,
 }
@@ -368,7 +370,7 @@ impl Plugin for PlayPlugin {
         ))
         // Over the plugin tuple's limit.
         .add_plugins((crate::quickslots::QuickslotPlugin, crate::status::StatusPlugin, crate::travel::TravelPlugin, crate::sight::SightPlugin, crate::dazzle::DazzlePlugin, crate::light::ShadowBudgetPlugin, crate::webs::WebsPlugin, crate::camp::CampPlugin, crate::save::SavePlugin, crate::talk::TalkPlugin, crate::dice::DicePlugin, crate::identify::IdentifyPlugin, crate::commission::CommissionPlugin, crate::enchanter::EnchanterPlugin, crate::reading::ReadingPlugin))
-        .add_plugins((crate::sparkle::SparklePlugin, crate::casting::CastingPlugin, crate::smoke::SmokePlugin));
+        .add_plugins((crate::sparkle::SparklePlugin, crate::casting::CastingPlugin, crate::smoke::SmokePlugin, crate::deeds::DeedsPlugin, crate::devotion::DevotionPlugin));
         if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
             app.add_plugins(crate::ui::InterfaceScalePlugin);
         }

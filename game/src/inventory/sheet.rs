@@ -283,6 +283,15 @@ fn row_labelled(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, label: &str,
     });
 }
 
+/// The sheet's devotion section, for a cleric: what they follow now, read-only. The choice is
+/// offered on a screen of its own when their kills earn one ([`crate::devotion`]).
+fn devotion_section(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character) {
+    heading(sheet, fonts, "devotion");
+    let now = character.devotion;
+    let line = now.map_or_else(|| "None yet. Kills of one kind of creature or with one kind of weapon earn an offer.".to_string(), |d| format!("{}. {}", d.label(character.body_seed), d.effect_text(&rules.devotion)));
+    sheet.spawn((Name::new("Devotion"), Text::new(line), UiFonts::style(&fonts.body, 15.0, if now.is_some() { BRIGHT } else { MUTED }), Node { max_width: percent(100), ..default() }));
+}
+
 /// Builds the character tab's body: the status section.
 #[allow(clippy::too_many_arguments)]
 pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, character: &Character, inventory: &Inventory, needs: &Needs, exhaustion: ExhaustionLevel, vitals: Vitals) {
@@ -293,6 +302,9 @@ pub fn sheet(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &Rules, 
                 line.spawn((AttributeLine(i), Text::new(text), UiFonts::style(&fonts.mono_bold, 15.0, BRIGHT)));
             }
         });
+        if character.class == crate::character::Class::Cleric {
+            devotion_section(sheet, fonts, rules, character);
+        }
         heading(sheet, fonts, "conditions");
         sheet.spawn((ConditionList, Name::new("Conditions"), Node { flex_direction: FlexDirection::Column, row_gap: px(6), ..default() }));
         heading(sheet, fonts, "enchanting");

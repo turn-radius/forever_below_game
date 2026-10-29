@@ -296,6 +296,7 @@ fn take_bites(
     mut pain: ResMut<Pain>,
     bodies: Query<(), With<Corpse>>,
     critters: Query<&Critter>,
+    folk: Query<&crate::folk::Denizen>,
     mut players: Query<(Entity, &mut Health, Option<&DelverEffects>), With<Player>>,
     sounds: Option<Res<super::feedback::CreatureSounds>>,
     settings: Option<Res<crate::settings::GameSettings>>,
@@ -321,7 +322,9 @@ fn take_bites(
             }
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), poison_resistance, &mut dice.0);
             // Gear that wards against the attacker's kind takes a fraction off, never the last 1.
-            let ward = bite.species.map_or(0.0, |s| gear.ward[s.foe().index()] as f32);
+            // The family that struck them: a creature's, or a folk's or denizen's by the attacker.
+            let kin = bite.species.map(fb_character::kin::Kin::of_species).or_else(|| folk.get(bite.attacker).ok().map(|d| fb_character::kin::Kin::of_folk(d.person.spec.folk)));
+            let ward = kin.map_or(0.0, |k| gear.ward_against(k) as f32);
             let damage = fb_items::foe::warded_damage(damage, ward);
             let damage = spared_by_venom(health.hp, bite.damage, damage, bite.species.is_some_and(Species::venom_spares));
             health.hurt(damage);

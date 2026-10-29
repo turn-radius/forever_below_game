@@ -199,12 +199,25 @@ pub(crate) fn look(
 
 /// Keeps the delver's [`Load`] to what they wear and carry, working it out again only when the
 /// character or the inventory has changed, or for a delver just spawned.
-fn weigh_the_delver(character: Option<Res<Character>>, inventory: Option<Res<Inventory>>, rules: Option<Res<crate::rules::GameRules>>, mut players: Query<(&mut Load, &mut GearPace, &mut crate::character::GearStamina), With<Player>>) {
+fn weigh_the_delver(
+    mut commands: Commands,
+    character: Option<Res<Character>>,
+    inventory: Option<Res<Inventory>>,
+    rules: Option<Res<crate::rules::GameRules>>,
+    mut players: Query<(Entity, &mut Load, &mut GearPace, &mut crate::character::GearStamina, Has<WebWalker>), With<Player>>,
+) {
     let (Some(character), Some(inventory)) = (character, inventory) else { return };
     let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
     let mut derived = None;
-    for (mut load, mut pace, mut stamina) in &mut players {
+    for (player, mut load, mut pace, mut stamina, web_walker) in &mut players {
         if changed || load.is_added() {
+            // An alignment with spiders lets them through webs.
+            let walks_webs = character.gear(&inventory).web_walker;
+            if walks_webs && !web_walker {
+                commands.entity(player).insert(WebWalker);
+            } else if !walks_webs && web_walker {
+                commands.entity(player).remove::<WebWalker>();
+            }
             let derived = *derived.get_or_insert_with(|| character.derive_with(crate::rules::GameRules::of(&rules), &inventory));
             load.set_if_neq(Load::of(derived.load, derived.capacity));
             pace.set_if_neq(GearPace(derived.speed));
@@ -225,6 +238,11 @@ impl Default for GearPace {
     }
 }
 
+/// The delver walks through webs unhindered, as the spiders do: a cleric aligned with them
+/// ([`fb_character::devotion::Devotion::Aligned`]). Kept up by `weigh_the_delver`.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WebWalker;
+
 /// What walking moves and reads on the delver.
 type Walker<'a> = (&'a mut Locomotion, &'a mut Gait, &'a mut Transform, Option<&'a Slowed>, &'a Exhaustion, &'a Load, &'a DelverStamina, Option<&'a GearPace>, Has<crate::combat::guard::Guard>);
 
@@ -240,6 +258,7 @@ pub(crate) fn walk(
     doors: Option<Res<crate::doors::Doors>>,
     mut body: Single<Walker<'_>, With<Player>>,
     effects: Query<&crate::character::DelverEffects, With<Player>>,
+    web_walker: Query<(), (With<Player>, With<WebWalker>)>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP_SECONDS);
     if dt <= 0.0 {
@@ -250,7 +269,7 @@ pub(crate) fn walk(
     let rules = crate::rules::GameRules::of(&rules);
     // What they wear and what is on them (the cold in a cold-blooded body) set their pace.
     let pace = gear_pace.map_or(1.0, |p| p.0) * effects.iter().next().map_or(1.0, |e| e.0.pace(&rules.effects) as f32);
-    let web = fb_level::webs::web_pace(&level.0.webs, transform.translation.x, transform.translation.z, moving.body_radius, None, moving.web_pace);
+    let web = fb_level::webs::web_pace(&level.0.webs, transform.translation.x, transform.translation.z, moving.body_radius, web_walker.iter().next().map(|()| fb_creatures::Species::GiantSpider), moving.web_pace);
     // A raised shield slows them to a guarded walk, with no sprinting (`crate::combat::guard`).
     let guard = if *guarding { crate::combat::guard::GUARD_PACE } else { 1.0 };
     let sprinting = input.pressed(Action::Sprint) && stamina.0.can_exert() && !*guarding;

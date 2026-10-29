@@ -14,6 +14,9 @@ serde = { workspace = true }
 procgen_rng = { workspace = true }
 fb_creatures = { workspace = true }
 fb_items = { workspace = true }
+armory = { workspace = true }
+fb_body = { workspace = true }
+fb_denizens = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

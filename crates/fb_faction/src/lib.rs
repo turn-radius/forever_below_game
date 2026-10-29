@@ -880,7 +880,7 @@ fn shuffle<T>(items: &mut [T], rng: &mut Mulberry32) {
 }
 
 mod standing;
-pub use standing::{Band, Delver, Standing, StandingRules, Standings, Victim};
+pub use standing::{Band, Delver, Favour, Standing, StandingRules, Standings, Victim};
 
 #[cfg(test)]
 mod tests;

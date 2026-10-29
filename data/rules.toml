@@ -295,6 +295,51 @@ heal_share = 0.75
 # Prayers between sleeps, pass or fail.
 per_rest = 1
 
+[devotion]
+# A cleric devoted against a favored foe: the share of that kind's damage warded off, and the
+# extra dice rolled against it. Our own.
+favored_ward = 0.25
+favored_bane = "1d4"
+# Kills with one kind of weapon (mace, sword, ...) before the cleric is offered to dedicate
+# themselves to it, and kills of one kind of creature before they are offered a favored foe or an
+# alignment. Declining makes the next offer come at double the count. Play-test numbers.
+weapon_kills = 50
+creature_kills = 20
+
+# Aligned with a folk or a denizen people, the factions of that people think better of the cleric
+# (standing added) and a loss of standing with them lands only in part. Against one, they think
+# less (a negative number added). Our own.
+aligned_standing = 15
+aligned_loss_percent = 50
+favored_standing = -15
+
+# A cleric aligned with a creature group takes one of its traits (keys: the group's name). Spiders walk through webs, serpents
+# shrug off venom (points added to the save), vermin seldom sicken (multiple of the chance of a
+# disease), the undead see in the dark (feet).
+[devotion.aligned.beast]
+stealth = 2.0
+text = "+2 Stealth."
+
+[devotion.aligned.troll]
+recovery = 1.0
+text = "+1 recovery."
+
+[devotion.aligned.spider]
+web_walker = true
+text = "Webs never hold you back."
+
+[devotion.aligned.serpent]
+poison_resistance = 3.0
+text = "+3 to saves against venom."
+
+[devotion.aligned.vermin]
+disease_risk = 0.5
+text = "Half as likely to catch a disease."
+
+[devotion.aligned.undead]
+darkvision = 60.0
+text = "See 60 ft in the dark."
+
 [visibility]
 # How visible a delver is in the dark, from 0 to 1: the eye is nearly closed.
 in_dark = 0.05

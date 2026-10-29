@@ -179,7 +179,7 @@ impl Context {
     /// reads as a menu: nothing in it but the keys that swap screens, and so do a talk and a commission.
     pub fn of(app: Option<AppState>, open: Option<Screen>) -> Context {
         match (app, open) {
-            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk | Screen::Commission | Screen::Enchant)) => Context::Menus,
+            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk | Screen::Commission | Screen::Enchant | Screen::Devotion)) => Context::Menus,
             (_, Some(Screen::Inventory)) => Context::Inventory,
             (_, None) => Context::Level,
         }

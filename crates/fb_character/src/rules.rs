@@ -42,6 +42,8 @@ pub struct Rules {
     pub warmth: WarmthRules,
     /// Sleeping in a set bedroll or tent.
     pub camp: CampRules,
+    /// What a cleric's devotion gives ([`crate::devotion`]).
+    pub devotion: crate::devotion::DevotionRules,
     /// Falling unconscious and coming to ([`crate::revival`]).
     pub revival: crate::revival::RevivalRules,
     /// A cleric's saving throw against falling ([`crate::protection`]).
@@ -70,6 +72,7 @@ impl Default for Rules {
             visibility: VisibilityRules::default(),
             warmth: WarmthRules::default(),
             camp: CampRules::default(),
+            devotion: crate::devotion::DevotionRules::default(),
             revival: crate::revival::RevivalRules::default(),
             protection: crate::protection::ProtectionRules::default(),
             creatures: default_creatures(),

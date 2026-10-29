@@ -135,6 +135,11 @@ pub struct Character {
     pub learned: AbilityBonus,
     /// The seeds of the books they have read: each teaches them once.
     pub books_read: Vec<u32>,
+    /// What a cleric has devoted themselves to, chosen on the character sheet and changeable
+    /// ([`fb_character::devotion`]); `None` for the other classes and until they choose.
+    pub devotion: Option<fb_character::devotion::Devotion>,
+    /// What they have done: kills by kind, family and weapon, hits taken in each armour, offers answered ([`fb_character::deeds`]).
+    pub deeds: fb_character::deeds::Tally,
 }
 
 /// What reading a book did ([`Character::read`]).
@@ -193,7 +198,7 @@ impl Character {
         let nudges = Character::roll_nudges(rng);
         let attributes = Character::scores_from(folk, nudges);
         let dirt = 0.3 + rng.next_f64() as f32 * 0.2;
-        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default(), learned: AbilityBonus::default(), books_read: Vec::new() }
+        Character { folk, body_seed, shape: None, sex: None, name, class, attributes, dirt, worn: AbilityBonus::default(), learned: AbilityBonus::default(), books_read: Vec::new(), devotion: None, deeds: Default::default() }
     }
 
     /// Five nudges to the folk's ability scores, in order strength, dexterity, constitution,
@@ -377,8 +382,13 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from), favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false },
             );
+        }
+        // A cleric's devotion counts like one more thing worn, so the sheet can explain it and
+        // choosing another drops the old one's bonuses.
+        if let Some(devotion) = self.devotion.filter(|_| self.class == Class::Cleric) {
+            loadout = loadout.wearing(devotion.label(self.body_seed), devotion.worn(&fb_character::rules::defaults().devotion));
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
@@ -561,6 +571,15 @@ pub fn character_for(seed: u32) -> Character {
     // `FB_CLASS=ranger` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
     if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| Class::ALL.into_iter().find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))) {
         character.class = class;
+    }
+    // `FB_DEVOTION=foe:goblin` or `aligned:spider` devotes a cleric, for captures.
+    if let Ok(spec) = std::env::var("FB_DEVOTION") {
+        let kin = |name: &str| fb_character::kin::Kin::all().into_iter().find(|k| k.key().eq_ignore_ascii_case(name));
+        character.devotion = spec.trim().split_once(':').and_then(|(how, name)| match how {
+            "foe" => kin(name).map(fb_character::devotion::Devotion::FavoredFoe),
+            "aligned" => kin(name).map(fb_character::devotion::Devotion::Aligned),
+            _ => None,
+        });
     }
     character
 }

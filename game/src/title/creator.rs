@@ -187,6 +187,8 @@ impl Draft {
             worn: default(),
             learned: default(),
             books_read: Vec::new(),
+            devotion: None,
+            deeds: Default::default(),
         }
     }
 

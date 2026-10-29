@@ -490,6 +490,9 @@ pub fn write_rules_toml(text: &str, rules: &Rules) -> Result<String, String> {
     let mut found = Vec::new();
     let mut root = tree(rules);
     root.remove("effects");
+    // The devotion's numbers hold text and a table of traits the lab has no field for yet: the
+    // file's own stand.
+    root.remove("devotion");
     let root = Value::Table(root);
     add_missing_arrays(doc.as_item_mut(), &root);
     walk(&mut Vec::new(), &root, &mut found);
