@@ -105,7 +105,42 @@
     }
    }
   ],
-  "t": "+10 ft of light"
+  "t": "+10 ft of light",
+  "grp": "light_reach"
+ },
+ {
+  "n": "Radiant",
+  "k": "pre",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "add": {
+     "stat": "light",
+     "by": 20
+    }
+   }
+  ],
+  "t": "+20 ft of light",
+  "grp": "light_reach",
+  "r": "rare"
+ },
+ {
+  "n": "Blazing",
+  "k": "pre",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "add": {
+     "stat": "light",
+     "by": 30
+    }
+   }
+  ],
+  "t": "+30 ft of light",
+  "grp": "light_reach",
+  "r": "legendary"
  },
  {
   "n": "Long-burning",
@@ -120,7 +155,42 @@
     }
    }
   ],
-  "t": "Burns twice as long"
+  "t": "Burns twice as long",
+  "grp": "burn_time"
+ },
+ {
+  "n": "Enduring",
+  "k": "pre",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "scale": {
+     "stat": "burn_time",
+     "by": 3
+    }
+   }
+  ],
+  "t": "Burns three times as long",
+  "grp": "burn_time",
+  "r": "rare"
+ },
+ {
+  "n": "Everlasting",
+  "k": "pre",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "scale": {
+     "stat": "burn_time",
+     "by": 4
+    }
+   }
+  ],
+  "t": "Burns four times as long",
+  "grp": "burn_time",
+  "r": "legendary"
  },
  {
   "n": "Moth-eaten",
@@ -1746,5 +1816,54 @@
   ],
   "t": "Holds one row less",
   "grp": "capacity"
+ },
+ {
+  "n": "of the Ember",
+  "k": "suf",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "add": {
+     "stat": "warmth",
+     "by": 2
+    }
+   }
+  ],
+  "t": "+2 warmth",
+  "grp": "light_warmth"
+ },
+ {
+  "n": "of the Furnace",
+  "k": "suf",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "add": {
+     "stat": "warmth",
+     "by": 4
+    }
+   }
+  ],
+  "t": "+4 warmth",
+  "grp": "light_warmth",
+  "r": "rare"
+ },
+ {
+  "n": "of Patience",
+  "k": "suf",
+  "g": 1,
+  "on": "light",
+  "fx": [
+   {
+    "scale": {
+     "stat": "burn_time",
+     "by": 1.5
+    }
+   }
+  ],
+  "t": "Burns half again as long",
+  "grp": "burn_time"
  }
 ]
