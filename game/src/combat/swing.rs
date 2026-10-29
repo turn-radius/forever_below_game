@@ -64,12 +64,19 @@ impl Plugin for SwingPlugin {
     }
 }
 
-/// Whether `hand` holds a lit torch, so a blow with it is fire as well as a club's
-/// bludgeoning: a troll's regeneration stops at it (`crate::creatures::trolls`). A lantern's
-/// glass and an unlit or spent torch are not.
+/// Whether `hand` holds a lit torch, or a censer with incense burning in it, so a blow with it
+/// is fire as well as a club's bludgeoning: a troll's regeneration stops at it
+/// (`crate::creatures::trolls`). A lantern's glass, an unlit or spent torch, and a cold or
+/// empty censer are not. Swinging spends nothing: the fuel burns by the clock alone
+/// (`crate::kindle`).
 pub fn flaming_blow(inventory: &Inventory, hand: Slot) -> bool {
-    inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
+    inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| (item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true)) || item.burning_incense().is_some())
 }
+
+/// How far behind the hand a censer's bowl turns on its chain, seconds at the usual pace.
+const FLAIL_LAG: f32 = 0.05;
+/// Radians the bowl hangs out per view unit a second of the fist's sideways travel.
+const FLAIL_SWING: f32 = 0.03;
 
 /// How long a swing takes, seconds, and when in it the blow lands. Our own: about two swings a
 /// second, quicker than the SRD's one attack in a 6-second round (p. 90), as a real-time fight
@@ -577,6 +584,7 @@ impl Strike {
             SwingKind::Chop => &[(Overhead, 4), (HighRight, 3), (HighLeft, 2), (FromRight, 1)],
             SwingKind::Slash => &[(HighRight, 3), (FromRight, 3), (HighLeft, 2), (FromLeft, 2), (Overhead, 1), (Rising, 1)],
             SwingKind::Sweep => &[(FromRight, 3), (FromLeft, 3), (Overhead, 1), (Rising, 1)],
+            SwingKind::Flail => &[(FromRight, 3), (HighRight, 2), (FromLeft, 2), (HighLeft, 1)],
             SwingKind::Thrust | SwingKind::Punch => &[(Stab, 1)],
         }
     }
@@ -756,7 +764,17 @@ pub(super) fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&
     for (item, mut transform, parent) in &mut held {
         if item.hand == swing.hand && view_models.contains(parent.parent()) {
             let grip = Grip::of(*transform, hold, item.point);
-            *transform = swing.path(grip).at(swing.t).apply(*transform, hold.fist);
+            let path = swing.path(grip);
+            let mut pose = path.at(swing.t);
+            if swing.weapon.kind == SwingKind::Flail {
+                // The bowl hangs plumb on its chain and trails the hand: it swings out the way
+                // the fist is moving, a pendulum, and is never turned over.
+                let before = path.at((swing.t - FLAIL_LAG).max(0.0)).offset;
+                let drag = (pose.offset - before) / FLAIL_LAG;
+                let out = (-drag.x * FLAIL_SWING).clamp(-0.9, 0.9);
+                pose.turn = Quat::from_rotation_z(out);
+            }
+            *transform = pose.apply(*transform, hold.fist);
         }
     }
 }
@@ -862,6 +880,56 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         app.update();
         app.world().get::<Swing>(delver).copied()
+    }
+
+    /// An inventory with `item` in the main hand.
+    fn holding(item: fb_items::Item) -> Inventory {
+        let mut inventory = Inventory::default();
+        let id = inventory.add(item);
+        inventory.wear(id, Slot::Mainhand).unwrap();
+        inventory
+    }
+
+    fn censer(incense: bool, lit: bool) -> fb_items::Item {
+        let mut censer = fb_items::roll_item(fb_items::CENSER, 7).unwrap();
+        censer.shape.load_incense(armory::incense::IncenseKind::Cedar);
+        censer.shape.set_lit(true).unwrap();
+        if !incense {
+            // Burnt right down, it goes out.
+            censer.burn(1.0e9);
+        }
+        if !lit && incense {
+            censer.shape.set_lit(false).unwrap();
+        }
+        censer
+    }
+
+    #[test]
+    fn a_lit_censer_with_incense_burns_what_it_strikes_as_a_torch_does() {
+        let mut torch = fb_items::roll_item("Torch", 7).unwrap();
+        torch.shape.set_lit(true).unwrap();
+        assert!(flaming_blow(&holding(torch), Slot::Mainhand));
+        assert!(flaming_blow(&holding(censer(true, true)), Slot::Mainhand), "lit, with incense");
+        assert!(!flaming_blow(&holding(censer(true, false)), Slot::Mainhand), "unlit");
+        assert!(!flaming_blow(&holding(censer(false, true)), Slot::Mainhand), "burnt down to nothing");
+        let mut lantern = fb_items::roll_item("Lantern", 7).unwrap();
+        let _ = lantern.shape.set_lit(true);
+        assert!(!flaming_blow(&holding(lantern), Slot::Mainhand), "a lantern's glass does not burn");
+    }
+
+    #[test]
+    fn swinging_a_censer_is_a_flail_and_spends_no_incense() {
+        let lit = censer(true, true);
+        let before = lit.fuel_left();
+        let inventory = holding(lit);
+        let character = Character::default();
+        let weapon = Weapon::held_in(Slot::Mainhand, &inventory, &character);
+        assert_eq!(weapon.kind, SwingKind::Flail);
+        assert!(flaming_blow(&inventory, Slot::Mainhand));
+        let id = inventory.worn(Slot::Mainhand).unwrap();
+        assert_eq!(inventory.item(id).unwrap().fuel_left(), before, "the blow takes nothing from the coals");
+        let sword = Weapon::held_in(Slot::Mainhand, &holding(fb_items::roll_item("Sword", 3).unwrap()), &character);
+        assert!(weapon.reach < sword.reach, "a censer on its chain reaches less than a sword");
     }
 
     #[test]

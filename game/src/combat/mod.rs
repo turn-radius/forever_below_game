@@ -170,6 +170,8 @@ pub enum SwingKind {
     Thrust,
     /// A wide flat arc: a staff.
     Sweep,
+    /// A wide swing across the body with the weight lagging: a censer on its chain.
+    Flail,
     /// Nothing in hand.
     Punch,
 }
@@ -183,6 +185,7 @@ impl SwingKind {
             Some(Family::Sword) => SwingKind::Slash,
             Some(Family::Spear | Family::Dagger) => SwingKind::Thrust,
             Some(Family::Staff) => SwingKind::Sweep,
+            Some(Family::Lantern) if matches!(item, Some(armory::Item::Lantern(s)) if s.body.style == armory::families::lantern::LanternStyle::Censer) => SwingKind::Flail,
             Some(_) => SwingKind::Chop,
         }
     }
