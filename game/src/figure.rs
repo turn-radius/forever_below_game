@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn a_minotaur_is_dressed_and_holds_a_weapon_in_its_fist() {
-        for outfit in ["fighter", "ranger", "mage", "cleric"] {
+        for outfit in ["fighter", "mage", "cleric"] {
             let worn = fb_items::outfit::outfit(outfit).unwrap().roll(7, Folk::Minotaur.key()).worn;
             let figure = Figure::dress(&BodySpec::roll(Folk::Minotaur, 7), &worn, 0.2);
             let names: Vec<&str> = figure.pieces.iter().map(|p| p.name.as_str()).collect();

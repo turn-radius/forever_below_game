@@ -889,7 +889,7 @@ mod tests {
     #[test]
     fn an_archer_carries_what_it_shoots_and_no_one_else_carries_anything() {
         let mut archers = 0;
-        // Several worlds, since a world's factions may wear no ranger's outfit.
+        // Several worlds, since a world's factions may wear no bow-carrying fighter's outfit.
         let spots: Vec<(FolkSpot, FactionSpec)> = (1..=8)
             .flat_map(|world| {
                 let level = fb_level::generate(world, 1);

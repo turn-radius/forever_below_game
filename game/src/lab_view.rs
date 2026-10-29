@@ -2235,7 +2235,7 @@ mod tests {
         go(Control::Folk(1), &mut state, &mut picker);
         assert_eq!(state.character.folk, Folk::Dwarf);
         go(Control::Class(1), &mut state, &mut picker);
-        assert_eq!(state.character.class, Class::Ranger);
+        assert_eq!(state.character.class, Class::Mage);
         go(Control::Reroll, &mut state, &mut picker);
         assert_eq!(state.seed, DEFAULT_SEED + 1);
         go(Control::Remove(Slot::Head), &mut state, &mut picker);

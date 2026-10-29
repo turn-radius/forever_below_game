@@ -252,7 +252,7 @@ fn names_say_what_their_members_are() {
         }
     }
     let seen = |key: &str, value: &str| names.iter().any(|(_, e)| e.tag(key) == Some(value));
-    assert!(seen("sex", "female") && seen("sex", "male") && seen("class", "cleric") && seen("class", "fighter_or_ranger"));
+    assert!(seen("sex", "female") && seen("sex", "male") && seen("class", "cleric") && seen("class", "fighter"));
     assert!(names.iter().any(|(_, e)| e.tags.is_empty()), "every name says something");
     assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("female") && e.tag("class") == Some("cleric")), "no Daughters of a Chapel");
     assert!(names.iter().any(|(_, e)| e.tag("sex") == Some("male") && e.tag("class") == Some("cleric")), "no Brothers of a Chapel");

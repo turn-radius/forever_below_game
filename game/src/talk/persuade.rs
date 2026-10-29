@@ -54,7 +54,6 @@ pub fn class_bonus(class: ClassKind) -> (&'static str, i32) {
         ClassKind::Cleric => ("Cleric", 2),
         ClassKind::Mage => ("Mage", 1),
         ClassKind::Fighter => ("Fighter", 0),
-        ClassKind::Ranger => ("Ranger", 0),
     }
 }
 
