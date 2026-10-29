@@ -215,7 +215,7 @@ pub fn roll_affixes_for(rng: &mut Mulberry32, rarity: Rarity, tags: &[Tag], slot
 /// `rarity` beside the `taken` affixes. When none does, a second good prefix may stand in its
 /// place: the roll takes one for an empty suffix slot, and the enchanter's bench offers one.
 pub fn good_suffix_fits(tags: &[Tag], slot: Option<Slot>, rarity: Rarity, taken: &[&Affix]) -> bool {
-    affixes().iter().any(|a| a.kind == AffixKind::Suffix && a.good && a.in_play() && a.least <= rarity && a.fits_item(tags, slot) && taken.iter().all(|t| a.stacks_with(t)))
+    affixes().iter().any(|a| a.kind == AffixKind::Suffix && !a.holy && a.good && a.in_play() && a.least <= rarity && a.fits_item(tags, slot) && taken.iter().all(|t| a.stacks_with(t)))
 }
 
 /// Rarity against `odds`, then its affixes, from one stream, for an item in no particular slot.
@@ -274,7 +274,7 @@ mod tests {
                 assert!(good.len() <= rarity as usize && flawed <= 1, "{rarity:?}: {chosen:?}");
                 // Two prefixes only where no good suffix is left that fits (a slot falls back to the other kind).
                 if good.iter().filter(|a| a.kind == AffixKind::Prefix).count() > 1 {
-                    let left = affixes().iter().any(|a| a.good && a.kind == AffixKind::Suffix && a.least <= rarity && a.fits_item(tags, None) && a.in_play() && chosen.iter().all(|c| a.stacks_with(c)));
+                    let left = affixes().iter().any(|a| a.good && !a.holy && a.kind == AffixKind::Suffix && a.least <= rarity && a.fits_item(tags, None) && a.in_play() && chosen.iter().all(|c| a.stacks_with(c)));
                     assert!(!left, "{rarity:?}: {chosen:?} has two prefixes with a suffix left");
                 }
                 assert!(chosen.iter().take(good.len()).all(|a| a.good), "the flaw comes last, so the name keeps the good prefix");
@@ -287,7 +287,7 @@ mod tests {
             }
             // Where every flaw that fits is ungrouped, nothing keeps a flaw from its slot, so each
             // rarity rolls flaws at its chance.
-            let fitting: Vec<_> = affixes().iter().filter(|a| !a.good && a.fits_item(tags, None) && a.in_play()).collect();
+            let fitting: Vec<_> = affixes().iter().filter(|a| !a.good && !a.holy && a.fits_item(tags, None) && a.in_play()).collect();
             if !fitting.is_empty() && fitting.iter().all(|a| a.group.is_none()) {
                 for (i, chance) in FLAW_CHANCE.into_iter().enumerate() {
                     let share = flaws[i] as f64 / items[i].max(1) as f64;
@@ -863,6 +863,24 @@ mod tests {
         for base in ["Torch", "Lantern", "Helm", "Boots"] {
             let item = crate::roll_item(base, 1).unwrap();
             assert!(!light.fits_item(&item.profile.tags, item.profile.slot), "{base} is no weapon or shield");
+        }
+    }
+
+    #[test]
+    fn mana_affixes_keep_to_their_slots_and_groups() {
+        let by_name = |n: &str| affixes().iter().find(|a| a.name == n).unwrap();
+        let (attuned, wellspring, drained) = (by_name("Attuned"), by_name("of the Wellspring"), by_name("Drained"));
+        assert_eq!((attuned.kind, wellspring.kind, drained.kind), (AffixKind::Prefix, AffixKind::Suffix, AffixKind::Prefix));
+        assert_eq!(wellspring.least, Rarity::Rare);
+        assert!([attuned, wellspring, drained].iter().all(|a| a.in_play()));
+        assert!(!attuned.stacks_with(wellspring) && !attuned.stacks_with(drained), "one mana refill at a time");
+        let any = &[Tag::Leather, Tag::Wear][..];
+        for (affix, yes, no) in [
+            (attuned, &[Slot::Head, Slot::Neck, Slot::Charm][..], &[Slot::Body, Slot::Feet][..]),
+            (wellspring, &[Slot::Neck, Slot::Ring1, Slot::Charm][..], &[Slot::Head, Slot::Body][..]),
+            (drained, &[Slot::Head, Slot::Ring1, Slot::Charm][..], &[Slot::Body, Slot::Feet][..]),
+        ] {
+            assert!(yes.iter().all(|s| affix.fits_item(any, Some(*s))) && no.iter().all(|s| !affix.fits_item(any, Some(*s))), "{}", affix.name);
         }
     }
 

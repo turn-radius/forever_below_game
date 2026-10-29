@@ -1176,6 +1176,35 @@ mod tests {
     }
 
     #[test]
+    fn a_key_bound_attack_neither_swings_nor_draws_behind_the_wake_card() {
+        use crate::keymap::{Action, Input, Keymap};
+        let (mut app, player, _, quiver) = archer("Bow", 7, "Quiver", "Arrow", 3, 60.0);
+        for action in [Action::Attack, Action::Block] {
+            app.world_mut().resource_mut::<Keymap>().bindings.iter_mut().find(|b| b.action == action).unwrap().inputs = vec![Input::Key(if action == Action::Attack { KeyCode::KeyZ } else { KeyCode::KeyX })];
+        }
+        frames(&mut app, 2);
+        let card = app.world_mut().spawn(revival::WakeCard::default()).id();
+        let tap = |app: &mut App, key: KeyCode| {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.update();
+        };
+        tap(&mut app, KeyCode::KeyZ);
+        tap(&mut app, KeyCode::KeyX);
+        frames(&mut app, 3);
+        assert_eq!(held(&app, quiver), 3, "no arrow is nocked");
+        assert!(app.world().resource::<shoot::Marksman>().nocked.is_none());
+        assert!(app.world().get::<swing::Swing>(player).is_none());
+        assert!(app.world().get::<guard::Guard>(player).is_none());
+        // Once it is gone the same key draws the bow.
+        app.world_mut().despawn(card);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::KeyZ);
+        keys.clear();
+        tap(&mut app, KeyCode::KeyZ);
+        assert_eq!(held(&app, quiver), 2, "the bow is nocked");
+    }
+
+    #[test]
     fn a_loosed_arrow_is_a_real_item_that_ends_up_on_the_floor_of_an_open_cell() {
         use crate::inventory::{FloorChange, FloorChanges};
         let (mut app, player, rat, quiver) = archer("Bow", 7, "Quiver", "Arrow", 1, 60.0);

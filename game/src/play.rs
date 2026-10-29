@@ -59,7 +59,7 @@ fn map_rooms(mut commands: Commands, level: Res<CurrentLevel>) {
 /// The player's body. Its `Transform` is at the feet, on the floor; the camera is a child.
 #[derive(Component, Debug, Default, Reflect)]
 #[reflect(Component)]
-#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::casting::DelverSpellbook, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina)]
+#[require(DespawnOnExit<crate::launch::AppState> = DespawnOnExit(crate::launch::AppState::Delving), crate::exhaustion::Exhaustion, crate::exhaustion::ExhaustionTimes, crate::character::Load, crate::character::DelverNeeds, crate::character::DelverStamina, crate::character::DelverMana, crate::casting::DelverSpellbook, crate::character::DelverVisibility, crate::character::DelverRecovery, crate::player::GearPace, crate::character::GearStamina, crate::character::GearMana)]
 pub struct Player;
 
 /// The first-person camera, a child of [`Player`].
@@ -210,17 +210,37 @@ impl ScreenOpen {
     }
 }
 
+/// Whether something covers the level's inspect cards: the map or the pause menu, the "You fall
+/// unconscious" overlay ([`crate::combat::revival`]) or the fall screen ([`crate::combat::vitals`]) or the wake card after it.
+/// The cards come back when it closes, if they are still aimed at. The inventory does not cover
+/// them: it shows the hovered item's own card.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CardsCovered<'w, 's> {
+    open: Option<Res<'w, ScreenOpen>>,
+    unconscious: Option<Res<'w, crate::combat::revival::Unconscious>>,
+    fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
+    wake: Query<'w, 's, (), With<crate::combat::revival::WakeCard>>,
+}
+
+impl CardsCovered<'_, '_> {
+    pub fn is_covered(&self) -> bool {
+        self.open.as_ref().is_some_and(|o| o.is(Screen::Menu) || o.is(Screen::Map)) || self.unconscious.is_some() || self.fallen.is_some() || !self.wake.is_empty()
+    }
+}
+
 /// Run condition: no screen is open over the level, the delver is not between levels
 /// ([`crate::travel`]) or asleep ([`crate::camp`]) and the debug inspector is closed
-/// ([`crate::inspect`]) and no roll shows on the dice panel ([`crate::dice`]): the delver stands still.
+/// ([`crate::inspect`]), no roll shows on the dice panel ([`crate::dice`]) and the wake card is
+/// not up ([`crate::combat::revival`]): the delver stands still.
 pub fn level_has_focus(
     screen: Option<Res<ScreenOpen>>,
     journey: Option<Res<crate::travel::Journey>>,
     inspector: Option<Res<crate::inspect::InspectorOpen>>,
     asleep: Option<Res<crate::camp::Asleep>>,
     dice: Option<Res<crate::dice::Dice>>,
+    wake_card: Query<(), With<crate::combat::revival::WakeCard>>,
 ) -> bool {
-    !dice.is_some_and(|d| d.busy()) && !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0) && !asleep.is_some_and(|a| a.0.is_some())
+    wake_card.is_empty() && !dice.is_some_and(|d| d.busy()) && !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0) && !asleep.is_some_and(|a| a.0.is_some())
 }
 
 /// Run condition: the inventory screen is open, for keys that act on the item under the mouse.

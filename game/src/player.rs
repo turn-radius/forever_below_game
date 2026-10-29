@@ -204,12 +204,12 @@ fn weigh_the_delver(
     character: Option<Res<Character>>,
     inventory: Option<Res<Inventory>>,
     rules: Option<Res<crate::rules::GameRules>>,
-    mut players: Query<(Entity, &mut Load, &mut GearPace, &mut crate::character::GearStamina, Has<WebWalker>), With<Player>>,
+    mut players: Query<(Entity, &mut Load, &mut GearPace, &mut crate::character::GearStamina, &mut crate::character::GearMana, Has<WebWalker>), With<Player>>,
 ) {
     let (Some(character), Some(inventory)) = (character, inventory) else { return };
     let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
     let mut derived = None;
-    for (player, mut load, mut pace, mut stamina, web_walker) in &mut players {
+    for (player, mut load, mut pace, mut stamina, mut mana, web_walker) in &mut players {
         if changed || load.is_added() {
             // An alignment with spiders lets them through webs.
             let walks_webs = character.gear(&inventory).web_walker;
@@ -222,6 +222,7 @@ fn weigh_the_delver(
             load.set_if_neq(Load::of(derived.load, derived.capacity));
             pace.set_if_neq(GearPace(derived.speed));
             stamina.set_if_neq(crate::character::GearStamina { refill: derived.stamina_refill, cost: derived.stamina_cost });
+            mana.set_if_neq(crate::character::GearMana { refill: derived.mana_refill });
         }
     }
 }

@@ -1489,6 +1489,71 @@
   ]
  },
  {
+  "n": "Attuned",
+  "k": "pre",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "mana_refill",
+     "by": 1.2
+    }
+   }
+  ],
+  "t": "Mana refills 20% faster",
+  "grp": "mana_refill",
+  "at": [
+   "head",
+   "neck",
+   "charm"
+  ]
+ },
+ {
+  "n": "of the Wellspring",
+  "k": "suf",
+  "g": 1,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "mana_refill",
+     "by": 1.25
+    }
+   }
+  ],
+  "t": "Mana refills 25% faster",
+  "grp": "mana_refill",
+  "r": "rare",
+  "at": [
+   "neck",
+   "ring1",
+   "charm"
+  ]
+ },
+ {
+  "n": "Drained",
+  "k": "pre",
+  "g": 0,
+  "on": "any",
+  "fx": [
+   {
+    "scale": {
+     "stat": "mana_refill",
+     "by": 0.8
+    }
+   }
+  ],
+  "t": "Mana refills 20% slower",
+  "grp": "mana_refill",
+  "at": [
+   "head",
+   "neck",
+   "ring1",
+   "charm"
+  ]
+ },
+ {
   "n": "Light-handed",
   "k": "pre",
   "g": 1,

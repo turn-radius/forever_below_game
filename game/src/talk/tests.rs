@@ -709,3 +709,20 @@ fn the_persuasion_state_resets_with_the_delve() {
     app.update();
     assert!(app.world().resource::<Persuading>().0.is_none());
 }
+
+#[test]
+fn talk_does_not_open_on_a_folk_looked_at_behind_the_wake_card() {
+    let mut app = talk_app();
+    let folk = stand_in(&mut app, 0, smith(), None);
+    app.add_systems(Update, crate::folk::aim_at_folk.before(talk));
+    let at = app.world().get::<Transform>(folk).unwrap().translation;
+    let eye = Transform::from_translation(at + Vec3::new(0.0, 8.0, 12.0)).looking_at(at + Vec3::Y * 8.0, Vec3::Y);
+    app.world_mut().spawn((crate::play::PlayerCamera, eye, GlobalTransform::from(eye)));
+    let card = app.world_mut().spawn(crate::combat::revival::WakeCard::default()).id();
+    press(&mut app, KeyCode::KeyF);
+    assert!(app.world().resource::<AimedFolk>().0.is_none());
+    assert!(!app.world().resource::<ScreenOpen>().is(Screen::Talk), "F says nothing behind the card");
+    app.world_mut().despawn(card);
+    press(&mut app, KeyCode::KeyF);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk), "and talks once it is gone");
+}
