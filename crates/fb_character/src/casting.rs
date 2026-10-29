@@ -77,7 +77,7 @@ pub struct CastingRules {
 
 impl Default for CastingRules {
     fn default() -> Self {
-        use Casting::Divine;
+        use Casting::{Arcane, Divine};
         use TermKind::*;
         let terms = [
             ("light", term(Effect, "Light", Divine, 1.0, 0.0, 0.0, true)),
@@ -91,6 +91,11 @@ impl Default for CastingRules {
             ("cone", term(Reach, "Cone", Divine, 2.0, 30.0, 0.0, false)),
             ("short", term(Duration, "Short", Divine, 1.0, 0.0, 600.0, true)),
             ("long", term(Duration, "Long", Divine, 2.0, 0.0, 1800.0, true)),
+            ("arcane_light", term(Effect, "Light", Arcane, 1.0, 0.0, 0.0, true)),
+            ("arcane_ward", term(Effect, "Ward", Arcane, 2.0, 0.0, 0.0, true)),
+            ("arcane_self", term(Reach, "Self", Arcane, 0.0, 0.0, 0.0, true)),
+            ("arcane_around", term(Reach, "Around you", Arcane, 1.0, 20.0, 0.0, true)),
+            ("arcane_short", term(Duration, "Short", Arcane, 1.0, 0.0, 600.0, true)),
         ]
         .into_iter()
         .map(|(id, t)| (id.to_string(), t))
@@ -463,6 +468,19 @@ mod tests {
         assert_eq!(cast(&mut mana, Casting::Divine, &book.unlocked, &w, 0), Err(CastError::BadTier));
         assert_eq!(cast(&mut mana, Casting::Divine, &book.unlocked, &w, 4), Err(CastError::BadTier));
         assert_eq!(mana.points, 10.0);
+    }
+
+    #[test]
+    fn a_mage_composes_and_casts_an_arcane_written_ability() {
+        let book = Spellbook::starting(Casting::Arcane);
+        assert!(book.written.is_empty());
+        let w = compose(&book.unlocked, Casting::Arcane, "Spark", "arcane_light", "arcane_around", "arcane_short").unwrap();
+        assert_eq!(w.preview(2), Preview { tier: 2, cost: 6.0, range: 40.0, duration: 1200.0 });
+        assert!(matches!(compose(&book.unlocked, Casting::Arcane, "x", "light", "arcane_around", "arcane_short"), Err(ComposeError::WrongSchool { .. })));
+        let mut mana = Mana::full(10.0);
+        let cast = cast(&mut mana, Casting::Arcane, &book.unlocked, &w, 2).unwrap();
+        assert_eq!((cast.cost, mana.points), (6.0, 4.0));
+        assert_eq!(super::cast(&mut mana, Casting::Divine, &book.unlocked, &w, 1), Err(CastError::WrongCaster { needs: Casting::Arcane }));
     }
 
     #[test]

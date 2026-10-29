@@ -16,7 +16,7 @@
 
 use bevy::prelude::*;
 use fb_character::Casting;
-use fb_character::casting::{Cast, MAX_TIER, Spellbook, cast_with, points};
+use fb_character::casting::{Cast, CastError, MAX_TIER, Spellbook, cast_with, points};
 
 use crate::character::{Character, DelverMana};
 use crate::combat::orbs::{OrbCluster, cluster_layout};
@@ -46,7 +46,7 @@ impl Plugin for CastingPlugin {
                 (
                     start_the_spellbook,
                     give_clerics_their_prayer,
-                    items_displace_abilities,
+                    items_displace_abilities.after(crate::quickslots::bind_hovered),
                     (step_tier, pray_key, ability_slot_key).run_if(level_has_focus),
                     bind_ability_hovered.run_if(inventory_open),
                     debug_cast,
@@ -113,11 +113,18 @@ impl AbilitySlots {
 
 /// A new caster's spellbook starts as their class's: the known terms, and for a cleric Divine
 /// Light. A spellbook already filled (a delve resumed) is left alone.
-fn start_the_spellbook(mut players: Query<&mut DelverSpellbook, Added<Player>>, character: Option<Res<Character>>, rules: Res<GameRules>) {
+fn start_the_spellbook(mut players: Query<&mut DelverSpellbook>, character: Option<Res<Character>>, rules: Res<GameRules>, mut chosen: ResMut<Chosen>) {
     let Some(character) = character else { return };
     for mut book in &mut players {
         if book.0 == Spellbook::default() {
-            book.0 = Spellbook::starting_with(&rules, character.class.casting());
+            let start = Spellbook::starting_with(&rules, character.class.casting());
+            if start != Spellbook::default() {
+                book.0 = start;
+            }
+        }
+        // The chosen prayer is one the book holds.
+        if book.0.find(&chosen.name).is_none() {
+            chosen.name = book.0.written.first().map_or_else(String::new, |w| w.name.clone());
         }
     }
 }
@@ -183,7 +190,7 @@ fn bind_ability_hovered(
     chosen: Res<Chosen>,
     players: Query<&DelverSpellbook, With<Player>>,
     mut slots: ResMut<AbilitySlots>,
-    mut items: ResMut<Quickslots>,
+    items: Res<Quickslots>,
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
@@ -191,9 +198,13 @@ fn bind_ability_hovered(
     if hovered.0.is_some() || !players.iter().next().is_some_and(|b| b.0.find(&chosen.name).is_some()) {
         return;
     }
-    items.clear(slot);
+    let now = time.map_or(0.0, |t| t.elapsed_secs());
+    if items.get(slot).is_some() {
+        toast.say(format!("Slot {} already holds an item", crate::quickslots::number(slot)), now);
+        return;
+    }
     slots.bind(slot, &chosen.name);
-    toast.say(format!("{} is bound to slot {}", chosen.name, crate::quickslots::number(slot)), time.map_or(0.0, |t| t.elapsed_secs()));
+    toast.say(format!("{} is bound to slot {}", chosen.name, crate::quickslots::number(slot)), now);
 }
 
 /// Does each request: spends the mana and sends [`Casted`], or says why not.
@@ -210,7 +221,7 @@ fn cast_requests(
     for request in requests.read() {
         let Some((mut mana, book)) = players.iter_mut().next() else { continue };
         if character.as_deref().is_some_and(|c| c.class.casting() == Casting::Martial) {
-            toast.say(fb_character::casting::CastError::WrongCaster { needs: Casting::Divine }.say(&request.name), now);
+            toast.say(CastError::WrongCaster { needs: Casting::Martial }.say(&request.name), now);
             continue;
         }
         let Some(written) = book.0.find(&request.name) else {
@@ -374,7 +385,7 @@ mod tests {
         press(&mut app, KeyCode::KeyC);
         assert_eq!(pool(&app, player), 10.0);
         assert!(casted(&mut app).is_empty());
-        assert!(app.world().resource::<Toast>().text.contains("cleric"));
+        assert!(app.world().resource::<Toast>().text.starts_with("You cannot cast"));
     }
 
     #[test]
@@ -410,5 +421,29 @@ mod tests {
         app.world_mut().resource_mut::<Quickslots>().bind(0, crate::inventory::ItemId(9));
         app.update();
         assert_eq!(app.world().resource::<AbilitySlots>().get(0), None);
+    }
+
+    #[test]
+    fn a_slot_holds_an_item_or_a_prayer_and_binding_refuses_to_clear_an_item() {
+        let (mut app, _) = delve(true, 10.0);
+        app.world_mut().resource_mut::<Quickslots>().bind(2, crate::inventory::ItemId(9));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(crate::play::Screen::Inventory);
+        press(&mut app, KeyCode::Digit3);
+        assert_eq!(app.world().resource::<AbilitySlots>().get(2), None, "refused over an item");
+        assert_eq!(app.world().resource::<Quickslots>().get(2), Some(crate::inventory::ItemId(9)));
+        assert!(app.world().resource::<Toast>().text.contains("already holds an item"));
+        press(&mut app, KeyCode::Digit4);
+        assert_eq!(app.world().resource::<AbilitySlots>().get(3), Some("Divine Light"));
+        assert_eq!(app.world().resource::<AbilitySlots>().get(0), None, "a prayer sits in one slot only");
+    }
+
+    #[test]
+    fn the_chosen_prayer_follows_the_book_and_a_late_character_fills_it() {
+        let (mut app, player) = delve(false, 10.0);
+        assert_eq!(app.world().resource::<Chosen>().name, "", "a fighter chooses nothing");
+        app.world_mut().resource_mut::<Character>().class = crate::character::Class::Cleric;
+        app.update();
+        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 1);
+        assert_eq!(app.world().resource::<Chosen>().name, "Divine Light");
     }
 }

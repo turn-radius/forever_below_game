@@ -234,7 +234,7 @@ fn use_quickslot(
 /// Keys 1 to 0 in the inventory: binds the item under the mouse to that slot, as dropping it
 /// on the strip's slot would, picking it up first if it lies underfoot ([`pick_up_and_bind`]),
 /// and says so (or why not). Nothing under the mouse, nothing happens.
-fn bind_hovered(
+pub(crate) fn bind_hovered(
     input: ActionInput,
     hovered: Res<Hovered>,
     mut slots: ResMut<Quickslots>,

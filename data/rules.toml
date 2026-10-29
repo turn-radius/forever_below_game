@@ -219,6 +219,51 @@ range = 0.0
 seconds = 1800.0
 known = true
 
+[casting.terms.arcane_light]
+kind = "effect"
+name = "Light"
+school = "Arcane"
+cost = 1.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_ward]
+kind = "effect"
+name = "Ward"
+school = "Arcane"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_self]
+kind = "reach"
+name = "Self"
+school = "Arcane"
+cost = 0.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_around]
+kind = "reach"
+name = "Around you"
+school = "Arcane"
+cost = 1.0
+range = 20.0
+seconds = 0.0
+known = true
+
+[casting.terms.arcane_short]
+kind = "duration"
+name = "Short"
+school = "Arcane"
+cost = 1.0
+range = 0.0
+seconds = 600.0
+known = true
+
 [load]
 # Pounds of capacity for each point of STR (SRD p. 79).
 capacity_per_strength = 15.0
