@@ -86,6 +86,16 @@ pub const PORTCULLIS_SECONDS: f32 = 1.6;
 pub const LEVER_SECONDS: f32 = 0.35;
 /// Seconds the pick is held before the roll.
 pub const PICK_SECONDS: f32 = 1.5;
+/// Seconds the crosshair may be off the door, with R still down, before the hold starts over.
+pub const PICK_GRACE: f32 = 0.3;
+
+/// A pick being worked: the door, the seconds held on it and the seconds the aim has been off it.
+#[derive(Clone, Copy, Debug)]
+struct Hold {
+    cell: (i32, i32),
+    held: f32,
+    off: f32,
+}
 /// What lockpicks add to the roll.
 pub const LOCKPICKS_BONUS: i32 = 1;
 /// The roll a Neutral faction's locked door asks for.
@@ -548,13 +558,29 @@ fn use_door(
     players: Query<&Transform, With<Player>>,
     folk: Query<(&Transform, &Denizen), Without<Corpse>>,
     mut toasts: Toasts,
-    mut picking: Local<Option<((i32, i32), f32)>>,
-    mut spare_rolls: Local<u32>,
+    mut picking: Local<Option<Hold>>,
+    mut spare: Local<(u32, Option<bool>)>,
     mut pending: ResMut<PickInFlight>,
     mut rolls: MessageWriter<RollRequest>,
 ) {
+    let debug = *spare.1.get_or_insert_with(|| std::env::var("FB_DEBUG_PICK").is_ok_and(|v| !v.is_empty() && v != "0"));
+    let held_key = input.pressed(Action::Tertiary);
     let Some(cell) = aimed.0 else {
-        *picking = None;
+        // The aim slips off the door: the hold waits a moment for it to come back, while R is down.
+        let why = match picking.as_mut() {
+            Some(hold) if held_key && hold.off + time.delta_secs() <= PICK_GRACE => {
+                hold.off += time.delta_secs();
+                "aim off the door, waiting"
+            }
+            Some(_) => {
+                *picking = None;
+                if held_key { "aim off the door past the grace" } else { "R released" }
+            }
+            None => "nothing aimed",
+        };
+        if debug && (held_key || picking.is_some()) {
+            info!("pick: {why} (held {:?})", picking.as_ref().map(|h| h.held));
+        }
         return;
     };
     let Some(door) = doors.0.get_mut(&cell) else { return };
@@ -604,30 +630,39 @@ fn use_door(
         toasts.say("The grate can't be picked");
     }
 
-    // Picking: R held at a door that can be picked runs the clock, the roll comes at the end. The
-    // clock starts over when the aim leaves the door and comes back.
+    // Picking: R held at a door that can be picked runs the clock, the roll comes at the end.
     let locked = door.locked(band) && !inside;
-    if pending.0.is_some() || !(locked && lockpicks && !grate && !door.open && input.pressed(Action::Tertiary)) {
+    let eligible = pending.0.is_none() && locked && lockpicks && !grate && !door.open && held_key;
+    if debug && (held_key || picking.is_some()) {
+        let distance = feet.map(|f| f.distance(door.centre));
+        info!(
+            "pick: aimed {cell:?} at {distance:?} units, held {:?}, eligible {eligible} (in flight {}, locked {locked}, picks {lockpicks}, grate {grate}, open {}, R down {held_key})",
+            picking.as_ref().map(|h| h.held),
+            pending.0.is_some(),
+            door.open
+        );
+    }
+    if !eligible {
         *picking = None;
         return;
     }
+    // The time held carries over a slip of the aim off this door and back; another door, or a
+    // pause past the grace, starts over (R released ends it above).
     let held = match *picking {
-        Some((at, held)) if at == cell => held,
-        // Starting over, whether the press began it or the aim came back to the door with R
-        // still down: a slip off the door must not leave the key held for nothing.
+        Some(hold) if hold.cell == cell => hold.held,
         _ => 0.0,
     };
     let held = held + time.delta_secs();
     if held < PICK_SECONDS {
-        *picking = Some((cell, held));
+        *picking = Some(Hold { cell, held, off: 0.0 });
         toasts.say_once("Picking the lock...");
         return;
     }
     *picking = None;
     let Some(dc) = pick_dc_for(door.kind, band) else { return };
     // Without the run's dice (a bare app), a counter of its own keeps each roll different.
-    *spare_rolls += 1;
-    let mut fallback = Mulberry32::new(*spare_rolls ^ cell.0 as u32 ^ (cell.1 as u32) << 8);
+    spare.0 += 1;
+    let mut fallback = Mulberry32::new(spare.0 ^ cell.0 as u32 ^ (cell.1 as u32) << 8);
     let mut dice = dice;
     let dexterity = character.as_deref().map_or(10, Character::dexterity);
     let worn = inventory.as_deref().map_or_else(Vec::new, worn_lockpicking_by_item);
