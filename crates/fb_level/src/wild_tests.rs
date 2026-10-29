@@ -53,6 +53,7 @@ fn nothing_that_was_there_before_moves() {
             // The crystals of a cavern and the lights of its largest, and the niches of stone halls, come after everything else.
             let bare = |mut l: Level| {
                 l.creatures.clear();
+                l.daises.clear();
                 l.crystals.clear();
                 l.niches.clear();
                 l.items.retain(|i| i.family != armory::Family::Crystal);

@@ -136,7 +136,7 @@ pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> T
     let reach = prop_floor_shape(spot.prop, scale).radius();
     let floor = std::iter::once(Vec2::ZERO)
         .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
-        .map(|offset| relief.floor_height(centre.x + offset.x, centre.z + offset.y))
+        .map(|offset| relief.rest_height(centre.x + offset.x, centre.z + offset.y))
         .fold(f32::INFINITY, f32::min);
     Transform::from_translation(Vec3::new(centre.x, floor - low * scale - SINK, centre.z))
         .with_rotation(Quat::from_rotation_y(spot.yaw))
@@ -294,7 +294,7 @@ pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemM
             let reach = spot.radius.max(1.0);
             let floor = std::iter::once(Vec2::ZERO)
                 .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
-                .map(|offset| relief.floor_height(x + offset.x, z + offset.y))
+                .map(|offset| relief.rest_height(x + offset.x, z + offset.y))
                 .fold(f32::INFINITY, f32::min);
             let low = if spot.growth == armory::families::crystal::Growth::Mass { crystal_mount(mesh, spot) } else { low };
             Transform::from_translation(Vec3::new(x, floor - low - SINK, z)).with_rotation(rotation)
@@ -808,7 +808,7 @@ mod tests {
             let low = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
             let transform = prop_transform(&level, spot, low, prop_scale(spot.prop, &Tuning::default()));
             let bottom = points.iter().map(|&p| transform.transform_point(p).y).fold(f32::INFINITY, f32::min);
-            let floor = relief.floor_height(transform.translation.x, transform.translation.z);
+            let floor = relief.rest_height(transform.translation.x, transform.translation.z);
             assert!(bottom <= floor + 1e-3, "prop {index} floats: base {bottom}, floor {floor}");
             assert!(bottom > floor - 0.4, "prop {index} sinks: base {bottom}, floor {floor}");
         }

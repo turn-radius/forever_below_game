@@ -178,6 +178,7 @@ mod tests {
             webs: Vec::new(),
             past: None,
             purposes: Vec::new(),
+            daises: Vec::new(),
         }
     }
 

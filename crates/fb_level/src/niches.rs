@@ -142,7 +142,9 @@ fn takes_niche(level: &Level, finishes: &Finishes, cell: (i32, i32), wall: (i32,
     let by_stairs = level.stairs.iter().any(|s| (s.x as i32 - cell.0).abs().max((s.y as i32 - cell.1).abs()) <= 1);
     // Ashlar only: rubble is laid in rough stones, which have no frame to give a niche.
     let dressed = |c: (i32, i32)| finishes.at(c.0, c.1).is_some_and(|f| f.walls != WallFinish::Rubble);
-    !by_stairs && dressed(cell) && dressed(beside(-1)) && dressed(beside(1)) && floor_with_rock(cell) && floor_with_rock(beside(-1)) && floor_with_rock(beside(1)) && level.cell(front.0, front.1) == Cell::Floor
+    // Never on a dais's wall: the recess would stand on its steps or in its rim.
+    let on_dais = [-1, 0, 1].into_iter().any(|k| level.on_dais(beside(k).0, beside(k).1) || level.on_dais(front.0, front.1));
+    !by_stairs && !on_dais && dressed(cell) && dressed(beside(-1)) && dressed(beside(1)) && floor_with_rock(cell) && floor_with_rock(beside(-1)) && floor_with_rock(beside(1)) && level.cell(front.0, front.1) == Cell::Floor
 }
 
 fn facing_of(wall: (i32, i32)) -> Facing {
@@ -324,7 +326,7 @@ mod tests {
             let before = crate::generate::generate_before_niches(seed, seed, depth, &params);
             assert!(before.niches.is_empty());
             let level = generate(seed, depth);
-            assert_eq!(Level { niches: Vec::new(), ..level }, before, "seed {seed} depth {depth}: the niche step moved something");
+            assert_eq!(Level { niches: Vec::new(), daises: Vec::new(), ..level }, Level { daises: Vec::new(), ..before }, "seed {seed} depth {depth}: the niche step moved something");
         }
     }
 

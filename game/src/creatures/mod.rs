@@ -399,7 +399,7 @@ const GRIME: (f32, f32) = (0.15, 0.4);
 /// face +Z and the spot's yaw is a camera's (0 faces -Z), as for folk.
 pub fn stand_at(level: &Level, spot: &CreatureSpot) -> Transform {
     let [x, _, z] = Level::world(spot.x, spot.y);
-    let y = Relief::new(level).floor_height(x, z);
+    let y = Relief::new(level).rest_height(x, z);
     Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(spot.yaw + std::f32::consts::PI))
 }
 

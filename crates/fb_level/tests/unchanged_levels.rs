@@ -20,6 +20,7 @@ use fb_level::generate;
 fn without_niches(seed: u32, depth: u32) -> fb_level::Level {
     let mut level = generate(seed, depth);
     level.niches.clear();
+    level.daises.clear();
     level
 }
 
@@ -29,7 +30,7 @@ fn all_levels_hash() -> u64 {
     for depth in 1..=4 {
         for seed in 1..=50 {
             // A level above the caverns grows no crystals (#658): the empty list the field prints is not a change.
-            for b in round_floats(&format!("{:?}", without_niches(seed, depth)).replace(", crystals: []", "").replace(", niches: []", "")).bytes() {
+            for b in round_floats(&format!("{:?}", without_niches(seed, depth)).replace(", crystals: []", "").replace(", niches: []", "").replace(", daises: []", "")).bytes() {
                 h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
             }
         }
@@ -155,7 +156,7 @@ fn strip_tastes(text: &str) -> String {
 fn depth_hash(depth: u32) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for seed in 1..=50 {
-        let text = strip_tastes(&round_floats(&format!("{:?}", without_niches(seed, depth)))).replace(", denizen: None", "").replace(", crystals: []", "").replace(", niches: []", "");
+        let text = strip_tastes(&round_floats(&format!("{:?}", without_niches(seed, depth)))).replace(", denizen: None", "").replace(", crystals: []", "").replace(", niches: []", "").replace(", daises: []", "");
         for b in text.bytes() {
             h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
         }
