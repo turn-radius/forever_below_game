@@ -532,6 +532,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("play::Obstacles", "gathered each frame"),
         ("doors::Doors", "the level's doors: in the record"),
         ("dice::Dice", "a roll showing: transient screen state"),
+        ("doors::PickInFlight", "a lock pick whose dice are showing: transient, and cleared when the delve ends"),
         ("dice::DiceStage", "the roll's render image, made when the app starts"),
         ("identify::Identifying", "an identify roll showing: transient"),
         ("talk::Persuading", "a persuasion roll showing: the talk is not saved"),
