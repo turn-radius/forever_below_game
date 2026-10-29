@@ -243,6 +243,8 @@ mod tests {
 
     /// A fingerprint of every banner on a sweep of levels, taken before the wall-face search
     /// became the shared [`crate::walls`] helper: the same seeds hang the same banners.
+    /// Retaken when the Ranger left the factions' outfit tables (#741), which moved the factions
+    /// the banners name.
     #[test]
     fn banner_placement_is_unchanged_by_the_shared_wall_search() {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -261,6 +263,6 @@ mod tests {
                 feed(format!("{:?}{:?}{}", b.faction, b.site, b.room).as_bytes());
             }
         }
-        assert_eq!(hash, 8766096541518196646, "banner fingerprint");
+        assert_eq!(hash, 14462697157998352738, "banner fingerprint");
     }
 }
