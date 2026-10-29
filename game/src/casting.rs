@@ -12,18 +12,32 @@
 //! checks the caster and the terms, spends the mana from [`DelverMana`] and either sends a
 //! [`Casted`] message, which is what a prayer's effect reacts to (#747 gives the light term its
 //! light, reading `cast.written.effect`, `cast.range` and `cast.duration`), or says on screen
-//! why it failed. The HUD shows the chosen prayer, its tier and its cost above the quickslot bar.
+//! why it failed. [`cast_effects`] is the one place a cast does what it says: it reads
+//! `cast.written.effect` and hands the cast to that effect (`"light"` sets Divine Light, a
+//! [`DivineLight`] bauble that follows the caster; the ward, frighten and charm effects join it
+//! the same way). The HUD shows the chosen prayer, its tier and its cost above the quickslot bar.
 
+use armory::build::light::{LightAnchor, glowing};
+use armory::build::parts::Parts;
+use armory::geom::{ItemMesh, Shading, icosphere, torus};
+use armory::material::Rgb;
+use bevy::app::Propagate;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use fb_character::Casting;
 use fb_character::casting::{Cast, CastError, MAX_TIER, Spellbook, cast_with, points};
 
+use crate::carry::given_light;
 use crate::character::{Character, DelverMana};
+use crate::game_clock::GameClock;
+use crate::render::{ItemAppearance, ItemSpawner, ToonMaterial};
+use crate::sparkle::Sparkles;
+use crate::tuning::Tuning;
 use crate::combat::orbs::{OrbCluster, cluster_layout};
 use crate::inventory::{Hovered, Toast};
 use crate::keymap::{Action, ActionInput, Keymap};
 use crate::launch::AppState;
-use crate::play::{DelveSystems, Player, inventory_open, level_has_focus};
+use crate::play::{DelveSystems, EYE_HEIGHT, Player, PlayerCamera, inventory_open, level_has_focus};
 use crate::quickslots::{Quickslots, SLOTS};
 use crate::rules::GameRules;
 use crate::ui::{BRIGHT, UiFonts, hud};
@@ -51,6 +65,10 @@ impl Plugin for CastingPlugin {
                     bind_ability_hovered.run_if(inventory_open),
                     debug_cast,
                     cast_requests,
+                    cast_effects,
+                    dress_baubles.run_if(resource_exists::<Assets<ToonMaterial>>),
+                    follow_the_caster,
+                    fade_the_light,
                     spawn_hud,
                     show_chosen,
                     show_slot_labels,
@@ -243,6 +261,160 @@ fn cast_requests(
     }
 }
 
+/// The colour of Divine Light: a soft pale gold, not a flame's orange.
+pub const HOLY_LIGHT: Rgb = Rgb::hex(0xfff0c0);
+/// The pearl at the bauble's heart, nearly white.
+const HOLY_CORE: Rgb = Rgb::hex(0xffeeb0);
+/// How high above the caster's eye the bauble floats, world units.
+const BAUBLE_RISE: f32 = 1.6;
+/// How far ahead of the caster it floats, world units.
+const BAUBLE_AHEAD: f32 = 9.0;
+/// How far to the right of where they look, world units, so it does not sit on the aim.
+const BAUBLE_ASIDE: f32 = 3.0;
+/// How quickly it catches up with the caster, per second.
+const BAUBLE_FOLLOW: f32 = 5.0;
+/// Game seconds a bauble takes to fade out at the end of its life, at most.
+const FADE_SECONDS: f64 = 20.0;
+/// Flicker of the holy light: nearly steady.
+const HOLY_FLICKER: f32 = 0.08;
+
+/// The bauble a cast of Divine Light leaves floating by the caster: a real light in the level's
+/// lighting ([`crate::carry::GivenLight`]) of `feet` reach, until `expires` (game seconds),
+/// fading at the end.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(DespawnOnExit<AppState> = DespawnOnExit(AppState::Delving))]
+pub struct DivineLight {
+    /// Feet the light reaches: the cast's range.
+    pub feet: f32,
+    /// The game time it goes out, seconds.
+    pub expires: f64,
+    /// Game seconds it fades over at the end.
+    pub fade: f64,
+    /// The light's intensity at full, set when it first lights.
+    pub peak: f32,
+}
+
+impl DivineLight {
+    /// How bright it is at game time `now`: 1 until it begins to fade, then down to 0.
+    pub fn brightness(&self, now: f64) -> f32 {
+        if self.fade <= 0.0 {
+            return if now < self.expires { 1.0 } else { 0.0 };
+        }
+        ((self.expires - now) / self.fade).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// The reach in feet of the light cast on the delver, if one burns: what
+/// [`crate::character::Character::gear_with_spell`] counts as a carried light.
+pub fn spell_light_feet<'a>(lights: impl IntoIterator<Item = &'a DivineLight>) -> Option<f64> {
+    lights.into_iter().map(|l| l.feet as f64).reduce(f64::max)
+}
+
+/// Does what each cast says. This is the one place a prayer's effect is read, from
+/// `cast.written.effect`; a new effect is another arm.
+fn cast_effects(
+    mut casts: MessageReader<Casted>,
+    mut commands: Commands,
+    clock: Option<Res<GameClock>>,
+    tuning: Option<Res<Tuning>>,
+    players: Query<&GlobalTransform, With<Player>>,
+    cameras: Query<&GlobalTransform, With<PlayerCamera>>,
+    old: Query<Entity, With<DivineLight>>,
+) {
+    for Casted(cast) in casts.read() {
+        if cast.written.effect == "light" {
+            let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+            let tuning = tuning.as_deref().cloned().unwrap_or_default();
+            // Recasting replaces the light: the old one goes out, never two.
+            for light in &old {
+                commands.entity(light).despawn();
+            }
+            let at = players.iter().next().map_or(Vec3::Y * (EYE_HEIGHT + BAUBLE_RISE), |p| bauble_goal(p, cameras.iter().next()));
+            set_divine_light(&mut commands, cast, now, at, &tuning);
+        }
+    }
+}
+
+/// The bauble lit for `cast` at `at`.
+fn set_divine_light(commands: &mut Commands, cast: &fb_character::casting::Cast, now: f64, at: Vec3, tuning: &Tuning) {
+    let anchor = LightAnchor::feet([0.0; 3], HOLY_LIGHT, cast.range as f32, HOLY_FLICKER);
+    let lit = given_light(anchor, bevy::camera::Exposure::INDOOR, &tuning.light);
+    let peak = lit.0.intensity;
+    commands.spawn((
+        Name::new(format!("Divine Light, tier {}", cast.tier)),
+        DivineLight { feet: cast.range as f32, expires: now + cast.duration, fade: FADE_SECONDS.min(cast.duration * 0.25), peak },
+        lit,
+        Sparkles { color: Color::srgb(1.0, 0.92, 0.6), count: 5, min: Vec3::splat(-0.6), max: Vec3::splat(0.6) },
+        Transform::from_translation(at),
+        Visibility::default(),
+    ));
+}
+
+/// Where the bauble floats for a caster at `player`: above the eye, a little ahead and aside.
+fn bauble_goal(player: &GlobalTransform, camera: Option<&GlobalTransform>) -> Vec3 {
+    let (forward, right) = match camera {
+        Some(c) => {
+            let f = Vec3::new(c.forward().x, 0.0, c.forward().z).normalize_or(Vec3::NEG_Z);
+            (f, Vec3::new(-f.z, 0.0, f.x))
+        }
+        None => (Vec3::NEG_Z, Vec3::X),
+    };
+    player.translation() + Vec3::Y * (EYE_HEIGHT + BAUBLE_RISE) + forward * BAUBLE_AHEAD + right * BAUBLE_ASIDE
+}
+
+/// The bauble drifts after its caster, easing toward its place and bobbing a little.
+fn follow_the_caster(
+    time: Res<Time>,
+    players: Query<&GlobalTransform, With<Player>>,
+    cameras: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut baubles: Query<&mut Transform, (With<DivineLight>, Without<Player>)>,
+) {
+    let Some(player) = players.iter().next() else { return };
+    let goal = bauble_goal(player, cameras.iter().next()) + Vec3::Y * (time.elapsed_secs() * 2.0).sin() * 0.25;
+    let ease = 1.0 - (-BAUBLE_FOLLOW * time.delta_secs()).exp();
+    for mut at in &mut baubles {
+        at.translation = at.translation.lerp(goal, ease);
+    }
+}
+
+/// Dims each bauble toward its end and puts it out when its time is up.
+fn fade_the_light(mut commands: Commands, clock: Option<Res<GameClock>>, mut baubles: Query<(Entity, &DivineLight, &mut PointLight, &mut Transform)>) {
+    let Some(clock) = clock else { return };
+    let now = clock.game_seconds();
+    for (entity, bauble, mut light, mut at) in &mut baubles {
+        let k = bauble.brightness(now);
+        if k <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let intensity = bauble.peak * k;
+        if light.intensity != intensity {
+            light.intensity = intensity;
+        }
+        at.scale = Vec3::splat(0.4 + 0.6 * k);
+    }
+}
+
+/// The bauble's shape: a glowing pearl in two crossed haloes, all unoutlined glow.
+pub fn bauble_mesh() -> ItemMesh {
+    let mut parts = Parts::new();
+    parts.add_look("pearl", icosphere(0.45, 3), glowing(HOLY_CORE, 1.0));
+    for (i, tilt) in [0.5_f32, 1.9].into_iter().enumerate() {
+        let mut halo = torus(0.75, 0.035, 40, 6, Shading::SMOOTH);
+        halo.rotate_x(tilt);
+        halo.rotate_y(i as f32 * 1.1);
+        parts.add_look(if i == 0 { "halo" } else { "halo_cross" }, halo, glowing(HOLY_LIGHT, 1.0));
+    }
+    parts.finish()
+}
+
+/// Gives each new bauble its glowing shape, with no shadow of its own to black out its light.
+fn dress_baubles(new: Query<Entity, Added<DivineLight>>, mut spawner: ItemSpawner) {
+    for bauble in &new {
+        spawner.spawn(&bauble_mesh(), &ItemAppearance::default()).insert((Propagate(NotShadowCaster), ChildOf(bauble)));
+    }
+}
+
 /// `FB_PRAY=1` casts once, a moment into the delve; `FB_PRAY_TIER=2` chooses the tier first and
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. For captures.
 fn debug_cast(mut frames: Local<u32>, mut chosen: ResMut<Chosen>, mut requests: MessageWriter<CastRequest>, mut players: Query<&mut DelverMana, With<Player>>) {
@@ -330,13 +502,14 @@ mod tests {
             .init_resource::<Toast>()
             .init_resource::<ScreenOpen>()
             .init_resource::<GameRules>()
+            .init_resource::<crate::game_clock::GameClock>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_plugins(CastingPlugin);
         run_delve_systems_while_delving(&mut app);
         let mut character = Character::roll(1);
         character.class = if class_seed_cleric { crate::character::Class::Cleric } else { crate::character::Class::Fighter };
         app.insert_resource(character);
-        let player = app.world_mut().spawn((Player, DelverSpellbook::default(), DelverMana(fb_character::Mana { points: mana, max: 10.0 }))).id();
+        let player = app.world_mut().spawn((Player, GlobalTransform::default(), DelverSpellbook::default(), DelverMana(fb_character::Mana { points: mana, max: 10.0 }))).id();
         app.update();
         (app, player)
     }
@@ -445,5 +618,102 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 1);
         assert_eq!(app.world().resource::<Chosen>().name, "Divine Light");
+    }
+
+    fn lit(app: &mut App) -> Vec<(DivineLight, crate::carry::GivenLight, Vec3)> {
+        app.world_mut().query::<(&DivineLight, &crate::carry::GivenLight, &Transform)>().iter(app.world()).map(|(d, g, t)| (*d, *g, t.translation)).collect()
+    }
+
+    fn cast_at_tier(app: &mut App, tier: u8) {
+        app.world_mut().resource_mut::<Chosen>().tier = tier;
+        press(app, KeyCode::KeyC);
+    }
+
+    #[test]
+    fn divine_light_reaches_twenty_forty_and_sixty_feet_by_tier() {
+        for (tier, units) in [(1, 61.0), (2, 122.0), (3, 183.0)] {
+            let (mut app, _) = delve(true, 20.0);
+            cast_at_tier(&mut app, tier);
+            let lights = lit(&mut app);
+            assert_eq!(lights.len(), 1, "tier {tier}");
+            assert!((lights[0].1.anchor.radius - units).abs() < 0.5, "tier {tier}: {}", lights[0].1.anchor.radius);
+            assert_eq!(lights[0].0.feet, 20.0 * tier as f32);
+        }
+    }
+
+    #[test]
+    fn the_light_is_pale_gold_and_a_real_point_light() {
+        let (mut app, _) = delve(true, 10.0);
+        cast_at_tier(&mut app, 1);
+        let (light, given) = app.world_mut().query_filtered::<(&PointLight, &crate::carry::GivenLight), With<DivineLight>>().single(app.world()).map(|(l, g)| (l.clone(), *g)).unwrap();
+        assert!(light.intensity > 0.0 && light.range > given.anchor.radius);
+        let Rgb(r, g, b) = given.anchor.color;
+        assert!(r >= g && g > b && b > 0.4, "pale gold, not orange: {r} {g} {b}");
+    }
+
+    #[test]
+    fn the_light_follows_the_player() {
+        let (mut app, player) = delve(true, 10.0);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)));
+        cast_at_tier(&mut app, 1);
+        let before = lit(&mut app)[0].2;
+        let to = Vec3::new(120.0, 0.0, -40.0);
+        app.world_mut().entity_mut(player).insert(GlobalTransform::from_translation(to));
+        for _ in 0..120 {
+            app.update();
+        }
+        let after = lit(&mut app)[0].2;
+        assert!(before.distance(to) > 60.0, "it began elsewhere");
+        let hover = Vec3::new(after.x - to.x, after.y - to.y, after.z - to.z);
+        assert!((hover.xz().length() - BAUBLE_AHEAD.hypot(BAUBLE_ASIDE)).abs() < 1.0 && (hover.y - (EYE_HEIGHT + BAUBLE_RISE)).abs() < 1.0, "it arrived above and a little ahead: {hover}");
+    }
+
+    #[test]
+    fn the_light_goes_out_when_its_time_is_up() {
+        let (mut app, _) = delve(true, 10.0);
+        cast_at_tier(&mut app, 1);
+        let duration = lit(&mut app)[0].0.expires;
+        assert!(duration > 0.0);
+        app.world_mut().resource_mut::<GameClock>().advance(duration * 0.5);
+        app.update();
+        assert_eq!(lit(&mut app).len(), 1, "still burning at half time");
+        app.world_mut().resource_mut::<GameClock>().advance(duration);
+        app.update();
+        assert!(lit(&mut app).is_empty(), "out");
+    }
+
+    #[test]
+    fn the_light_fades_before_it_goes() {
+        let (mut app, _) = delve(true, 10.0);
+        cast_at_tier(&mut app, 1);
+        let bauble = lit(&mut app)[0].0;
+        app.world_mut().resource_mut::<GameClock>().advance(bauble.expires - bauble.fade * 0.5);
+        app.update();
+        let now = app.world_mut().query_filtered::<&PointLight, With<DivineLight>>().single(app.world()).unwrap().intensity;
+        assert!(now > 0.0 && now < bauble.peak * 0.6, "half dimmed: {now} of {}", bauble.peak);
+    }
+
+    #[test]
+    fn recasting_replaces_the_light() {
+        let (mut app, _) = delve(true, 10.0);
+        cast_at_tier(&mut app, 1);
+        cast_at_tier(&mut app, 2);
+        let lights = lit(&mut app);
+        assert_eq!(lights.len(), 1, "never two");
+        assert_eq!(lights[0].0.feet, 40.0);
+    }
+
+    #[test]
+    fn a_cast_light_counts_as_the_carried_light() {
+        let (mut app, _) = delve(true, 10.0);
+        let character = Character::roll(3);
+        let inventory = crate::inventory::Inventory::default();
+        assert_eq!(character.derive(&inventory).light, 0.0);
+        cast_at_tier(&mut app, 3);
+        let feet = spell_light_feet(app.world_mut().query::<&DivineLight>().iter(app.world()));
+        assert_eq!(feet, Some(60.0));
+        let rules = fb_character::rules::defaults();
+        assert_eq!(character.derive_lit(rules, &inventory, feet).light, 60.0);
+        assert_eq!(character.gear_with_spell(&inventory, feet).light, 60.0);
     }
 }

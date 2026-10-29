@@ -360,9 +360,21 @@ impl Character {
         self.loadout(inventory).gear()
     }
 
+    /// [`Character::gear`] with a light cast on them (Divine Light) counted among the carried
+    /// lights: of `spell` feet, if one burns.
+    pub fn gear_with_spell(&self, inventory: &Inventory, spell: Option<f64>) -> Gear {
+        self.loadout_with_spell(inventory, spell).gear()
+    }
+
     /// [`Character::gear`] with each item's name, so the numbers it sums can be explained
     /// ([`Loadout::capacity`] and the rest).
     pub fn loadout(&self, inventory: &Inventory) -> Loadout {
+        self.loadout_with_spell(inventory, None)
+    }
+
+    /// [`Character::loadout`] with a light of `spell` feet cast on them, which burns as long as
+    /// the spell holds and so adds no burn time of its own.
+    pub fn loadout_with_spell(&self, inventory: &Inventory, spell: Option<f64>) -> Loadout {
         let mut loadout = Loadout::new(self.folk.race().label.to_string(), self.folk.race().dv as f64);
         let equipped = inventory.equipped();
         // Block chance counts only with a shield held in the off hand: the gloves and charms that
@@ -392,6 +404,9 @@ impl Character {
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
             loadout = loadout.carrying(&item.name, CarriedLight { reach: item.profile.stats.light as f64, burn_time: item.profile.stats.burn_time as f64 });
+        }
+        if let Some(reach) = spell {
+            loadout = loadout.carrying("Divine Light", CarriedLight { reach, burn_time: 1.0 });
         }
         loadout
     }
@@ -504,11 +519,16 @@ impl Character {
 
     /// [`Character::derive`] under `rules`.
     pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
+        self.derive_lit(rules, inventory, None)
+    }
+
+    /// [`Character::derive_with`] with a light of `spell` feet cast on them ([`Character::gear_with_spell`]).
+    pub fn derive_lit(&self, rules: &Rules, inventory: &Inventory, spell: Option<f64>) -> Derived {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
         let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = self.load_explained(inventory).value() as f32;
-        let gear = self.gear(inventory);
+        let gear = self.gear_with_spell(inventory, spell);
         let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
         let load_band = LoadBand::from_load_with(rules, load as f64, capacity as f64);
         Derived {
