@@ -272,14 +272,14 @@ pub(crate) fn place_niches(level: &Level) -> Vec<NicheSpot> {
     niches
 }
 
-/// What a niche holds, from a roll of `0..1`: more than half stand empty.
+/// What a niche holds, from a roll of `0..1`: over two in five stand empty and one in five holds an urn.
 fn contents_for(pick: f64) -> NicheContents {
     const TABLE: [(NicheContents, f64); 5] = [
-        (NicheContents::Empty, 0.55),
+        (NicheContents::Empty, 0.44),
         (NicheContents::Candle, 0.2),
         (NicheContents::Skull, 0.08),
         (NicheContents::Bones, 0.08),
-        (NicheContents::Urn, 0.09),
+        (NicheContents::Urn, 0.20),
     ];
     let mut edge = 0.0;
     for (contents, share) in TABLE {
