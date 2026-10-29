@@ -284,7 +284,7 @@ const HEART_SIZE: f32 = 4.2;
 const MOTE_SIZE: f32 = 0.5;
 /// How quickly it catches up with the caster, per second.
 const BAUBLE_FOLLOW: f32 = 5.0;
-/// Game seconds a bauble takes to gutter out at the end of its life, at most: about ten real
+/// Game seconds a bauble takes to sputter out at the end of its life, at most: about ten real
 /// seconds at the usual clock, long enough to see it dying.
 const FADE_SECONDS: f64 = 120.0;
 /// Real seconds a fresh bauble takes to gather and bloom.
@@ -307,7 +307,7 @@ const PRECESS: f32 = 0.4;
 
 /// The bauble a cast of Divine Light leaves floating by the caster: a real light in the level's
 /// lighting ([`crate::carry::GivenLight`]) of `feet` reach, until `expires` (game seconds),
-/// guttering out at the end.
+/// sputtering out at the end.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 #[require(DespawnOnExit<AppState> = DespawnOnExit(AppState::Delving))]
 pub struct DivineLight {
@@ -631,7 +631,7 @@ fn shimmer_baubles(
 /// `FB_PRAY=1` casts once, a moment into the delve; `FB_PRAY_TIER=2` chooses the tier first and
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. `FB_PRAY_TURN=180` turns the
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
-/// the light last only that many game seconds, to see it gutter out. For captures.
+/// the light last only that many game seconds, to see it sputter out. For captures.
 #[allow(clippy::type_complexity)]
 fn debug_cast(
     mut frames: Local<u32>,
