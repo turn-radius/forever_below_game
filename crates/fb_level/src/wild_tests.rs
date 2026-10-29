@@ -50,10 +50,11 @@ fn nothing_that_was_there_before_moves() {
             assert!(kept.iter().all(|k| rest.any(|o| o == k)), "seed {seed} depth {depth}: creatures moved");
             let trolls = |l: &[CreatureSpot]| l.iter().filter(|c| c.species == Species::Troll).count();
             assert_eq!(trolls(&kept), trolls(&old.creatures), "seed {seed} depth {depth}: a troll made way");
-            // The crystals of a cavern and the lights of its largest come after everything else.
+            // The crystals of a cavern and the lights of its largest, and the niches of stone halls, come after everything else.
             let bare = |mut l: Level| {
                 l.creatures.clear();
                 l.crystals.clear();
+                l.niches.clear();
                 l.items.retain(|i| i.family != armory::Family::Crystal);
                 l.lights.retain(|light| light.kind != crate::LightKind::Crystal);
                 l

@@ -60,6 +60,7 @@ impl Plugin for PropsPlugin {
                 (
                     lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
                     lay_out_banners.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    crate::niches::lay_out_niches.run_if(resource_exists_and_changed::<CurrentLevel>),
                     lay_out_crystals.run_if(resource_exists_and_changed::<CurrentLevel>),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
