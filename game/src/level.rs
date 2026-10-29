@@ -1259,10 +1259,11 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let want = std::env::var("FB_DEBUG_NICHE").ok();
             let holds = |n: &fb_level::NicheSpot| format!("{:?}", n.contents).to_lowercase();
             let in_room = |n: &fb_level::NicheSpot| level.rooms.iter().any(|r| r.contains(n.x, n.y));
-            let tall = |n: &fb_level::NicheSpot| n.spring - n.sill > 7.0;
+            let tall = |n: &fb_level::NicheSpot| n.crown() > fb_level::niches::CROWN_LIMIT + 1e-3;
             let spot = match want.as_deref() {
                 Some(w) if w.parse::<usize>().is_ok() => level.niches.get(w.parse::<usize>().unwrap()),
-                Some("tall") => level.niches.iter().find(|n| tall(n)),
+                Some("tall") => level.niches.iter().find(|n| tall(n) && n.style == fb_level::NicheStyle::Grand).or_else(|| level.niches.iter().find(|n| tall(n))),
+                Some("urn") => level.niches.iter().find(|n| holds(n) == "urn" && !fb_items::roll_urn_contents(n.seed, fb_items::Odds::loot(level.depth)).is_empty()).or_else(|| level.niches.iter().find(|n| holds(n) == "urn")),
                 Some("moulded") => level.niches.iter().find(|n| n.style == fb_level::NicheStyle::Moulded),
                 Some("grand") => level.niches.iter().find(|n| n.style == fb_level::NicheStyle::Grand),
                 Some("corridor") => level.niches.iter().find(|n| !in_room(n)),

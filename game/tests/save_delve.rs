@@ -84,7 +84,13 @@ use common::run;
 
 /// A new delve in level 1207, a second in, which may save.
 fn delving(file: &PathBuf) -> App {
+    delving_in(file, 1207)
+}
+
+/// A new delve in the world of `seed`, a second in, which may save.
+fn delving_in(file: &PathBuf, seed: u32) -> App {
     let mut app = headless_game(file);
+    app.insert_resource(NewDelveSeed(Some(seed)));
     run(&mut app, 30);
     app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
@@ -280,6 +286,8 @@ struct Standing {
     floor: Vec<(ItemSpot, fb_items::Item)>,
     camps: Vec<fb_items::camp::Camp>,
     containers: Vec<(usize, bool, Vec<(String, u32)>)>,
+    /// The urns in the niches, by niche, with what is left in each.
+    urns: Vec<(usize, Vec<(String, u32)>)>,
     creatures: Vec<(u32, i32, bool)>,
 }
 
@@ -297,9 +305,28 @@ fn standing(app: &mut App) -> Standing {
         .map(|(p, c)| (p.index, c.opened, inventory.grid(c.id).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect()))
         .collect();
     containers.sort_by_key(|c| c.0);
+    let mut urns: Vec<_> = world
+        .query::<(&forever_below::niches::NichePiece, &Container)>()
+        .iter(world)
+        .map(|(p, c)| (p.index, inventory.grid(c.id).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect()))
+        .collect();
+    urns.sort_by_key(|u| u.0);
     let mut creatures: Vec<_> = world.query::<(&Critter, &Health, Has<Corpse>)>().iter(world).map(|(c, h, dead)| (c.spot.seed, h.hp, dead)).collect();
     creatures.sort();
-    Standing { floor, camps, containers, creatures }
+    Standing { floor, camps, containers, urns, creatures }
+}
+
+/// Takes the first thing out of the first urn in a niche of this level that holds anything, if
+/// there is one. Returns whether it did.
+fn rob_an_urn(app: &mut App) -> bool {
+    let world = app.world_mut();
+    let inventory = world.resource::<Inventory>().clone();
+    let mut urns: Vec<_> = world.query::<(&forever_below::niches::NichePiece, &Container)>().iter(world).map(|(p, c)| (p.index, *c)).collect();
+    urns.sort_by_key(|u| u.0);
+    let Some((_, urn)) = urns.into_iter().find(|(_, c)| inventory.contents_count(c.id) >= 1) else { return false };
+    let taken = inventory.grid(urn.id).unwrap().entries()[0].id;
+    world.resource_mut::<Inventory>().stow(taken).ok();
+    true
 }
 
 /// A delve on three levels with something changed on each, ended by lying down in a pitched
@@ -339,6 +366,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     run(&mut app, 5);
     let taken = app.world().resource::<Inventory>().grid(container.id).unwrap().entries()[0].id;
     app.world_mut().resource_mut::<Inventory>().stow(taken).ok();
+    rob_an_urn(&mut app);
     go(&mut app, StairKind::Down);
 
     // Level 2: a sack with a dagger in it set down.
@@ -352,6 +380,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
         sack
     };
     set_down_at(&mut app, sack, at, 0.1);
+    rob_an_urn(&mut app);
     go(&mut app, StairKind::Down);
 
     // Level 3: a tent pitched, and the delve changed in every way it can be.
@@ -393,6 +422,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     }
     run(&mut app, 5);
 
+    rob_an_urn(&mut app);
     // Lie down: F, and one frame.
     look_down_at_camp(&mut app, feet, forward, 0.6);
     key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
@@ -424,6 +454,44 @@ fn resumed(file: &PathBuf) -> (App, Snapshot) {
     }
     let snap = snapshot(&mut app);
     (app, snap)
+}
+
+/// An urn in a niche, robbed, stays robbed in a delve saved and resumed: the world of 4 has an urn
+/// with something in it on its second level.
+#[test]
+fn an_urn_robbed_in_a_niche_stays_robbed_in_a_saved_delve() {
+    let file = scratch("urn");
+    let mut app = delving_in(&file, 4);
+    go(&mut app, StairKind::Down);
+    let held = |app: &mut App| -> Vec<(usize, usize)> {
+        let world = app.world_mut();
+        let inventory = world.resource::<Inventory>().clone();
+        let mut urns: Vec<_> = world.query::<(&forever_below::niches::NichePiece, &Container)>().iter(world).map(|(p, c)| (p.index, inventory.contents_count(c.id))).collect();
+        urns.sort();
+        urns
+    };
+    let before = held(&mut app);
+    assert!(before.iter().any(|u| u.1 > 0), "an urn with something in it: {before:?}");
+    assert!(rob_an_urn(&mut app));
+    let after = held(&mut app);
+    assert_ne!(before, after, "something came out of an urn");
+    let lying = standing(&mut app);
+
+    let (feet, forward) = set_camp_where(&mut app, "Tent", 40_010);
+    look_down_at_camp(&mut app, feet, forward, 0.6);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    assert!(app.world().resource::<Asleep>().0.is_some(), "asleep: {}", app.world().resource::<forever_below::inventory::Toast>().text);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Released);
+
+    let (mut resumed_app, _) = resumed(&file);
+    let mut frames = 0;
+    while !resumed_app.world().resource::<forever_below::loading::LayoutTurn>().done() && frames < 60 {
+        resumed_app.update();
+        frames += 1;
+    }
+    assert_eq!(held(&mut resumed_app), after, "what was taken from the urn is still gone, and the rest is still there");
+    assert_eq!(standing(&mut resumed_app).urns, lying.urns);
 }
 
 #[test]
@@ -465,6 +533,7 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     }
     assert_eq!(now.camps, lying.camps, "the tent is still pitched");
     assert_eq!(now.containers, lying.containers, "the chests");
+    assert_eq!(now.urns, lying.urns, "the urns in the niches, and what was taken from them");
     assert_eq!(now.creatures, lying.creatures, "the creatures, hurt or dead");
     // By now the rats of this level may have come for the sleeper. Let them be, and walk up.
     let delver = player(&mut app);

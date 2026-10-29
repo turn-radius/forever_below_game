@@ -1531,8 +1531,22 @@ mod tests {
             let level = fb_level::generate(seed, 2);
             out.extend(level.niches.iter().map(|n| (level.clone(), *n)));
         }
-        assert!(out.len() >= 8, "{} niches", out.len());
+        // And a few tall ones, which stand to the vault.
+        let mut tall = 0;
+        for seed in 13..=120 {
+            let level = fb_level::generate(seed, 2);
+            if level.niches.iter().any(is_tall) && tall < 3 {
+                out.extend(level.niches.iter().filter(|n| is_tall(n)).map(|n| (level.clone(), *n)));
+                tall += 1;
+            }
+        }
+        assert!(out.len() >= 8 && tall > 0, "{} niches, {tall} tall levels", out.len());
         out
+    }
+
+    /// Whether the niche is taller than the ordinary ones can be.
+    fn is_tall(n: &fb_level::NicheSpot) -> bool {
+        n.crown() > niches::CROWN_LIMIT + 1e-3
     }
 
     /// The niche's opening on its wall: the plane's middle on the floor, the wall's `u` and out
@@ -1620,7 +1634,10 @@ mod tests {
     #[test]
     fn the_dressing_covers_the_wall_right_down_to_the_arch() {
         let mut checked = 0;
-        for seed in [2, 36, 3, 11, 1, 4, 6, 12, 15, 20] {
+        // The levels with niches already looked at, and the first few with a tall one.
+        let tall_seeds: Vec<u32> = (21..=120u32).filter(|&seed| crate::travel::Abyss::new(seed).level_at(2).niches.iter().any(is_tall)).take(3).collect();
+        assert!(!tall_seeds.is_empty(), "tall niches turn up");
+        for seed in [2, 36, 3, 11, 1, 4, 6, 12, 15, 20].into_iter().chain(tall_seeds) {
             let level = crate::travel::Abyss::new(seed).level_at(2);
             let view = CellView::new(&level);
             let mesh = level_mesh(&view, view.bounds());
