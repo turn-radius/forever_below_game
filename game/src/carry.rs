@@ -153,7 +153,7 @@ impl Plugin for CarryPlugin {
             .add_systems(
                 Update,
                 (
-                    lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    lay_out_items.run_if(crate::loading::laid_out_at(2)),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
                     (widen_view_models, rescale_floor_items, reshimmer_floor_items, resparkle_floor_items).run_if(resource_changed::<Tuning>),

@@ -134,6 +134,9 @@ impl Plugin for TitlePlugin {
         if !app.is_plugin_added::<crate::ui::InterfaceScalePlugin>() {
             app.add_plugins(crate::ui::InterfaceScalePlugin);
         }
+        if !app.is_plugin_added::<crate::loading::LoadingPlugin>() {
+            app.add_plugins(crate::loading::LoadingPlugin);
+        }
         // The creator's paper doll draws its slots' icons and turns its seal as the inventory's does.
         app.add_plugins(preview::PreviewPlugin)
             .init_resource::<crate::inventory::IconCache>()
@@ -169,7 +172,8 @@ impl Plugin for TitlePlugin {
                     build_panel,
                 )
                     .chain()
-                    .run_if(in_state(AppState::Title)),
+                    .run_if(in_state(AppState::Title))
+                    .run_if(not(resource_exists::<crate::loading::StartingDelve>)),
             )
             .add_systems(Update, mark_chosen.before(light_hovered).run_if(in_state(AppState::Title)));
     }
@@ -313,7 +317,6 @@ fn resume_saved_delve(
     input: ActionInput,
     mut chosen: MessageReader<MenuCommand>,
     mut saved: ResMut<SavedGame>,
-    mut next: ResMut<NextState<AppState>>,
     page: Res<MenuPage>,
     draft: Option<Res<Draft>>,
     prompt: Res<ReplacePrompt>,
@@ -323,7 +326,7 @@ fn resume_saved_delve(
     if (clicked || enter)
         && let Some(delve) = saved.delve.take()
     {
-        crate::save::begin_resume(&mut commands, &mut next, *delve);
+        crate::save::begin_resume(&mut commands, *delve);
     }
 }
 
@@ -539,8 +542,21 @@ mod tests {
             .insert_resource(NewDelveSeed(seed))
             .add_message::<MenuCommand>()
             .add_message::<bevy::input::keyboard::KeyboardInput>()
-            .add_systems(Update, (title_controls, resume_saved_delve, run_creator).chain().run_if(in_state(AppState::Title)));
+            .add_plugins(crate::loading::LoadingPlugin)
+            .add_systems(Update, (title_controls, resume_saved_delve, run_creator).chain().run_if(in_state(AppState::Title)).run_if(not(resource_exists::<crate::loading::StartingDelve>)));
         app
+    }
+
+    /// Steps until the delve being made behind the loading screen has begun (its level is made
+    /// off the main thread, so the frames it takes are not counted).
+    fn settle(app: &mut App) {
+        let started = std::time::Instant::now();
+        while app.world().get_resource::<crate::loading::StartingDelve>().is_some() || app.world().get_resource::<NextState<AppState>>().is_some_and(|n| matches!(n, NextState::Pending(_))) {
+            assert!(started.elapsed().as_secs() < 120, "the level was not made in two minutes");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.update();
+        }
+        app.update();
     }
 
     fn state(app: &App) -> AppState {
@@ -630,6 +646,7 @@ mod tests {
         app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
         app.update();
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         assert_eq!(app.world().resource::<CurrentLevel>().0.seed, 42);
         let delver = chosen(&app).expect("the delve begins as the drafted delver");
@@ -646,6 +663,7 @@ mod tests {
         assert!(app.world().get_resource::<Draft>().is_some());
         tap(&mut app, KeyCode::Enter);
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         assert!(app.world().get_resource::<CurrentLevel>().is_some());
     }
@@ -684,6 +702,7 @@ mod tests {
             app.world_mut().write_message(MenuCommand::Continue);
             app.update();
             app.update();
+            settle(&mut app);
             assert_eq!(state(&app), AppState::Delving);
             assert_eq!(chosen(&app), Some(last.clone()));
             levels.push(app.world().resource::<CurrentLevel>().0.seed);
@@ -722,6 +741,7 @@ mod tests {
         app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
         app.update();
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         assert!(chosen(&app).is_some());
     }
@@ -800,6 +820,7 @@ mod tests {
         // With no question up, Enter resumes.
         tap(&mut app, KeyCode::Enter);
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         assert!(app.world().get_resource::<crate::save::ResumeDelve>().is_some());
         assert!(path.exists() && app.world().get_resource::<Draft>().is_none());
@@ -815,6 +836,7 @@ mod tests {
         app.world_mut().write_message(MenuCommand::Continue);
         app.update();
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         assert!(!path.exists(), "the saved delve was replaced");
         assert!(app.world().resource::<crate::save::Saveable>().0, "and the new delve may save");
@@ -828,6 +850,7 @@ mod tests {
         app.world_mut().write_message(MenuCommand::Continue);
         app.update();
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         assert!(path.exists(), "the save is left alone");
         assert!(!app.world().resource::<crate::save::Saveable>().0);
@@ -840,6 +863,7 @@ mod tests {
         app.world_mut().write_message(MenuCommand::ResumeDelve);
         app.update();
         app.update();
+        settle(&mut app);
         assert_eq!(state(&app), AppState::Delving);
         let level = &app.world().resource::<CurrentLevel>().0;
         assert_eq!((level.depth, level.seed), (saved.depth, Abyss::new(saved.run_seed).level_at(saved.depth).seed));

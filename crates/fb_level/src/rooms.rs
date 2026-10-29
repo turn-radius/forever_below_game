@@ -166,6 +166,7 @@ mod tests {
             roles: vec![],
             props: vec![],
             banners: Vec::new(),
+            niches: Vec::new(),
             crystals: Vec::new(),
             creatures: vec![],
             stairs: vec![],

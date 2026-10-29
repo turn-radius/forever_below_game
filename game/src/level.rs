@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|wall|gem|brazier|glowcaps|hall|vault|role|banner|cells|wide|dais|ondais` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|wall|gem|brazier|glowcaps|hall|vault|role|banner|niche|cells|wide|dais|ondais` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or in the aisle of the first cell block looking at its bars (`cells`), or at the end of the longest stretch of corridor two cells wide or more, looking down it (`wide`), or at the dais `FB_DEBUG_DAIS` names (`throne`, `shrine`, `platform`, `sunk`; `FB_DEBUG_DAIS_NTH` skips some) from its open side (`dais`) or standing on its top (`ondais`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or the niche `FB_DEBUG_NICHE=<n or empty|candle|skull|bones|urn|tall|moulded|grand|corridor>` names (`niche`), or in the aisle of the first cell block looking at its bars (`cells`), or at the end of the longest stretch of corridor two cells wide or more, looking down it (`wide`), or at the dais `FB_DEBUG_DAIS` names (`throne`, `shrine`, `platform`, `sunk`; `FB_DEBUG_DAIS_NTH` skips some) from its open side (`dais`) or standing on its top (`ondais`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -29,6 +29,7 @@ use fb_level::{CELL, Level, LightKind, StairKind};
 
 use crate::capture::FrameCapturePlugin;
 use crate::light::{Torch, cast_shadows, point_light};
+use crate::loading::laid_out_at;
 use crate::play::{BlockedCells, CurrentLevel, EYE_HEIGHT, Player, PlayerCamera};
 use crate::audio::sound_effect;
 use crate::play::DelveSystems;
@@ -52,7 +53,11 @@ impl Plugin for LevelPlugin {
             // delve, then each one they travel to ([`crate::travel`]), as the folk and props are.
             .add_systems(
                 Update,
-                (clear_stone, spawn_stone, spawn_columns, spawn_bars, spawn_corridor_arches, spawn_fixtures, spawn_stairs, spawn_debug_camera).chain().run_if(resource_exists_and_changed::<CurrentLevel>).in_set(DelveSystems),
+                (clear_stone, spawn_stone, spawn_columns, spawn_bars, spawn_corridor_arches, spawn_stairs, spawn_debug_camera).chain().run_if(laid_out_at(0)).in_set(DelveSystems),
+            )
+            .add_systems(
+                Update,
+                spawn_fixtures.run_if(laid_out_at(1)).in_set(DelveSystems),
             )
             // Offscreen captures stay silent, as the music does.
             .add_systems(Startup, load_level_sounds.run_if(not(resource_exists::<FrameCapturePlugin>)))
@@ -60,7 +65,7 @@ impl Plugin for LevelPlugin {
             // After the render layers have propagated down, which `Update` does.
             .add_systems(PostUpdate, limit_far_parts.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .add_systems(Update, apply_light_tuning.run_if(resource_changed::<Tuning>).in_set(DelveSystems))
-            .add_systems(Update, lift_cavern_ambient.run_if(resource_exists_and_changed::<CurrentLevel>).after(apply_light_tuning).in_set(DelveSystems))
+            .add_systems(Update, lift_cavern_ambient.run_if(laid_out_at(0)).after(apply_light_tuning).in_set(DelveSystems))
             .add_systems(PostUpdate, put_out_carried_lights.run_if(|| std::env::var("FB_DEBUG_LIGHT").is_ok_and(|v| v == "none")));
     }
 }
@@ -1291,6 +1296,31 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             let out = hang.rotation * Vec3::Z;
             let target = hang.translation - Vec3::Y * 9.0;
             let from = Vec3::new(hang.translation.x, EYE_HEIGHT, hang.translation.z) + out * CELL * 2.5;
+            Transform::from_translation(from).looking_at(target, Vec3::Y)
+        }
+        "niche" => {
+            // The niche `FB_DEBUG_NICHE` names, by index or by what it holds (`empty`, `candle`,
+            // `skull`, `bones`, `urn`; the first niche if unset), from a cell and a half out in front of
+            // it, looking at its middle.
+            let want = std::env::var("FB_DEBUG_NICHE").ok();
+            let holds = |n: &fb_level::NicheSpot| format!("{:?}", n.contents).to_lowercase();
+            let in_room = |n: &fb_level::NicheSpot| level.rooms.iter().any(|r| r.contains(n.x, n.y));
+            let tall = |n: &fb_level::NicheSpot| n.spring - n.sill > 7.0;
+            let spot = match want.as_deref() {
+                Some(w) if w.parse::<usize>().is_ok() => level.niches.get(w.parse::<usize>().unwrap()),
+                Some("tall") => level.niches.iter().find(|n| tall(n)),
+                Some("moulded") => level.niches.iter().find(|n| n.style == fb_level::NicheStyle::Moulded),
+                Some("grand") => level.niches.iter().find(|n| n.style == fb_level::NicheStyle::Grand),
+                Some("corridor") => level.niches.iter().find(|n| !in_room(n)),
+                Some(w) => level.niches.iter().find(|n| holds(n) == w),
+                None => level.niches.first(),
+            };
+            let Some(spot) = spot else { return };
+            let [fx, _, fz] = fb_level::Level::world(spot.face().0, spot.face().1);
+            let (dx, dy) = spot.facing.step();
+            let out = Vec3::new(-dx as f32, 0.0, -dy as f32);
+            let target = Vec3::new(fx, (spot.sill + spot.spring) * 0.5, fz);
+            let from = Vec3::new(fx, EYE_HEIGHT, fz) + out * CELL * 1.5;
             Transform::from_translation(from).looking_at(target, Vec3::Y)
         }
         "role" => {

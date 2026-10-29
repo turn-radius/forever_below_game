@@ -208,13 +208,25 @@ pub(crate) fn place_daises(level: &Level) -> Vec<Dais> {
 }
 
 /// Whether the cells of `x0..x1` by `y0..y1` can be a dais: all floor (or, for a platform, a
-/// column too) of one room, with no doorway beside them.
+/// column too) of one room, and clear of what the level has already placed, which a dais never
+/// moves: no doorway within a cell of them (a door's sweep), no stair or its approach within a
+/// cell, no banner hung over one, and not the way in.
 fn fit(level: &Level, room: usize, [x0, y0, x1, y1]: [i32; 4], columns: bool) -> bool {
+    let (sx, sy, _) = level.start();
+    let taken = |x: i32, y: i32| {
+        level.stairs.iter().any(|s| {
+            let (ax, ay) = s.approach();
+            [(s.x, s.y), (ax, ay)].iter().any(|&(px, py)| (px as i32 - x).abs().max((py as i32 - y).abs()) <= 1)
+        }) || level.banners.iter().any(|b| (b.x.floor() as i32, b.y.floor() as i32) == (x, y))
+            || (sx as i32 - x).abs().max((sy as i32 - y).abs()) <= 1
+    };
     (y0..y1).all(|y| {
         (x0..x1).all(|x| {
             let cell = level.cell(x, y);
             let ok = cell == Cell::Floor || (columns && cell == Cell::Column);
-            ok && level.room_at(x, y) == Some(room) && Facing::ALL.iter().all(|f| !level.cell(x + f.step().0, y + f.step().1).is_doorway())
+            ok && level.room_at(x, y) == Some(room)
+                && !taken(x, y)
+                && (-1..=1).all(|dy| (-1..=1).all(|dx| !level.cell(x + dx, y + dy).is_doorway()))
         })
     })
 }
@@ -242,14 +254,24 @@ fn seat_dais(level: &Level, room: usize, steps: u32) -> Option<Dais> {
     let ((sx, sy), back) = crate::past::seat(level, room)?;
     let (bx, by) = back.step();
     let (ax, ay) = (-by, bx);
-    for depth in [3, 2] {
-        for half in [3, 2, 1] {
-            // Cells from the wall (depth 0) inward, and along the wall either side of the seat.
-            let corners = [(-half, 0), (half, depth - 1)].map(|(k, d)| (sx + ax * k - bx * d, sy + ay * k - by * d));
-            let rect = [corners[0].0.min(corners[1].0), corners[0].1.min(corners[1].1), corners[0].0.max(corners[1].0) + 1, corners[0].1.max(corners[1].1) + 1];
-            if fit(level, room, rect, true) {
-                return Some(build(level, rect, steps, false));
+    // The biggest rectangle against the wall that holds the seat and clears what is placed: the
+    // seat's three cells either side first, then lopsided ones, then the narrower.
+    let mut sizes: Vec<(i32, i32, i32)> = Vec::new();
+    for depth in 1..=3 {
+        for left in 0..=3 {
+            for right in 0..=3 {
+                if (left + right + 1) * depth >= 3 {
+                    sizes.push((left, right, depth));
+                }
             }
+        }
+    }
+    sizes.sort_by_key(|&(l, r, d)| (std::cmp::Reverse((l + r + 1) * d), (l - r).abs(), std::cmp::Reverse(d)));
+    for (left, right, depth) in sizes {
+        let corners = [(-left, 0), (right, depth - 1)].map(|(k, d)| (sx + ax * k - bx * d, sy + ay * k - by * d));
+        let rect = [corners[0].0.min(corners[1].0), corners[0].1.min(corners[1].1), corners[0].0.max(corners[1].0) + 1, corners[0].1.max(corners[1].1) + 1];
+        if fit(level, room, rect, true) {
+            return Some(build(level, rect, steps, false));
         }
     }
     None
@@ -314,7 +336,7 @@ mod tests {
                 }
             }
         }
-        assert!(seats > 0 && raised * 10 >= seats * 9, "{raised} of {seats} seats raised");
+        assert!(seats > 0 && raised * 4 >= seats * 3, "{raised} of {seats} seats raised");
     }
 
     #[test]
@@ -350,6 +372,9 @@ mod tests {
                 let level = generate(seed, depth);
                 if level.style != LevelStyle::StoneHalls {
                     assert!(level.daises.is_empty());
+                }
+                for b in &level.banners {
+                    assert!(!level.on_dais(b.x.floor() as i32, b.y.floor() as i32), "seed {seed} depth {depth}: a banner over a dais");
                 }
                 for s in &level.stairs {
                     assert!(!level.on_dais(s.x as i32, s.y as i32), "seed {seed} depth {depth}");

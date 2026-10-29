@@ -54,6 +54,11 @@ impl<K, T: Send + 'static> Fitting<K, T> {
         self.ready.take().or_else(|| self.task.take().map(block_on))
     }
 
+    /// Whether the result is there to take: the job has finished (or its result was given).
+    pub fn is_ready(&self) -> bool {
+        self.ready.is_some() || self.task.as_ref().is_some_and(|task| task.is_finished())
+    }
+
     /// The result, if the job has finished. Takes it once: call again and it is `None`.
     pub fn poll(&mut self) -> Option<T> {
         if let Some(result) = self.ready.take() {
@@ -66,6 +71,13 @@ impl<K, T: Send + 'static> Fitting<K, T> {
         } else {
             None
         }
+    }
+}
+
+impl<K: Clone, T> Fitting<K, T> {
+    /// The job itself, task and key, moved out: this one is left with nothing to give.
+    pub fn take(&mut self) -> Self {
+        Fitting { key: self.key.clone(), task: self.task.take(), ready: self.ready.take() }
     }
 }
 

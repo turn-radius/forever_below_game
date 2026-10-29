@@ -15,11 +15,12 @@
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
 
-use crate::folk::{Faction, by_door};
+use crate::folk::Faction;
 use crate::generate::{item_seed, shuffle};
 use crate::roles::{RoomRole, main_door};
 use crate::rooms::RoomGraph;
-use crate::{CELL, Cell, Facing, Level};
+use crate::walls::{bare_wall_faces, near_light_or_prop};
+use crate::{CELL, Cell, Level};
 
 /// Salt for the banner stream.
 pub(crate) const BANNER_SALT: u32 = 0xBA44_E2A1;
@@ -75,10 +76,6 @@ fn on_wall(level: &Level, cell: (i32, i32), wall: (i32, i32), shift: (i32, i32),
     if level.cell(cell.0, cell.1) != Cell::Floor || level.cell(cell.0 + wall.0, cell.1 + wall.1) != Cell::Rock {
         return None;
     }
-    // A dais stands at the foot of the wall: the banner hangs clear of it.
-    if level.on_dais(cell.0, cell.1) {
-        return None;
-    }
     let out = 0.5 - WALL_OFFSET / CELL;
     let slide = JAMB_CLEARANCE / CELL;
     let (x, y) = (cell.0 as f32 + 0.5 + wall.0 as f32 * out + shift.0 as f32 * slide, cell.1 as f32 + 0.5 + wall.1 as f32 * out + shift.1 as f32 * slide);
@@ -132,20 +129,7 @@ pub(crate) fn place_banners(level: &Level) -> Vec<BannerSpot> {
             if !is_hall && level.roles_of(r).contains(&RoomRole::Hall) {
                 want = 1;
             }
-            let mut cells: Vec<((i32, i32), (i32, i32))> = Vec::new();
-            for y in room.y as i32..(room.y + room.h) as i32 {
-                for x in room.x as i32..(room.x + room.w) as i32 {
-                    if level.cell(x, y) != Cell::Floor || by_door(level, x, y) {
-                        continue;
-                    }
-                    for f in Facing::ALL {
-                        let w = f.step();
-                        if level.cell(x + w.0, y + w.1) == Cell::Rock {
-                            cells.push(((x, y), w));
-                        }
-                    }
-                }
-            }
+            let mut cells = bare_wall_faces(level, &room);
             shuffle(&mut cells, &mut rng);
             // In the hall, the wall facing the door first, so the banners are seen on coming in.
             if let (true, Some(door)) = (is_hall, door) {
@@ -158,10 +142,7 @@ pub(crate) fn place_banners(level: &Level) -> Vec<BannerSpot> {
                     break;
                 }
                 let Some(b) = on_wall(level, cell, wall, (0, 0), faction, site, r, &mut rng) else { continue };
-                let near = |ax: f32, ay: f32, gap: f32| (ax - b.x).hypot(ay - b.y) < gap;
-                let crowded = banners.iter().any(|o| near(o.x, o.y, APART))
-                    || level.lights.iter().any(|l| near(l.x, l.y, CLEAR))
-                    || level.props.iter().any(|p| near(p.x, p.y, CLEAR));
+                let crowded = banners.iter().any(|o| (o.x - b.x).hypot(o.y - b.y) < APART) || near_light_or_prop(level, b.x, b.y, CLEAR);
                 if !crowded {
                     banners.push(b);
                     hung += 1;
@@ -175,6 +156,7 @@ pub(crate) fn place_banners(level: &Level) -> Vec<BannerSpot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::folk::by_door;
     use crate::generate;
 
     fn sweep() -> impl Iterator<Item = (u32, u32)> {
@@ -257,5 +239,28 @@ mod tests {
         for (seed, depth) in sweep().take(30) {
             assert_eq!(generate(seed, depth).banners, generate(seed, depth).banners);
         }
+    }
+
+    /// A fingerprint of every banner on a sweep of levels, taken before the wall-face search
+    /// became the shared [`crate::walls`] helper: the same seeds hang the same banners.
+    #[test]
+    fn banner_placement_is_unchanged_by_the_shared_wall_search() {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |bytes: &[u8]| {
+            for b in bytes {
+                hash = (hash ^ *b as u64).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for (seed, depth) in sweep() {
+            let level = generate(seed, depth);
+            for b in &level.banners {
+                feed(&b.x.to_bits().to_le_bytes());
+                feed(&b.y.to_bits().to_le_bytes());
+                feed(&b.yaw.to_bits().to_le_bytes());
+                feed(&b.seed.to_le_bytes());
+                feed(format!("{:?}{:?}{}", b.faction, b.site, b.room).as_bytes());
+            }
+        }
+        assert_eq!(hash, 8766096541518196646, "banner fingerprint");
     }
 }

@@ -94,6 +94,16 @@ pub fn generate_with(seed: u32, depth: u32, params: &LevelParams) -> Level {
 
 /// The level for level seed `seed` at `depth`, its factions drawn from the pool of `world_seed`.
 pub fn generate_for(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
+    let mut level = generate_before_niches(world_seed, seed, depth, params);
+    // Daises after everything else, so they keep clear of what is placed and move none of it.
+    level.daises = crate::dais::place_daises(&level);
+    // Niches after everything they keep clear of.
+    level.niches = crate::niches::place_niches(&level);
+    level
+}
+
+/// The level for `seed` as [`generate_for`] lays it out, without its niches.
+pub(crate) fn generate_before_niches(world_seed: u32, seed: u32, depth: u32, params: &LevelParams) -> Level {
     let mut params = *params;
     params.fit();
     let (mut level, layout_seed) = generate_without_creatures_in(world_seed, seed, depth, &params);
@@ -193,6 +203,7 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         roles: Vec::new(),
         props: Vec::new(),
         banners: Vec::new(),
+        niches: Vec::new(),
         crystals: Vec::new(),
         creatures: Vec::new(),
         stairs: Vec::new(),
@@ -211,8 +222,6 @@ fn try_generate(world_seed: u32, seed: u32, depth: u32, attempt: u32, p: &LevelP
         if colonnaded == 0 && attempt < RELAX_EVERY {
             return None;
         }
-        // Daises last of the halls' stone, from a hash of the seed and the room alone.
-        level.daises = crate::dais::place_daises(&level);
     }
     if style == LevelStyle::CrystalCavern {
         erode_chambers(&mut level, &mut Mulberry32::new(layout_seed ^ ERODE_SALT));
@@ -1831,7 +1840,7 @@ mod tests {
                 taken.extend(place_creatures(&bare, &mut Mulberry32::new(layout_seed ^ CREATURE_SALT)).iter().map(|s| (s.x.floor() as i32, s.y.floor() as i32)));
                 // And in wild ground: a stair never stands in a claim or behind its doors.
                 let held = crate::claims::held_cells(&level, &level.claims);
-                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !level.on_dais(x, y) && !taken.contains(&(x, y)) && !held[(y as u32 * level.width + x as u32) as usize];
+                let free = |x: i32, y: i32| level.cell(x, y) == Cell::Floor && !taken.contains(&(x, y)) && !held[(y as u32 * level.width + x as u32) as usize];
                 let mut furthest = 0;
                 for y in 0..level.height as i32 {
                     for x in 0..level.width as i32 {

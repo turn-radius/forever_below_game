@@ -79,11 +79,8 @@ fn headless_game(file: &PathBuf) -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 /// A new delve in level 1207, a second in, which may save.
 fn delving(file: &PathBuf) -> App {
@@ -418,7 +415,7 @@ fn resumed(file: &PathBuf) -> (App, Snapshot) {
     let mut frames = 0;
     // The state is put back on the first frame of the delve; the next frame it is only played.
     loop {
-        app.update();
+        run(&mut app, 1);
         frames += 1;
         if *app.world().resource::<State<AppState>>().get() == AppState::Delving && app.world().get_resource::<ResumeDelve>().is_none() {
             break;
@@ -442,7 +439,8 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     assert_eq!(resumed_at, at_save);
     // Frames on, the level is laid out as it was left, and the delver lies in the tent.
     let mut frames = 0;
-    while app.world().resource::<Asleep>().0.is_none() && frames < 60 {
+    // (The level is laid out over the frames after the state is put back, a part a frame.)
+    while (app.world().resource::<Asleep>().0.is_none() || !app.world().resource::<forever_below::loading::LayoutTurn>().done()) && frames < 60 {
         app.update();
         frames += 1;
     }
@@ -505,6 +503,44 @@ fn a_delve_that_may_not_save_writes_nothing_when_the_delver_lies_down() {
     assert!(app.world().resource::<forever_below::inventory::Toast>().text.starts_with("You lie down"));
 }
 
+#[test]
+fn a_rested_delver_lies_down_in_a_camp_and_the_delve_is_saved_with_the_nap() {
+    let file = scratch("rested_nap");
+    let mut app = delving(&file);
+    let (feet, forward) = set_camp_where(&mut app, "Bedroll", 40_012);
+    look_down_at_camp(&mut app, feet, forward, 0.0);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    let sleep = app.world().resource::<Asleep>().0.expect("a rested delver lies down in a camp");
+    assert!(sleep.nap_until.is_some_and(|end| end > sleep.since), "it is a nap");
+    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "Your delve is saved.");
+    let saved = forever_below::save::SavedGame::find(&file);
+    let delve = saved.delve.expect("saved");
+    assert_eq!(delve.nap_until, sleep.nap_until, "the nap's end is in the save");
+}
+
+#[test]
+fn a_rested_delver_with_something_hostile_near_is_refused_and_nothing_is_saved() {
+    let file = scratch("rested_watched");
+    let mut app = delving(&file);
+    let (feet, forward) = set_camp_where(&mut app, "Bedroll", 40_013);
+    look_down_at_camp(&mut app, feet, forward, 0.0);
+    let world = app.world_mut();
+    let mut creatures = world.query_filtered::<&mut Transform, With<Critter>>();
+    let mut moved = false;
+    for mut at in creatures.iter_mut(world) {
+        at.translation = Vec3::new(feet.x + 1.0, 0.0, feet.y);
+        moved = true;
+    }
+    assert!(moved, "the level has a creature");
+    app.update();
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    assert!(app.world().resource::<Asleep>().0.is_none());
+    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "You cannot sleep with something so near.");
+    assert!(!file.exists(), "nothing was saved");
+}
+
 /// Every resource and every component of the delver the game has, and what the save does with
 /// it. A new one is not in either list and fails here; say which it is.
 #[test]
@@ -529,10 +565,12 @@ fn every_resource_and_component_is_accounted_for() {
         ("character::ChosenDelver", "taken up by the delve's start"),
         ("play::CurrentLevel", "rebuilt from the seed, depth and record"),
         ("play::LevelRooms", "mapped from the level"),
+        ("loading::LayoutTurn", "counts the frames since the level changed"),
         ("play::BlockedCells", "worked out as the level is laid out"),
         ("play::Obstacles", "gathered each frame"),
         ("doors::Doors", "the level's doors: in the record"),
         ("dice::Dice", "a roll showing: transient screen state"),
+        ("doors::PickInFlight", "a lock pick whose dice are showing: transient, and cleared when the delve ends"),
         ("dice::DiceStage", "the roll's render image, made when the app starts"),
         ("identify::Identifying", "an identify roll showing: transient"),
         ("talk::Persuading", "a persuasion roll showing: the talk is not saved"),
