@@ -153,7 +153,7 @@ impl Plugin for CarryPlugin {
             .add_systems(
                 Update,
                 (
-                    lay_out_items.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    lay_out_items.run_if(crate::loading::laid_out_at(2)),
                     equip_player_camera,
                     show_held.after(equip_player_camera),
                     (widen_view_models, rescale_floor_items, reshimmer_floor_items, resparkle_floor_items).run_if(resource_changed::<Tuning>),
@@ -1551,6 +1551,7 @@ pub(crate) fn aim(
     camera: Query<&GlobalTransform, (With<PlayerCamera>, With<Equipped>)>,
     items: Query<(Entity, &GlobalTransform, &FloorItem)>,
     containers: Query<(Entity, &GlobalTransform, &PropPiece), With<Container>>,
+    urns: Query<(Entity, &GlobalTransform, &crate::niches::NicheUrn), With<Container>>,
     mut aimed: ResMut<Aimed>,
 ) {
     let Some(eye) = camera.iter().next() else {
@@ -1560,7 +1561,8 @@ pub(crate) fn aim(
     let targets = items
         .iter()
         .map(|(entity, transform, floor)| (entity, transform.compute_transform(), floor.min, floor.max))
-        .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)));
+        .chain(containers.iter().map(|(entity, transform, piece)| (entity, transform.compute_transform(), piece.min, piece.max)))
+        .chain(urns.iter().map(|(entity, transform, urn)| (entity, transform.compute_transform(), urn.min, urn.max)));
     let hit = nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity);
     if aimed.0 != hit {
         aimed.0 = hit;

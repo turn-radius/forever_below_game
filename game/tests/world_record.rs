@@ -50,15 +50,18 @@ fn headless_game() -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 /// A new delve in level 1207, a second in.
 fn delving() -> App {
+    delving_in(1207)
+}
+
+/// A new delve in the world of `seed`, a second in.
+fn delving_in(seed: u32) -> App {
     let mut app = headless_game();
+    app.insert_resource(NewDelveSeed(Some(seed)));
     run(&mut app, 30);
     app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
@@ -529,4 +532,51 @@ fn the_world_record_round_trips_through_serde_and_death_resets_it() {
     assert_eq!(*level(&app), generated);
     assert!(lying(&mut app).iter().all(|(spot, _)| generated.items.contains(spot)), "level 1 is as generated again");
     assert_eq!(kept(&app, "Sword", 40_001), 0, "the dropped sword is not in the new run");
+}
+
+/// The first urn in a niche of the level that holds something: its niche index and container.
+fn urn_with_goods(app: &mut App) -> Option<(usize, Container)> {
+    let world = app.world_mut();
+    let inventory = world.resource::<Inventory>().clone();
+    let mut all: Vec<_> = world.query::<(&forever_below::niches::NichePiece, &Container)>().iter(world).map(|(p, c)| (p.index, *c)).collect();
+    all.sort_by_key(|a| a.0);
+    all.into_iter().find(|(_, c)| inventory.contents_count(c.id) >= 1)
+}
+
+#[test]
+fn what_is_taken_from_an_urn_in_a_niche_stays_taken_after_round_trips() {
+    // World 6 has an urn with something in it on its second level.
+    let mut app = delving_in(6);
+    // Too hardy for the level's rats to down between stairs: a fallen delver takes no stair, and
+    // what bites where moves whenever a level's layout or furnishing does.
+    let delver = player(&mut app);
+    *app.world_mut().get_mut::<Health>(delver).expect("the delver has hit points") = Health::full(10_000);
+    // Down the levels until a niche holds an urn with something in it.
+    let mut levels = 0;
+    let (index, urn) = loop {
+        if let Some(found) = urn_with_goods(&mut app) {
+            break found;
+        }
+        levels += 1;
+        assert!(levels <= 3, "world 6 has an urn with something in it by its fourth level");
+        go(&mut app, StairKind::Down);
+    };
+    let contents = |app: &App, id: ItemId| -> Vec<(String, u32)> {
+        let inventory = app.world().resource::<Inventory>();
+        inventory.grid(id).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect()
+    };
+    let before = contents(&app, urn.id);
+    // Take what it holds, as the inventory screen does with its first thing.
+    let taken = app.world().resource::<Inventory>().grid(urn.id).unwrap().entries()[0].id;
+    let taken_seed = app.world().resource::<Inventory>().item(taken).unwrap().seed;
+    app.world_mut().resource_mut::<Inventory>().stow(taken).ok();
+    let remaining = contents(&app, urn.id);
+    assert_eq!(remaining.len() + 1, before.len(), "one thing came out");
+    assert!(!remaining.iter().any(|(_, s)| *s == taken_seed));
+    for _ in 0..2 {
+        round_trip(&mut app);
+        let world = app.world_mut();
+        let now = world.query::<(&forever_below::niches::NichePiece, &Container)>().iter(world).find(|(p, _)| p.index == index).map(|(_, c)| *c).expect("the urn stands in its niche");
+        assert_eq!(contents(&app, now.id), remaining, "what was taken is still gone and the rest is still there");
+    }
 }

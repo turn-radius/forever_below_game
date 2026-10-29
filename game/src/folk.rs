@@ -41,7 +41,7 @@ use crate::interact::{Delver, Target, key_line, verbs_for};
 use crate::inventory::card::{CARD_WIDTH, place_under};
 use crate::keymap::Keymap;
 use crate::level::EXPOSURE;
-use crate::play::{BlocksTheWay, CurrentLevel, DelveSystems, PlayerCamera, ScreenOpen};
+use crate::play::{BlocksTheWay, CardsCovered, CurrentLevel, DelveSystems, PlayerCamera, ScreenOpen};
 use crate::ui::{BG, FAINT, INK, LINE, MUTED, UiFonts, rarity_color};
 use crate::render::ItemSpawner;
 
@@ -56,7 +56,7 @@ impl Plugin for FolkPlugin {
             .add_systems(
                 Update,
                 (
-                    spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    spawn_folk.run_if(crate::loading::laid_out_at(5)),
                     idle_folk,
                     turn_heads,
                     (aim_at_folk, meet_aimed_folk, spawn_folk_card, show_folk_card).chain(),
@@ -563,14 +563,16 @@ pub struct AimedFolk(pub Option<Entity>);
 pub struct FolkCard;
 
 /// Picks the folk under the crosshair within reach, by their figure's bounds, with the same
-/// buffer round the crosshair as items (`crate::carry::nearest_aimed`).
-fn aim_at_folk(
+/// buffer round the crosshair as items (`crate::carry::nearest_aimed`). Nobody is aimed at
+/// while the wake card shows, so no one is talked to, bartered with or met behind it.
+pub(crate) fn aim_at_folk(
     tuning: Res<crate::tuning::Tuning>,
+    wake: Query<(), With<crate::combat::revival::WakeCard>>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
     folk: Query<(Entity, &GlobalTransform, &Denizen), Without<crate::combat::feedback::Corpse>>,
     mut aimed: ResMut<AimedFolk>,
 ) {
-    let hit = eyes.iter().next().and_then(|eye| {
+    let hit = eyes.iter().next().filter(|_| wake.is_empty()).and_then(|eye| {
         let targets = folk.iter().map(|(entity, at, denizen)| (entity, at.compute_transform(), denizen.min, denizen.max));
         nearest_aimed(eye.translation(), eye.forward().as_vec3(), REACH, AimBuffer::of(&tuning), targets).map(|(entity, _)| entity)
     });
@@ -663,6 +665,7 @@ fn meet_aimed_folk(aimed: Res<AimedFolk>, folk: Query<&Denizen>, level: Option<R
 fn show_folk_card(
     mut commands: Commands,
     open: Option<Res<ScreenOpen>>,
+    covered: CardsCovered,
     aimed: Res<AimedFolk>,
     aimed_item: Option<Res<Aimed>>,
     keymap: Option<Res<Keymap>>,
@@ -672,7 +675,7 @@ fn show_folk_card(
     mut cards: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, &ComputedUiRenderTargetInfo), With<FolkCard>>,
     mut shown: Local<Option<(Entity, fb_faction::Band)>>,
 ) {
-    let screen_open = open.is_some_and(|o| o.0.is_some());
+    let screen_open = open.is_some_and(|o| o.0.is_some()) || covered.is_covered();
     let item_card = aimed_item.is_some_and(|a| a.0.is_some());
     let subject = aimed.0.filter(|_| !screen_open && !item_card).and_then(|e| folk.get(e).ok().map(|d| (e, d)));
     for (card, mut node, mut visibility, computed, target) in &mut cards {
@@ -1108,6 +1111,38 @@ mod tests {
         app.update();
         app.update();
         assert!(line(&mut app).starts_with("E Talk"), "{}", line(&mut app));
+    }
+
+    #[test]
+    fn the_folk_card_hides_behind_the_map_and_the_fall_screens() {
+        use crate::combat::{revival::Unconscious, vitals::Fallen};
+        use crate::play::Screen;
+        let (mut app, _, _) = looking_app(Vec3::ZERO);
+        app.init_resource::<Keymap>().init_resource::<UiFonts>().init_resource::<Aimed>().init_resource::<AimedFolk>().init_resource::<ScreenOpen>().add_systems(Update, show_folk_card);
+        let folk = app.world_mut().query_filtered::<Entity, With<Denizen>>().single(app.world()).unwrap();
+        app.world_mut().resource_mut::<AimedFolk>().0 = Some(folk);
+        let card = app.world_mut().spawn((FolkCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default())).id();
+        let visible = |app: &mut App| {
+            app.update();
+            app.update();
+            *app.world().get::<Visibility>(card).unwrap() != Visibility::Hidden
+        };
+        assert!(visible(&mut app), "aimed at a folk");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Map);
+        assert!(!visible(&mut app), "no card over the map");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        assert!(visible(&mut app), "the card returns with the map closed");
+        app.world_mut().insert_resource(Unconscious);
+        assert!(!visible(&mut app), "no card over the unconscious screen");
+        app.world_mut().remove_resource::<Unconscious>();
+        assert!(visible(&mut app));
+        app.world_mut().insert_resource(Fallen(1.0));
+        assert!(!visible(&mut app), "no card over the fall screen");
+        app.world_mut().remove_resource::<Fallen>();
+        let wake = app.world_mut().spawn(crate::combat::revival::WakeCard::default()).id();
+        assert!(!visible(&mut app), "no card over the wake card");
+        app.world_mut().entity_mut(wake).despawn();
+        assert!(visible(&mut app), "the card returns once the wake card is gone");
     }
 
     #[test]

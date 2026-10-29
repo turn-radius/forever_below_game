@@ -26,7 +26,8 @@ pub struct SimulatePlugin;
 impl Plugin for SimulatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GameRules>().add_systems(FixedUpdate, (step_the_delver, step_folk).after(advance_game_clock).in_set(DelveSystems))
-            .add_systems(FixedUpdate, step_stamina.in_set(DelveSystems));
+            .add_systems(FixedUpdate, step_stamina.in_set(DelveSystems))
+            .add_systems(FixedUpdate, step_mana.after(step_the_delver).in_set(DelveSystems));
     }
 }
 
@@ -128,10 +129,6 @@ fn step_the_delver(
         }
         needs.0 = n;
         times.0 = t;
-        // Only written when the pool changes, so a full one marks nothing.
-        let mut pool = mana.0;
-        pool.step_with(&rules, hours, activity);
-        mana.set_if_neq(DelverMana(pool));
         // The level moves a few times in a run, so it is only marked changed when it does.
         exhaustion.set_if_neq(DelverExhaustion(e));
         // Fed, watered and with nothing stopping it (venom does), they mend; the effects are read
@@ -243,6 +240,33 @@ fn step_stamina(
         let gear = gear.copied().unwrap_or_default();
         next.step_geared(&rules, seconds, activity, load.0, gear.refill as f64, gear.cost as f64);
         stamina.set_if_neq(DelverStamina(next));
+    }
+}
+
+/// Steps the delver's mana by the real seconds of the fixed step, like [`step_stamina`] and for
+/// the same reason: it refills in seconds, not game hours, so the clock's ratio does not speed
+/// it up. Asleep it refills fastest, sprinting and swinging stop it, and it holds still while a
+/// screen is open. Only written when the pool changes, so a full one marks nothing.
+#[allow(clippy::type_complexity)]
+fn step_mana(
+    time: Res<Time<Fixed>>,
+    screen: Res<ScreenOpen>,
+    rules: Res<GameRules>,
+    input: ActionInput,
+    asleep: Option<Res<crate::camp::Asleep>>,
+    mut players: Query<(&Locomotion, Has<Swing>, &Load, &mut DelverMana, Has<crate::combat::guard::Guard>, Option<&crate::character::GearMana>), With<Player>>,
+) {
+    let seconds = time.delta_secs_f64();
+    if screen.0.is_some() || seconds <= 0.0 {
+        return;
+    }
+    let sleeping = asleep.as_deref().is_some_and(|a| a.0.is_some());
+    for (locomotion, swinging, load, mut mana, guarding, gear) in &mut players {
+        let sprinting = input.pressed(Action::Sprint) && !guarding;
+        let activity = if sleeping { Activity::Sleeping } else { delver_activity(&rules, locomotion.velocity, sprinting, swinging, *load) };
+        let mut pool = mana.0;
+        pool.step_geared(&rules, seconds, activity, gear.copied().unwrap_or_default().refill as f64);
+        mana.set_if_neq(DelverMana(pool));
     }
 }
 
@@ -553,24 +577,62 @@ mod tests {
     }
 
     #[test]
-    fn resting_for_eight_game_hours_refills_an_empty_pool_and_walking_is_slower() {
+    fn standing_refills_an_empty_pool_in_real_seconds_slower_than_stamina_and_walking_is_slower() {
         let mut app = app();
-        app.world_mut().resource_mut::<Tuning>().clock.game_seconds_per_second = 3600.0;
         cast_as(&mut app, crate::character::Class::Mage, 16, 10);
         let resting = app.world_mut().spawn((Player, Locomotion::default())).id();
-        run(&mut app, 1);
-        app.world_mut().get_mut::<DelverMana>(resting).unwrap().0.points = 0.0;
-        run(&mut app, 4);
-        let half = mana(&app, resting);
-        assert!((half.fraction() - 0.5).abs() < 0.01, "{half:?}");
-        run(&mut app, 4);
-        assert!((mana(&app, resting).fraction() - 1.0).abs() < 1e-6);
-        // Walking refills at a quarter of that.
         let walking = walker(&mut app);
         run(&mut app, 1);
-        app.world_mut().get_mut::<DelverMana>(walking).unwrap().0.points = 0.0;
+        for who in [resting, walking] {
+            app.world_mut().get_mut::<DelverMana>(who).unwrap().0.points = 0.0;
+        }
+        // Stamina is full again in 8 seconds standing; mana is not.
+        run(&mut app, 10);
+        let (stand, walk) = (mana(&app, resting).fraction(), mana(&app, walking).fraction());
+        assert!((stand - 0.5).abs() < 0.01, "{stand}: half full in 10 of 20 seconds");
+        assert!(walk < stand && walk > 0.0, "walking refills more slowly: {walk} against {stand}");
+        run(&mut app, 10);
+        assert!((mana(&app, resting).fraction() - 1.0).abs() < 1e-6, "{:?}", mana(&app, resting));
+        assert!(mana(&app, walking).fraction() < 0.6, "{:?}", mana(&app, walking));
+    }
+
+    #[test]
+    fn sprinting_stops_mana_and_sleeping_still_refills_it() {
+        let mut app = app();
+        cast_as(&mut app, crate::character::Class::Mage, 16, 10);
+        let delver = walker(&mut app);
+        run(&mut app, 1);
+        app.world_mut().get_mut::<DelverMana>(delver).unwrap().0.points = 0.0;
+        sprinting(&mut app);
+        run(&mut app, 3);
+        assert_eq!(mana(&app, delver).points, 0.0, "no refill while sprinting");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::ShiftLeft);
         run(&mut app, 4);
-        assert!(mana(&app, walking).fraction() < 0.2, "{:?}", mana(&app, walking));
+        let walked = mana(&app, delver).fraction();
+        assert!(walked > 0.0);
+        app.world_mut().get_mut::<DelverMana>(delver).unwrap().0.points = 0.0;
+        let bed = app.world_mut().spawn_empty().id();
+        let lying = crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed, hit_points: 10, since: 0.0, nap_until: None, began: 0.0 };
+        app.insert_resource(crate::camp::Asleep(Some(lying)));
+        run(&mut app, 4);
+        assert!(mana(&app, delver).fraction() > walked, "asleep refills faster than walking: {:?}", mana(&app, delver));
+    }
+
+    #[test]
+    fn gear_refills_mana_faster() {
+        use crate::character::GearMana;
+        let refilled = |refill: f32| {
+            let mut app = app();
+            cast_as(&mut app, crate::character::Class::Mage, 16, 10);
+            let delver = app.world_mut().spawn((Player, Transform::default(), Locomotion::default(), GearMana { refill })).id();
+            run(&mut app, 1);
+            app.world_mut().get_mut::<DelverMana>(delver).unwrap().0.points = 0.0;
+            run(&mut app, 10);
+            mana(&app, delver).fraction()
+        };
+        assert!((refilled(1.0) - 0.5).abs() < 0.01);
+        assert!((refilled(1.5) - 0.75).abs() < 0.01, "a 1.25 and a 1.2 item refill at 1.5 times the rate");
+        assert!(refilled(0.8) < 0.45);
     }
 
     #[test]
@@ -587,7 +649,7 @@ mod tests {
         run(&mut app, 1);
         let pool = mana(&app, delver);
         assert_eq!(pool.max, 30.0);
-        assert!((pool.fraction() - 0.5).abs() < 0.01, "kept half full: {pool:?}");
+        assert!((pool.fraction() - 0.5).abs() < 0.05, "kept about half full, less the second walked: {pool:?}");
     }
 
     fn needs(app: &App, who: Entity) -> Needs {
@@ -810,7 +872,7 @@ mod tests {
         let delver = app.world_mut().spawn((Player, Transform::default(), Locomotion { velocity: Vec2::new(30.0, 0.0), ..default() })).id();
         app.update();
         app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = sleepiness;
-        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp, bed: Entity::PLACEHOLDER, hit_points: 0, since: 0.0, began: 0.0 });
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp, bed: Entity::PLACEHOLDER, hit_points: 0, since: 0.0, nap_until: None, began: 0.0 });
         delver
     }
 

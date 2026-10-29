@@ -234,10 +234,15 @@ fn check_add(item: &Item, affix: &Affix, tier: Tier) -> Result<Rarity, Refusal> 
     }
     let count = good(item).count();
     let of_kind = good(item).filter(|a| a.kind == affix.kind).count();
-    if count >= 3 || of_kind >= if affix.kind == AffixKind::Prefix { 1 } else { 2 } {
+    let made = rarity_of(count + 1);
+    // One good prefix, two good suffixes; a second prefix only where no suffix fits, as in a roll.
+    let room = match affix.kind {
+        AffixKind::Prefix => of_kind < 1 || !crate::rarity::good_suffix_fits(&item.profile.tags, item.profile.slot, made, &item.affixes),
+        AffixKind::Suffix => of_kind < 2,
+    };
+    if count >= 3 || !room {
         return Err(Refusal::Full);
     }
-    let made = rarity_of(count + 1);
     // The affix rolls only on its rarity or better, and the enchanter will make only so much.
     if affix.least > made || made > tier.ceiling() || affix.least > tier.ceiling() {
         return Err(Refusal::TooHigh);

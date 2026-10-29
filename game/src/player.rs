@@ -204,12 +204,12 @@ fn weigh_the_delver(
     character: Option<Res<Character>>,
     inventory: Option<Res<Inventory>>,
     rules: Option<Res<crate::rules::GameRules>>,
-    mut players: Query<(Entity, &mut Load, &mut GearPace, &mut crate::character::GearStamina, Has<WebWalker>), With<Player>>,
+    mut players: Query<(Entity, &mut Load, &mut GearPace, &mut crate::character::GearStamina, &mut crate::character::GearMana, Has<WebWalker>), With<Player>>,
 ) {
     let (Some(character), Some(inventory)) = (character, inventory) else { return };
     let changed = character.is_changed() || inventory.is_changed() || rules.as_ref().is_some_and(|r| r.is_changed());
     let mut derived = None;
-    for (player, mut load, mut pace, mut stamina, web_walker) in &mut players {
+    for (player, mut load, mut pace, mut stamina, mut mana, web_walker) in &mut players {
         if changed || load.is_added() {
             // An alignment with spiders lets them through webs.
             let walks_webs = character.gear(&inventory).web_walker;
@@ -222,6 +222,7 @@ fn weigh_the_delver(
             load.set_if_neq(Load::of(derived.load, derived.capacity));
             pace.set_if_neq(GearPace(derived.speed));
             stamina.set_if_neq(crate::character::GearStamina { refill: derived.stamina_refill, cost: derived.stamina_cost });
+            mana.set_if_neq(crate::character::GearMana { refill: derived.mana_refill });
         }
     }
 }
@@ -289,6 +290,8 @@ pub(crate) fn walk(
     locomotion.velocity = (to - from) / dt;
     transform.translation.x = to.x;
     transform.translation.z = to.y;
+    // Up the steps of a dais and down into a sunken floor: the camera follows the body.
+    transform.translation.y = level.0.dais_height(to.x, to.y);
     gait.phase = (gait.phase + (to - from).length() / STRIDE * std::f32::consts::TAU) % std::f32::consts::TAU;
     gait.pace = (locomotion.velocity.length() / moving.walk_speed.max(1e-3)).min(1.5);
 }
@@ -456,6 +459,30 @@ mod tests {
         app.update();
         let Projection::Perspective(p) = app.world().get::<Projection>(camera).unwrap() else { panic!("not a perspective") };
         assert_eq!(p.far, far(&tuning));
+    }
+
+    #[test]
+    fn the_delver_climbs_onto_a_dais_and_down_into_a_sunken_floor() {
+        use bevy::time::TimeUpdateStrategy;
+        for (seed, sunk) in [(8, false), (3, true)] {
+            let level = fb_level::generate(seed, 2);
+            let dais = *level.daises.iter().find(|d| d.sunk == sunk).unwrap();
+            let [x0, x1, z0, z1] = dais.rect();
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 60.0)))
+                .insert_resource(CurrentLevel(level))
+                .init_resource::<Keymap>()
+                .init_resource::<BlockedCells>()
+                .init_resource::<Tuning>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .add_systems(Update, (weigh_the_delver, walk).chain());
+            app.update();
+            let body = app.world_mut().spawn((Player, Locomotion::default(), Transform::from_xyz((x0 + x1) * 0.5, 0.0, (z0 + z1) * 0.5))).id();
+            app.update();
+            let y = app.world().get::<Transform>(body).unwrap().translation.y;
+            assert!((y - dais.top_height()).abs() < 1e-4, "stands at {y}, not {}", dais.top_height());
+        }
     }
 
     #[test]

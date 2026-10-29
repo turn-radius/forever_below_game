@@ -109,12 +109,12 @@ caster_base = 10.0
 caster_per_modifier = 5.0
 # A caster's pool is never smaller than this.
 caster_floor = 4.0
-# Of a full pool, what a Resting delver regains each game hour: 0.125 is empty to full in 8 hours.
-rest_per_hour = 0.125
-# Of a full pool, what a walking delver regains each game hour.
-walk_per_hour = 0.03125
-# Of a full pool, what a sleeping delver regains each game hour.
-sleep_per_hour = 0.375
+# Real seconds to refill from empty standing still.
+stand_refill_seconds = 20.0
+# Real seconds to refill from empty while walking.
+walk_refill_seconds = 40.0
+# Sleeping refills this many times as fast as standing.
+sleep_refill_factor = 2.0
 
 # Whether frighten and charm take hold of a creature: each gets a save. The chance is base, less
 # per_size for each size above Tiny, plus per_tier for each tier above the first, between floor and
@@ -325,6 +325,8 @@ sleep_clock_ratio = 900.0
 wake_distance = 80.0
 # Sleepiness, from 0 rested to 1 spent, the delver must have reached to fall asleep.
 tired_from = 0.25
+# Game hours a delver who lies down in a camp without being tired naps before waking.
+nap_hours = 1.0
 
 [revival]
 # Times a delver brought to 0 hit points may come to in one world; the next fall ends the run.

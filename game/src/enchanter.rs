@@ -712,7 +712,9 @@ fn open_for_capture(mut bench: ResMut<Bench>, inventory: Res<Inventory>, mut ope
 
 /// For captures: with the bench open, picks an item and does what `FB_ENCHANT` says.
 fn drive_for_capture(mut bench: ResMut<Bench>, mut inventory: ResMut<Inventory>, mut stock: ResMut<Enchanting>, mut frames: Local<u32>) {
-    let Some(open) = bench.open.as_ref() else { return };
+    if bench.open.is_none() {
+        return;
+    }
     *frames += 1;
     let what = std::env::var("FB_ENCHANT").unwrap_or_default();
     let pick = |want: &dyn Fn(&Item) -> bool| candidates(&inventory).into_iter().find(|&id| inventory.item(id).is_some_and(want));

@@ -58,9 +58,10 @@ impl Plugin for PropsPlugin {
             .add_systems(
                 Update,
                 (
-                    lay_out_props.run_if(resource_exists_and_changed::<CurrentLevel>),
-                    lay_out_banners.run_if(resource_exists_and_changed::<CurrentLevel>),
-                    lay_out_crystals.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    lay_out_props.run_if(crate::loading::laid_out_at(3)),
+                    lay_out_banners.run_if(crate::loading::laid_out_at(3)),
+                    crate::niches::lay_out_niches.run_if(crate::loading::laid_out_at(3)),
+                    lay_out_crystals.run_if(crate::loading::laid_out_at(3)),
                     rescale_props.run_if(resource_exists_and_changed::<Tuning>),
                     open_aimed_container.run_if(level_has_focus),
                     prompt_aimed_container.after(crate::carry::aim),
@@ -135,7 +136,7 @@ pub fn prop_transform(level: &Level, spot: &PropSpot, low: f32, scale: f32) -> T
     let reach = prop_floor_shape(spot.prop, scale).radius();
     let floor = std::iter::once(Vec2::ZERO)
         .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
-        .map(|offset| relief.floor_height(centre.x + offset.x, centre.z + offset.y))
+        .map(|offset| relief.rest_height(centre.x + offset.x, centre.z + offset.y))
         .fold(f32::INFINITY, f32::min);
     Transform::from_translation(Vec3::new(centre.x, floor - low * scale - SINK, centre.z))
         .with_rotation(Quat::from_rotation_y(spot.yaw))
@@ -225,17 +226,25 @@ pub fn banner_transform(spot: &BannerSpot, top: f32) -> Transform {
     Transform::from_translation(Vec3::new(centre.x, top, centre.z)).with_rotation(Quat::from_rotation_y(spot.yaw))
 }
 
-/// Spawns (or respawns, when the level changes) the level's banners.
-fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<BannerPiece>>, mut spawner: ItemSpawner) {
+/// The banner at `spot` shaped and hung: plain data, so it can be made ahead of time
+/// ([`crate::staged`]).
+pub fn banner_piece(level: &Level, spot: &BannerSpot) -> crate::staged::StagedPiece {
+    let (state, top) = banner_hang(spot, level);
+    let item = Item::Banner(state);
+    let name = format!("Banner of {}", level.faction(spot.faction).name);
+    crate::staged::StagedPiece { mesh: item.build(), appearance: appearance_of(&item), name, transform: banner_transform(spot, top) }
+}
+
+/// Spawns (or respawns, when the level changes) the level's banners, made ahead of time if the
+/// level was made in the background.
+fn lay_out_banners(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<BannerPiece>>, mut staged: Option<ResMut<crate::staged::Staged>>, mut spawner: ItemSpawner) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
+    let mut ahead = staged.as_mut().and_then(|s| s.take_banners(&level.0)).map(Vec::into_iter);
     for (index, spot) in level.0.banners.iter().enumerate() {
-        let (state, top) = banner_hang(spot, &level.0);
-        let item = Item::Banner(state);
-        let (mesh, appearance) = (item.build(), appearance_of(&item));
-        let name = format!("Banner of {}", level.0.faction(spot.faction).name);
-        spawner.spawn(&mesh, &appearance).insert((LevelPiece, Name::new(name), banner_transform(spot, top), BannerPiece { index }));
+        let piece = ahead.as_mut().and_then(Iterator::next).unwrap_or_else(|| banner_piece(&level.0, spot));
+        spawner.spawn(&piece.mesh, &piece.appearance).insert((LevelPiece, Name::new(piece.name), piece.transform, BannerPiece { index }));
     }
 }
 
@@ -285,7 +294,7 @@ pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemM
             let reach = spot.radius.max(1.0);
             let floor = std::iter::once(Vec2::ZERO)
                 .chain((0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * reach * 0.8))
-                .map(|offset| relief.floor_height(x + offset.x, z + offset.y))
+                .map(|offset| relief.rest_height(x + offset.x, z + offset.y))
                 .fold(f32::INFINITY, f32::min);
             let low = if spot.growth == armory::families::crystal::Growth::Mass { crystal_mount(mesh, spot) } else { low };
             Transform::from_translation(Vec3::new(x, floor - low - SINK, z)).with_rotation(rotation)
@@ -298,22 +307,31 @@ pub fn crystal_transform(level: &Level, spot: &CrystalSpot, mesh: &armory::ItemM
     }
 }
 
-/// Spawns (or respawns, when the level changes) the level's crystals.
-fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<CrystalPiece>>, mut spawner: ItemSpawner) {
+/// The crystal at `spot` shaped and set in the rock: plain data, so it can be made ahead of time
+/// ([`crate::staged`]).
+pub fn crystal_piece(level: &Level, spot: &CrystalSpot) -> crate::staged::StagedPiece {
+    let item = Item::Crystal(crystal_state(spot));
+    let (mesh, mut appearance) = (item.build(), appearance_of(&item));
+    // The rock they grow from is the cavern's own pale stone.
+    if let Some(stone) = level.cavern_stone() {
+        appearance.palette.materials.stone = stone.rgb();
+    }
+    let low = item_points(&mesh).iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let transform = crystal_transform(level, spot, &mesh, low);
+    crate::staged::StagedPiece { mesh, appearance, name: item.noun().to_string(), transform }
+}
+
+/// Spawns (or respawns, when the level changes) the level's crystals, made ahead of time if the
+/// level was made in the background.
+fn lay_out_crystals(mut commands: Commands, level: Res<CurrentLevel>, old: Query<Entity, With<CrystalPiece>>, mut staged: Option<ResMut<crate::staged::Staged>>, mut spawner: ItemSpawner) {
     for entity in &old {
         commands.entity(entity).despawn();
     }
+    let mut ahead = staged.as_mut().and_then(|s| s.take_crystals(&level.0)).map(Vec::into_iter);
     for (index, spot) in level.0.crystals.iter().enumerate() {
-        let item = Item::Crystal(crystal_state(spot));
-        let (mesh, mut appearance) = (item.build(), appearance_of(&item));
-        // The rock they grow from is the cavern's own pale stone.
-        if let Some(stone) = level.0.cavern_stone() {
-            appearance.palette.materials.stone = stone.rgb();
-        }
-        let low = item_points(&mesh).iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-        let name = item.noun();
-        let mut root = spawner.spawn(&mesh, &appearance);
-        root.insert((LevelPiece, Name::new(name), crystal_transform(&level.0, spot, &mesh, low), CrystalPiece { index }));
+        let piece = ahead.as_mut().and_then(Iterator::next).unwrap_or_else(|| crystal_piece(&level.0, spot));
+        let mut root = spawner.spawn(&piece.mesh, &piece.appearance);
+        root.insert((LevelPiece, Name::new(piece.name), piece.transform, CrystalPiece { index }));
         if matches!(spot.surface, CrystalSurface::Floor | CrystalSurface::Foot) {
             root.insert(BlocksTheWay(fb_level::FloorShape::Round(spot.radius)));
         }
@@ -332,8 +350,14 @@ pub fn stock_container(inventory: &mut Inventory, spot: &PropSpot, odds: fb_item
 pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec<fb_items::Item>) -> Option<ItemId> {
     let Prop::Container { style, seed, .. } = prop else { return None };
     let container = inventory.add(fb_items::container_item(chest_state(style, seed, false)));
+    fill_container(inventory, container, contents);
+    Some(container)
+}
+
+/// Puts `contents` in `container`, each at its first free spot, upright first and then turned,
+/// and anything with no room left out. What is found in a container is unknown if it is magic.
+pub fn fill_container(inventory: &mut Inventory, container: ItemId, contents: Vec<fb_items::Item>) {
     for item in contents {
-        // What is found in a container is unknown if it is magic.
         let id = inventory.add(crate::identify::found_unknown(item));
         let footprint = inventory.footprint(id).unwrap_or(Footprint { cols: 1, rows: 1 });
         let at = inventory.grid(container).and_then(|g| g.first_free(footprint));
@@ -341,7 +365,6 @@ pub fn stock_container_with(inventory: &mut Inventory, prop: Prop, contents: Vec
             inventory.forget(id);
         }
     }
-    Some(container)
 }
 
 /// Spawns (or respawns, when the level changes) every prop the level lays out, each container
@@ -433,6 +456,7 @@ fn open_aimed_container(
     input: ActionInput,
     mut aimed: ResMut<Aimed>,
     containers: Query<(&PropPiece, &Container)>,
+    urns: Query<&Container, With<crate::niches::NicheUrn>>,
     level: Res<CurrentLevel>,
     mut open: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
@@ -444,6 +468,13 @@ fn open_aimed_container(
         return;
     }
     let Some(entity) = aimed.0 else { return };
+    // An urn in a niche has no lid to raise: its grid goes up and that is all.
+    if let Ok(urn) = urns.get(entity) {
+        aimed.0 = None;
+        showing.0 = Some(urn.id);
+        show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+        return;
+    }
     let Ok((piece, &container)) = containers.get(entity) else { return };
     aimed.0 = None;
     let cursor = cursor.as_deref_mut().map(|c| &mut **c);
@@ -479,6 +510,7 @@ pub(crate) fn prompt_aimed_container(
 fn open_for_capture(
     mut commands: Commands,
     containers: Query<(Entity, &PropPiece, &Container)>,
+    urns: Query<(&crate::niches::NichePiece, &Container), With<crate::niches::NicheUrn>>,
     level: Res<CurrentLevel>,
     mut open: ResMut<ScreenOpen>,
     mut showing: ResMut<OpenContainer>,
@@ -489,6 +521,14 @@ fn open_for_capture(
 ) {
     *frames += 1;
     if *frames != 4 {
+        return;
+    }
+    // `FB_OPEN_CONTAINER=urn` opens the level's first urn in a niche.
+    if std::env::var("FB_OPEN_CONTAINER").is_ok_and(|v| v == "urn") {
+        if let Some((_, urn)) = urns.iter().min_by_key(|(piece, _)| piece.index) {
+            showing.0 = Some(urn.id);
+            show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+        }
         return;
     }
     let n: usize = std::env::var("FB_OPEN_CONTAINER").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -790,7 +830,7 @@ mod tests {
             let low = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
             let transform = prop_transform(&level, spot, low, prop_scale(spot.prop, &Tuning::default()));
             let bottom = points.iter().map(|&p| transform.transform_point(p).y).fold(f32::INFINITY, f32::min);
-            let floor = relief.floor_height(transform.translation.x, transform.translation.z);
+            let floor = relief.rest_height(transform.translation.x, transform.translation.z);
             assert!(bottom <= floor + 1e-3, "prop {index} floats: base {bottom}, floor {floor}");
             assert!(bottom > floor - 0.4, "prop {index} sinks: base {bottom}, floor {floor}");
         }

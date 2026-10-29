@@ -11,12 +11,14 @@
 //!   the delver to its hall, the room most of them stand in, heals them and takes a share of
 //!   their coin ([`fb_character::revival::choose_hall`]). Otherwise they come to where they fell,
 //!   hours later and weak, and every creature that was hunting them has gone home.
-//! - A card tells them what happened, then fades.
+//! - A card tells them what happened, then fades. It holds the level still ([`crate::play::level_has_focus`])
+//!   and the mouse is not read behind it ([`hold_the_mouse`]) until a click dismisses it.
 //!
 //! The revive count belongs to the world, and the world (the run's abyss) is made afresh when a
 //! run begins, so [`Revives`] starts over with each new delve.
 
 use bevy::{
+    input::InputSystems,
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
@@ -52,7 +54,8 @@ impl Plugin for RevivalPlugin {
                 prayers.0 = 0;
             })
             .add_systems(Update, sleep_renews_prayer.in_set(DelveSystems))
-            .add_systems(Update, (choose, come_to, let_go, fade_wake_card).chain().in_set(DelveSystems));
+            .add_systems(Update, (choose, come_to, let_go, fade_wake_card).chain().in_set(DelveSystems))
+            .add_systems(PreUpdate, hold_the_mouse.run_if(any_with_component::<WakeCard>).after(InputSystems).before(crate::keymap::HoldSet));
         // `FB_FALL=wait|come_to|let_go`, for captures (README, "Debug switches").
         if let Ok(then) = std::env::var("FB_FALL") {
             let choice = match then.trim() {
@@ -487,6 +490,19 @@ fn fade_wake_card(
     }
 }
 
+/// While the wake card shows the mouse is not read: a click meant to read on must not swing at
+/// the folk who carried the delver here. A left click dismisses the card, and that click, like
+/// every other, goes no further, being cleared before the hold tracker or any action sees it.
+fn hold_the_mouse(mut commands: Commands, mouse: Option<ResMut<ButtonInput<MouseButton>>>, cards: Query<Entity, With<WakeCard>>) {
+    let Some(mut mouse) = mouse else { return };
+    if mouse.just_pressed(MouseButton::Left) {
+        for card in &cards {
+            commands.entity(card).despawn();
+        }
+    }
+    mouse.reset_all();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,7 +649,7 @@ mod tests {
         assert!(app.world().get_resource::<Unconscious>().is_some(), "no second prayer");
         choose(&mut app, ReviveButton::ComeTo);
         app.world_mut().resource_mut::<Prayers>().0 = 1;
-        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: player, hit_points: 1, since: 0.0, began: 0.0 });
+        app.world_mut().resource_mut::<crate::camp::Asleep>().0 = Some(crate::camp::Sleeping { camp: fb_items::camp::Camp::Bedroll, bed: player, hit_points: 1, since: 0.0, nap_until: None, began: 0.0 });
         app.update();
         assert_eq!(app.world().resource::<Prayers>().0, 0, "sleep renews it");
     }
@@ -739,5 +755,63 @@ mod tests {
         choose(&mut app, ReviveButton::ComeTo);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 3, "alone");
         assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO, "where they fell");
+    }
+
+    /// A delve with the mouse, the keymap and the swing, and a delver who has just come to alone.
+    fn awake() -> (App, Entity) {
+        let (mut app, player) = delve();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<crate::inventory::Toast>()
+            .add_systems(Update, super::super::swing::start_swing.run_if(crate::play::level_has_focus));
+        knock_down(&mut app, player);
+        choose(&mut app, ReviveButton::ComeTo);
+        (app, player)
+    }
+
+    fn click(app: &mut App) {
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+    }
+
+    fn cards(app: &mut App) -> usize {
+        app.world_mut().query::<&WakeCard>().iter(app.world()).count()
+    }
+
+    #[test]
+    fn the_level_has_no_focus_while_the_wake_card_shows() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _) = awake();
+        assert!(!app.world_mut().run_system_once(crate::play::level_has_focus).unwrap());
+        let card = app.world_mut().query_filtered::<Entity, With<WakeCard>>().single(app.world()).unwrap();
+        app.world_mut().despawn(card);
+        assert!(app.world_mut().run_system_once(crate::play::level_has_focus).unwrap());
+    }
+
+    #[test]
+    fn a_click_behind_the_wake_card_does_not_swing_and_dismisses_it() {
+        use super::super::swing::Swing;
+        let (mut app, player) = awake();
+        assert_eq!(cards(&mut app), 1);
+        click(&mut app);
+        assert_eq!(cards(&mut app), 0, "the click dismisses it");
+        assert!(app.world().get::<Swing>(player).is_none(), "and does nothing else");
+        click(&mut app);
+        assert!(app.world().get::<Swing>(player).is_some(), "the next click swings");
+    }
+
+    #[test]
+    fn waking_alone_holds_the_mouse_the_same_way() {
+        use super::super::swing::Swing;
+        let (mut app, player) = awake();
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO, "where they fell");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.update();
+        assert!(!app.world().resource::<ButtonInput<MouseButton>>().pressed(MouseButton::Right), "no button reads behind it");
+        assert_eq!(cards(&mut app), 1, "only a left click dismisses");
+        assert!(app.world().get::<Swing>(player).is_none());
     }
 }

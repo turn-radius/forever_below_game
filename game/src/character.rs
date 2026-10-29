@@ -338,6 +338,8 @@ pub struct Derived {
     pub attack_rate: f32,
     /// Multiple of how fast their stamina refills, from what they wear.
     pub stamina_refill: f32,
+    /// Multiple of how fast their mana refills, from what they wear.
+    pub mana_refill: f32,
     /// Multiple of what swinging, blocking and sprinting cost them in stamina, from what they
     /// wear; below 1 is a saving.
     pub stamina_cost: f32,
@@ -394,7 +396,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from), favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: Self::warmth_of(item) as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), mana_refill: s.mana_refill as f64, shun: s.shun.map(f64::from), favored: None, favored_ward: 0.0, favored_bane: None, web_walker: false },
             );
         }
         // A cleric's devotion counts like one more thing worn, so the sheet can explain it and
@@ -517,7 +519,13 @@ impl Character {
         self.derive_with(fb_character::rules::defaults(), inventory)
     }
 
-    /// [`Character::derive`] under `rules`.
+    /// The warmth an equipped item gives: a light's own (of the Ember, of the Furnace) only while it
+    /// burns, so an unlit lantern at the hip warms no one.
+    fn warmth_of(item: &fb_items::Item) -> f32 {
+        if item.shape.lit() == Some(false) { 0.0 } else { item.profile.stats.warmth }
+    }
+
+/// [`Character::derive`] under `rules`.
     pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
         self.derive_lit(rules, inventory, None)
     }
@@ -536,7 +544,7 @@ impl Character {
             load,
             capacity,
             load_band,
-            warmth: sum(|s| s.warmth),
+            warmth: equipped.iter().map(|(_, item)| Self::warmth_of(item)).fold(0.0, |a, b| a + b),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,
             hunger_rate: gear.hunger_rate as f32,
@@ -552,6 +560,7 @@ impl Character {
             shun: gear.shun.map(|w| w as f32),
             attack_rate: gear.attack_rate as f32,
             stamina_refill: gear.stamina_refill as f32,
+            mana_refill: gear.mana_refill as f32,
             stamina_cost: gear.stamina_cost as f32,
         }
     }
@@ -648,6 +657,20 @@ impl Default for GearStamina {
     }
 }
 
+/// What the delver's gear makes of their mana: how fast it refills, as a multiple of the usual.
+/// Kept up with [`Load`] by `player::weigh_the_delver`.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct GearMana {
+    pub refill: f32,
+}
+
+impl Default for GearMana {
+    fn default() -> Self {
+        GearMana { refill: 1.0 }
+    }
+}
+
 /// The delver's hunger, thirst and sleepiness, on the [`Player`](crate::play::Player) from their
 /// spawn, so a new delve starts Fed. Eating and drinking take from it (`crate::eat`); the game
 /// clock steps it in #229.
@@ -664,7 +687,7 @@ pub struct DelverStamina(#[reflect(remote = crate::inspect::remote::StaminaDef)]
 
 /// The delver's mana, on the [`Player`](crate::play::Player) from their spawn. The pool's size
 /// is set from the character when the delver is new and again whenever the character changes,
-/// keeping how full it is; the game clock refills it (`crate::simulate::step_the_delver`).
+/// keeping how full it is; it refills in real seconds (`crate::simulate::step_mana`).
 /// Nothing spends it yet.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 #[reflect(Component)]
@@ -945,6 +968,21 @@ mod tests {
     }
 
     #[test]
+    fn a_lantern_of_the_ember_warms_only_while_it_burns() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let warmth = |lit: bool| {
+            let mut lantern = with_affix("Lantern", 7, "of the Ember");
+            lantern.shape.set_lit(lit).unwrap();
+            let mut inventory = Inventory::default();
+            let id = inventory.add(lantern);
+            inventory.wear(id, Slot::Offhand).unwrap();
+            delver.derive(&inventory).warmth
+        };
+        assert_eq!(warmth(true) - warmth(false), 2.0, "of the Ember gives +2 while lit, nothing unlit");
+    }
+
+    #[test]
     fn a_belt_of_the_ox_lifts_a_human_to_175_lb() {
         use fb_items::Slot;
         let attributes = Attributes { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10 };
@@ -1093,6 +1131,25 @@ mod tests {
         assert!((derived.stamina_refill - 1.2 * 1.3).abs() < 1e-6, "{}", derived.stamina_refill);
         assert!((derived.stamina_cost - 0.75 * 0.8).abs() < 1e-6, "{}", derived.stamina_cost);
         assert!(delver.loadout(&inventory).stamina_cost().line().contains("× "));
+    }
+
+    #[test]
+    fn mana_refill_composes_multiplicatively_and_the_flaw_lowers_it() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let mut inventory = Inventory::default();
+        assert_eq!(delver.derive(&inventory).mana_refill, 1.0);
+        for (base, slot, affix) in [("Helm", Slot::Head, "Attuned"), ("Charm", Slot::Charm, "of the Wellspring")] {
+            let id = inventory.add(with_affix(base, 4, affix));
+            inventory.wear(id, slot).unwrap();
+        }
+        let derived = delver.derive(&inventory);
+        assert!((derived.mana_refill - 1.2 * 1.25).abs() < 1e-6, "{}", derived.mana_refill);
+        assert!(delver.loadout(&inventory).mana_refill().line().contains("× "));
+        let mut drained = Inventory::default();
+        let amulet = drained.add(with_affix("Amulet", 4, "Drained"));
+        drained.wear(amulet, Slot::Neck).unwrap();
+        assert!((delver.derive(&drained).mana_refill - 0.8).abs() < 1e-6);
     }
 
     #[test]

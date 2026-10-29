@@ -79,15 +79,18 @@ fn headless_game(file: &PathBuf) -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 /// A new delve in level 1207, a second in, which may save.
 fn delving(file: &PathBuf) -> App {
+    delving_in(file, 1207)
+}
+
+/// A new delve in the world of `seed`, a second in, which may save.
+fn delving_in(file: &PathBuf, seed: u32) -> App {
     let mut app = headless_game(file);
+    app.insert_resource(NewDelveSeed(Some(seed)));
     run(&mut app, 30);
     app.world_mut().write_message(MenuCommand::Creator(CreatorCommand::Begin));
     run(&mut app, 90);
@@ -283,6 +286,8 @@ struct Standing {
     floor: Vec<(ItemSpot, fb_items::Item)>,
     camps: Vec<fb_items::camp::Camp>,
     containers: Vec<(usize, bool, Vec<(String, u32)>)>,
+    /// The urns in the niches, by niche, with what is left in each.
+    urns: Vec<(usize, Vec<(String, u32)>)>,
     creatures: Vec<(u32, i32, bool)>,
 }
 
@@ -300,9 +305,28 @@ fn standing(app: &mut App) -> Standing {
         .map(|(p, c)| (p.index, c.opened, inventory.grid(c.id).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect()))
         .collect();
     containers.sort_by_key(|c| c.0);
+    let mut urns: Vec<_> = world
+        .query::<(&forever_below::niches::NichePiece, &Container)>()
+        .iter(world)
+        .map(|(p, c)| (p.index, inventory.grid(c.id).unwrap().entries().iter().map(|e| (inventory.item(e.id).unwrap().base.clone(), inventory.item(e.id).unwrap().seed)).collect()))
+        .collect();
+    urns.sort_by_key(|u| u.0);
     let mut creatures: Vec<_> = world.query::<(&Critter, &Health, Has<Corpse>)>().iter(world).map(|(c, h, dead)| (c.spot.seed, h.hp, dead)).collect();
     creatures.sort();
-    Standing { floor, camps, containers, creatures }
+    Standing { floor, camps, containers, urns, creatures }
+}
+
+/// Takes the first thing out of the first urn in a niche of this level that holds anything, if
+/// there is one. Returns whether it did.
+fn rob_an_urn(app: &mut App) -> bool {
+    let world = app.world_mut();
+    let inventory = world.resource::<Inventory>().clone();
+    let mut urns: Vec<_> = world.query::<(&forever_below::niches::NichePiece, &Container)>().iter(world).map(|(p, c)| (p.index, *c)).collect();
+    urns.sort_by_key(|u| u.0);
+    let Some((_, urn)) = urns.into_iter().find(|(_, c)| inventory.contents_count(c.id) >= 1) else { return false };
+    let taken = inventory.grid(urn.id).unwrap().entries()[0].id;
+    world.resource_mut::<Inventory>().stow(taken).ok();
+    true
 }
 
 /// A delve on three levels with something changed on each, ended by lying down in a pitched
@@ -342,6 +366,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     run(&mut app, 5);
     let taken = app.world().resource::<Inventory>().grid(container.id).unwrap().entries()[0].id;
     app.world_mut().resource_mut::<Inventory>().stow(taken).ok();
+    rob_an_urn(&mut app);
     go(&mut app, StairKind::Down);
 
     // Level 2: a sack with a dagger in it set down.
@@ -355,6 +380,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
         sack
     };
     set_down_at(&mut app, sack, at, 0.1);
+    rob_an_urn(&mut app);
     go(&mut app, StairKind::Down);
 
     // Level 3: a tent pitched, and the delve changed in every way it can be.
@@ -396,6 +422,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     }
     run(&mut app, 5);
 
+    rob_an_urn(&mut app);
     // Lie down: F, and one frame.
     look_down_at_camp(&mut app, feet, forward, 0.6);
     key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
@@ -418,7 +445,7 @@ fn resumed(file: &PathBuf) -> (App, Snapshot) {
     let mut frames = 0;
     // The state is put back on the first frame of the delve; the next frame it is only played.
     loop {
-        app.update();
+        run(&mut app, 1);
         frames += 1;
         if *app.world().resource::<State<AppState>>().get() == AppState::Delving && app.world().get_resource::<ResumeDelve>().is_none() {
             break;
@@ -427,6 +454,44 @@ fn resumed(file: &PathBuf) -> (App, Snapshot) {
     }
     let snap = snapshot(&mut app);
     (app, snap)
+}
+
+/// An urn in a niche, robbed, stays robbed in a delve saved and resumed: the world of 4 has an urn
+/// with something in it on its second level.
+#[test]
+fn an_urn_robbed_in_a_niche_stays_robbed_in_a_saved_delve() {
+    let file = scratch("urn");
+    let mut app = delving_in(&file, 4);
+    go(&mut app, StairKind::Down);
+    let held = |app: &mut App| -> Vec<(usize, usize)> {
+        let world = app.world_mut();
+        let inventory = world.resource::<Inventory>().clone();
+        let mut urns: Vec<_> = world.query::<(&forever_below::niches::NichePiece, &Container)>().iter(world).map(|(p, c)| (p.index, inventory.contents_count(c.id))).collect();
+        urns.sort();
+        urns
+    };
+    let before = held(&mut app);
+    assert!(before.iter().any(|u| u.1 > 0), "an urn with something in it: {before:?}");
+    assert!(rob_an_urn(&mut app));
+    let after = held(&mut app);
+    assert_ne!(before, after, "something came out of an urn");
+    let lying = standing(&mut app);
+
+    let (feet, forward) = set_camp_where(&mut app, "Tent", 40_010);
+    look_down_at_camp(&mut app, feet, forward, 0.6);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    assert!(app.world().resource::<Asleep>().0.is_some(), "asleep: {}", app.world().resource::<forever_below::inventory::Toast>().text);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Released);
+
+    let (mut resumed_app, _) = resumed(&file);
+    let mut frames = 0;
+    while !resumed_app.world().resource::<forever_below::loading::LayoutTurn>().done() && frames < 60 {
+        resumed_app.update();
+        frames += 1;
+    }
+    assert_eq!(held(&mut resumed_app), after, "what was taken from the urn is still gone, and the rest is still there");
+    assert_eq!(standing(&mut resumed_app).urns, lying.urns);
 }
 
 #[test]
@@ -442,7 +507,8 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     assert_eq!(resumed_at, at_save);
     // Frames on, the level is laid out as it was left, and the delver lies in the tent.
     let mut frames = 0;
-    while app.world().resource::<Asleep>().0.is_none() && frames < 60 {
+    // (The level is laid out over the frames after the state is put back, a part a frame.)
+    while (app.world().resource::<Asleep>().0.is_none() || !app.world().resource::<forever_below::loading::LayoutTurn>().done()) && frames < 60 {
         app.update();
         frames += 1;
     }
@@ -467,6 +533,7 @@ fn a_saved_delve_comes_back_whole_on_three_levels() {
     }
     assert_eq!(now.camps, lying.camps, "the tent is still pitched");
     assert_eq!(now.containers, lying.containers, "the chests");
+    assert_eq!(now.urns, lying.urns, "the urns in the niches, and what was taken from them");
     assert_eq!(now.creatures, lying.creatures, "the creatures, hurt or dead");
     // By now the rats of this level may have come for the sleeper. Let them be, and walk up.
     let delver = player(&mut app);
@@ -505,6 +572,44 @@ fn a_delve_that_may_not_save_writes_nothing_when_the_delver_lies_down() {
     assert!(app.world().resource::<forever_below::inventory::Toast>().text.starts_with("You lie down"));
 }
 
+#[test]
+fn a_rested_delver_lies_down_in_a_camp_and_the_delve_is_saved_with_the_nap() {
+    let file = scratch("rested_nap");
+    let mut app = delving(&file);
+    let (feet, forward) = set_camp_where(&mut app, "Bedroll", 40_012);
+    look_down_at_camp(&mut app, feet, forward, 0.0);
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    let sleep = app.world().resource::<Asleep>().0.expect("a rested delver lies down in a camp");
+    assert!(sleep.nap_until.is_some_and(|end| end > sleep.since), "it is a nap");
+    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "Your delve is saved.");
+    let saved = forever_below::save::SavedGame::find(&file);
+    let delve = saved.delve.expect("saved");
+    assert_eq!(delve.nap_until, sleep.nap_until, "the nap's end is in the save");
+}
+
+#[test]
+fn a_rested_delver_with_something_hostile_near_is_refused_and_nothing_is_saved() {
+    let file = scratch("rested_watched");
+    let mut app = delving(&file);
+    let (feet, forward) = set_camp_where(&mut app, "Bedroll", 40_013);
+    look_down_at_camp(&mut app, feet, forward, 0.0);
+    let world = app.world_mut();
+    let mut creatures = world.query_filtered::<&mut Transform, With<Critter>>();
+    let mut moved = false;
+    for mut at in creatures.iter_mut(world) {
+        at.translation = Vec3::new(feet.x + 1.0, 0.0, feet.y);
+        moved = true;
+    }
+    assert!(moved, "the level has a creature");
+    app.update();
+    key(&mut app, KeyCode::KeyF, "f", bevy::input::ButtonState::Pressed);
+    app.update();
+    assert!(app.world().resource::<Asleep>().0.is_none());
+    assert_eq!(app.world().resource::<forever_below::inventory::Toast>().text, "You cannot sleep with something so near.");
+    assert!(!file.exists(), "nothing was saved");
+}
+
 /// Every resource and every component of the delver the game has, and what the save does with
 /// it. A new one is not in either list and fails here; say which it is.
 #[test]
@@ -529,17 +634,18 @@ fn every_resource_and_component_is_accounted_for() {
         ("book::Book", "the spellbook screen: open-screen state"),
         ("devotion::Offered", "an open devotion offer: the deed tally offers it again"),
         ("smoke::PuffAssets", "the smoke puffs' mesh, made when the app starts"),
-        ("doors::PickInFlight", "a lock-pick roll showing: transient"),
         // Set again by the delve that starts, from what the save holds.
         ("save::SaveFile", "where the file is"),
         ("save::Saveable", "whether this delve may save: set by the title"),
         ("character::ChosenDelver", "taken up by the delve's start"),
         ("play::CurrentLevel", "rebuilt from the seed, depth and record"),
         ("play::LevelRooms", "mapped from the level"),
+        ("loading::LayoutTurn", "counts the frames since the level changed"),
         ("play::BlockedCells", "worked out as the level is laid out"),
         ("play::Obstacles", "gathered each frame"),
         ("doors::Doors", "the level's doors: in the record"),
         ("dice::Dice", "a roll showing: transient screen state"),
+        ("doors::PickInFlight", "a lock pick whose dice are showing: transient, and cleared when the delve ends"),
         ("dice::DiceStage", "the roll's render image, made when the app starts"),
         ("identify::Identifying", "an identify roll showing: transient"),
         ("talk::Persuading", "a persuasion roll showing: the talk is not saved"),
@@ -654,6 +760,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("play::Player", "the delver itself"),
         ("character::Load", "worked out from the pack"),
         ("character::GearStamina", "worked out from the pack"),
+        ("character::GearMana", "worked out from the pack"),
         ("player::GearPace", "worked out from the pack"),
         ("character::DelverVisibility", "worked out from the light and the pace"),
         ("player::Gait", "the step cycle"),
