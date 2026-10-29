@@ -89,7 +89,7 @@ pub fn covers(at: Vec2, forward: Vec2, from: Vec2) -> bool {
 }
 
 /// Raises the guard while the block key is held with a shield in the off hand, the mouse taken
-/// and the delver standing, the wake card not up, not winded and not mid-swing; lowers it otherwise.
+/// and the delver standing, no overlay over the level, not winded and not mid-swing; lowers it otherwise.
 #[allow(clippy::type_complexity)]
 fn raise_guard(
     mut commands: Commands,
@@ -97,11 +97,11 @@ fn raise_guard(
     cursor: Option<Single<&CursorOptions, With<PrimaryWindow>>>,
     inventory: Res<Inventory>,
     fallen: Option<Res<super::vitals::Fallen>>,
-    wake: Query<(), With<super::revival::WakeCard>>,
+    overlay: crate::play::LevelOverlay,
     mut players: Query<(Entity, &Transform, Option<&Health>, Option<&DelverStamina>, Option<&mut Guard>, Has<Swing>), With<Player>>,
 ) {
     let looking = cursor.is_none_or(|c| c.grab_mode != CursorGrabMode::None);
-    let held = (input.pressed(Action::Block) && looking && wake.is_empty()) || crate::launch::env_set("FB_GUARD");
+    let held = (input.pressed(Action::Block) && looking && !overlay.covers()) || crate::launch::env_set("FB_GUARD");
     let shield = holds_shield(&inventory);
     for (player, at, health, stamina, guard, swinging) in &mut players {
         let able = !health.is_some_and(Health::is_down) && fallen.is_none() && stamina.is_none_or(|s| s.0.can_exert()) && !swinging;

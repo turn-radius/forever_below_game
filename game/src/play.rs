@@ -206,37 +206,63 @@ impl ScreenOpen {
     }
 }
 
-/// Whether something covers the level's inspect cards: the map or the pause menu, the "You fall
-/// unconscious" overlay ([`crate::combat::revival`]) or the fall screen ([`crate::combat::vitals`]) or the wake card after it.
-/// The cards come back when it closes, if they are still aimed at. The inventory does not cover
-/// them: it shows the hovered item's own card.
+/// Marks the root of an overlay that covers the level while it lasts: the loading screen, the
+/// page being read, the dice roll. [`LevelOverlay`] reads it, so for an overlay marked once the
+/// inspect cards hide ([`CardsCovered`]) and the level holds still ([`level_has_focus`]).
+/// Overlays that are a resource rather than a node (a screen, the journey, sleep) are read from
+/// the resource, which is there the frame it starts.
+#[derive(Component, Debug, Default)]
+pub struct CoversTheLevel;
+
+/// Whether an overlay that is not a [`Screen`] covers the level: one marked [`CoversTheLevel`],
+/// a journey between levels ([`crate::travel`]), sleep ([`crate::camp`]), a roll on the dice panel
+/// ([`crate::dice`]), a page being read ([`crate::reading`]) or the wake card
+/// ([`crate::combat::revival`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct LevelOverlay<'w, 's> {
+    marked: Query<'w, 's, (), With<CoversTheLevel>>,
+    journey: Option<Res<'w, crate::travel::Journey>>,
+    asleep: Option<Res<'w, crate::camp::Asleep>>,
+    dice: Option<Res<'w, crate::dice::Dice>>,
+    page: Option<Res<'w, crate::reading::OpenPage>>,
+    wake: Query<'w, 's, (), With<crate::combat::revival::WakeCard>>,
+}
+
+impl LevelOverlay<'_, '_> {
+    pub fn covers(&self) -> bool {
+        !self.marked.is_empty()
+            || self.journey.is_some()
+            || self.asleep.as_ref().is_some_and(|a| a.0.is_some())
+            || self.dice.as_ref().is_some_and(|d| d.busy())
+            || self.page.as_ref().is_some_and(|p| p.is_open())
+            || !self.wake.is_empty()
+    }
+}
+
+/// Whether something covers the level's inspect cards: any screen but the inventory (the map, the
+/// pause menu, a talk, a commission, the enchanter's bench), the "You fall unconscious" overlay
+/// ([`crate::combat::revival`]) or the fall screen ([`crate::combat::vitals`]), or a
+/// [`LevelOverlay`]. The cards come back when it closes, if they are still aimed at. The
+/// inventory does not cover them: it shows the hovered item's own card.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct CardsCovered<'w, 's> {
     open: Option<Res<'w, ScreenOpen>>,
     unconscious: Option<Res<'w, crate::combat::revival::Unconscious>>,
     fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
-    wake: Query<'w, 's, (), With<crate::combat::revival::WakeCard>>,
+    overlay: LevelOverlay<'w, 's>,
 }
 
 impl CardsCovered<'_, '_> {
     pub fn is_covered(&self) -> bool {
-        self.open.as_ref().is_some_and(|o| o.is(Screen::Menu) || o.is(Screen::Map)) || self.unconscious.is_some() || self.fallen.is_some() || !self.wake.is_empty()
+        self.open.as_ref().is_some_and(|o| o.0.is_some_and(|screen| screen != Screen::Inventory)) || self.unconscious.is_some() || self.fallen.is_some() || self.overlay.covers()
     }
 }
 
-/// Run condition: no screen is open over the level, the delver is not between levels
-/// ([`crate::travel`]) or asleep ([`crate::camp`]) and the debug inspector is closed
-/// ([`crate::inspect`]), no roll shows on the dice panel ([`crate::dice`]) and the wake card is
-/// not up ([`crate::combat::revival`]): the delver stands still.
-pub fn level_has_focus(
-    screen: Option<Res<ScreenOpen>>,
-    journey: Option<Res<crate::travel::Journey>>,
-    inspector: Option<Res<crate::inspect::InspectorOpen>>,
-    asleep: Option<Res<crate::camp::Asleep>>,
-    dice: Option<Res<crate::dice::Dice>>,
-    wake_card: Query<(), With<crate::combat::revival::WakeCard>>,
-) -> bool {
-    wake_card.is_empty() && !dice.is_some_and(|d| d.busy()) && !screen.is_some_and(|s| s.0.is_some()) && journey.is_none() && !inspector.is_some_and(|i| i.0) && !asleep.is_some_and(|a| a.0.is_some())
+/// Run condition: no screen is open over the level, the debug inspector is closed
+/// ([`crate::inspect`]) and no other overlay covers it ([`LevelOverlay`]: between levels, asleep,
+/// a roll on the dice panel, a page, the wake card): the delver stands still.
+pub fn level_has_focus(screen: Option<Res<ScreenOpen>>, inspector: Option<Res<crate::inspect::InspectorOpen>>, overlay: LevelOverlay) -> bool {
+    !overlay.covers() && !screen.is_some_and(|s| s.0.is_some()) && !inspector.is_some_and(|i| i.0)
 }
 
 /// Run condition: the inventory screen is open, for keys that act on the item under the mouse.

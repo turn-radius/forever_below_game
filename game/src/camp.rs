@@ -1256,6 +1256,21 @@ mod tests {
     }
 
     #[test]
+    fn asleep_the_level_has_no_focus_and_no_inspect_card_shows_until_they_wake() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _, _) = sleeper("Tent");
+        let covered = |app: &mut App| app.world_mut().run_system_once(|covered: crate::play::CardsCovered| covered.is_covered()).unwrap();
+        assert!(app.world_mut().run_system_once(level_has_focus).unwrap());
+        assert!(!covered(&mut app));
+        press(&mut app, KeyCode::KeyF);
+        assert!(!app.world_mut().run_system_once(level_has_focus).unwrap(), "no swing, walk or look while asleep");
+        assert!(covered(&mut app), "the tent's card stays down over the sleep screen");
+        app.world_mut().resource_mut::<Asleep>().0 = None;
+        assert!(app.world_mut().run_system_once(level_has_focus).unwrap());
+        assert!(!covered(&mut app), "the card may return once awake");
+    }
+
+    #[test]
     fn a_rested_delver_lies_down_in_a_camp_and_naps_an_hour() {
         let (mut app, delver, _) = sleeper("Bedroll");
         app.world_mut().get_mut::<DelverNeeds>(delver).unwrap().0.sleepiness.value = 0.05;

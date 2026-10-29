@@ -177,6 +177,7 @@ fn show_page(
     let mut root = commands.spawn((
         Name::new("PageView"),
         PageView,
+        crate::play::CoversTheLevel,
         DespawnOnExit(crate::launch::AppState::Delving),
         Node {
             position_type: PositionType::Absolute,

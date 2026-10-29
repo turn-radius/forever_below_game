@@ -310,6 +310,7 @@ fn spawn_panel(commands: &mut Commands, fonts: &UiFonts, camera: Entity, stage: 
         .spawn((
             Name::new("Dice roll"),
             DicePanel,
+            crate::play::CoversTheLevel,
             DespawnOnExit(AppState::Delving),
             UiTargetCamera(camera),
             GlobalZIndex(40),

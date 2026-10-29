@@ -264,13 +264,12 @@ fn put_back(inventory: &mut Inventory, ammo: ItemId) {
 pub struct Around<'w, 's> {
     cursor: Option<Single<'w, 's, &'static CursorOptions, With<PrimaryWindow>>>,
     screens: Option<Res<'w, crate::play::ScreenOpen>>,
-    journey: Option<Res<'w, crate::travel::Journey>>,
     tuning: Res<'w, crate::tuning::Tuning>,
     sound: Option<Res<'w, super::swing::SwingSound>>,
     settings: Option<Res<'w, crate::settings::GameSettings>>,
     aimed: Option<Res<'w, crate::carry::Aimed>>,
     fallen: Option<Res<'w, super::vitals::Fallen>>,
-    wake: Query<'w, 's, (), With<super::revival::WakeCard>>,
+    overlay: crate::play::LevelOverlay<'w, 's>,
 }
 
 /// The input of shooting: nocking and drawing a bow, loosing it, firing and reloading a crossbow,
@@ -314,9 +313,9 @@ pub fn shoot(
     if marksman.reload.is_some() && marksman.nocked.is_some() {
         marksman.reload = None;
     }
-    let screens = around.screens.as_ref().is_some_and(|s| s.0.is_some()) || around.journey.is_some();
+    let screens = around.screens.as_ref().is_some_and(|s| s.0.is_some()) || around.overlay.covers();
     let Ok((at, health, effects)) = players.single() else { return };
-    if screens || around.fallen.is_some() || !around.wake.is_empty() || health.is_some_and(Health::is_down) {
+    if screens || around.fallen.is_some() || health.is_some_and(Health::is_down) {
         // The screen opened mid-draw: lower the bow and put the arrow back.
         if marksman.draw.is_some() || marksman.reload.is_some() {
             if let Some(nocked) = marksman.nocked.take() {
