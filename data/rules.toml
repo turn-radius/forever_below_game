@@ -348,6 +348,9 @@ favored_bane = "1d4"
 # Kills with one kind of weapon (mace, sword, ...) before the cleric is offered to dedicate
 # themselves to it, and kills of one kind of creature before they are offered a favored foe or an
 # alignment. Declining makes the next offer come at double the count. Play-test numbers.
+# How near, in world units (10 cm each), a living creature or a hostile folk may be before an
+# offer waits for a quieter moment; it also waits while the delver is down. Our own.
+quiet_distance = 250.0
 weapon_kills = 50
 creature_kills = 20
 

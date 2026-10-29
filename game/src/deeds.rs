@@ -103,6 +103,20 @@ mod tests {
     }
 
     #[test]
+    fn a_kill_with_a_bow_is_recorded_against_bows() {
+        let mut app = app();
+        let mut inventory = Inventory::default();
+        let bow = inventory.add(fb_items::roll_item("Bow", 7).unwrap());
+        inventory.wear(bow, Slot::Mainhand).unwrap();
+        app.insert_resource(inventory);
+        let spot = fb_level::generate(1207, 1).creatures[0];
+        let target = app.world_mut().spawn(Critter::new(spot, spot.creature())).id();
+        app.world_mut().write_message(Slain { target, by_ally: false });
+        app.update();
+        assert_eq!(app.world().resource::<Character>().deeds.kills_with(armory::Family::Bow), 1);
+    }
+
+    #[test]
     fn an_allys_kill_is_not_the_delvers() {
         let mut app = app();
         let spot = fb_level::generate(1207, 1).creatures[0];

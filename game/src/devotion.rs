@@ -31,6 +31,8 @@ use fb_faction::{Favour, World};
 
 use crate::carry::ViewModelCamera;
 use crate::character::{Character, Class};
+use crate::combat::feedback::Corpse;
+use crate::creatures::Critter;
 use crate::keymap::{Action, ActionInput};
 use crate::play::{DelveSystems, Screen, ScreenOpen, show_screen};
 use crate::record::WorldRecord;
@@ -93,12 +95,24 @@ fn offer_devotion(
     mut open: ResMut<ScreenOpen>,
     mut offered: ResMut<Offered>,
     journey: Option<Res<crate::travel::Journey>>,
+    players: Query<(&Transform, Option<&crate::combat::Health>), With<crate::play::Player>>,
+    creatures: Query<&Transform, (With<Critter>, Without<Corpse>)>,
+    folk: Query<(&Transform, &crate::hostility::Hostility), (With<crate::folk::Denizen>, Without<Corpse>)>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
 ) {
     if character.class != Class::Cleric || offered.0.is_some() || open.0.is_some() || journey.is_some() {
         return;
     }
     let rules = &GameRules::of(&rules).devotion;
+    // A due offer waits, pending, for a quiet moment: the delver up, and nothing alive and
+    // hostile near.
+    if let Ok((at, health)) = players.single() {
+        let me = at.translation.xz();
+        let near = |t: &Transform| t.translation.xz().distance(me) <= rules.quiet_distance;
+        if health.is_some_and(|h| h.is_down()) || creatures.iter().any(near) || folk.iter().any(|(t, h)| h.is_hostile() && near(t)) {
+            return;
+        }
+    }
     // An offer that would change nothing is answered without being made.
     while let Some(offer) = devotion::due(&character.deeds, rules) {
         if choices(&character, rules, offer).is_empty() {
@@ -371,6 +385,36 @@ mod tests {
         let mut app = app(c);
         app.update();
         assert_eq!(app.world().resource::<Offered>().0, Some(Offer::Weapon(armory::Family::Mace)));
+    }
+
+    #[test]
+    fn an_offer_due_mid_fight_waits_until_it_is_quiet() {
+        let need = DevotionRules::default().creature_kills;
+        let mut c = cleric();
+        slay(&mut c, UNDEAD, need);
+        let mut app = app(c);
+        app.world_mut().spawn((crate::play::Player, Transform::default(), crate::combat::Health::full(10)));
+        let spot = fb_level::generate(1207, 1).creatures[0];
+        let foe = app.world_mut().spawn((Critter::new(spot, spot.creature()), Transform::from_xyz(20.0, 0.0, 0.0))).id();
+        app.update();
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None, "a creature is near");
+        app.world_mut().entity_mut(foe).insert(Corpse { since: 0.0, fell: Transform::default() });
+        app.update();
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Devotion), "it opens once the creature is down");
+    }
+
+    #[test]
+    fn an_offer_waits_while_the_delver_is_down() {
+        let need = DevotionRules::default().creature_kills;
+        let mut c = cleric();
+        slay(&mut c, UNDEAD, need);
+        let mut app = app(c);
+        let player = app.world_mut().spawn((crate::play::Player, Transform::default(), crate::combat::Health { hp: 0, max: 10 })).id();
+        app.update();
+        assert_eq!(app.world().resource::<ScreenOpen>().0, None);
+        app.world_mut().entity_mut(player).insert(crate::combat::Health::full(10));
+        app.update();
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Devotion));
     }
 
     #[test]

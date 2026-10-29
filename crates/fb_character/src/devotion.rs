@@ -86,6 +86,9 @@ pub struct DevotionRules {
     pub favored_ward: f64,
     /// The extra dice the cleric rolls against a favored foe.
     pub favored_bane: Dice,
+    /// How near, in world units (10 cm each), a living creature or hostile folk may be before an
+    /// offer waits for a quieter moment. Our own.
+    pub quiet_distance: f32,
     /// Kills with one kind of weapon before a cleric is offered to dedicate themselves to it.
     /// Declining makes the next offer come at double.
     pub weapon_kills: u32,
@@ -114,6 +117,7 @@ impl Default for DevotionRules {
             aligned_standing: 15,
             aligned_loss_percent: 50,
             favored_standing: -15,
+            quiet_distance: 250.0,
             weapon_kills: 50,
             creature_kills: 20,
             aligned: BTreeMap::from([
