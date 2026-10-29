@@ -29,6 +29,12 @@ pub const CHILLED_BLOOD: &str = "chilled_blood";
 /// Lingering by a fire.
 pub const WARMED: &str = "warmed";
 
+/// The wards burning incense gives, by kind: cedar's against poison, myrrh's against cold and
+/// frankincense's against the undead.
+pub const CEDAR_WARD: &str = "cedar_ward";
+pub const MYRRH_WARD: &str = "myrrh_ward";
+pub const FRANKINCENSE_WARD: &str = "frankincense_ward";
+
 /// Where the delver is, as the cold and the fire reach them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Surroundings {
@@ -62,6 +68,15 @@ pub fn exposures(inventory: &Inventory, defs: &BTreeMap<String, EffectDef>, arou
         push(WARMED, 1.0, Source::Surroundings);
     }
     for (slot, item) in inventory.equipped() {
+        // Incense burning in a censer, held or hung at the hip, wards while it lasts.
+        if let Some(kind) = item.burning_incense() {
+            let ward = match kind {
+                armory::incense::IncenseKind::Cedar => CEDAR_WARD,
+                armory::incense::IncenseKind::Myrrh => MYRRH_WARD,
+                armory::incense::IncenseKind::Frankincense => FRANKINCENSE_WARD,
+            };
+            push(ward, 1.0, Source::Item { name: item.name.clone() });
+        }
         let held = matches!(slot, Slot::Mainhand | Slot::Offhand);
         // A lit light with the Smoky affix, in hand, puts its smoke in the delver's eyes.
         // A censer smokes by design, in a sweet way that stings nothing, whatever its affixes.

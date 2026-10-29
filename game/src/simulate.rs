@@ -158,7 +158,11 @@ fn step_the_delver(
         // Effects run their course by game time under what keeps acting on the delver (a smoky
         // light in hand), and the component comes on with the first and goes with the last.
         let exposures = exposures.get_or_insert_with(|| {
-            let around = surroundings(&character, &inventory, &rules, at.map_or(Vec3::NAN, |t| t.translation), &fires, level.as_deref().map_or(1, |l| l.0.depth));
+            let mut around = surroundings(&character, &inventory, &rules, at.map_or(Vec3::NAN, |t| t.translation), &fires, level.as_deref().map_or(1, |l| l.0.depth));
+            // Myrrh smoke makes up for some of the warmth they are short of.
+            if around.shortfall > 0.0 {
+                around.shortfall = (around.shortfall - effects.as_deref().map_or(0.0, |e| e.0.cold_ward(&rules.effects))).max(0.0);
+            }
             crate::exposure::exposures(&inventory, &rules.effects, &around)
         });
         match effects {

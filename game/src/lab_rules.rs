@@ -406,6 +406,9 @@ fn effect_label(def: &fb_character::effect::EffectDef, rest: &[&str]) -> Option<
                 Influence::Noticed { .. } => "Added to being seen at full".into(),
                 Influence::HitPointsPerHour { .. } => "HP lost per hour at full".into(),
                 Influence::Glare { .. } => "Glare at full".into(),
+                Influence::PoisonSave { .. } => "Save against venom at full (points)".into(),
+                Influence::ColdWard { .. } => "Cold warded at full (points)".into(),
+                Influence::UndeadWard { .. } => "Undead blows lessened at full (share)".into(),
             };
             match *key {
                 "at_full" => what,

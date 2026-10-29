@@ -320,11 +320,17 @@ fn take_bites(
             if health.is_down() {
                 continue;
             }
+            // Burning incense adds to the save (cedar) and to the ward against the undead (frankincense).
+            let poison_resistance = poison_resistance + effects.map_or(0, |e| e.0.poison_save(&rules.effects));
             let (damage, poisons_for) = bite_damage_with(&rules, bite, character.constitution(), poison_resistance, &mut dice.0);
             // Gear that wards against the attacker's kind takes a fraction off, never the last 1.
             // The family that struck them: a creature's, or a folk's or denizen's by the attacker.
             let kin = bite.species.map(fb_character::kin::Kin::of_species).or_else(|| folk.get(bite.attacker).ok().map(|d| fb_character::kin::Kin::of_folk(d.person.spec.folk)));
-            let ward = kin.map_or(0.0, |k| gear.ward_against(k) as f32);
+            let mut ward = kin.map_or(0.0, |k| gear.ward_against(k) as f32);
+            if bite.species.is_some_and(|s| s.foe() == fb_items::Foe::Undead) {
+                let incense = effects.map_or(0.0, |e| e.0.undead_ward(&rules.effects)) as f32;
+                ward = 1.0 - (1.0 - ward) * (1.0 - incense);
+            }
             let damage = fb_items::foe::warded_damage(damage, ward);
             let damage = spared_by_venom(health.hp, bite.damage, damage, bite.species.is_some_and(Species::venom_spares));
             health.hurt(damage);
@@ -740,6 +746,19 @@ mod tests {
         bite(&mut app, snake, Species::Rat, 1);
         bite(&mut app, snake, Species::Rat, 1);
         assert_eq!(app.world().get::<Health>(player).unwrap().hp, 2, "a rat's blow is not warded");
+    }
+
+    #[test]
+    fn frankincense_smoke_weakens_a_skeletons_blow() {
+        let (mut app, player, snake) = delve();
+        app.update();
+        let mut effects = fb_character::effect::Effects::default();
+        let defs = &fb_character::rules::defaults().effects;
+        effects.add(defs, crate::exposure::FRANKINCENSE_WARD, 1.0, None, fb_character::effect::Source::Surroundings);
+        app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+        let max = app.world().get::<Health>(player).unwrap().max;
+        bite(&mut app, snake, Species::Skeleton, 10);
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, max - 7, "10 becomes 7");
     }
 
     #[test]

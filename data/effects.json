@@ -78,6 +78,30 @@
     "exposure_per_hour": 2.0,
     "note": "Warm by the fire; the cold lifts fast"
   },
+  "cedar_ward": {
+    "name": "Cedar ward",
+    "stages": [{ "at": 0.0, "word": "Warded from poison", "severity": "good" }],
+    "per_hour": -3.0,
+    "exposure_per_hour": 6.0,
+    "influences": [{ "kind": "poison_save", "at_full": 3.0 }],
+    "note": "Cedar smoke while it burns: +3 on saves against venom"
+  },
+  "myrrh_ward": {
+    "name": "Myrrh ward",
+    "stages": [{ "at": 0.0, "word": "Warded from cold", "severity": "good" }],
+    "per_hour": -3.0,
+    "exposure_per_hour": 6.0,
+    "influences": [{ "kind": "cold_ward", "at_full": 2.0 }],
+    "note": "Myrrh smoke while it burns: the cold bites less"
+  },
+  "frankincense_ward": {
+    "name": "Frankincense ward",
+    "stages": [{ "at": 0.0, "word": "Warded from the undead", "severity": "good" }],
+    "per_hour": -3.0,
+    "exposure_per_hour": 6.0,
+    "influences": [{ "kind": "undead_ward", "at_full": 0.3 }],
+    "note": "Frankincense smoke while it burns: the undead's blows are 30% weaker"
+  },
   "dazzled": {
     "name": "Dazzled",
     "stages": [{ "at": 0.0, "word": "Dazzled", "severity": "mild" }],
