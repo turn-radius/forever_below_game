@@ -528,8 +528,6 @@ impl Character {
     /// [`Character::derive_with`] with a light of `spell` feet cast on them ([`Character::gear_with_spell`]).
     pub fn derive_lit(&self, rules: &Rules, inventory: &Inventory, spell: Option<f64>) -> Derived {
         let equipped = inventory.equipped();
-        // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
-        let sum = |f: fn(&fb_items::stats::Stats) -> f32| equipped.iter().map(|(_, item)| f(&item.profile.stats)).fold(0.0, |a, b| a + b);
         let load = self.load_explained(inventory).value() as f32;
         let gear = self.gear_with_spell(inventory, spell);
         let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
@@ -539,6 +537,7 @@ impl Character {
             load,
             capacity,
             load_band,
+            // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
             warmth: equipped.iter().map(|(_, item)| Self::warmth_of(item)).fold(0.0, |a, b| a + b),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,

@@ -274,14 +274,14 @@ const BAUBLE_ASIDE: f32 = 3.5;
 /// Where a fresh bauble gathers, from the caster's eye (right, up, ahead): down by the hands
 /// and a little ahead.
 const BAUBLE_GATHER: Vec3 = Vec3::new(1.5, -3.0, 4.0);
-/// How near a wall or a shut door it comes along its line from the eye, world units (20 cm),
+/// How near a wall or a shut door it comes along its line from the eye, world units (30 cm),
 /// so it never sinks into the stone and its light is never cut off by it.
-const BAUBLE_CLEARANCE: f32 = 2.0;
+const BAUBLE_CLEARANCE: f32 = 3.0;
 /// The width of the card its glowing heart is drawn on, world units; the glow fades well
 /// inside it.
-const HEART_SIZE: f32 = 2.6;
+const HEART_SIZE: f32 = 4.2;
 /// The width of a mote's card, world units.
-const MOTE_SIZE: f32 = 0.32;
+const MOTE_SIZE: f32 = 0.5;
 /// How quickly it catches up with the caster, per second.
 const BAUBLE_FOLLOW: f32 = 5.0;
 /// Game seconds a bauble takes to gutter out at the end of its life, at most: about ten real
@@ -295,7 +295,7 @@ const HOLY_FLICKER: f32 = 0.08;
 /// The orbits motes swirl along: the axis and angle each is tilted by, how fast its motes go
 /// round (radians a second, the sign the way round) and its radius in world units. Each also
 /// turns slowly about the up, so the orbits never settle into a fixed atom.
-const ORBITS: [(Vec3, f32, f32, f32); 3] = [(Vec3::X, 0.5, 2.2, 0.62), (Vec3::Z, -1.1, -1.7, 0.72), (Vec3::new(1.0, 0.0, 1.0), 1.9, 1.35, 0.55)];
+const ORBITS: [(Vec3, f32, f32, f32); 3] = [(Vec3::X, 0.5, 2.2, 1.0), (Vec3::Z, -1.1, -1.7, 1.15), (Vec3::new(1.0, 0.0, 1.0), 1.9, 1.35, 0.88)];
 /// Streams of motes on each orbit, spaced evenly round it.
 const STREAMS: u8 = 2;
 /// Motes in a stream: a lead mote and the tail that trails it, shrinking.
@@ -900,7 +900,7 @@ mod tests {
     fn the_light_is_pale_gold_and_a_real_point_light() {
         let (mut app, _) = delve(true, 10.0);
         cast_at_tier(&mut app, 1);
-        let (light, given, bauble) = app.world_mut().query::<(&PointLight, &crate::carry::GivenLight, &DivineLight)>().single(app.world()).map(|(l, g, d)| (l.clone(), *g, *d)).unwrap();
+        let (light, given, bauble) = app.world_mut().query::<(&PointLight, &crate::carry::GivenLight, &DivineLight)>().single(app.world()).map(|(l, g, d)| (*l, *g, *d)).unwrap();
         // It blooms up to its peak from the cast ([`glow`]).
         assert!(bauble.peak > 0.0 && light.intensity <= bauble.peak && light.range > given.anchor.radius);
         let Rgb(r, g, b) = given.anchor.color;
