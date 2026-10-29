@@ -1830,7 +1830,7 @@
     }
    }
   ],
-  "t": "+2 warmth",
+  "t": "+2 warmth while lit",
   "grp": "light_warmth"
  },
  {
@@ -1846,7 +1846,7 @@
     }
    }
   ],
-  "t": "+4 warmth",
+  "t": "+4 warmth while lit",
   "grp": "light_warmth",
   "r": "rare"
  },

@@ -377,7 +377,7 @@ impl Character {
             let abilities = AbilityBonus { strength: point(s.strength), dexterity: point(s.dexterity), constitution: point(s.constitution), intelligence: point(s.intelligence), wisdom: point(s.wisdom) };
             loadout = loadout.wearing(
                 &item.name,
-                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: s.warmth as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
+                Worn { carry: s.carry as f64, darkvision: s.darkvision as f64, hunger_rate: s.hunger_rate as f64, sleepiness_rate: s.sleepiness_rate as f64, stealth: s.stealth as f64, warmth: Self::warmth_of(item) as f64, heal_on_kill, speed: s.speed as f64, block_chance, abilities, disease_risk: s.disease_risk as f64, luck: s.luck as f64, recovery: s.recovery as f64, poison_resistance: s.poison_resistance as f64, to_hit, ranged_to_hit: s.ranged_to_hit as f64, attack_rate, stamina_refill: s.stamina_refill as f64, stamina_cost: s.stamina_cost as f64, ward: s.ward.map(f64::from), shun: s.shun.map(f64::from) },
             );
         }
         for item in carried_lights(inventory).into_iter().filter_map(|(_, id)| inventory.item(id)) {
@@ -492,7 +492,13 @@ impl Character {
         self.derive_with(fb_character::rules::defaults(), inventory)
     }
 
-    /// [`Character::derive`] under `rules`.
+    /// The warmth an equipped item gives: a light's own (of the Ember, of the Furnace) only while it
+    /// burns, so an unlit lantern at the hip warms no one.
+    fn warmth_of(item: &fb_items::Item) -> f32 {
+        if item.shape.lit() == Some(false) { 0.0 } else { item.profile.stats.warmth }
+    }
+
+/// [`Character::derive`] under `rules`.
     pub fn derive_with(&self, rules: &Rules, inventory: &Inventory) -> Derived {
         let equipped = inventory.equipped();
         // Folded from +0, since an empty `Sum` of floats is -0 and would read "-0".
@@ -506,7 +512,7 @@ impl Character {
             load,
             capacity,
             load_band,
-            warmth: sum(|s| s.warmth),
+            warmth: equipped.iter().map(|(_, item)| Self::warmth_of(item)).fold(0.0, |a, b| a + b),
             light: gear.light as f32,
             darkvision: gear.darkvision as f32,
             hunger_rate: gear.hunger_rate as f32,
@@ -903,6 +909,21 @@ mod tests {
         affix.apply_to_stats(&mut item.profile.stats);
         item.affixes.push(affix);
         item
+    }
+
+    #[test]
+    fn a_lantern_of_the_ember_warms_only_while_it_burns() {
+        use fb_items::Slot;
+        let delver = Character::roll(4);
+        let warmth = |lit: bool| {
+            let mut lantern = with_affix("Lantern", 7, "of the Ember");
+            lantern.shape.set_lit(lit).unwrap();
+            let mut inventory = Inventory::default();
+            let id = inventory.add(lantern);
+            inventory.wear(id, Slot::Offhand).unwrap();
+            delver.derive(&inventory).warmth
+        };
+        assert_eq!(warmth(true) - warmth(false), 2.0, "of the Ember gives +2 while lit, nothing unlit");
     }
 
     #[test]
