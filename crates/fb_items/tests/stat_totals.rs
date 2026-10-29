@@ -17,6 +17,9 @@ fn stat_totals_pinned_across_base_seeds() {
         // with stamina refill and cost. Trousers 12345 and Breeches 99 now roll another affix, since of
         // Endurance joined the leg slot's pool. Club 1, Hand axe 1, Torch 1 and 123 and Lantern 1
         // now roll another affix, since of Thieves came back into the pools when lockpicking was read again.
+        // Of Thieves now rolls only on gloves, rings, amulets, charms and belts, and a rare or
+        // legendary slot with nothing that fits takes the other kind, so Club 1, Hand axe 1, Torch 1
+        // and 123 and Lantern 1 roll other affixes (a lantern now has prefixes to fall back on).
         ("Shirt", 1, 12.0),
         ("Shirt", 42, 10.0),
         ("Shirt", 12345, 11.6),
@@ -31,13 +34,13 @@ fn stat_totals_pinned_across_base_seeds() {
         ("Mail coif", 1, 25.0),
         ("Belt", 1, 11.0),
         ("Belt", 99, 11.0),
-        ("Club", 1, 12.0),
+        ("Club", 1, 11.0),
         ("Club", 42, 10.0),
-        ("Hand axe", 1, 12.0),
+        ("Hand axe", 1, 11.0),
         ("Hand axe", 88, 10.0),
-        ("Torch", 1, 31.0),
-        ("Torch", 123, 41.0),
-        ("Lantern", 1, 42.0),
+        ("Torch", 1, 39.0),
+        ("Torch", 123, 40.0),
+        ("Lantern", 1, 50.0),
         ("Lantern", 456, 40.0),
     ];
 

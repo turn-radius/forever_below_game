@@ -374,7 +374,14 @@
     }
    }
   ],
-  "t": "Lockpicking +2"
+  "t": "Lockpicking +2",
+  "at": [
+   "hands",
+   "ring1",
+   "neck",
+   "charm",
+   "belt"
+  ]
  },
  {
   "n": "of the Ox",
