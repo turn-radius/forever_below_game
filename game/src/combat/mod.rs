@@ -111,7 +111,7 @@ impl Health {
 
 /// The delver's hit points: a 1st-level character's, the class's hit die at its highest plus
 /// the Constitution modifier (SRD 5.1 "Hit Points at 1st Level": fighter 10 + Con, p. 24;
-/// ranger 10 + Con, p. 35; cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
+/// cleric 8 + Con, p. 15; wizard, our mage, 6 + Con, p. 52), and never
 /// below 1 (our own floor for a very frail delver).
 pub fn first_level_hit_points_with(rules: &Rules, character: &Character) -> i32 {
     first_level_hit_points_explained_with(rules, character).value() as i32
@@ -466,7 +466,6 @@ mod tests {
     #[test]
     fn hit_points_follow_the_srd_at_first_level() {
         assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Fighter, 14)), 12);
-        assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Ranger, 10)), 10);
         assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Cleric, 9)), 7);
         assert_eq!(first_level_hit_points_with(fb_character::rules::defaults(), &delver(Class::Mage, 3)), 2);
     }

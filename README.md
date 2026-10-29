@@ -114,7 +114,7 @@ One folk's body, dressed in a rolled outfit and holding what it carries, turning
 - `--folk <name>`: human, dwarf, gnome, goblin, lizard (or lizardfolk), pig (or pigfolk). Human by default.
 - `--seed <n>` rolls the body and the outfit's items; 1207 by default.
 - `--walk` starts the doll walking in place, `--speed <n>` sets its pace as a multiple of its folk's natural one (0 to 1.6, 1 by default). W toggles the walk in the view, and the panel at the top right has the same toggle and a speed slider.
-- `--outfit <key>`: fighter (the default), ranger, mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
+- `--outfit <key>`: fighter (the default), mage, cleric, fallen ("Freshly fallen") or scavenger, from `data/outfits.json`.
 
 Tab and Shift+Tab change the folk, Left and Right the seed, Up and Down the outfit, and Space pauses the turn. `FB_SCREENSHOT` works here as on the turntable.
 

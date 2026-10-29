@@ -101,8 +101,8 @@ impl Intention {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outfit {
+    #[serde(alias = "ranger")]
     Fighter,
-    Ranger,
     Mage,
     Cleric,
     Scavenger,
@@ -113,7 +113,7 @@ impl Outfit {
     pub fn of(class: ClassKind) -> Outfit {
         match class {
             ClassKind::Fighter => Outfit::Fighter,
-            ClassKind::Ranger => Outfit::Ranger,
+            
             ClassKind::Mage => Outfit::Mage,
             ClassKind::Cleric => Outfit::Cleric,
         }
@@ -123,7 +123,7 @@ impl Outfit {
     pub fn class(self) -> Option<ClassKind> {
         match self {
             Outfit::Fighter => Some(ClassKind::Fighter),
-            Outfit::Ranger => Some(ClassKind::Ranger),
+            
             Outfit::Mage => Some(ClassKind::Mage),
             Outfit::Cleric => Some(ClassKind::Cleric),
             Outfit::Scavenger => None,
@@ -133,7 +133,7 @@ impl Outfit {
     pub fn key(self) -> &'static str {
         match self {
             Outfit::Fighter => "fighter",
-            Outfit::Ranger => "ranger",
+            
             Outfit::Mage => "mage",
             Outfit::Cleric => "cleric",
             Outfit::Scavenger => "scavenger",
@@ -338,14 +338,14 @@ impl CreatureKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassKind {
+    #[serde(alias = "ranger")]
     Fighter,
-    Ranger,
     Mage,
     Cleric,
 }
 
 impl ClassKind {
-    pub const ALL: [ClassKind; 4] = [ClassKind::Fighter, ClassKind::Ranger, ClassKind::Mage, ClassKind::Cleric];
+    pub const ALL: [ClassKind; 3] = [ClassKind::Fighter, ClassKind::Mage, ClassKind::Cleric];
 }
 
 /// One thing a faction likes or hates.
@@ -373,7 +373,7 @@ pub struct FactionSpec {
     #[serde(default)]
     pub sex: Option<Sex>,
     /// The classes its name says its members are, none if the name says nothing ("the Daughters of
-    /// the Burning Chapel" are all clerics; "the Black Reavers" fighters and rangers). Its
+    /// the Burning Chapel" are all clerics; "the Black Reavers" fighters). Its
     /// members dress only in these, and it never hates one.
     #[serde(default)]
     pub classes: Vec<ClassKind>,
@@ -672,25 +672,25 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
 
     // Dress: one outfit from what its purpose wears, one from what its folk wear.
     let by_intention: &[(Outfit, u32)] = match intention {
-        Intention::WayOut => &[(Ranger, 3), (Fighter, 3), (Scavenger, 1)],
-        Intention::Trade => &[(Ranger, 3), (Scavenger, 3), (Mage, 1)],
+        Intention::WayOut => &[(Fighter, 6), (Scavenger, 1)],
+        Intention::Trade => &[(Fighter, 3), (Scavenger, 3), (Mage, 1)],
         Intention::Worship => &[(Cleric, 5), (Mage, 2)],
-        Intention::Plunder => &[(Fighter, 3), (Scavenger, 3), (Ranger, 1)],
+        Intention::Plunder => &[(Fighter, 4), (Scavenger, 3)],
     };
     let by_folk: &[(Outfit, u32)] = match folk {
-        Folk::Human => &[(Cleric, 2), (Mage, 2), (Fighter, 2), (Ranger, 1)],
+        Folk::Human => &[(Cleric, 2), (Mage, 2), (Fighter, 3)],
         Folk::Dwarf => &[(Cleric, 2), (Mage, 1), (Fighter, 3)],
-        Folk::Gnome => &[(Mage, 3), (Scavenger, 2), (Ranger, 1)],
+        Folk::Gnome => &[(Mage, 3), (Scavenger, 2), (Fighter, 1)],
         Folk::Goblin => &[(Scavenger, 4), (Fighter, 2)],
-        Folk::Lizardfolk => &[(Fighter, 3), (Ranger, 3), (Mage, 1)],
-        Folk::Pigfolk => &[(Ranger, 3), (Scavenger, 3), (Cleric, 1)],
-        Folk::Minotaur => &[(Fighter, 4), (Scavenger, 2), (Ranger, 1)],
-        Folk::Faun => &[(Ranger, 3), (Mage, 2), (Cleric, 1)],
+        Folk::Lizardfolk => &[(Fighter, 6), (Mage, 1)],
+        Folk::Pigfolk => &[(Fighter, 3), (Scavenger, 3), (Cleric, 1)],
+        Folk::Minotaur => &[(Fighter, 5), (Scavenger, 2)],
+        Folk::Faun => &[(Fighter, 3), (Mage, 2), (Cleric, 1)],
         // Denizens are not rolled into folk factions; their kit is a fighter's.
         Folk::Cyclops => &[(Fighter, 3), (Scavenger, 1)],
-        Folk::WingedDemon => &[(Fighter, 3), (Ranger, 2), (Mage, 2)],
+        Folk::WingedDemon => &[(Fighter, 5), (Mage, 2)],
         Folk::HornedDemon => &[(Fighter, 5), (Scavenger, 1)],
-        Folk::Succubus => &[(Mage, 3), (Cleric, 2), (Ranger, 1)],
+        Folk::Succubus => &[(Mage, 3), (Cleric, 2), (Fighter, 1)],
     };
     // The two differ: the second is drawn from its folk's table without the first.
     let first = *rng.weighted(by_intention);
@@ -770,13 +770,12 @@ fn roll_with(world: u32, index: usize, count: usize, taken: &HashSet<String>, na
     FactionSpec { id, name, folk, sex, classes, outfits, alignment, intention, likes, hates, field, armour, looks, insular, denizen: None }
 }
 
-/// The classes a name's `class` tag says its members are: `cleric`, `fighter`, or `fighter_or_ranger`. Empty
+/// The classes a name's `class` tag says its members are: `cleric`, `fighter` or `fighter`. Empty
 /// for no tag, or one this crate does not know.
 fn named_classes(tag: Option<&str>) -> Vec<ClassKind> {
     match tag {
         Some("cleric") => vec![ClassKind::Cleric],
         Some("fighter") => vec![ClassKind::Fighter],
-        Some("fighter_or_ranger") => vec![ClassKind::Fighter, ClassKind::Ranger],
         _ => Vec::new(),
     }
 }
@@ -797,7 +796,7 @@ fn roll_denizen_faction(world: u32, index: usize, total: usize, kind: DenizenKin
         DenizenKind::Minotaur => (
             &[(Intention::Plunder, 3), (Intention::WayOut, 2), (Intention::Worship, 1)],
             &[(ChaoticEvil, 3), (NeutralEvil, 2), (LawfulNeutral, 1), (TrueNeutral, 1)],
-            &[(Fighter, 4), (Scavenger, 3), (Ranger, 1)],
+            &[(Fighter, 5), (Scavenger, 3)],
             &[(ArmourLean::Leather, 3), (ArmourLean::Scale, 2), (ArmourLean::Plate, 1)],
         ),
         DenizenKind::Cyclops => (
@@ -809,7 +808,7 @@ fn roll_denizen_faction(world: u32, index: usize, total: usize, kind: DenizenKin
         DenizenKind::Faun => (
             &[(Intention::Worship, 3), (Intention::Trade, 2), (Intention::WayOut, 1)],
             &[(ChaoticGood, 3), (ChaoticNeutral, 3), (NeutralGood, 2), (TrueNeutral, 1)],
-            &[(Ranger, 4), (Mage, 2), (Cleric, 2)],
+            &[(Fighter, 4), (Mage, 2), (Cleric, 2)],
             &[(ArmourLean::Padded, 3), (ArmourLean::Leather, 2)],
         ),
         DenizenKind::Demon => (

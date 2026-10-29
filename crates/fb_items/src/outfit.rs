@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn every_outfit_reads_from_the_table() {
         let keys: Vec<&str> = outfits().iter().map(|o| o.key.as_str()).collect();
-        for key in ["fighter", "ranger", "mage", "cleric", "fallen", "scavenger"] {
+        for key in ["fighter", "mage", "cleric", "fallen", "scavenger"] {
             assert!(keys.contains(&key), "{key}");
         }
         let fallen = outfit("Freshly fallen").unwrap();
@@ -476,9 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn a_ranger_can_roll_a_satchel_beside_a_pack() {
-        let ranger = outfit("ranger").unwrap();
-        let sets: Vec<_> = (0..60).map(|s| ranger.roll(s, "human")).collect();
+    fn a_fighter_can_roll_a_satchel_beside_a_pack() {
+        let fighter = outfit("fighter").unwrap();
+        let sets: Vec<_> = (0..60).map(|s| fighter.roll(s, "human")).collect();
         assert!(sets.iter().any(|set| set.item(Slot::Satchel).is_some_and(|i| i.base == "Satchel")));
         assert!(sets.iter().any(|set| set.item(Slot::Back).is_some() && set.item(Slot::Satchel).is_some()));
     }
@@ -531,9 +531,9 @@ mod tests {
     }
 
     #[test]
-    fn a_ranger_with_a_bow_has_a_quiver_and_twenty_arrows() {
-        let ranger = outfit("ranger").unwrap();
-        let archers: Vec<_> = (0..40).map(|seed| ranger.roll(seed, "human")).filter(|s| s.item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).collect();
+    fn a_fighter_with_a_bow_has_a_quiver_and_twenty_arrows() {
+        let fighter = outfit("fighter").unwrap();
+        let archers: Vec<_> = (0..40).map(|seed| fighter.roll(seed, "human")).filter(|s| s.item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).collect();
         assert!(!archers.is_empty());
         for set in archers {
             assert_eq!(set.item(Slot::Quiver).map(|i| i.base.as_str()), Some("Quiver"));
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn folk_legwear_is_left_as_rolled_and_costs_the_livery_stream_nothing() {
         let livery = livery(ArmourLean::Mail);
-        for key in ["fighter", "ranger", "mage", "cleric", "scavenger", "fallen"] {
+        for key in ["fighter", "mage", "cleric", "scavenger", "fallen"] {
             for seed in [1, 7, 1207] {
                 let plain = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), None);
                 let dressed = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery));
@@ -589,7 +589,7 @@ mod tests {
         let colours = [Tincture::Vert.dye(), Tincture::Or.dye()];
         let (mut worn, mut total) = (0, 0);
         for seed in 0..30 {
-            for key in ["ranger", "mage", "cleric"] {
+            for key in ["fighter", "mage", "cleric"] {
                 for colour in pieces_of_cloth(&outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery))) {
                     total += 1;
                     worn += usize::from(colours.contains(&colour));
@@ -673,7 +673,7 @@ mod tests {
         let blue = Tincture::Azure.dye();
         let (mut worn, mut total) = (0, 0);
         for seed in 0..40 {
-            for key in ["ranger", "mage", "cleric", "scavenger"] {
+            for key in ["fighter", "mage", "cleric", "scavenger"] {
                 for colour in pieces_of_cloth(&outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&livery))) {
                     total += 1;
                     worn += usize::from(colour == blue);
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn a_robe_is_the_outer_layer_of_every_member() {
-        for key in ["fighter", "ranger", "mage", "cleric", "scavenger"] {
+        for key in ["fighter", "mage", "cleric", "scavenger"] {
             for seed in 0..25 {
                 let set = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&sisters(ArmourLean::Mail)));
                 let (slot, robe) = robe_of(&set);
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn a_robe_over_armour_covers_the_leans_armour_in_gold_and_white() {
-        for key in ["fighter", "ranger", "mage", "cleric", "scavenger"] {
+        for key in ["fighter", "mage", "cleric", "scavenger"] {
             for seed in 0..25 {
                 let set = outfit(key).unwrap().roll_in(seed, "human", Odds::default(), Some(&redeemed()));
                 let body = set.item(Slot::Body).unwrap_or_else(|| panic!("{key} {seed} wears no armour"));
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn a_gold_hem_edges_a_tunic_and_a_hood_too() {
-        let set = outfit("ranger").unwrap().roll_in(3, "human", Odds::default(), Some(&redeemed()));
+        let set = outfit("fighter").unwrap().roll_in(3, "human", Odds::default(), Some(&redeemed()));
         for (_, item) in &set.worn {
             match &item.shape {
                 armory::Item::Garment(g) if matches!(g.cut.style, GarmentStyle::Tunic | GarmentStyle::Robe | GarmentStyle::Cloak) => {
@@ -739,11 +739,11 @@ mod tests {
         let livery = sisters(ArmourLean::Padded);
         let mace = (0..30).filter(|&s| outfit("cleric").unwrap().roll_in(s, "human", Odds::default(), Some(&livery)).item(Slot::Mainhand).is_some_and(|i| i.base == "Mace")).count();
         assert!(mace > 12, "{mace}");
-        let bows = (0..30).filter(|&s| outfit("ranger").unwrap().roll_in(s, "human", Odds::default(), Some(&livery)).item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).count();
+        let bows = (0..30).filter(|&s| outfit("fighter").unwrap().roll_in(s, "human", Odds::default(), Some(&livery)).item(Slot::Mainhand).is_some_and(|i| i.base == "Bow")).count();
         assert!(bows > 8, "{bows}");
         // A bow still comes with its quiver.
         for seed in 0..30 {
-            let set = outfit("ranger").unwrap().roll_in(seed, "human", Odds::default(), Some(&livery));
+            let set = outfit("fighter").unwrap().roll_in(seed, "human", Odds::default(), Some(&livery));
             if set.item(Slot::Mainhand).is_some_and(|i| i.base == "Bow") {
                 assert!(set.item(Slot::Quiver).is_some(), "{seed}");
             }

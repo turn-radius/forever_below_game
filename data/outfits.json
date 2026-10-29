@@ -52,12 +52,18 @@
     0.7,
     "Pack"
    ],
+   "satchel": [
+    0.4,
+    "Satchel"
+   ],
    "mainhand": [
     "Sword",
     "Sword",
     "Mace",
     "Hand axe",
-    "Spear"
+    "Spear",
+    "Bow",
+    "Bow"
    ],
    "offhand": [
     0.75,
@@ -72,57 +78,6 @@
    "Purse",
    "Bandages",
    "Healing draught"
-  ]
- },
- "ranger": {
-  "label": "Ranger",
-  "slots": {
-   "shirt": [
-    "Tunic"
-   ],
-   "legs": [
-    "Trousers",
-    "Breeches"
-   ],
-   "feet": [
-    "Boots"
-   ],
-   "hands": [
-    "Gloves"
-   ],
-   "cloak": [
-    0.75,
-    "Cloak",
-    "Mantle"
-   ],
-   "head": [
-    0.4,
-    "Hood"
-   ],
-   "belt": [
-    "Belt"
-   ],
-   "back": [
-    0.6,
-    "Pack"
-   ],
-   "satchel": [
-    0.6,
-    "Satchel"
-   ],
-   "mainhand": [
-    "Bow",
-    "Bow",
-    "Spear"
-   ]
-  },
-  "goods": [
-   "Dagger",
-   "Smoked fish",
-   "Waterskin",
-   "Purse",
-   "Rope",
-   "Spare torch"
   ]
  },
  "cleric": {

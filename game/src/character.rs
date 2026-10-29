@@ -17,24 +17,24 @@ use crate::inventory::Inventory;
 /// Whether a delver is a woman or a man: what the creator's Sex choice sets. Folk have one too.
 pub use fb_body::Sex;
 
-/// The four classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
+/// The three classes (`docs/design.md`); each has its outfit in `data/outfits.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Class {
+    /// Saves from before the Ranger was removed name it `ranger`; it loads as a fighter.
+    #[serde(alias = "ranger")]
     Fighter,
-    Ranger,
     Mage,
     Cleric,
 }
 
 impl Class {
-    pub const ALL: [Class; 4] = [Class::Fighter, Class::Ranger, Class::Mage, Class::Cleric];
+    pub const ALL: [Class; 3] = [Class::Fighter, Class::Mage, Class::Cleric];
 
     /// The class as the factions' likes and hates name it.
     pub fn faction_class(self) -> fb_faction::ClassKind {
         match self {
             Class::Fighter => fb_faction::ClassKind::Fighter,
-            Class::Ranger => fb_faction::ClassKind::Ranger,
             Class::Mage => fb_faction::ClassKind::Mage,
             Class::Cleric => fb_faction::ClassKind::Cleric,
         }
@@ -44,7 +44,6 @@ impl Class {
     pub fn outfit_key(self) -> &'static str {
         match self {
             Class::Fighter => "fighter",
-            Class::Ranger => "ranger",
             Class::Mage => "mage",
             Class::Cleric => "cleric",
         }
@@ -57,23 +56,22 @@ impl Class {
         use fb_faction::Alignment::*;
         match self {
             Class::Fighter => LawfulNeutral,
-            Class::Ranger => NeutralGood,
             Class::Mage => TrueNeutral,
             Class::Cleric => LawfulGood,
         }
     }
 
-    /// How the class casts: Mages from INT, Clerics from WIS, Fighters and Rangers hardly at all.
+    /// How the class casts: Mages from INT, Clerics from WIS, Fighters hardly at all.
     pub fn casting(self) -> Casting {
         match self {
-            Class::Fighter | Class::Ranger => Casting::Martial,
+            Class::Fighter => Casting::Martial,
             Class::Mage => Casting::Arcane,
             Class::Cleric => Casting::Divine,
         }
     }
 
-    /// The class's hit die under the default rules: d10 for fighters and rangers, d8 for
-    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, ranger p. 35, cleric p. 15,
+    /// The class's hit die under the default rules: d10 for fighters, d8 for
+    /// clerics, d6 for mages (SRD 5.1 "Hit Points": fighter p. 24, cleric p. 15,
     /// wizard, our mage, p. 52).
     pub fn hit_die(self) -> u32 {
         self.hit_die_with(fb_character::rules::defaults())
@@ -84,7 +82,6 @@ impl Class {
         let dice = &rules.combat.hit_dice;
         match self {
             Class::Fighter => dice.fighter,
-            Class::Ranger => dice.ranger,
             Class::Cleric => dice.cleric,
             Class::Mage => dice.mage,
         }
@@ -558,7 +555,7 @@ pub fn character_for(seed: u32) -> Character {
         Some(folk) => Character::roll_folk(folk, seed),
         None => Character::roll(seed),
     };
-    // `FB_CLASS=ranger` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
+    // `FB_CLASS=mage` picks the class, for trying a class's kit with `FB_DEBUG_KIT`.
     if let Some(class) = std::env::var("FB_CLASS").ok().and_then(|c| Class::ALL.into_iter().find(|k| k.outfit_key().eq_ignore_ascii_case(c.trim()))) {
         character.class = class;
     }

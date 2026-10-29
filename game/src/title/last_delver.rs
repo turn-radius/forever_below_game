@@ -157,6 +157,15 @@ mod tests {
     }
 
     #[test]
+    fn a_delver_saved_as_a_ranger_loads_as_a_fighter() {
+        let path = scratch("ranger");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"name":"Olm","folk":"human","class":"ranger","attributes":{"strength":10,"dexterity":10,"constitution":10,"intelligence":10,"wisdom":10},"body_seed":1,"dirt":0.4}"#).unwrap();
+        let old = load(&path).expect("a ranger saved before the class was removed still loads");
+        assert_eq!(old.class, Class::Fighter);
+    }
+
+    #[test]
     fn what_they_learned_is_saved_and_an_older_file_loads_with_none() {
         let path = scratch("learned");
         let mut delver = Character::roll(21);

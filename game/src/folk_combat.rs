@@ -2,7 +2,7 @@
 //!
 //! - **Who they are in a fight** ([`FolkStats`]): a folk's abilities are their folk's scores in
 //!   `data/races.json` (the scores the delver's are rolled about, `crate::character`), and their
-//!   class is their outfit's (`data/outfits.json`: a fighter, ranger, cleric or mage). Hit points
+//!   class is their outfit's (`data/outfits.json`: a fighter, cleric or mage). Hit points
 //!   are a 1st-level character's, as the delver's are: the class's hit die at its highest plus
 //!   the Constitution modifier (SRD 5.1 "Hit Points at 1st Level", [`crate::combat::first_level_hit_points`]).
 //!   A scavenger or someone freshly fallen has no class: they have a commoner's hit die, a d8, at
