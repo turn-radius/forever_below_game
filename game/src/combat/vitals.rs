@@ -749,6 +749,30 @@ mod tests {
     }
 
     #[test]
+    fn cedar_smoke_turns_a_failed_save_against_venom_into_a_good_one() {
+        // A seed whose save fails on the delver's own constitution and passes with cedar's +3.
+        let (app, ..) = delve();
+        let con = app.world().resource::<Character>().constitution();
+        let attack = AttackOnDelver { attacker: Entity::PLACEHOLDER, species: None, damage: 0, poison: 4, attacker_pos: Vec2::ZERO };
+        let poisoned_by = |resistance: i32, seed: u32| bite_damage_with(fb_character::rules::defaults(), &attack, con, resistance, &mut procgen_rng::Mulberry32::new(seed)).1.is_some();
+        let seven = (0..10_000u32).find(|&s| poisoned_by(0, s) && !poisoned_by(3, s)).expect("some save sits within 3 of the line");
+        for (cedar, poisoned) in [(false, true), (true, false)] {
+            let (mut app, player, snake) = delve();
+            app.world_mut().resource_mut::<RunDice>().0 = procgen_rng::Mulberry32::new(seven);
+            if cedar {
+                let mut effects = fb_character::effect::Effects::default();
+                effects.add(&fb_character::rules::defaults().effects, crate::exposure::CEDAR_WARD, 1.0, None, fb_character::effect::Source::Surroundings);
+                app.world_mut().entity_mut(player).insert(DelverEffects(effects));
+            }
+            app.update();
+            app.world_mut().write_message(AttackOnDelver { attacker: snake, species: Some(Species::PoisonousSnake), damage: 1, poison: 4, attacker_pos: Vec2::ZERO });
+            app.update();
+            let poison = app.world().get::<DelverEffects>(player).and_then(|e| e.poisoned_hours());
+            assert_eq!(poison.is_some(), poisoned, "cedar {cedar}");
+        }
+    }
+
+    #[test]
     fn frankincense_smoke_weakens_a_skeletons_blow() {
         let (mut app, player, snake) = delve();
         app.update();
