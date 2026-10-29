@@ -111,6 +111,7 @@ hit_kick = 1.0
 [light]
 # A torch, lantern or other burning thing's strength close up (1 = full).
 torch_peak = 1.0
+holy_peak = 0.6
 # How far its light reaches, as a multiple of its bright radius.
 torch_reach = 2.0
 # A brazier's strength close up (1 = full).

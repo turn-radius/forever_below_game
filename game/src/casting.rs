@@ -27,7 +27,7 @@ use bevy::prelude::*;
 use fb_character::Casting;
 use fb_character::casting::{Cast, CastError, MAX_TIER, Spellbook, cast_with, points};
 
-use crate::carry::given_light;
+use crate::carry::holy_light;
 use crate::character::{Character, DelverMana};
 use crate::game_clock::GameClock;
 use crate::render::{ItemAppearance, ItemSpawner, ToonMaterial};
@@ -263,15 +263,17 @@ pub(crate) fn cast_requests(
 }
 
 /// The colour of Divine Light: a soft pale gold, not a flame's orange.
-pub const HOLY_LIGHT: Rgb = Rgb::hex(0xfff0c0);
+pub const HOLY_LIGHT: Rgb = Rgb::hex(0xfff8e8);
 /// The pearl at the bauble's heart, nearly white.
 const HOLY_CORE: Rgb = Rgb::hex(0xffeeb0);
 /// How high above the caster's eye the bauble floats, world units.
-const BAUBLE_RISE: f32 = 1.6;
+const BAUBLE_RISE: f32 = 0.9;
 /// How far ahead of the caster it floats, world units.
-const BAUBLE_AHEAD: f32 = 9.0;
+const BAUBLE_AHEAD: f32 = 14.0;
 /// How far to the right of where they look, world units, so it does not sit on the aim.
-const BAUBLE_ASIDE: f32 = 3.0;
+const BAUBLE_ASIDE: f32 = 3.5;
+/// The bauble's size, a share of its drawn mesh.
+const BAUBLE_SIZE: f32 = 0.55;
 /// How quickly it catches up with the caster, per second.
 const BAUBLE_FOLLOW: f32 = 5.0;
 /// Game seconds a bauble takes to fade out at the end of its life, at most.
@@ -339,7 +341,7 @@ fn cast_effects(
 /// The bauble lit for `cast` at `at`.
 fn set_divine_light(commands: &mut Commands, cast: &fb_character::casting::Cast, now: f64, at: Vec3, tuning: &Tuning) {
     let anchor = LightAnchor::feet([0.0; 3], HOLY_LIGHT, cast.range as f32, HOLY_FLICKER);
-    let lit = given_light(anchor, bevy::camera::Exposure::INDOOR, &tuning.light);
+    let lit = holy_light(anchor, bevy::camera::Exposure::INDOOR, &tuning.light);
     let peak = lit.0.intensity;
     commands.spawn((
         Name::new(format!("Divine Light, tier {}", cast.tier)),
@@ -412,7 +414,7 @@ pub fn bauble_mesh() -> ItemMesh {
 /// Gives each new bauble its glowing shape, with no shadow of its own to black out its light.
 fn dress_baubles(new: Query<Entity, Added<DivineLight>>, mut spawner: ItemSpawner) {
     for bauble in &new {
-        spawner.spawn(&bauble_mesh(), &ItemAppearance::default()).insert((Propagate(NotShadowCaster), ChildOf(bauble)));
+        spawner.spawn(&bauble_mesh(), &ItemAppearance::default()).insert((Propagate(NotShadowCaster), Transform::from_scale(Vec3::splat(BAUBLE_SIZE)), ChildOf(bauble)));
     }
 }
 

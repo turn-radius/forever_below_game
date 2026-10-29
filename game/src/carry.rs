@@ -1117,17 +1117,29 @@ pub fn world_light(anchor: &LightAnchor, exposure: &Exposure, light: &LightTunin
     cast_shadows(anchor_light(anchor, light.torch_peak, anchor.radius * light.torch_reach, exposure, light))
 }
 
+/// [`world_light`] for a holy light (Divine Light): the same reach, at the tuning's `holy_peak`.
+pub fn holy_world_light(anchor: &LightAnchor, exposure: &Exposure, light: &LightTuning) -> PointLight {
+    cast_shadows(anchor_light(anchor, light.holy_peak, anchor.radius * light.torch_reach, exposure, light))
+}
+
 /// On a lit thing's light in the world ([`world_light`]): what it is the light of, so it can be
 /// lit again when the tuning changes ([`relight_given_lights`]).
 #[derive(Component, Clone, Copy)]
 pub struct GivenLight {
     pub anchor: LightAnchor,
     pub exposure: Exposure,
+    /// Whether it is a holy light, lit at the tuning's `holy_peak` rather than `torch_peak`.
+    pub holy: bool,
 }
 
 /// A lit thing's light in the world, with what it is the light of.
 pub fn given_light(anchor: LightAnchor, exposure: Exposure, light: &LightTuning) -> (PointLight, GivenLight) {
-    (world_light(&anchor, &exposure, light), GivenLight { anchor, exposure })
+    (world_light(&anchor, &exposure, light), GivenLight { anchor, exposure, holy: false })
+}
+
+/// A holy light's light in the world ([`holy_world_light`]), with what it is the light of.
+pub fn holy_light(anchor: LightAnchor, exposure: Exposure, light: &LightTuning) -> (PointLight, GivenLight) {
+    (holy_world_light(&anchor, &exposure, light), GivenLight { anchor, exposure, holy: true })
 }
 
 /// Lights every lit thing's light again when the tuning changes (in hand, on the floor, held by
@@ -1137,7 +1149,7 @@ fn relight_given_lights(tuning: Res<Tuning>, mut lights: Query<(Ref<GivenLight>,
         if !tuning.is_changed() && !given.is_added() {
             continue;
         }
-        *light = world_light(&given.anchor, &given.exposure, &tuning.light);
+        *light = if given.holy { holy_world_light(&given.anchor, &given.exposure, &tuning.light) } else { world_light(&given.anchor, &given.exposure, &tuning.light) };
     }
 }
 

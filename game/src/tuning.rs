@@ -303,6 +303,8 @@ pub struct LightTuning {
     /// A lit torch, lantern or other burning thing, in hand or on the floor: its strength close
     /// up. Over 1 widens the fully lit core; the shader caps it at full.
     pub torch_peak: f32,
+    /// Divine Light's bauble: its strength close up, a little under a torch's.
+    pub holy_peak: f32,
     /// How far its light reaches, as a multiple of its bright radius (its `LightAnchor`
     /// radius): dim light runs as far again beyond the bright, as a torch's does in the D&D 5e
     /// SRD 5.1 ("Adventuring Gear": bright light in a 20-foot radius and dim light for an
@@ -341,6 +343,7 @@ impl Default for LightTuning {
     fn default() -> Self {
         LightTuning {
             torch_peak: 1.0,
+            holy_peak: 0.6,
             torch_reach: 2.0,
             brazier_peak: 1.5,
             brazier_reach: 150.0,
