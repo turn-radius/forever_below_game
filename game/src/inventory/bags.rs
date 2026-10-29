@@ -40,11 +40,17 @@ const WINDOW_GAP_PX: f32 = 12.0;
 const AREA_MARGIN_PX: f32 = 16.0;
 
 /// Which containers are open as windows, and where each sits.
-#[derive(Resource, Default, Debug, Clone, PartialEq)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct BagWindows {
-    /// Back to front: the last is on top.
+    /// Everything opened and not closed, oldest first: the remembered set.
     pub order: Vec<ItemId>,
-    /// Each window's top left, in the interface's logical pixels, as [`place_windows`] last laid it out.
+    /// Those of `order` the screen had no room for at the last layout, which come back by themselves
+    /// when room frees (another window closes, or a smaller one is in the way).
+    pub hidden: Vec<ItemId>,
+    /// How much the windows' cells are shrunk from the screen's, 1 down to what lets them all fit
+    /// ([`fit_windows`]).
+    pub scale: f32,
+    /// Each shown window's top left, in the interface's logical pixels, as [`place_windows`] last laid it out.
     pub at: HashMap<ItemId, Vec2>,
     /// A click on a bag lying underfoot or in the level that has not yet been told from the first
     /// half of a double-click (which takes it up): the bag and when it was clicked. It opens or
@@ -52,22 +58,36 @@ pub struct BagWindows {
     pub pending: Option<(ItemId, f32)>,
 }
 
+impl Default for BagWindows {
+    fn default() -> Self {
+        BagWindows { order: Vec::new(), hidden: Vec::new(), scale: 1.0, at: HashMap::new(), pending: None }
+    }
+}
+
 impl BagWindows {
     pub fn is_open(&self, id: ItemId) -> bool {
         self.order.contains(&id)
     }
 
-    /// Opens `id` in front, or closes it if it is open. Its place is kept for next time.
+    /// Whether `id` is open and has a window on the screen.
+    pub fn is_shown(&self, id: ItemId) -> bool {
+        self.is_open(id) && !self.hidden.contains(&id)
+    }
+
+    /// Opens `id` as the newest, or closes it if its window is showing. One with no room on the screen
+    /// opens afresh, as the newest.
     pub fn toggle(&mut self, id: ItemId) {
-        if self.is_open(id) {
+        if self.is_shown(id) {
             self.close(id);
         } else {
+            self.close(id);
             self.order.push(id);
         }
     }
 
     pub fn close(&mut self, id: ItemId) {
         self.order.retain(|&o| o != id);
+        self.hidden.retain(|&o| o != id);
     }
 
     /// Brings `id` in front of the others. False if it already was, or is not open.
@@ -164,11 +184,30 @@ fn ui_size(window: &Window, scale: Option<&UiScale>, cameras: &Query<&Camera, Or
 
 /// Where the windows' columns lie on a screen of `screen` interface pixels: from just right of the
 /// doll (the ledger sits at the screen's left in the inventory, [`super::LEDGER_PAD_PX`] in, its leaf and
-/// the doll one after the other) and from the ledger's top to its bottom, to the screen's right edge.
+/// the doll one after the other) to the screen's right edge, and the screen's height less its margins.
 pub fn windows_area(screen: Vec2) -> Rect {
     let doll_right = super::LEDGER_PAD_PX + super::SOLO_LEAF_PX + super::LEDGER_GAP_PX + super::doll::FRAME.x;
-    let (top, bottom) = (screen.y * (1.0 - super::LEDGER_HEIGHT) / 2.0 + super::LEDGER_PAD_PX, screen.y * (1.0 + super::LEDGER_HEIGHT) / 2.0 - super::LEDGER_PAD_PX);
-    Rect::from_corners(Vec2::new(doll_right + AREA_MARGIN_PX, top), Vec2::new(screen.x - AREA_MARGIN_PX, bottom.max(top)))
+    Rect::from_corners(Vec2::new(doll_right + AREA_MARGIN_PX, AREA_MARGIN_PX), Vec2::new(screen.x - AREA_MARGIN_PX, (screen.y - AREA_MARGIN_PX).max(AREA_MARGIN_PX)))
+}
+
+/// The shares of a cell the windows' grids are drawn at, biggest first: the first that lets every open
+/// window fit is used, so a pack, a satchel and a belt with frogs all show on the smallest screen.
+const WINDOW_SCALES: [f32; 6] = [1.0, 0.85, 0.75, 0.65, 0.55, 0.45];
+
+/// Lays out the windows `ids` (oldest first) with cells of `cell` pixels in `area`, shrinking the cells
+/// through [`WINDOW_SCALES`] until all fit; at the smallest, the oldest are left out as [`column_layout`]
+/// says. Gives the scale, how many were left out and where the rest sit.
+pub fn fit_windows(inventory: &Inventory, ids: &[ItemId], cell: f32, area: Rect) -> (f32, usize, Vec<(ItemId, Vec2)>) {
+    let mut result = (1.0, 0, Vec::new());
+    for scale in WINDOW_SCALES {
+        let sizes: Vec<(ItemId, Vec2)> = ids.iter().filter_map(|&id| Some((id, window_size(inventory, id, cell * scale)?))).collect();
+        let (skipped, placed) = column_layout(&sizes, area);
+        result = (scale, skipped, placed);
+        if skipped == 0 {
+            break;
+        }
+    }
+    result
 }
 
 /// Lays windows of the given `sizes`, oldest first, in columns inside `area`: each window under the
@@ -235,7 +274,8 @@ pub fn settle_click(time: Res<Time<Real>>, mut windows: ResMut<BagWindows>, inve
 }
 
 /// Drops windows whose container is out of reach and, while the inventory page shows them, lays
-/// the open ones out in columns beside the doll, closing the oldest when they do not all fit.
+/// the open ones out in columns beside the doll, shrinking their cells to fit them and, when they
+/// still do not all fit, hiding the oldest.
 #[allow(clippy::too_many_arguments)]
 pub fn place_windows(
     mut windows: ResMut<BagWindows>,
@@ -266,10 +306,14 @@ pub fn place_windows(
     if screen.x < 1.0 || screen.y < 1.0 {
         return;
     }
-    let sizes: Vec<(ItemId, Vec2)> = windows.order.iter().filter_map(|&id| Some((id, window_size(&inventory, id, cell)?))).collect();
-    let (skipped, placed) = column_layout(&sizes, windows_area(screen));
-    for &(id, _) in &sizes[..skipped] {
-        windows.close(id);
+    // What has no room is hidden, not closed: it is still remembered and comes back when room frees.
+    let (scale, _, placed) = fit_windows(&inventory, &windows.order, cell, windows_area(screen));
+    let hidden: Vec<ItemId> = windows.order.iter().copied().filter(|id| !placed.iter().any(|(p, _)| p == id)).collect();
+    if windows.hidden != hidden {
+        windows.hidden = hidden;
+    }
+    if windows.scale != scale {
+        windows.scale = scale;
     }
     for (id, at) in placed {
         if windows.at.get(&id) != Some(&at) {
@@ -503,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn the_oldest_window_closes_when_the_screen_has_no_room_beside_the_doll() {
+    fn the_oldest_window_is_hidden_when_the_screen_has_no_room_beside_the_doll() {
         let (inventory, pack, inner, _) = bags();
         let mut app = place_app(inventory);
         let mut window = Window::default();
@@ -513,7 +557,81 @@ mod tests {
         // At a scale of 1, 1280 pixels leave nothing right of the doll.
         app.world_mut().resource_mut::<BagWindows>().order = vec![pack, inner];
         app.update();
-        assert_eq!(app.world().resource::<BagWindows>().order, vec![inner], "the newest stays");
+        let windows = app.world().resource::<BagWindows>();
+        assert_eq!((windows.order.clone(), windows.hidden.clone()), (vec![pack, inner], vec![pack]), "the oldest is left out but remembered");
+    }
+
+    /// A delver wearing a pack, a satchel and a belt rolled from the three seeds.
+    fn three_bags(seeds: (u32, u32, u32)) -> (Inventory, [ItemId; 3]) {
+        let mut inventory = Inventory::default();
+        let mut wear = |base: &str, seed: u32, slot: Slot| {
+            let id = inventory.add(fb_items::roll_item(base, seed).unwrap());
+            inventory.wear(id, slot).unwrap();
+            id
+        };
+        let bags = [wear("Pack", seeds.0, Slot::Back), wear("Satchel", seeds.1, Slot::Satchel), wear("Belt", seeds.2, Slot::Belt)];
+        (inventory, bags)
+    }
+
+    #[test]
+    fn a_pack_a_satchel_and_a_belt_all_fit_beside_the_doll_at_any_seed() {
+        let screen = Vec2::new(1920.0, 1080.0);
+        let area = windows_area(screen);
+        for seed in 1..400u32 {
+            let (inventory, bags) = three_bags((seed, seed * 7 % 400 + 1, seed * 13 % 400 + 1));
+            let (scale, skipped, placed) = fit_windows(&inventory, &bags, 72.0, area);
+            assert_eq!((skipped, placed.len()), (0, 3), "seed {seed}: scale {scale}");
+            let sizes: Vec<(ItemId, Vec2)> = bags.iter().map(|&id| (id, window_size(&inventory, id, 72.0 * scale).unwrap())).collect();
+            no_overlap(&placed, &sizes, area);
+        }
+    }
+
+    #[test]
+    fn three_bags_open_at_1280_by_720_all_show_and_none_overlap() {
+        for seed in [1u32, 7, 23, 91, 140, 333] {
+            let (inventory, bags) = three_bags((seed, seed + 3, seed + 11));
+            let mut app = place_app(inventory);
+            let mut window = Window::default();
+            window.resolution.set(1280.0, 720.0);
+            app.world_mut().spawn((window, PrimaryWindow));
+            app.world_mut().insert_resource(UiScale(1280.0 / 1920.0));
+            app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+            app.world_mut().resource_mut::<BagWindows>().order = bags.to_vec();
+            app.update();
+            let windows = app.world().resource::<BagWindows>();
+            assert!(windows.hidden.is_empty(), "seed {seed}");
+            let inventory = app.world().resource::<Inventory>();
+            let sizes: Vec<(ItemId, Vec2)> = bags.iter().map(|&id| (id, window_size(inventory, id, 72.0 * windows.scale).unwrap())).collect();
+            let placed: Vec<(ItemId, Vec2)> = bags.iter().map(|id| (*id, windows.at[id])).collect();
+            no_overlap(&placed, &sizes, windows_area(Vec2::new(1920.0, 1080.0)));
+        }
+    }
+
+    #[test]
+    fn windows_pushed_out_for_room_come_back_when_room_frees() {
+        let (inventory, pack, inner, loose) = bags();
+        let mut app = place_app(inventory);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
+        // A screen just tall enough for two of the three.
+        let hidden_at = |app: &mut App, height: f32| {
+            app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().resolution.set(1920.0, height);
+            app.world_mut().resource_mut::<BagWindows>().order = vec![pack, inner, loose];
+            app.update();
+            app.world().resource::<BagWindows>().hidden.clone()
+        };
+        let height = (100..1080).step_by(5).map(|h| h as f32).find(|&h| hidden_at(&mut app, h).len() == 1).expect("some height has room for two of the three");
+        let hidden = hidden_at(&mut app, height);
+        assert_eq!(hidden, vec![pack], "the oldest is the one pushed out");
+        assert_eq!(app.world().resource::<BagWindows>().order, vec![pack, inner, loose], "but it is still remembered");
+        // Close the newest: the pushed out one comes back.
+        app.world_mut().resource_mut::<BagWindows>().close(loose);
+        app.update();
+        let windows = app.world().resource::<BagWindows>();
+        assert_eq!(windows.order, vec![pack, inner]);
+        assert!(windows.hidden.is_empty(), "{:?}", windows.hidden);
+        assert!(windows.is_shown(pack) && windows.at.contains_key(&pack));
     }
 
     #[test]
