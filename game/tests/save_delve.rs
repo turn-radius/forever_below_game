@@ -818,6 +818,7 @@ fn dying_deletes_the_save_and_the_title_offers_no_resume() {
     assert!(file.exists());
     // Walked on and fell, with every revive spent.
     app.insert_resource(Revives(u32::MAX));
+    app.insert_resource(forever_below::combat::revival::Prayers(u32::MAX));
     let body = player(&mut app);
     app.world_mut().get_mut::<Health>(body).unwrap().hp = 0;
     // The save goes at the lethal blow, in the last gasp, before the fall.
