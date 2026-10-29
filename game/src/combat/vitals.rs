@@ -427,6 +427,7 @@ fn fall(
     mut screen: Option<ResMut<ScreenOpen>>,
     next: Option<ResMut<NextState<AppState>>>,
     revival: Revival,
+    mut protection: super::revival::Protection,
 ) {
     let (revives, unconscious, rules) = revival;
     // Lying unconscious, the delver waits on the choice ([`super::revival`]).
@@ -457,6 +458,13 @@ fn fall(
         commands.entity(player).insert(Slowed(0.0)).remove::<(Constricted, super::swing::Swing, super::guard::Guard)>();
         if let Some(screen) = screen.as_deref_mut() {
             screen.0 = None;
+        }
+        // A cleric's prayer may save them before they fall at all; it spends no revive.
+        if spent.is_none()
+            && let Some((_, health, _)) = players.iter().find(|(p, ..)| *p == player)
+            && protection.ask(&mut commands, GameRules::of(&rules), player, *health, fonts.as_deref(), view_models.iter().next())
+        {
+            return;
         }
         // Brought down by a blow, a delver with a revive left in this world falls unconscious
         // instead; spent by exhaustion, they do not.

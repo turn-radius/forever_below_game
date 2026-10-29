@@ -24,6 +24,7 @@ pub mod conditions;
 pub mod effect;
 pub mod explain;
 pub mod poison;
+pub mod protection;
 pub mod recovery;
 pub mod revival;
 pub mod rules;

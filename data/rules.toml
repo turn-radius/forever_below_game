@@ -180,6 +180,18 @@ alone_hit_points = 0.25
 # Game hours a delver lies unconscious alone before coming to; hunger and thirst go on.
 hours_alone = 4.0
 
+[protection]
+# Divine Protection: a cleric brought to 0 hit points rolls a Wisdom save (d20 + modifier)
+# against this DC; a pass stands them up instead of falling, and spends no revive.
+dc = 12
+# The Wisdom modifier from which a pass also heals (tier two) and also cleanses (tier three).
+heal_from = 2
+cleanse_from = 3
+# Share of maximum hit points tiers two and three heal them to (tier one: 1 hit point).
+heal_share = 0.75
+# Prayers between sleeps, pass or fail.
+per_rest = 1
+
 [visibility]
 # How visible a delver is in the dark, from 0 to 1: the eye is nearly closed.
 in_dark = 0.05
