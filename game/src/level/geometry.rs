@@ -258,6 +258,104 @@ impl Relief {
     }
 }
 
+/// Whether the level draws floor in cell `(x, y)`: it is not rock (`passage` is the drawn-only
+/// cells behind the entrance, [`CellView::passage`]) and no way down goes through it. The one
+/// predicate the stone halls' mesh and [`DrawnFloor`] share.
+pub fn is_floored(level: &Level, passage: &[(i32, i32)], x: i32, y: i32) -> bool {
+    let open = if passage.contains(&(x, y)) { Cell::Floor } else { level.cell(x, y) };
+    open != Cell::Rock && !super::stairs::opens_floor(level.stair_at(x, y))
+}
+
+/// What is needed to read the height of the floor as drawn, built once per level: its finishes
+/// (the room grouping and flood fill) and the passage behind the entrance. A pure function of
+/// the level.
+#[derive(Clone, Debug)]
+pub struct DrawnFloor {
+    finishes: Finishes,
+    passage: Vec<(i32, i32)>,
+    /// What the level is, to tell whether a [`DrawnFloorCache`] still holds its own.
+    key: (u32, u32, u32, u32, u32, usize, usize),
+}
+
+impl DrawnFloor {
+    pub fn new(level: &Level) -> Self {
+        Self::of_view(&CellView::new(level))
+    }
+
+    /// The drawn floor of the level `view` sees, finishes and passage as it has them.
+    pub fn of_view(view: &CellView) -> Self {
+        DrawnFloor { finishes: view.finishes().clone(), passage: view.passage().to_vec(), key: Self::key(view.level()) }
+    }
+
+    fn key(level: &Level) -> (u32, u32, u32, u32, u32, usize, usize) {
+        (level.seed, level.depth, level.width, level.height, level.style as u32, level.rooms.len(), level.stairs.len())
+    }
+
+    /// The height of the floor as drawn under a footprint: the world rectangle `half` either side
+    /// of `centre` (x, z). The highest point of it, so a thin thing rests on the highest part of
+    /// the floor it touches. Only cells the level draws a floor in ([`is_floored`]) count. On a
+    /// rock level that is the relief ([`Relief::floor_height`]) over the footprint, with the
+    /// paving's or cobbles' lowest stone standing on it; on dressed stone the flagstones' faces
+    /// ([`stone::flag_top`]), or the cobbles' lowest stone.
+    pub fn height_under(&self, level: &Level, centre: [f32; 2], half: [f32; 2]) -> f32 {
+        let (x, z) = (centre[0], centre[1]);
+        let (hx, hz) = (half[0].abs(), half[1].abs());
+        let (cx0, cx1) = (((x - hx) / CELL).floor() as i32, ((x + hx) / CELL).floor() as i32);
+        let (cy0, cy1) = (((z - hz) / CELL).floor() as i32, ((z + hz) / CELL).floor() as i32);
+        let rock = level.style.is_rock();
+        let mut top = if rock { f32::NEG_INFINITY } else { 0.0f32 };
+        if rock {
+            let relief = Relief::new(level);
+            for i in 0..3 {
+                for j in 0..3 {
+                    top = top.max(relief.floor_height(x + hx * (i as f32 - 1.0), z + hz * (j as f32 - 1.0)));
+                }
+            }
+        }
+        let mut stones = 0.0f32;
+        for cy in cy0..=cy1 {
+            for cx in cx0..=cx1 {
+                if !is_floored(level, &self.passage, cx, cy) {
+                    continue;
+                }
+                let finish = self.finishes.at(cx, cy).map(|f| f.floor);
+                match finish {
+                    Some(FloorFinish::Cobble) => stones = stones.max(cobble::COBBLE_REST),
+                    Some(FloorFinish::Flagstone) if rock => stones = stones.max(cobble::PAVING_REST),
+                    _ if rock => {}
+                    _ => {
+                        let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+                        let clip = |lo: f32, hi: f32, o: f32| [lo.max(o), hi.min(o + CELL)];
+                        top = top.max(stone::flag_top(level.seed, clip(x - hx, x + hx, ox), clip(z - hz, z + hz, oz)));
+                    }
+                }
+            }
+        }
+        if rock && top == f32::NEG_INFINITY { 0.0 } else { top + stones }
+    }
+}
+
+/// A [`DrawnFloor`] kept for the level it was built for, so the many floor items of one level
+/// share one: built again only when the level is another.
+#[derive(Default)]
+pub struct DrawnFloorCache(Option<std::sync::Arc<DrawnFloor>>);
+
+impl DrawnFloorCache {
+    pub fn of(&mut self, level: &Level) -> std::sync::Arc<DrawnFloor> {
+        if let Some(floor) = self.0.as_ref().filter(|f| f.key == DrawnFloor::key(level)) {
+            return floor.clone();
+        }
+        let floor = std::sync::Arc::new(DrawnFloor::new(level));
+        self.0 = Some(floor.clone());
+        floor
+    }
+}
+
+/// [`DrawnFloor::height_under`] for a level built just for the one question.
+pub fn floor_under(level: &Level, centre: [f32; 2], half: [f32; 2]) -> f32 {
+    DrawnFloor::new(level).height_under(level, centre, half)
+}
+
 /// A flat rectangle of the cell grid before relief: `origin` plus `u` and `v` (unit axes)
 /// times up to `size`, cut into `steps`, facing `facing`.
 #[derive(Clone, Copy, Debug)]

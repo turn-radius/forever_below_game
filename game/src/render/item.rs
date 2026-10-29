@@ -110,6 +110,7 @@ impl ItemAppearance {
         let decay = Decay {
             kind: part.material.map_or(0, MaterialKind::decay_type),
             amount: part.material.map_or(0.0, |kind| self.condition.decay(kind)) * light_fastness(part),
+            rust: part.material.map_or(0.0, |kind| self.condition.rust_decay(kind)) * light_fastness(part),
             scale: self.condition.scale * self.decay_scale_factor,
             seed: (self.seed % 997) as f32 * 0.137,
         };
@@ -317,6 +318,15 @@ pub struct ItemSpawner<'w, 's> {
     toon_materials: ResMut<'w, Assets<ToonMaterial>>,
     outline_materials: ResMut<'w, Assets<OutlineMaterial>>,
     shared_outlines: ResMut<'w, OutlineMaterials>,
+    /// The drawn floor of the level the last floor item was set on, read for each next one.
+    drawn_floor: Local<'s, crate::level::geometry::DrawnFloorCache>,
+}
+
+impl ItemSpawner<'_, '_> {
+    /// The drawn floor of `level`, built once for it ([`crate::level::geometry::DrawnFloor`]).
+    pub fn drawn_floor(&mut self, level: &fb_level::Level) -> std::sync::Arc<crate::level::geometry::DrawnFloor> {
+        self.drawn_floor.of(level)
+    }
 }
 
 impl<'w, 's> ItemSpawner<'w, 's> {

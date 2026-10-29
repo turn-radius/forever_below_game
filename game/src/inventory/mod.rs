@@ -746,6 +746,11 @@ impl Toasts<'_> {
         }
     }
 
+    /// Takes down the line showing.
+    pub fn clear(&mut self) {
+        self.say(String::new());
+    }
+
     /// Shows `text`, unless it is the line already showing.
     pub fn say_once(&mut self, text: &str) {
         let now = self.now();

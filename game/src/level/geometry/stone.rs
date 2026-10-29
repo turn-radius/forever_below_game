@@ -69,8 +69,14 @@ const FLAG_CHAMFER: f32 = 0.09;
 /// The lowest course of wall is darker where the damp climbs it, and may be chipped.
 pub const DAMP_STONE: Rgb = Rgb::hex(0x676a67);
 /// How often a block of the lowest course has a corner knocked off, and how big a bite, in world units.
-const CHIP_CHANCE: f32 = 0.3;
+const CHIP_CHANCE: f32 = 0.05;
 const CHIP: (f32, f32) = (1.1, 2.1);
+/// Whether the block of the lowest course keyed by `key` is chipped, how big the bite is and
+/// whether it is taken from the left. The same key always rolls the same.
+fn chip_roll(key: u32) -> (bool, f32, bool) {
+    let mut luck = Mulberry32::new(key ^ 0x0da4_9b10);
+    (luck.range_f32(0.0, 1.0) < CHIP_CHANCE, luck.range_f32(CHIP.0, CHIP.1), luck.range_f32(0.0, 1.0) < 0.5)
+}
 /// The fine ink along a joint sits this far off the shell, down in the groove between blocks.
 const JOINT_INK_LIFT: f32 = 0.1;
 /// The ink along the base of a wall floats this high and this far off the shell, to clear the
@@ -458,7 +464,7 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
             // Where a stair goes through (`crate::level::stairs`), no floor under a way down and
             // no vault over a way up, as in the rough rock.
             let stair = level.stair_at(x, y);
-            if !crate::level::stairs::opens_floor(stair) {
+            if super::is_floored(level, view.passage(), x, y) {
                 Face {
                     origin: corner,
                     u: [1.0, 0.0, 0.0],
@@ -1057,8 +1063,7 @@ fn lay_blocks(
             }
             // Damp darkens the lowest course, and now and then the knocks of a floor's traffic
             // have taken a corner off a block.
-            let mut luck = Mulberry32::new(run.key ^ (a * 64.0) as u32 ^ 0x0da4_9b10);
-            let (chipped, size, left) = (luck.range_f32(0.0, 1.0) < CHIP_CHANCE, luck.range_f32(CHIP.0, CHIP.1), luck.range_f32(0.0, 1.0) < 0.5);
+            let (chipped, size, left) = chip_roll(run.key ^ (a * 64.0) as u32);
             if chipped && hi - lo > size * 2.5 && top - bottom > size * 2.0 {
                 dress(damp, [lo, hi], [bottom + size, top], proud);
                 let strip = if left { [lo + size, hi] } else { [lo, hi - size] };
@@ -1098,11 +1103,21 @@ fn split(total: f32, n: usize, rng: &mut Mulberry32, wander: f32) -> Vec<f32> {
     (0..=n).map(|i| if i == 0 || i == n { i as f32 * step } else { (i as f32 + rng.range_f32(-wander, wander)) * step }).collect()
 }
 
-/// Flagstones over cell `(x, y)`: two to four rows of two to four slabs of all sizes, the
-/// joints wandering. A slab is now and then sunk, or cracked in two with one half lower.
-fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
+/// One flagstone of a cell: the slab's extent along the cell's x and z (cell-local) and how far
+/// its face stands off the shell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Flag {
+    a: [f32; 2],
+    b: [f32; 2],
+    raise: f32,
+}
+
+/// The flagstones of cell `(x, y)`: two to four rows of two to four slabs of all sizes, the
+/// joints wandering. A slab is now and then sunk, or cracked in two with one half lower. The
+/// one layout both the drawn floor ([`flagstones`]) and what rests on it ([`flag_top`]) read.
+fn flag_layout(seed: u32, x: i32, y: i32) -> Vec<Flag> {
     let mut rng = Mulberry32::new(seed ^ (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca6b) ^ 0xf1a6_5700);
-    let frame = Frame { origin: [x as f32 * CELL, 0.0, y as f32 * CELL], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    let mut flags = Vec::new();
     let rows = 2 + (rng.range_f32(0.0, 1.0) * 2.6) as usize;
     let zs = split(CELL, rows, &mut rng, 0.34);
     for r in 0..rows {
@@ -1114,22 +1129,50 @@ fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
             let inset = JOINT * 0.5;
             let (a0, a1, b0, b1) = (xs[c] + inset, xs[c + 1] - inset, zs[r] + inset, zs[r + 1] - inset);
             if !cracked || a1 - a0 < 3.0 || b1 - b0 < 3.0 {
-                slab(mesh, &frame, [a0, a1], [b0, b1], raise, FLAG_CHAMFER.min(raise * 0.9), false);
+                flags.push(Flag { a: [a0, a1], b: [b0, b1], raise });
                 continue;
             }
             // The crack runs across the longer side, a hair wide, and one half has settled.
             let low = (raise - drop).max(0.03);
             if a1 - a0 >= b1 - b0 {
                 let m = a0 + (a1 - a0) * at;
-                slab(mesh, &frame, [a0, m - 0.12], [b0, b1], raise, FLAG_CHAMFER.min(raise * 0.9), false);
-                slab(mesh, &frame, [m + 0.12, a1], [b0, b1], low, FLAG_CHAMFER.min(low * 0.9), false);
+                flags.push(Flag { a: [a0, m - 0.12], b: [b0, b1], raise });
+                flags.push(Flag { a: [m + 0.12, a1], b: [b0, b1], raise: low });
             } else {
                 let m = b0 + (b1 - b0) * at;
-                slab(mesh, &frame, [a0, a1], [b0, m - 0.12], raise, FLAG_CHAMFER.min(raise * 0.9), false);
-                slab(mesh, &frame, [a0, a1], [m + 0.12, b1], low, FLAG_CHAMFER.min(low * 0.9), false);
+                flags.push(Flag { a: [a0, a1], b: [b0, m - 0.12], raise });
+                flags.push(Flag { a: [a0, a1], b: [m + 0.12, b1], raise: low });
             }
         }
     }
+    flags
+}
+
+/// Flagstones over cell `(x, y)`, drawn from [`flag_layout`].
+fn flagstones(seed: u32, x: i32, y: i32, mesh: &mut MeshBuilder) {
+    let frame = Frame { origin: [x as f32 * CELL, 0.0, y as f32 * CELL], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    for flag in flag_layout(seed, x, y) {
+        slab(mesh, &frame, flag.a, flag.b, flag.raise, FLAG_CHAMFER.min(flag.raise * 0.9), false);
+    }
+}
+
+/// How high the flagstones that [`hall_mesh`] lays stand over the world rectangle `x` by `z`
+/// (min and max of each): the highest flag face under any part of it, 0 where it lies over
+/// the joints or off the flags. A thing across a joint rests on the higher flag.
+pub fn flag_top(seed: u32, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> f32 {
+    let cells = |lo: f32, hi: f32| (lo / CELL).floor() as i32..=(hi / CELL).floor() as i32;
+    let mut top = 0.0f32;
+    for cy in cells(z0, z1) {
+        for cx in cells(x0, x1) {
+            let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+            for flag in flag_layout(seed, cx, cy) {
+                if ox + flag.a[0] <= x1 && ox + flag.a[1] >= x0 && oz + flag.b[0] <= z1 && oz + flag.b[1] >= z0 {
+                    top = top.max(flag.raise);
+                }
+            }
+        }
+    }
+    top
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1168,6 +1211,9 @@ pub struct ColumnSpot {
     pub variant: u32,
     /// Quarter turns about the shaft, so a repeated column does not wear the same way on the same face.
     pub turn: u32,
+    /// Whether the shaft is cut with flutes: set for every column of a hall the level
+    /// ([`Level::hall_is_fluted`]) chose to flute.
+    pub fluted: bool,
 }
 
 /// Every column of the level, with how tall each stands.
@@ -1188,7 +1234,7 @@ pub fn columns(level: &Level) -> Vec<ColumnSpot> {
             let seat = over.iter().copied().fold(f32::MAX, f32::min).floor();
             let top = (over.iter().copied().fold(0.0, f32::max) + 0.3).ceil();
             let h = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663) ^ level.seed;
-            out.push(ColumnSpot { cell: (x, y), seat, top, variant: (h >> 7) % COLUMN_VARIANTS, turn: (h >> 13) % 4 });
+            out.push(ColumnSpot { cell: (x, y), seat, top, variant: (h >> 7) % COLUMN_VARIANTS, turn: (h >> 13) % 4, fluted: level.room_at(x, y).is_some_and(|room| level.hall_is_fluted(room)) });
         }
     }
     out
@@ -1198,8 +1244,10 @@ pub fn columns(level: &Level) -> Vec<ColumnSpot> {
 /// swells a little a third of the way up and narrows toward the top (entasis), and a capital of
 /// an echinus under a square abacus whose top is at `seat`, with an impost block above it
 /// running up to `top`. The shaft is worn smooth and chipped: `variant` and `seed` choose
-/// where. In its own space the column stands on the origin.
-pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
+/// where. A `fluted` shaft is cut with shallow vertical grooves from the base to the necking
+/// ring, following its swell and taper, with the chips and wear still biting into them. In its
+/// own space the column stands on the origin.
+pub fn column(seat: f32, top: f32, variant: u32, seed: u32, fluted: bool) -> ItemMesh {
     let mut rng = Mulberry32::new(seed ^ variant.wrapping_mul(0x85eb_ca6b) ^ 0xc010_0000);
     let (plinth, abacus, echinus) = (1.6, 1.4, 2.4);
     let shaft_bottom = plinth + 1.5;
@@ -1238,8 +1286,8 @@ pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
     profile.push([0.0, seat - abacus]);
     // Dense enough that chips and wear have vertices to move.
     let profile = densify(&profile, 1.0);
-    let mut body = lathe(&profile, &LatheOptions { facets: 28, shading: Shading::SMOOTH, ..Default::default() });
-    wear(&mut body, &mut rng, [shaft_bottom, shaft_top], r_bottom, seed ^ variant);
+    let mut body = lathe(&profile, &LatheOptions { facets: if fluted { FLUTES * FLUTE_FACETS } else { 28 }, shading: Shading::SMOOTH, ..Default::default() });
+    wear(&mut body, &mut rng, [shaft_bottom, shaft_top], r_bottom, seed ^ variant, fluted);
 
     let mut foot = plank(2.0 * COLUMN_HALF, plinth, 2.0 * COLUMN_HALF, 0.4);
     foot.translate([0.0, plinth * 0.5, 0.0]);
@@ -1251,6 +1299,21 @@ pub fn column(seat: f32, top: f32, variant: u32, seed: u32) -> ItemMesh {
     let mut parts = Parts::new();
     parts.add_look("column", body, Look::of(MaterialKind::Stone).tinted(COLUMN_STONE));
     parts.finish()
+}
+
+/// How many flutes run round a fluted shaft, and how many facets of the lathe cut each: enough
+/// that a groove has a flat bottom, steep sides and a crisp arris between neighbours.
+const FLUTES: usize = 16;
+const FLUTE_FACETS: usize = 8;
+/// How deep a flute cuts, in world units.
+const FLUTE_DEPTH: f32 = 0.5;
+
+/// The depth of a flute, 0 at the arris to 1 across its flat bottom, `s` of the way round it.
+fn flute_profile(s: f32) -> f32 {
+    const DEPTHS: [f32; FLUTE_FACETS + 1] = [0.0, 0.7, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 0.0];
+    let at = s * FLUTE_FACETS as f32;
+    let i = (at as usize).min(FLUTE_FACETS - 1);
+    DEPTHS[i] + (DEPTHS[i + 1] - DEPTHS[i]) * (at - i as f32)
 }
 
 /// `profile` with no step longer than `max`.
@@ -1270,7 +1333,7 @@ fn densify(profile: &[[f32; 2]], max: f32) -> Vec<[f32; 2]> {
 
 /// Erodes the turned body: a slow wander of the surface, worse at the foot where the damp
 /// sits, and a few chips knocked out of the shaft and the capital.
-fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]: [f32; 2], radius: f32, seed: u32) {
+fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]: [f32; 2], radius: f32, seed: u32, fluted: bool) {
     let chips: Vec<(V3, f32, f32)> = (0..4 + (rng.range_f32(0.0, 3.0) as usize))
         .map(|_| {
             let (angle, y) = (rng.range_f32(0.0, std::f32::consts::TAU), rng.range_f32(shaft_bottom, shaft_top + 2.0));
@@ -1288,6 +1351,12 @@ fn wear(body: &mut MeshBuilder, rng: &mut Mulberry32, [shaft_bottom, shaft_top]:
         let (dx, dz) = (p[0] / r, p[2] / r);
         let foot = (-(p[1] - shaft_bottom).max(0.0) / 6.0).exp();
         let mut sink = (value_noise3([p[0] / 3.0, p[1] / 5.0, p[2] / 3.0], seed) - 0.5) * (0.3 + 0.5 * foot);
+        if fluted && p[1] >= shaft_bottom - 1e-3 && p[1] <= shaft_top + 1e-3 {
+            // The grooves run out over the first and last stretch of the shaft.
+            let ends = ((p[1] - shaft_bottom).min(shaft_top - p[1]) / 1.2).clamp(0.0, 1.0);
+            let s = ((-p[2]).atan2(p[0]) / std::f32::consts::TAU * FLUTES as f32).rem_euclid(1.0);
+            sink += FLUTE_DEPTH * ends * flute_profile(s);
+        }
         for &(centre, size, depth) in &chips {
             let d = vec3::distance(*p, centre);
             if d < size {
@@ -1325,12 +1394,106 @@ mod tests {
     use super::*;
     use fb_level::LevelStyle;
 
+    #[test]
+    fn about_one_block_in_twenty_of_the_lowest_course_is_chipped_and_the_same_each_time() {
+        let n = 20_000u32;
+        let chipped = (0..n).filter(|&k| chip_roll(k.wrapping_mul(2_654_435_761)).0).count() as f32 / n as f32;
+        assert!((0.04..0.06).contains(&chipped), "chip rate {chipped}");
+        for k in [1u32, 77, 4096, 0xdead_beef] {
+            assert_eq!(chip_roll(k), chip_roll(k));
+        }
+    }
+
     /// A stone halls level without its stairs, whose openings in the floor and vault are
     /// tested on their own ([`stairs_open_the_floor_and_the_vault`]).
     fn halls(seed: u32) -> Level {
         let level = fb_level::generate(seed, 2);
         assert_eq!(level.style, LevelStyle::StoneHalls);
         Level { stairs: Vec::new(), ..level }
+    }
+
+    #[test]
+    fn flag_top_reads_the_flags_that_are_drawn() {
+        let level = halls(1207);
+        let mut mesh = MeshBuilder::new();
+        let (cx, cy) = (3, 4);
+        flagstones(level.seed, cx, cy, &mut mesh);
+        let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+        let flags = flag_layout(level.seed, cx, cy);
+        assert!(flags.len() >= 4);
+        for flag in &flags {
+            let (mx, mz) = (ox + (flag.a[0] + flag.a[1]) * 0.5, oz + (flag.b[0] + flag.b[1]) * 0.5);
+            // On a flag's middle, the flag's face.
+            assert!((flag_top(level.seed, [mx, mx], [mz, mz]) - flag.raise).abs() < 1e-6);
+        }
+        // Across a joint, the higher of the two flags it lies between.
+        let (first, second) = flags.iter().enumerate().flat_map(|(i, f)| flags[i + 1..].iter().map(move |g| (f, g))).find(|(f, g)| f.raise != g.raise && (f.a[1] - g.a[0]).abs() < 0.5 && f.b == g.b).expect("two neighbours of unequal height");
+        let joint = ox + (first.a[1] + second.a[0]) * 0.5;
+        let z = oz + (first.b[0] + first.b[1]) * 0.5;
+        let across = flag_top(level.seed, [joint - 0.4, joint + 0.4], [z, z]);
+        assert!((across - first.raise.max(second.raise)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn flag_top_matches_the_floor_mesh() {
+        let level = halls(1207);
+        let view = CellView::uncobbled(&level);
+        let mesh = level_mesh(&view, view.bounds());
+        let floor = part(&mesh, "floor");
+        let (x0, y0, x1, y1) = view.bounds();
+        let mut checked = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if view.cell(x, y) == Cell::Rock {
+                    continue;
+                }
+                // The highest vertex of the drawn floor over a cell is the highest flag in it.
+                let (ox, oz) = (x as f32 * CELL, y as f32 * CELL);
+                let drawn = floor.positions.iter().filter(|p| p[0] >= ox && p[0] <= ox + CELL && p[2] >= oz && p[2] <= oz + CELL).map(|p| p[1]).fold(0.0f32, f32::max);
+                let read = flag_top(level.seed, [ox + 0.01, ox + CELL - 0.01], [oz + 0.01, oz + CELL - 0.01]);
+                assert!((drawn - read).abs() < 1e-4, "cell {x},{y}: drawn {drawn}, read {read}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 20);
+    }
+
+    #[test]
+    fn an_item_against_a_wall_or_a_stair_opening_rests_on_the_open_cells_flags() {
+        let level = halls(1207);
+        let view = CellView::uncobbled(&level);
+        let drawn = super::super::DrawnFloor::of_view(&view);
+        let flags = |x0: f32, x1: f32, z0: f32, z1: f32| flag_top(level.seed, [x0, x1], [z0, z1]);
+        let (mut walls, mut openings, mut bit) = (0, 0, 0);
+        for y in 1..level.height as i32 - 1 {
+            for x in 1..level.width as i32 - 1 {
+                if view.cell(x, y) == Cell::Rock || view.is_cobbled(x, y) {
+                    continue;
+                }
+                let (z0, z1) = (y as f32 * CELL + 1.0, (y + 1) as f32 * CELL - 1.0);
+                let edge = (x + 1) as f32 * CELL;
+                // Rock to the east: the footprint reaches 1.5 into it, the floor is the open side's.
+                if view.cell(x + 1, y) == Cell::Rock {
+                    let height = drawn.height_under(&level, [edge, (z0 + z1) * 0.5], [1.5, (z1 - z0) * 0.5]);
+                    let (open, whole) = (flags(edge - 1.5, edge, z0, z1), flags(edge - 1.5, edge + 1.5, z0, z1));
+                    assert!((height - open).abs() < 1e-6, "cell {x},{y}: {height} against {open}");
+                    walls += 1;
+                    bit += (whole > open) as i32;
+                }
+                // A way down through the cell to the east: no floor there either.
+                if view.cell(x + 1, y) != Cell::Rock && !view.is_cobbled(x + 1, y) && level.stair_at(x + 1, y).is_none() {
+                    let mut stairs = level.clone();
+                    stairs.stairs.push(fb_level::Stair { x: (x + 1) as u32, y: y as u32, facing: Facing::East, kind: fb_level::StairKind::Down });
+                    let height = { let view = CellView::uncobbled(&stairs); super::super::DrawnFloor::of_view(&view).height_under(&stairs,  [edge, (z0 + z1) * 0.5], [1.5, (z1 - z0) * 0.5]) };
+                    let open = flags(edge - 1.5, edge, z0, z1);
+                    assert!((height - open).abs() < 1e-6, "stair at {},{y}: {height} against {open}", x + 1);
+                    openings += 1;
+                    bit += (flags(edge - 1.5, edge + 1.5, z0, z1) > open) as i32;
+                }
+            }
+        }
+        assert!(walls > 3 && openings > 3, "{walls} walls, {openings} openings");
+        assert!(bit > 0, "some footprint would have read a flag that is not drawn");
     }
 
     #[test]
@@ -1862,7 +2025,7 @@ mod tests {
         assert!(counted > 0);
         let vaults = Vaults::new(&level);
         for spot in spots {
-            let column = column(spot.seat, spot.top, spot.variant, level.seed);
+            let column = column(spot.seat, spot.top, spot.variant, level.seed, spot.fluted);
             for p in &column.parts {
                 p.validate().unwrap();
                 assert!(p.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3));
@@ -1883,7 +2046,7 @@ mod tests {
 
     #[test]
     fn a_column_swells_then_narrows_and_is_chipped() {
-        let made = column(34.0, 36.0, 1, 1207);
+        let made = column(34.0, 36.0, 1, 1207, false);
         let body = &made.parts[0];
         let radius_near = |y: f32| {
             let r: Vec<f32> = body.positions.iter().filter(|p| (p[1] - y).abs() < 0.8 && p[0].hypot(p[2]) > 2.0 && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
@@ -1896,8 +2059,63 @@ mod tests {
         let (lo, hi) = ring.iter().fold((f32::MAX, f32::MIN), |(l, h), &r| (l.min(r), h.max(r)));
         assert!(hi - lo > 0.1, "{lo} {hi}");
         // The same column twice, and a different variant another.
-        assert_eq!(made, column(34.0, 36.0, 1, 1207));
-        assert_ne!(made, column(34.0, 36.0, 2, 1207));
+        assert_eq!(made, column(34.0, 36.0, 1, 1207, false));
+        assert_ne!(made, column(34.0, 36.0, 2, 1207, false));
+    }
+
+    #[test]
+    fn a_hall_flutes_all_its_columns_or_none() {
+        let mut fluted = 0;
+        for seed in 1..=20 {
+            let level = fb_level::generate(seed, 2);
+            let spots = columns(&level);
+            for spot in &spots {
+                let room = level.room_at(spot.cell.0, spot.cell.1).unwrap();
+                assert_eq!(spot.fluted, level.hall_is_fluted(room), "seed {seed}: column {:?}", spot.cell);
+                for other in spots.iter().filter(|o| level.room_at(o.cell.0, o.cell.1) == Some(room)) {
+                    assert_eq!(spot.fluted, other.fluted);
+                }
+            }
+            fluted += spots.iter().filter(|s| s.fluted).count();
+        }
+        assert!(fluted > 0, "no fluted column in 20 levels");
+    }
+
+    #[test]
+    fn flutes_run_out_at_the_ends_of_the_shaft() {
+        let radii = |fluted: bool, y: f32, tol: f32| {
+            let made = column(34.0, 36.0, 1, 1207, fluted);
+            let r: Vec<f32> = made.parts[0].positions.iter().filter(|p| (p[1] - y).abs() < tol && p[0].hypot(p[2]) < 5.4).map(|p| p[0].hypot(p[2])).collect();
+            assert!(!r.is_empty(), "no ring at {y}");
+            r.iter().fold(0.0f32, |m, &r| m.max(r)) - r.iter().fold(f32::MAX, |m, &r| m.min(r))
+        };
+        let (bottom, top) = (3.1, 34.0 - 1.4 - 2.4 - 0.6);
+        for y in [bottom, top] {
+            assert!(radii(true, y, 0.01) < radii(false, y, 0.01) + 0.05, "grooves at {y}");
+        }
+        assert!(radii(true, 14.0, 0.3) > 0.3);
+    }
+
+    #[test]
+    fn a_fluted_shaft_is_grooved_round_and_a_plain_one_is_not() {
+        let ripple = |fluted: bool| {
+            let made = column(34.0, 36.0, 1, 1207, fluted);
+            let body = &made.parts[0];
+            // Radii of the vertices in a band of the shaft, by angle; the grooves make them swing.
+            let mut r: Vec<f32> = body.positions.iter().filter(|p| (p[1] - 14.0).abs() < 0.3).map(|p| p[0].hypot(p[2])).collect();
+            r.sort_by(f32::total_cmp);
+            for part in &made.parts {
+                part.validate().unwrap();
+                assert!(part.normals.iter().all(|n| (vec3::length(*n) - 1.0).abs() < 1e-3));
+            }
+            (r[r.len() - 1] - r[0], r.len())
+        };
+        let (plain, plain_n) = ripple(false);
+        let (cut, cut_n) = ripple(true);
+        assert!(cut > plain + 0.2, "plain swings {plain}, fluted {cut}");
+        assert!(cut_n >= 16 * 8 && cut_n > plain_n, "{cut_n} vertices a ring");
+        assert_eq!(column(34.0, 36.0, 1, 1207, true), column(34.0, 36.0, 1, 1207, true));
+        assert_ne!(column(34.0, 36.0, 1, 1207, true), column(34.0, 36.0, 1, 1207, false));
     }
 
     #[test]

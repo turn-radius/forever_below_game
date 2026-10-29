@@ -409,9 +409,20 @@ mod tests {
     }
 
     #[test]
+    fn of_thieves_rolls_again_now_that_picks_count_lockpicking() {
+        let thieves = affixes().iter().find(|a| a.name == "of Thieves").expect("of Thieves is in the table");
+        assert!(thieves.in_play(), "a pick rolls lockpicking as a line of its own");
+        let rolled: Vec<_> = (0..3_000).filter(|&seed| roll_rarity(&mut game_rng(seed), SWORD, &Odds::loot(6)).1.iter().any(|a| a.name == "of Thieves")).collect();
+        assert!(!rolled.is_empty(), "of Thieves rolls on some sword");
+        // And it gives the item the lockpicking its card shows and a pick counts.
+        let item = (0..20_000).filter_map(|seed| crate::roll_item_with("Gloves", seed, Odds::loot(8))).find(|i| i.affixes.iter().any(|a| a.name == "of Thieves")).expect("gloves of Thieves turn up");
+        assert!(item.profile.stats.lockpicking >= 1.0, "{:?}", item.profile.stats.lockpicking);
+    }
+
+    #[test]
     fn no_rolled_item_carries_a_held_back_affix() {
         let held: Vec<&str> = affixes().iter().filter(|a| !a.in_play()).map(|a| a.name.as_str()).collect();
-        assert_eq!(held, ["Silent", "Squeaking", "Cracked", "of Thieves", "of Quiet Steps", "of Presence", "of the Silver Tongue"]);
+        assert_eq!(held, ["Silent", "Squeaking", "Cracked", "of Quiet Steps", "of Presence", "of the Silver Tongue"]);
         let quiet = &[Tag::Quiet, Tag::Leather, Tag::Wear][..];
         for tags in [SWORD, TUNIC, PACK, quiet, &[Tag::Wood, Tag::Weapon][..], &[Tag::Trinket][..]] {
             for seed in 0..5_000 {

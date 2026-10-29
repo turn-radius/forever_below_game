@@ -169,7 +169,7 @@ mod tests {
         let cracked = dressed("Staff", 5, Rarity::Common, &[affix("Cracked")]).condition();
         assert_eq!(cracked.rot, 1.5);
         let clean = dressed("Sword", 5, Rarity::Common, &[]).condition();
-        assert!(clean.wear < 0.5 && clean.rust == 1.0);
+        assert!(clean.wear < 0.5 && clean.rust == 0.0);
     }
 
     #[test]

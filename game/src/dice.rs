@@ -6,8 +6,9 @@
 //! only shows it. When the panel closes, a [`RollDone`] carries the roll and purpose back and the
 //! requester applies the outcome. Esc ([`Action::Back`]) jumps to the verdict,
 //! and again closes the panel (the screen under it cannot be left meanwhile, [`crate::play::switch_screens`]); left alone it closes itself a couple of seconds after the verdict.
-//! Requests queue, so two rolls show one after the other. The panel pauses nothing: it sits over
-//! the talk or the inventory, which are already screens.
+//! Requests queue, so two rolls show one after the other. The panel pauses nothing. It sits over
+//! the talk or the inventory, which are already screens, or over the live level for a lock
+//! being picked: there [`crate::play::level_has_focus`] holds the delver still while [`Dice::busy`].
 //!
 //! The die is a 3D icosahedron drawn into an image by a camera on its own layer
 //! ([`DICE_LAYER`]), gold numerals engraved from strokes on each face, opposite faces adding to
@@ -60,6 +61,8 @@ pub enum RollPurpose {
     Persuade(Entity),
     /// Identifying this item.
     Identify(ItemId),
+    /// Picking the lock of the claim door in this cell.
+    PickLock((i32, i32)),
     /// A sample roll for captures.
     Sample,
 }
@@ -100,6 +103,11 @@ struct Active {
 }
 
 impl Dice {
+    #[cfg(test)]
+    pub fn queue_for_test(&mut self, request: RollRequest) {
+        self.queue.push_back(request);
+    }
+
     /// Whether a roll is showing or waiting: what rolled for should wait for its outcome.
     pub fn busy(&self) -> bool {
         self.active.is_some() || !self.queue.is_empty()

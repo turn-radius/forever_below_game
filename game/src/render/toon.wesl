@@ -42,6 +42,7 @@ struct ToonUniform {
     band_count: u32,
     decay_type: u32,
     decay_amount: f32,
+    decay_rust: f32,
     decay_scale: f32,
     decay_seed: f32,
     // Self-lit strength as a fraction of the worn base colour (glowing gems).
@@ -416,6 +417,7 @@ fn fragment(
         pixel,
         toon.decay_type,
         toon.decay_amount,
+        toon.decay_rust,
         toon.decay_scale,
         toon.decay_seed,
     );
