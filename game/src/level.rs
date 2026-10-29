@@ -6,11 +6,11 @@
 //! and an ambient fill of a few lux so carried light is what matters. The entrance door slams
 //! and latches when it reaches shut ([`LevelSounds`]).
 //!
-//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|wall|gem|brazier|glowcaps|hall|vault|role|banner|cells|wide` is for captures: a lit camera that stands in for the
+//! `FB_DEBUG_CAMERA=start|back|shut|top|crystal|wall|gem|brazier|glowcaps|hall|vault|role|banner|cells|wide|dais|ondais` is for captures: a lit camera that stands in for the
 //! [`PlayerCamera`] (which it deactivates), at the start looking in, a cell in looking back at
 //! the open entrance, the same with the player walked a cell further in so the door shuts, or
 //! high over the level looking down, or beside the first brazier or glowcaps, or at one end of
-//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or in the aisle of the first cell block looking at its bars (`cells`), or at the end of the longest stretch of corridor two cells wide or more, looking down it (`wide`). Unset, nothing here touches the player's camera.
+//! the first colonnaded hall looking down it (`hall`) or up at its vault (`vault`), or in the first room with the role `FB_DEBUG_ROLE` (`hall`, `hearth`, `sleeping`, `market`, `store`) or the room `FB_DEBUG_ROOM` looking at its middle (`role`), or the banner `FB_DEBUG_BANNER=<n>` names from in front of it (`banner`), or in the aisle of the first cell block looking at its bars (`cells`), or at the end of the longest stretch of corridor two cells wide or more, looking down it (`wide`), or at the dais `FB_DEBUG_DAIS` names (`throne`, `shrine`, `platform`, `sunk`; `FB_DEBUG_DAIS_NTH` skips some) from its open side (`dais`) or standing on its top (`ondais`). Unset, nothing here touches the player's camera.
 //! `FB_DEPTH=2` plays the stone halls of depth 2.
 
 pub mod geometry;
@@ -870,7 +870,9 @@ fn spawn_fixtures(
 
     // Fixed lights.
     for (i, (spot, brazier)) in level.lights.iter().zip(braziers).enumerate() {
-        let at = v3(fb_level::Level::world(spot.x, spot.y));
+        let mut at = v3(fb_level::Level::world(spot.x, spot.y));
+        // A brazier or a fire on a dais stands on its tread.
+        at.y += level.dais_floor(at.x, at.z);
         let seed = light_seed(level, i);
         match spot.kind {
             LightKind::Glowcaps => spawn_glowcaps(&mut commands, &mut spawner, at, seed, &tuning.light),
@@ -1234,6 +1236,50 @@ fn spawn_debug_camera(mut commands: Commands, level: Res<CurrentLevel>) {
             };
             let from = if kind == fb_level::WebKind::Corner { at + back + eye } else { target + back + Vec3::Y * if kind == fb_level::WebKind::Floor { 9.0 } else { -4.0 } };
             Transform::from_translation(from).looking_at(target, Vec3::Y)
+        }
+        "dais" | "ondais" => {
+            // The dais `FB_DEBUG_DAIS` names (throne, shrine, platform or sunk; the first dais
+            // if unset): from the open side looking at its middle, or for `ondais` standing on
+            // its top and looking along it.
+            let kind = std::env::var("FB_DEBUG_DAIS").unwrap_or_default();
+            let purpose = |d: &fb_level::Dais| level.room_at(d.x as i32, d.y as i32).and_then(|r| level.purpose_of(r));
+            let wanted = |d: &&fb_level::Dais| match kind.as_str() {
+                "throne" => purpose(d) == Some(fb_level::Purpose::ThroneRoom),
+                "shrine" => purpose(d) == Some(fb_level::Purpose::Shrine),
+                "platform" => !d.sunk && purpose(d).is_none(),
+                "sunk" => d.sunk,
+                _ => true,
+            };
+            let nth = std::env::var("FB_DEBUG_DAIS_NTH").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+            let Some(dais) = level.daises.iter().filter(wanted).nth(nth) else { return };
+            let [x0, x1, z0, z1] = dais.rect();
+            let centre = Vec3::new((x0 + x1) * 0.5, 0.0, (z0 + z1) * 0.5);
+            // Out of the first stepped side, the south one first.
+            let out = [(2, Vec3::Z), (1, Vec3::X), (3, Vec3::NEG_X), (0, Vec3::NEG_Z)].into_iter().find(|&(i, _)| dais.stepped[i]).map_or(Vec3::Z, |(_, v)| v);
+            if mode == "ondais" {
+                let along = if out.x != 0.0 { Vec3::Z } else { Vec3::X };
+                let from = centre + out * CELL * 0.3 - along * CELL * 0.0;
+                let at = from + Vec3::Y * (level.dais_height(from.x, from.z) + EYE_HEIGHT);
+                Transform::from_translation(at).looking_to(-out, Vec3::Y)
+            } else {
+                let reach = if out.x != 0.0 { (x1 - x0) * 0.5 } else { (z1 - z0) * 0.5 };
+                // The furthest open spot out from it with nothing (a column) in the way.
+                let side = Vec3::new(out.z, 0.0, out.x);
+                let clear = |p: Vec3| {
+                    level.is_open((p.x / CELL).floor() as i32, (p.z / CELL).floor() as i32)
+                        && (0..=24).all(|i| {
+                            let q = p.lerp(centre, i as f32 / 24.0);
+                            level.cell((q.x / CELL).floor() as i32, (q.z / CELL).floor() as i32) != fb_level::Cell::Column
+                        })
+                };
+                let from = [6.0, 5.0, 4.0, 3.0, 2.0, 1.5]
+                    .into_iter()
+                    .flat_map(|cells| [0.0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5].map(|lateral| centre + out * (reach + CELL * cells) + side * CELL * lateral))
+                    .find(|&p| clear(p))
+                    .unwrap_or(centre + out * (reach + CELL * 0.5));
+                let at = from + Vec3::Y * (level.dais_height(from.x, from.z) + EYE_HEIGHT);
+                Transform::from_translation(at).looking_at(centre + Vec3::Y * 4.0, Vec3::Y)
+            }
         }
         "banner" => {
             // The banner `FB_DEBUG_BANNER` names (the first if unset), from five cells out in

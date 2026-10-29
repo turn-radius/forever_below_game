@@ -209,8 +209,18 @@ fn cell(p: Vec2) -> (i32, i32) {
 
 /// Gives each new person a routine (a body brought back from the record has none).
 #[allow(clippy::type_complexity)]
-pub(crate) fn begin_routines(mut commands: Commands, tuning: Res<Tuning>, new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>) {
+pub(crate) fn begin_routines(
+    mut commands: Commands,
+    tuning: Res<Tuning>,
+    level: Option<Res<crate::play::CurrentLevel>>,
+    mut transforms: Query<&mut Transform>,
+    new: Query<(Entity, &Denizen), (Added<Denizen>, Without<crate::combat::feedback::Corpse>)>,
+) {
     for (entity, denizen) in &new {
+        // Someone who stands on a dais stands on its steps.
+        if let (Some(level), Ok(mut at)) = (level.as_deref(), transforms.get_mut(entity)) {
+            at.translation.y += level.0.dais_height(at.translation.x, at.translation.z);
+        }
         let mut rng = Mulberry32::new(denizen.person.spot.seed ^ ROUTINE_SALT);
         let first = rng.range_f32(0.0, tuning.folk.pause_max.max(tuning.folk.pause_min));
         // Home is their spot, even for someone brought back from the record somewhere else.

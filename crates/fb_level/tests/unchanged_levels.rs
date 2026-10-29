@@ -15,13 +15,22 @@
 
 use fb_level::generate;
 
+/// The level's debug text without its daises (#818), the last field: they are a list of their own,
+/// so a hash taken before they existed can still be compared with.
+fn without_daises(text: String) -> String {
+    match text.rfind(", daises: [") {
+        Some(i) => format!("{} }}", &text[..i]),
+        None => text,
+    }
+}
+
 /// FNV-1a over the debug text of each level, with its floats rounded.
 fn all_levels_hash() -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for depth in 1..=4 {
         for seed in 1..=50 {
             // A level above the caverns grows no crystals (#658): the empty list the field prints is not a change.
-            for b in round_floats(&format!("{:?}", generate(seed, depth)).replace(", crystals: []", "")).bytes() {
+            for b in round_floats(&without_daises(format!("{:?}", generate(seed, depth))).replace(", crystals: []", "")).bytes() {
                 h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
             }
         }
@@ -93,7 +102,7 @@ fn rounding_touches_only_floats() {
 
 #[test]
 fn levels_match_those_before_finishes() {
-    assert_eq!(all_levels_hash(), 16978683409277137263, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when corridors took widths by rank (#581), and when rough rock's main width became two to three, and again when levels took a past and cell blocks were carved (#587), rooms were furnished by their purpose (#588) and braziers left the front of cell gates, and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618), and again when wild groups took rooms of their own (#662) and the rats and snakes made way for them (#662), and again when faction names took words that say who the members are (#663), and again when factions were rolled from their names (#663), and again when folk gained a sex (#663), and when the factions kept their old rolls and a name that says a class rolled over (#663), and when faction names took words that say how members look (#682), and again when factions were rolled with the colours, armour and folk their names say (#682), and again when denizen factions were rolled (#627) and took the names' looks, which moved only the factions' likes and hates at these depths (levels_above_the_denizen_depth_are_unchanged pins the rest), and again when folk and claims grew with depth (#773): claims hold the corridors between their rooms and the folk total rises from depth 2, and again when one faction held each level from depth 4 down (#774), and again when levels grew rooms with depth, claims took the pockets they cut off and trades took workshops (#775)");
+    assert_eq!(all_levels_hash(), 12524972200895562077, "snapshot taken before finishes; retaken when guards took their posts at the hall door and traders stood in the market (#550), and again when those posts cleared the door leaves' real sweep, which moves folk and what keeps clear of them, and again when the hearth's brazier became a campfire (#569), which moves lights, props and the folk who gather round, and again when the door sweep followed door kinds and the doorway's real hinge, and again when corridors took widths by rank (#581), and when rough rock's main width became two to three, and again when levels took a past and cell blocks were carved (#587), rooms were furnished by their purpose (#588) and braziers left the front of cell gates, and again when claimed guardrooms kept their strongboxes (#617) and floor items left claimed rooms (#618), and again when wild groups took rooms of their own (#662) and the rats and snakes made way for them (#662), and again when faction names took words that say who the members are (#663), and again when factions were rolled from their names (#663), and again when folk gained a sex (#663), and when the factions kept their old rolls and a name that says a class rolled over (#663), and when faction names took words that say how members look (#682), and again when factions were rolled with the colours, armour and folk their names say (#682), and again when denizen factions were rolled (#627) and took the names' looks, which moved only the factions' likes and hates at these depths (levels_above_the_denizen_depth_are_unchanged pins the rest), and again when folk and claims grew with depth (#773): claims hold the corridors between their rooms and the folk total rises from depth 2, and again when one faction held each level from depth 4 down (#774), and again when levels grew rooms with depth, claims took the pockets they cut off and trades took workshops (#775), and again when stone halls grew daises (#818): the list itself is left out of the text, and only the banners that hung on the wall behind one, and the way down where it would have stood on one, moved");
 }
 
 /// A hash of every level's layout, items and lights, which come before the folk in the level's
@@ -147,7 +156,7 @@ fn strip_tastes(text: &str) -> String {
 fn depth_hash(depth: u32) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for seed in 1..=50 {
-        let text = strip_tastes(&round_floats(&format!("{:?}", generate(seed, depth)))).replace(", denizen: None", "").replace(", crystals: []", "");
+        let text = strip_tastes(&round_floats(&without_daises(format!("{:?}", generate(seed, depth))))).replace(", denizen: None", "").replace(", crystals: []", "");
         for b in text.bytes() {
             h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
         }
@@ -159,11 +168,11 @@ fn depth_hash(depth: u32) -> u64 {
 /// factions existed in everything but their factions' likes and hates, which may now name a denizen
 /// faction: layout, items, lights, folk, props, creatures, claims, and the factions' names, folk
 /// and looks. The hashes were taken on main (#701) before denizens were rolled, with the tastes
-/// taken out, and again after main's faction makeup and sexes (#663, #682) were merged in. Both were retaken when claims grew with depth (#773), which moved claims and so folk, lights and items at these depths. Depths at or below `DENIZEN_DEPTH` are deliberately not pinned: they draw denizen
+/// taken out, and again after main's faction makeup and sexes (#663, #682) were merged in. Both were retaken when claims grew with depth (#773), which moved claims and so folk, lights and items at these depths. Depth 2 was retaken when stone halls grew daises (#818), whose banners keep off them and whose stairs keep off them; depth 1 has none. Depths at or below `DENIZEN_DEPTH` are deliberately not pinned: they draw denizen
 /// factions, so they differ from what they were, and the other hashes here are retaken for them.
 #[test]
 fn levels_above_the_denizen_depth_are_unchanged() {
     assert_eq!(depth_hash(1), 13345954563120765281);
-    assert_eq!(depth_hash(2), 15484164110313931935);
+    assert_eq!(depth_hash(2), 2540713569422986115);
 }
 

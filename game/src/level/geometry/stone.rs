@@ -24,7 +24,7 @@ use armory::{
     },
     geom::{LatheOptions, MeshBuilder, Shading, V3, lathe, value_noise3, vec3},
 };
-use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle, WallFinish};
+use fb_level::{CELL, Cell, DoorStyle, Facing, Level, LevelStyle, WallFinish, dais::RISE};
 use procgen_rng::Mulberry32;
 
 use super::{
@@ -464,7 +464,8 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
             // Where a stair goes through (`crate::level::stairs`), no floor under a way down and
             // no vault over a way up, as in the rough rock.
             let stair = level.stair_at(x, y);
-            if super::is_floored(level, view.passage(), x, y) {
+            // A dais lays its own floor, wholly: steps, treads and flagstones ([`dais_stone`]).
+            if super::is_floored(level, view.passage(), x, y) && !level.on_dais(x, y) {
                 Face {
                     origin: corner,
                     u: [1.0, 0.0, 0.0],
@@ -512,6 +513,10 @@ pub fn hall_mesh(view: &CellView, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lev
         }
     }
     vault_ribs(&vaults, &|x, y| in_range(x, y), &mut joints);
+    // Each dais is laid by the stretch holding its first cell.
+    for dais in level.daises.iter().filter(|d| in_range(d.x as i32, d.y as i32)) {
+        dais_stone(dais, level.seed, &mut floor);
+    }
     let mut parts = Parts::new();
     let stone = |tint: Rgb| Look::of(MaterialKind::Stone).tinted(tint).without_outline();
     parts.add_look("floor", floor, stone(FLOOR_STONE));
@@ -886,6 +891,75 @@ pub fn flag_top(seed: u32, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> f32 {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Daises
+// ---------------------------------------------------------------------------------------------
+
+/// How far a step's nosing is chamfered.
+const NOSING: f32 = 0.35;
+/// The width a clipped flagstone must keep to be laid at all.
+const MIN_FLAG: f32 = 0.4;
+
+/// The stone of a dais, in the floor's own stone: each tread a slab with a chamfered nosing, the
+/// flagstones of [`flag_layout`] laid on it clipped to its edge, and for a sunk floor the dressed
+/// stone of its rim, down to the bottom. Walking, resting and the camera read the same steps
+/// ([`fb_level::dais`]).
+fn dais_stone(dais: &fb_level::Dais, seed: u32, mesh: &mut MeshBuilder) {
+    let bottom = if dais.sunk { dais.top_height() } else { 0.0 };
+    let base = Frame { origin: [0.0, bottom, 0.0], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+    for tread in dais.treads() {
+        let [x0, x1, z0, z1] = tread.rect;
+        let depth = tread.top - bottom;
+        if depth > 0.05 {
+            slab(mesh, &base, [x0, x1], [z0, z1], depth, NOSING.min(depth * 0.5), true);
+        }
+        let (cx0, cx1) = ((x0 / CELL).floor() as i32, ((x1 - 0.01) / CELL).floor() as i32);
+        let (cy0, cy1) = ((z0 / CELL).floor() as i32, ((z1 - 0.01) / CELL).floor() as i32);
+        for cy in cy0..=cy1 {
+            for cx in cx0..=cx1 {
+                let (ox, oz) = (cx as f32 * CELL, cy as f32 * CELL);
+                let frame = Frame { origin: [ox, tread.top, oz], a: [1.0, 0.0, 0.0], b: [0.0, 0.0, 1.0], n: [0.0, 1.0, 0.0] };
+                for flag in flag_layout(seed, cx, cy) {
+                    let a = [(x0 - ox).max(flag.a[0]), (x1 - ox).min(flag.a[1])];
+                    let b = [(z0 - oz).max(flag.b[0]), (z1 - oz).min(flag.b[1])];
+                    if a[1] - a[0] >= MIN_FLAG && b[1] - b[0] >= MIN_FLAG {
+                        slab(mesh, &frame, a, b, flag.raise, FLAG_CHAMFER.min(flag.raise * 0.9), false);
+                    }
+                }
+            }
+        }
+    }
+    if dais.sunk {
+        let [x0, x1, z0, z1] = dais.rect();
+        // The bottom, and the walls of the pit from the top tread up to the floor round it.
+        let (rim, top) = (-RISE, 0.0);
+        let mut quad = |corners: [V3; 4], along: usize, facing: V3| {
+            let uvs = corners.map(|p| if along == 1 { [p[0] / CELL, p[2] / CELL] } else { [p[along] / CELL, p[1] / CELL] });
+            mesh.push_flat_quad(corners, uvs, facing);
+        };
+        quad([[x0, bottom, z0], [x1, bottom, z0], [x1, bottom, z1], [x0, bottom, z1]], 1, [0.0, 1.0, 0.0]);
+        quad([[x0, rim, z0], [x1, rim, z0], [x1, top, z0], [x0, top, z0]], 0, [0.0, 0.0, 1.0]);
+        quad([[x1, rim, z1], [x0, rim, z1], [x0, top, z1], [x1, top, z1]], 0, [0.0, 0.0, -1.0]);
+        quad([[x0, rim, z1], [x0, rim, z0], [x0, top, z0], [x0, top, z1]], 2, [1.0, 0.0, 0.0]);
+        quad([[x1, rim, z0], [x1, rim, z1], [x1, top, z1], [x1, top, z0]], 2, [-1.0, 0.0, 0.0]);
+    }
+}
+
+/// How high the dais's drawn treads stand over the world rectangle `x` by `z`, with the flagstones
+/// laid on them: the highest part of the dais under any of it, `None` where it lies off the dais.
+pub fn dais_top(seed: u32, dais: &fb_level::Dais, [x0, x1]: [f32; 2], [z0, z1]: [f32; 2]) -> Option<f32> {
+    let mut top: Option<f32> = None;
+    for tread in dais.treads() {
+        let [tx0, tx1, tz0, tz1] = tread.rect;
+        let (cx, cz) = ([x0.max(tx0), x1.min(tx1)], [z0.max(tz0), z1.min(tz1)]);
+        if cx[0] < cx[1] && cz[0] < cz[1] || (cx[0] <= cx[1] && cz[0] <= cz[1] && x0 == x1 && z0 == z1) {
+            let here = tread.top + flag_top(seed, cx, cz);
+            top = Some(top.map_or(here, |t| t.max(here)));
+        }
+    }
+    top
+}
+
+// ---------------------------------------------------------------------------------------------
 // Doorways
 // ---------------------------------------------------------------------------------------------
 
@@ -1119,7 +1193,12 @@ mod tests {
     fn halls(seed: u32) -> Level {
         let level = fb_level::generate(seed, 2);
         assert_eq!(level.style, LevelStyle::StoneHalls);
-        Level { stairs: Vec::new(), ..level }
+        Level { stairs: Vec::new(), daises: Vec::new(), ..level }
+    }
+
+    /// As [`halls`], with the daises the level has.
+    fn halls_with_daises(seed: u32) -> Level {
+        Level { stairs: Vec::new(), ..fb_level::generate(seed, 2) }
     }
 
     #[test]
@@ -1166,6 +1245,44 @@ mod tests {
             }
         }
         assert!(checked > 20);
+    }
+
+    #[test]
+    fn a_dais_is_drawn_up_or_down_its_steps_and_things_rest_on_its_treads() {
+        let (mut raised, mut sunk) = (0, 0);
+        for seed in [3, 8, 16, 39, 21, 27] {
+            let level = halls_with_daises(seed);
+            let view = CellView::uncobbled(&level);
+            let mesh = level_mesh(&view, view.bounds());
+            let floor = part(&mesh, "floor");
+            // No face of the floor, dais included, looks down.
+            for tri in floor.indices.as_chunks::<3>().0 {
+                let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| floor.positions[i as usize]);
+                let face = vec3::normalize_or(vec3::cross(vec3::sub(b, a), vec3::sub(c, a)), [0.0; 3]);
+                let centre = vec3::scale(vec3::add(vec3::add(a, b), c), 1.0 / 3.0);
+                assert!(face[1] > -0.01, "seed {seed}: a floor face looks down at {centre:?}");
+            }
+            for dais in &level.daises {
+                let [x0, x1, z0, z1] = dais.rect();
+                let over: Vec<f32> = floor.positions.iter().filter(|p| p[0] >= x0 && p[0] <= x1 && p[2] >= z0 && p[2] <= z1).map(|p| p[1]).collect();
+                let top = dais.top_height();
+                if dais.sunk {
+                    sunk += 1;
+                    let lowest = over.iter().copied().fold(f32::MAX, f32::min);
+                    assert!((lowest - top).abs() < 1e-4, "seed {seed}: the pit bottoms at {lowest}, not {top}");
+                } else {
+                    raised += 1;
+                    let highest = over.iter().copied().fold(f32::MIN, f32::max);
+                    assert!(highest >= top && highest <= top + FLAG_RAISE.1 + 1e-4, "seed {seed}: the platform tops at {highest}, not {top}");
+                }
+                // A thing on the middle rests on the top tread's flags.
+                let (cx, cz) = ((x0 + x1) * 0.5, (z0 + z1) * 0.5);
+                let rest = dais_top(level.seed, dais, [cx - 1.0, cx + 1.0], [cz - 1.0, cz + 1.0]).unwrap();
+                assert!(rest >= top - 1e-4 && rest <= top + FLAG_RAISE.1 + 1e-4, "seed {seed}: rests at {rest}");
+                assert!(dais_top(level.seed, dais, [x0 - 30.0, x0 - 20.0], [z0 - 30.0, z0 - 20.0]).is_none());
+            }
+        }
+        assert!(raised > 0 && sunk > 0, "{raised} raised, {sunk} sunk");
     }
 
     #[test]

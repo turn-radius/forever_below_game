@@ -75,6 +75,10 @@ fn on_wall(level: &Level, cell: (i32, i32), wall: (i32, i32), shift: (i32, i32),
     if level.cell(cell.0, cell.1) != Cell::Floor || level.cell(cell.0 + wall.0, cell.1 + wall.1) != Cell::Rock {
         return None;
     }
+    // A dais stands at the foot of the wall: the banner hangs clear of it.
+    if level.on_dais(cell.0, cell.1) {
+        return None;
+    }
     let out = 0.5 - WALL_OFFSET / CELL;
     let slide = JAMB_CLEARANCE / CELL;
     let (x, y) = (cell.0 as f32 + 0.5 + wall.0 as f32 * out + shift.0 as f32 * slide, cell.1 as f32 + 0.5 + wall.1 as f32 * out + shift.1 as f32 * slide);

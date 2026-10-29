@@ -221,6 +221,10 @@ pub struct Level {
     /// What each room of [`Level::rooms`] was built for, indexed by room ([`past`]).
     #[serde(default)]
     pub purposes: Vec<Option<Purpose>>,
+    /// The daises: parts of a stone hall's floor stepped up or sunk ([`dais`]). Banners, niches
+    /// and the like keep clear of them.
+    #[serde(default)]
+    pub daises: Vec<Dais>,
 }
 
 impl Level {
@@ -371,6 +375,7 @@ impl Level {
 
 pub mod banners;
 pub mod crystals;
+pub mod dais;
 pub mod claims;
 pub mod doorkind;
 pub mod creatures;
@@ -401,6 +406,7 @@ pub use generate::{generate, generate_for, generate_in, generate_with};
 pub use stairs::{Stair, StairKind, depth_seed};
 pub use params::LevelParams;
 pub use past::{Past, Purpose};
+pub use dais::Dais;
 pub use doorkind::{DoorKind, STEEL_PICK_PENALTY, SwitchKind};
 pub use roles::{ClaimDoor, RoomRole};
 pub use rooms::RoomGraph;
