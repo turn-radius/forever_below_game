@@ -350,9 +350,9 @@ const LABELS: &[(&str, &str)] = &[
     ("mana/caster_base", "Caster mana at modifier 0"),
     ("mana/caster_per_modifier", "Mana per point of modifier"),
     ("mana/caster_floor", "Caster mana at least"),
-    ("mana/rest_per_hour", "Mana regained resting per hour (share)"),
-    ("mana/walk_per_hour", "Mana regained walking per hour (share)"),
-    ("mana/sleep_per_hour", "Mana regained asleep per hour (share)"),
+    ("mana/stand_refill_seconds", "Seconds to refill mana standing"),
+    ("mana/walk_refill_seconds", "Seconds to refill mana walking"),
+    ("mana/sleep_refill_factor", "Mana refill asleep (\u{d7})"),
     ("load/capacity_per_strength", "Capacity per STR (lb)"),
     ("load/burdened_multiple", "Burdened past (\u{d7} STR)"),
     ("load/encumbered_multiple", "Encumbered past (\u{d7} STR)"),
@@ -709,8 +709,8 @@ mod tests {
         let mut set = RuleSet::default();
         step(&mut set, "load/capacity_per_strength", 1);
         assert_eq!(set.rules.load.capacity_per_strength, 16.0);
-        step(&mut set, "mana/rest_per_hour", -1);
-        assert!((set.rules.mana.rest_per_hour - 0.115).abs() < 1e-9, "{}", set.rules.mana.rest_per_hour);
+        step(&mut set, "mana/stand_refill_seconds", -1);
+        assert_eq!(set.rules.mana.stand_refill_seconds, 19.0);
         step_dice(&mut set, "creatures/Giant Rat/bite", DicePart::Count, 1);
         step_dice(&mut set, "creatures/Giant Rat/bite", DicePart::Bonus, -1);
         assert_eq!(leaf(&set, "creatures/Giant Rat/bite").unwrap().text(), "2d4+1");
