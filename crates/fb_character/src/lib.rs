@@ -18,6 +18,7 @@
 //!
 //! `conditions` reads all of it into the conditions a character is under right now, for the HUD.
 
+pub mod casting;
 pub mod check;
 pub mod combat;
 pub mod conditions;
@@ -991,7 +992,7 @@ pub enum Casting {
 
 /// The pool spells will draw on, in points. Its size comes from INT for [`Casting::Arcane`]
 /// or WIS for [`Casting::Divine`], through the SRD modifier ([`modifier`]), and it refills
-/// slowly with rest and faster asleep. Nothing spends it yet. Steps in game hours, closed form
+/// slowly with rest and faster asleep. [`Mana::spend`] spends it in casting ([`casting`]). Steps in game hours, closed form
 /// for a constant activity, so any step length gives the same result.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mana {

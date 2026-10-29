@@ -33,7 +33,7 @@ use crate::keymap::{Action, Context, CrouchMode, Input, Keymap};
 
 impl Action {
     /// Every action, in the order the keymap lists them.
-    pub const ALL: [Action; 36] = [
+    pub const ALL: [Action; 38] = [
         Action::WalkForward,
         Action::WalkBack,
         Action::StepLeft,
@@ -55,6 +55,8 @@ impl Action {
         Action::Compare,
         Action::Light,
         Action::Quickslot,
+        Action::Pray,
+        Action::CastTier,
         Action::DrinkHealing,
         Action::DragItem,
         Action::TurnItem,
@@ -97,6 +99,8 @@ impl Action {
             Action::Compare => "compare",
             Action::Light => "light",
             Action::Quickslot => "quickslot",
+            Action::Pray => "pray",
+            Action::CastTier => "cast_tier",
             Action::DrinkHealing => "drink_healing",
             Action::DragItem => "drag_item",
             Action::TurnItem => "turn_item",

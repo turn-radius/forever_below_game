@@ -162,6 +162,9 @@ pub struct SavedBody {
     pub exhaustion_times: fb_character::ExhaustionTimes,
     pub recovery: fb_character::recovery::Recovery,
     pub effects: Option<fb_character::effect::Effects>,
+    /// What the delver has written and can write with; none for a delve saved before prayers.
+    #[serde(default)]
+    pub spellbook: Option<fb_character::casting::Spellbook>,
 }
 
 /// The cells of one level the map has seen, packed as bits and written in hex.
@@ -394,8 +397,10 @@ pub fn gather(world: &mut World, bed: Entity) -> Result<SavedDelve, SaveError> {
             exhaustion_times: times.0,
             recovery: recovery.0,
             effects: effects.map(|e| e.0.clone()),
+            spellbook: None,
         }
     };
+    let body = SavedBody { spellbook: world.query_filtered::<&crate::casting::DelverSpellbook, With<Player>>().iter(world).next().map(|b| b.0.clone()), ..body };
     let mut explored: Vec<SavedExplored> =
         world.resource::<ExploredLevels>().0.iter().map(|(&level_seed, seen)| SavedExplored { level_seed, width: seen.width, height: seen.height, bits: to_hex(&seen.to_bits()) }).collect();
     explored.sort_by_key(|e| e.level_seed);
@@ -598,6 +603,9 @@ pub fn restore_delve(world: &mut World) {
             ExhaustionTimes(body.exhaustion_times),
             DelverRecovery(body.recovery),
         ));
+        if let Some(book) = body.spellbook {
+            player.insert(crate::casting::DelverSpellbook(book));
+        }
         match body.effects {
             Some(effects) => {
                 player.insert(DelverEffects(effects));
@@ -704,6 +712,7 @@ pub(crate) fn sample_delve() -> SavedDelve {
             exhaustion_times: default(),
             recovery: default(),
             effects: None,
+            spellbook: Some(fb_character::casting::Spellbook::starting(fb_character::Casting::Divine)),
         },
         clock: GameTime::from_seconds(123_456.789),
         revives: 1,

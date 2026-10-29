@@ -220,8 +220,13 @@ fn use_quickslot(
     mut floor_changes: ResMut<FloorChanges>,
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
+    abilities: Option<Res<crate::casting::AbilitySlots>>,
 ) {
     let Some(slot) = input.just_pressed_index(Action::Quickslot) else { return };
+    // A slot holding a prayer or spell casts it ([`crate::casting`]).
+    if abilities.is_some_and(|a| a.get(slot).is_some()) {
+        return;
+    }
     let said = use_slot(slot, &mut slots, &mut inventory, &mut eating, &mut floor_changes);
     toast.say(said, time.map_or(0.0, |t| t.elapsed_secs()));
 }
@@ -324,6 +329,15 @@ pub fn spawn_slots(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, style: Sl
                 TextFont::from_font_size(style.number).with_font(fonts.mono.clone()),
                 TextColor(BRIGHT.with_alpha(0.55)),
                 Node { position_type: PositionType::Absolute, left: px(2), top: px(0), ..default() },
+                Pickable::IGNORE,
+            ));
+            // A prayer or spell held in the slot is named here ([`crate::casting`]).
+            square.with_child((
+                crate::casting::AbilityLabel(slot),
+                Text::new(""),
+                TextFont::from_font_size(style.number).with_font(fonts.mono.clone()),
+                TextColor(BRIGHT),
+                TextLayout::justify(Justify::Center),
                 Pickable::IGNORE,
             ));
         }
@@ -837,7 +851,8 @@ mod tests {
 
     fn slot_nodes(app: &mut App) -> Vec<(usize, usize)> {
         let mut query = app.world_mut().query_filtered::<(&QuickSlot, &Children), Without<QuickslotDrop>>();
-        let mut slots: Vec<_> = query.iter(app.world()).map(|(s, c)| (s.0, c.len())).collect();
+        let mut labels = app.world_mut().query::<&crate::casting::AbilityLabel>();
+        let mut slots: Vec<_> = query.iter(app.world()).map(|(s, c)| (s.0, c.iter().filter(|&e| labels.get(app.world(), e).is_err()).count())).collect();
         slots.sort();
         slots
     }

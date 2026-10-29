@@ -50,6 +50,11 @@ pub enum Action {
     Light,
     /// Uses the item in a quickslot: its ten keys, 1 to 0, are the slots in order.
     Quickslot,
+    /// Casts the chosen prayer or spell at the chosen tier, spending mana
+    /// (`crate::casting`).
+    Pray,
+    /// Steps the tier a prayer or spell is cast at, 1 to 3 and round again.
+    CastTier,
     /// In the level, drinks the nearest healing draught carried: belt and quickslots, then the
     /// pack, then the bags in it.
     DrinkHealing,
@@ -332,6 +337,8 @@ impl Default for Keymap {
                     ],
                 )
                 .in_contexts(ITEMS),
+                bind(Action::Pray, "Pray or cast the chosen ability (a cleric's Divine Light), at the chosen tier", Group::Fighting, &[Key(KeyCode::KeyC)]),
+                bind(Action::CastTier, "Step the tier a prayer or spell is cast at", Group::Fighting, &[Key(KeyCode::KeyV)]),
                 bind(Action::DrinkHealing, "Drink a healing draught", Group::Items, &[Key(KeyCode::KeyH)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
@@ -789,7 +796,7 @@ mod tests {
     #[test]
     fn the_spare_keys_are_unbound() {
         let keymap = Keymap::default();
-        for key in [KeyCode::KeyC, KeyCode::KeyV, KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
+        for key in [KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
             assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
         }
     }
@@ -1019,7 +1026,7 @@ mod tests {
     fn binding_jump_to_f_in_the_level_conflicts_with_primary() {
         let keymap = Keymap::default();
         assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyF)), Some(Action::Primary));
-        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyC)), None);
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyB)), None);
         assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::Space)), None, "its own key is no clash");
     }
 

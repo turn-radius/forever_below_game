@@ -35,6 +35,8 @@ pub struct Rules {
     pub exhaustion: ExhaustionRules,
     pub stamina: StaminaRules,
     pub mana: ManaRules,
+    /// The abilities' costs and durations ([`crate::casting`]).
+    pub casting: crate::casting::CastingRules,
     pub load: LoadRules,
     pub visibility: VisibilityRules,
     pub warmth: WarmthRules,
@@ -63,6 +65,7 @@ impl Default for Rules {
             exhaustion: ExhaustionRules::default(),
             stamina: StaminaRules::default(),
             mana: ManaRules::default(),
+            casting: crate::casting::CastingRules::default(),
             load: LoadRules::default(),
             visibility: VisibilityRules::default(),
             warmth: WarmthRules::default(),

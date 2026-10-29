@@ -116,6 +116,109 @@ walk_per_hour = 0.03125
 # Of a full pool, what a sleeping delver regains each game hour.
 sleep_per_hour = 0.375
 
+# Prayers are written from terms: an effect, a reach and a duration. A written prayer costs the sum
+# of its terms' costs, reaches its reach term's range and lasts its duration term's seconds; tier n
+# multiplies all three by n. `known` terms are there from the start; the rest are unlocked by
+# something else (a devotion unlocks a bane).
+[casting.terms.light]
+kind = "effect"
+name = "Light"
+school = "Divine"
+cost = 1.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.ward]
+kind = "effect"
+name = "Ward"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.frighten]
+kind = "effect"
+name = "Frighten"
+school = "Divine"
+cost = 3.0
+range = 0.0
+seconds = 0.0
+known = false
+
+[casting.terms.charm]
+kind = "effect"
+name = "Charm"
+school = "Divine"
+cost = 3.0
+range = 0.0
+seconds = 0.0
+known = false
+
+[casting.terms.bane]
+kind = "effect"
+name = "Bane"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = false
+
+[casting.terms.self]
+kind = "reach"
+name = "Self"
+school = "Divine"
+cost = 0.0
+range = 0.0
+seconds = 0.0
+known = true
+
+[casting.terms.around]
+kind = "reach"
+name = "Around you"
+school = "Divine"
+cost = 1.0
+range = 20.0
+seconds = 0.0
+known = true
+
+[casting.terms.touch]
+kind = "reach"
+name = "Touch"
+school = "Divine"
+cost = 0.0
+range = 5.0
+seconds = 0.0
+known = true
+
+[casting.terms.cone]
+kind = "reach"
+name = "Cone"
+school = "Divine"
+cost = 2.0
+range = 30.0
+seconds = 0.0
+known = false
+
+[casting.terms.short]
+kind = "duration"
+name = "Short"
+school = "Divine"
+cost = 1.0
+range = 0.0
+seconds = 600.0
+known = true
+
+[casting.terms.long]
+kind = "duration"
+name = "Long"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 1800.0
+known = true
+
 [load]
 # Pounds of capacity for each point of STR (SRD p. 79).
 capacity_per_strength = 15.0
