@@ -1184,6 +1184,33 @@ mod tests {
     }
 
     #[test]
+    fn a_key_bound_attack_neither_swings_nor_draws_behind_a_marked_overlay_or_a_page() {
+        use crate::keymap::{Action, Input, Keymap};
+        let (mut app, player, _, quiver) = archer("Bow", 7, "Quiver", "Arrow", 3, 60.0);
+        app.world_mut().resource_mut::<Keymap>().bindings.iter_mut().find(|b| b.action == Action::Attack).unwrap().inputs = vec![Input::Key(KeyCode::KeyZ)];
+        frames(&mut app, 2);
+        let tap = |app: &mut App| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyZ);
+            keys.clear();
+            keys.press(KeyCode::KeyZ);
+            frames(app, 3);
+        };
+        let overlay = app.world_mut().spawn(crate::play::CoversTheLevel).id();
+        tap(&mut app);
+        assert_eq!(held(&app, quiver), 3, "no arrow is nocked behind a marked overlay");
+        assert!(app.world().get::<swing::Swing>(player).is_none());
+        app.world_mut().despawn(overlay);
+        app.world_mut().insert_resource(crate::reading::OpenPage { page: Some(crate::reading::Page { title: "Note".into(), words: "Run.".into() }) });
+        tap(&mut app);
+        assert_eq!(held(&app, quiver), 3, "none behind a page");
+        // Once it is down the same key draws the bow.
+        app.world_mut().resource_mut::<crate::reading::OpenPage>().page = None;
+        tap(&mut app);
+        assert_eq!(held(&app, quiver), 2, "the bow is nocked");
+    }
+
+    #[test]
     fn a_loosed_arrow_is_a_real_item_that_ends_up_on_the_floor_of_an_open_cell() {
         use crate::inventory::{FloorChange, FloorChanges};
         let (mut app, player, rat, quiver) = archer("Bow", 7, "Quiver", "Arrow", 1, 60.0);

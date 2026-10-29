@@ -1395,6 +1395,48 @@ mod tests {
         assert!(visible(&mut app), "the inventory shows the hovered item's card");
     }
 
+    /// The card hides behind the overlays that are not screens, from the frame they open: a marked
+    /// one (the loading screen, a dice roll), a page being read and a talk, and returns after.
+    #[test]
+    fn the_aimed_card_hides_behind_marked_overlays_pages_and_talks() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::carry::Aimed>()
+            .init_resource::<crate::reading::OpenPage>()
+            .insert_resource(Inventory::default())
+            .add_systems(Update, show_card);
+        let dagger = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Dagger", 7).unwrap());
+        let item = app.world().resource::<Inventory>().item(dagger).unwrap();
+        let spot = fb_level::ItemSpot { x: 0.0, y: 0.0, yaw: 0.0, family: item.shape.family(), seed: item.seed };
+        let floor = app.world_mut().spawn(crate::carry::FloorItem { id: dagger, spot, min: Vec3::ZERO, max: Vec3::ONE }).id();
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(floor);
+        let card = app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default())).id();
+        let visible = |app: &mut App| {
+            app.update();
+            app.update();
+            *app.world().get::<Visibility>(card).unwrap() != Visibility::Hidden
+        };
+        assert!(visible(&mut app), "aimed at a floor item");
+        let overlay = app.world_mut().spawn(crate::play::CoversTheLevel).id();
+        assert!(!visible(&mut app), "no card over a marked overlay");
+        app.world_mut().entity_mut(overlay).despawn();
+        assert!(visible(&mut app), "the card returns when it closes");
+        app.world_mut().resource_mut::<crate::reading::OpenPage>().open("Note", "I escaped from a troll.");
+        assert!(!visible(&mut app), "no card over a page");
+        app.world_mut().resource_mut::<crate::reading::OpenPage>().page = None;
+        assert!(visible(&mut app));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Talk);
+        assert!(!visible(&mut app), "no card over a talk");
+    }
+
     /// The text of every node in the world, for the card's keys.
     fn card_texts(app: &mut App) -> Vec<String> {
         let mut texts = app.world_mut().query::<&Text>();

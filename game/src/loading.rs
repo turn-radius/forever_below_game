@@ -316,6 +316,7 @@ fn spawn_screen(commands: &mut Commands, fonts: &UiFonts, camera: Option<Entity>
     let mut root = commands.spawn((
         Name::new("loading screen"),
         LoadingScreen::default(),
+        crate::play::CoversTheLevel,
         Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
         BackgroundColor(Color::NONE),
         Tint(ABYSS),
