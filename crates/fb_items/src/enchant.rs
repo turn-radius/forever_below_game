@@ -209,7 +209,7 @@ pub fn unchangeable(item: &Item) -> Option<Refusal> {
 }
 
 fn good(item: &Item) -> impl Iterator<Item = &&'static Affix> {
-    item.affixes.iter().filter(|a| a.good)
+    item.affixes.iter().filter(|a| a.good && !a.holy)
 }
 
 fn rarity_of(good_count: usize) -> Rarity {
@@ -226,7 +226,7 @@ fn check_add(item: &Item, affix: &Affix, tier: Tier) -> Result<Rarity, Refusal> 
     if let Some(refusal) = unchangeable(item) {
         return Err(refusal);
     }
-    if !affix.good || !affix.in_play() || !affix.fits_item(&item.profile.tags, item.profile.slot) || item.affixes.iter().any(|a| !affix.stacks_with(a)) {
+    if !affix.good || affix.holy || !affix.in_play() || !affix.fits_item(&item.profile.tags, item.profile.slot) || item.affixes.iter().any(|a| !affix.stacks_with(a)) {
         return Err(Refusal::DoesNotFit);
     }
     let count = good(item).count();
@@ -277,7 +277,7 @@ fn rebuilt(item: &Item, affixes: Vec<&'static Affix>, line: String) -> Item {
 fn rebuilt_as(item: &Item, mut affixes: Vec<&'static Affix>, line: String, floor: Rarity) -> Item {
     // Good ones first, so the name takes them before a flaw.
     affixes.sort_by_key(|a| !a.good);
-    let rarity = rarity_of(affixes.iter().filter(|a| a.good).count()).max(floor);
+    let rarity = rarity_of(affixes.iter().filter(|a| a.good && !a.holy).count()).max(floor);
     let mut parts = ItemParts::from(item.clone());
     parts.name = item_name(&noun(&parts.base, &parts.shape), &affixes);
     parts.legend = (rarity == Rarity::Legendary).then(|| item.legend.clone().unwrap_or_else(|| legendize(&mut game_rng(item.seed ^ 0xE4C4), &parts.name, &item.profile.tags)));

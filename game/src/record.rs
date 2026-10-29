@@ -722,6 +722,17 @@ mod tests {
     }
 
     #[test]
+    fn a_hallowed_mace_stays_hallowed_through_a_save() {
+        let mace = fb_items::roll_item("Mace", 7).unwrap();
+        let hallowed = fb_items::blessing::hallow(&mace, "Maren", armory::Family::Mace).unwrap();
+        let again = through_record(&hallowed);
+        assert!(fb_items::blessing::is_hallowed(&again));
+        assert_eq!(again.history, vec!["Hallowed by Maren.".to_string()]);
+        assert_eq!(again, hallowed);
+        assert!(again.profile.stats.damage_bonus > mace.profile.stats.damage_bonus);
+    }
+
+    #[test]
     fn an_item_with_contents_round_trips_through_its_record() {
         let mut inventory = Inventory::default();
         let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());

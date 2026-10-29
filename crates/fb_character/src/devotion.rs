@@ -94,6 +94,10 @@ pub struct DevotionRules {
     pub weapon_kills: u32,
     /// Kills of one family of creature before a cleric is offered a devotion against or to it.
     pub creature_kills: u32,
+    /// Kills (of anything) for each blessing charge a cleric earns.
+    pub blessing_kills: u32,
+    /// Blessing charges hallowing a weapon costs (blessing one costs 1).
+    pub hallow_blessings: u32,
     /// How much more a faction of a family the cleric is aligned with thinks of them: added to
     /// the standing with each faction whose folk or denizens are that family.
     pub aligned_standing: i32,
@@ -120,6 +124,8 @@ impl Default for DevotionRules {
             quiet_distance: 250.0,
             weapon_kills: 50,
             creature_kills: 20,
+            blessing_kills: 25,
+            hallow_blessings: 3,
             aligned: BTreeMap::from([
                 entry(Kin::Foe(F::Spider), AlignedTraits { web_walker: true, text: "Webs never hold you back.".into(), ..Default::default() }),
                 entry(Kin::Foe(F::Serpent), AlignedTraits { poison_resistance: 3.0, text: "+3 to saves against venom.".into(), ..Default::default() }),
@@ -133,6 +139,17 @@ impl Default for DevotionRules {
 }
 
 impl DevotionRules {
+    /// Blessing charges a cleric has earned: one for every `blessing_kills` kills.
+    pub fn blessings_earned(&self, tally: &Tally) -> u32 {
+        let kills: u32 = crate::kin::Kin::all().into_iter().map(|k| tally.kills_of(k)).sum();
+        kills / self.blessing_kills.max(1)
+    }
+
+    /// Blessing charges they have left to spend.
+    pub fn blessings_left(&self, tally: &Tally) -> u32 {
+        self.blessings_earned(tally).saturating_sub(tally.blessings_spent())
+    }
+
     /// Whether a cleric can align with `kin`: a creature group with a trait to take, or any folk
     /// or denizen (whose factions favour them).
     pub fn can_align(&self, kin: Kin) -> bool {
@@ -463,6 +480,20 @@ mod tests {
         let after = gear(Some(Devotion::Dedicated(Family::Mace)));
         assert!(before.bane_against(UNDEAD).is_some());
         assert_eq!((after.bane_against(UNDEAD), after.ward_against(UNDEAD)), (None, 0.0));
+    }
+
+    #[test]
+    fn a_blessing_charge_is_earned_by_kills_and_spent_once() {
+        let rules = DevotionRules::default();
+        let mut tally = Tally::default();
+        slay(&mut tally, SPIDER, 24);
+        assert_eq!(rules.blessings_left(&tally), 0);
+        slay(&mut tally, SPIDER, 1);
+        assert_eq!(rules.blessings_left(&tally), 1);
+        tally.spend_blessings(1);
+        assert_eq!(rules.blessings_left(&tally), 0);
+        slay(&mut tally, SPIDER, 50);
+        assert_eq!(rules.blessings_left(&tally), 2);
     }
 
     #[test]

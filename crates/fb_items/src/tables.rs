@@ -123,6 +123,9 @@ pub struct Affix {
     /// The slots it rolls on, as well as its `on` tag; with none, any slot.
     #[serde(default, rename = "at")]
     pub slots: Vec<Slot>,
+    /// A blessing a cleric gives ([`crate::blessing`]): it never rolls and no enchanter sells it.
+    #[serde(default)]
+    pub holy: bool,
 }
 
 fn least_rarity() -> Rarity {
@@ -331,7 +334,7 @@ mod tests {
     fn every_table_parses_with_its_entries() {
         assert_eq!(bases().len(), 14);
         assert_eq!(goods().len(), 40);
-        assert_eq!(affixes().len(), 86);
+        assert_eq!(affixes().len(), 88);
         assert_eq!(slot_places().len(), 18);
         let head = &slot_places()[0];
         assert_eq!((head.slot, head.label.as_str(), head.size, head.side, head.x_percent, head.y_percent), (Slot::Head, "Head", SlotSize::Big, SlotSide::Left, 4.0, 5.0));

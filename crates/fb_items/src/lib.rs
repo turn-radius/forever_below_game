@@ -8,6 +8,7 @@
 //! `docs/items.md`.
 
 pub mod armory_base;
+pub mod blessing;
 pub mod camp;
 pub mod commission;
 pub mod contents;

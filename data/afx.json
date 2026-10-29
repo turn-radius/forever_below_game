@@ -1739,5 +1739,57 @@
   ],
   "t": "Holds one row less",
   "grp": "capacity"
+ },
+ {
+  "n": "Blessed",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 1
+    }
+   },
+   {
+    "add": {
+     "stat": "damage_bonus",
+     "by": 1
+    }
+   }
+  ],
+  "t": "+1 to hit and damage",
+  "grp": "sacred",
+  "holy": true
+ },
+ {
+  "n": "Hallowed",
+  "k": "pre",
+  "g": 1,
+  "on": "weapon",
+  "fx": [
+   {
+    "add": {
+     "stat": "to_hit",
+     "by": 2
+    }
+   },
+   {
+    "add": {
+     "stat": "damage_bonus",
+     "by": 3
+    }
+   },
+   {
+    "bane": {
+     "foe": "undead",
+     "dice": "1d4"
+    }
+   }
+  ],
+  "t": "+2 to hit, +3 damage, +1d4 against the undead",
+  "grp": "sacred",
+  "holy": true
  }
 ]

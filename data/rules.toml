@@ -363,6 +363,10 @@ favored_bane = "1d4"
 quiet_distance = 250.0
 weapon_kills = 50
 creature_kills = 20
+# Kills for each blessing charge a cleric earns; blessing a weapon spends one, hallowing one
+# spends hallow_blessings. Our own.
+blessing_kills = 25
+hallow_blessings = 3
 
 # Aligned with a folk or a denizen people, the factions of that people think better of the cleric
 # (standing added) and a loss of standing with them lands only in part. Against one, they think

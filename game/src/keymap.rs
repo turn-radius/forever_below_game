@@ -82,6 +82,10 @@ pub enum Action {
     NewDelve,
     /// In the inventory, rolls to identify the unknown item under the mouse.
     Identify,
+    /// In the inventory, a cleric blesses the weapon under the mouse.
+    Bless,
+    /// In the inventory, a cleric hallows the weapon under the mouse, if it is of the kind they are dedicated to.
+    Hallow,
     MusicQuieter,
     MusicLouder,
 }
@@ -356,6 +360,8 @@ impl Default for Keymap {
                 bind(Action::Choose, "Choose in a menu", Group::Screens, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Menus]),
                 bind(Action::NewDelve, "New delve, on the title", Group::Screens, &[Key(KeyCode::Enter), Key(KeyCode::NumpadEnter)]).in_contexts(&[Context::Menus]),
                 bind(Action::Identify, "Identify the unknown item under the mouse", Group::Items, &[Key(KeyCode::KeyY)]).in_contexts(&[Context::Inventory]),
+                bind(Action::Bless, "Bless the weapon under the mouse (a cleric)", Group::Items, &[Key(KeyCode::KeyU)]).in_contexts(&[Context::Inventory]),
+                bind(Action::Hallow, "Hallow the weapon under the mouse (a cleric dedicated to its kind)", Group::Items, &[Key(KeyCode::KeyN)]).in_contexts(&[Context::Inventory]),
                 bind(Action::MusicQuieter, "Music quieter", Group::Sound, &[Key(KeyCode::Minus)]).in_contexts(EVERYWHERE),
                 bind(Action::MusicLouder, "Music louder", Group::Sound, &[Key(KeyCode::Equal)]).in_contexts(EVERYWHERE),
             ],
@@ -800,7 +806,7 @@ mod tests {
     #[test]
     fn the_spare_keys_are_unbound() {
         let keymap = Keymap::default();
-        for key in [KeyCode::KeyZ, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
+        for key in [KeyCode::KeyZ, KeyCode::KeyO, KeyCode::KeyP] {
             assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
         }
     }

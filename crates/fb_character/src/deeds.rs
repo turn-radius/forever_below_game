@@ -28,6 +28,8 @@ pub enum Deed {
     HitTaken,
     /// Answered an offer made to them (taken or declined); the subject is what it was about.
     Answered,
+    /// Spent a blessing charge (a cleric's, [`crate::devotion::DevotionRules::blessing_kills`]).
+    Blessed,
 }
 
 impl Deed {
@@ -36,6 +38,7 @@ impl Deed {
             Deed::Kill => "kill",
             Deed::HitTaken => "hit_taken",
             Deed::Answered => "answered",
+            Deed::Blessed => "blessed",
         }
     }
 }
@@ -118,6 +121,18 @@ impl Tally {
     /// Kills with a weapon of `family`: "kills with maces".
     pub fn kills_with(&self, family: Family) -> u32 {
         self.count(Deed::Kill, &Subject::Weapon(family))
+    }
+
+    /// Blessing charges spent.
+    pub fn blessings_spent(&self) -> u32 {
+        self.count(Deed::Blessed, &Subject::Kind("charge".into()))
+    }
+
+    /// Spends `charges` blessing charges.
+    pub fn spend_blessings(&mut self, charges: u32) {
+        for _ in 0..charges {
+            self.record(Deed::Blessed, Subject::Kind("charge".into()));
+        }
     }
 
     /// Hits taken in armour or clothing of `family`: "hits taken in mail".

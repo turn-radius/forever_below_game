@@ -290,6 +290,9 @@ fn devotion_section(sheet: &mut ChildSpawnerCommands, fonts: &UiFonts, rules: &R
     let now = character.devotion;
     let line = now.map_or_else(|| "None yet. Kills of one kind of creature or with one kind of weapon earn an offer.".to_string(), |d| format!("{}. {}", d.label(character.body_seed), d.effect_text(&rules.devotion)));
     sheet.spawn((Name::new("Devotion"), Text::new(line), UiFonts::style(&fonts.body, 15.0, if now.is_some() { BRIGHT } else { MUTED }), Node { max_width: percent(100), ..default() }));
+    let left = rules.devotion.blessings_left(&character.deeds);
+    let line = format!("{left} blessing{} to give. One is earned for every {} kills; blessing a weapon takes 1, hallowing one {}.", if left == 1 { "" } else { "s" }, rules.devotion.blessing_kills, rules.devotion.hallow_blessings);
+    sheet.spawn((Name::new("Blessings"), Text::new(line), UiFonts::style(&fonts.body, 15.0, if left > 0 { BRIGHT } else { MUTED }), Node { max_width: percent(100), ..default() }));
 }
 
 /// Builds the character tab's body: the status section.

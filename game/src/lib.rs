@@ -32,6 +32,7 @@ pub mod folk;
 pub mod folk_combat;
 pub mod folk_regard;
 pub mod hostility;
+pub mod blessing;
 pub mod identify;
 pub mod kills;
 pub mod folk_pose;

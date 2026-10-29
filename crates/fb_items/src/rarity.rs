@@ -141,7 +141,7 @@ impl Rarity {
 pub fn pick_affix(rng: &mut Mulberry32, item: Rolling, kind: AffixKind, good: bool, taken: &[&Affix]) -> Option<&'static Affix> {
     let pool: Vec<&'static Affix> = affixes()
         .iter()
-        .filter(|a| a.kind == kind && a.good == good && a.least <= item.rarity && a.fits_item(item.tags, item.slot) && taken.iter().all(|t| a.stacks_with(t)))
+        .filter(|a| a.kind == kind && !a.holy && a.good == good && a.least <= item.rarity && a.fits_item(item.tags, item.slot) && taken.iter().all(|t| a.stacks_with(t)))
         .collect();
     if pool.is_empty() {
         return None;
