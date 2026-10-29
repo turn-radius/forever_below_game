@@ -66,6 +66,7 @@ pub mod menu;
 pub mod play;
 pub mod player;
 pub mod props;
+pub mod book;
 pub mod casting;
 pub mod casting_influence;
 pub mod quickslots;

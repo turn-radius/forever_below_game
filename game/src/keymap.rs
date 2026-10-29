@@ -55,6 +55,9 @@ pub enum Action {
     Pray,
     /// Steps the tier a prayer or spell is cast at, 1 to 3 and round again.
     CastTier,
+    /// Opens and closes the spellbook, where a caster writes prayers from terms
+    /// (`crate::book`).
+    Book,
     /// In the level, drinks the nearest healing draught carried: belt and quickslots, then the
     /// pack, then the bags in it.
     DrinkHealing,
@@ -179,7 +182,7 @@ impl Context {
     /// reads as a menu: nothing in it but the keys that swap screens, and so do a talk and a commission.
     pub fn of(app: Option<AppState>, open: Option<Screen>) -> Context {
         match (app, open) {
-            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk | Screen::Commission | Screen::Enchant | Screen::Devotion)) => Context::Menus,
+            (Some(AppState::Title), _) | (_, Some(Screen::Menu | Screen::Map | Screen::Talk | Screen::Commission | Screen::Enchant | Screen::Devotion | Screen::Book)) => Context::Menus,
             (_, Some(Screen::Inventory)) => Context::Inventory,
             (_, None) => Context::Level,
         }
@@ -339,6 +342,7 @@ impl Default for Keymap {
                 .in_contexts(ITEMS),
                 bind(Action::Pray, "Pray or cast the chosen ability (a cleric's Divine Light), at the chosen tier", Group::Fighting, &[Key(KeyCode::KeyC)]),
                 bind(Action::CastTier, "Step the tier a prayer or spell is cast at", Group::Fighting, &[Key(KeyCode::KeyV)]),
+                bind(Action::Book, "Open the spellbook to write prayers", Group::Screens, &[Key(KeyCode::KeyB)]).in_contexts(EVERYWHERE),
                 bind(Action::DrinkHealing, "Drink a healing draught", Group::Items, &[Key(KeyCode::KeyH)]),
                 bind(Action::DragItem, "Drag an item", Group::Items, &[Mouse(MouseButton::Left)]).in_contexts(&[Context::Inventory]),
                 bind(Action::TurnItem, "Turn a dragged item", Group::Items, &[Key(KeyCode::KeyR), Mouse(MouseButton::Right)]).in_contexts(&[Context::Inventory]),
@@ -796,7 +800,7 @@ mod tests {
     #[test]
     fn the_spare_keys_are_unbound() {
         let keymap = Keymap::default();
-        for key in [KeyCode::KeyZ, KeyCode::KeyB, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
+        for key in [KeyCode::KeyZ, KeyCode::KeyN, KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyU] {
             assert!(keymap.bindings.iter().all(|b| !b.inputs.contains(&Input::Key(key))), "{key:?} is bound");
         }
     }
@@ -1026,7 +1030,7 @@ mod tests {
     fn binding_jump_to_f_in_the_level_conflicts_with_primary() {
         let keymap = Keymap::default();
         assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyF)), Some(Action::Primary));
-        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyB)), None);
+        assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::KeyN)), None);
         assert_eq!(keymap.conflicts(Action::Jump, Input::Key(KeyCode::Space)), None, "its own key is no clash");
     }
 

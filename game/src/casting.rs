@@ -40,7 +40,7 @@ use crate::launch::AppState;
 use crate::play::{DelveSystems, EYE_HEIGHT, Player, PlayerCamera, inventory_open, level_has_focus};
 use crate::quickslots::{Quickslots, SLOTS};
 use crate::rules::GameRules;
-use crate::ui::{BRIGHT, UiFonts, hud};
+use crate::ui::{BRIGHT, UiFonts, hud, hud_font};
 
 /// What the delver has written and can write with.
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
@@ -450,11 +450,14 @@ fn spawn_hud(mut commands: Commands, clusters: Query<Entity, Added<OrbCluster>>,
     let layout = cluster_layout();
     for cluster in &clusters {
         commands.entity(cluster).with_children(|cluster| {
+            // Above the row of status badges (which sits on the bar), not on it.
             cluster.spawn((
                 ChosenLine,
                 Text::new(""),
-                UiFonts::style(&fonts.body, 16.0, BRIGHT),
-                Node { position_type: PositionType::Absolute, left: hud(layout.bar.min.x), top: hud(layout.bar.min.y - layout.slot * 0.95), ..default() },
+                TextFont::from_font_size(hud_font(2.0)).with_font(fonts.body_medium.clone()),
+                TextColor(BRIGHT),
+                TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK.with_alpha(0.85) },
+                Node { position_type: PositionType::Absolute, left: hud(layout.bar.min.x), top: hud(layout.status.min.y - 2.9), ..default() },
                 Pickable::IGNORE,
             ));
         });
@@ -477,11 +480,10 @@ fn show_chosen(chosen: Res<Chosen>, rules: Res<GameRules>, keymap: Res<Keymap>, 
     }
 }
 
-/// Each slot holding a prayer names it and the tier it would cast at.
-fn show_slot_labels(slots: Res<AbilitySlots>, chosen: Res<Chosen>, mut labels: Query<(&AbilityLabel, &mut Text)>) {
+/// Each slot holding a prayer names it, along its bottom edge.
+fn show_slot_labels(slots: Res<AbilitySlots>, mut labels: Query<(&AbilityLabel, &mut Text)>) {
     for (label, mut text) in &mut labels {
-        let want = slots.get(label.0).map_or_else(String::new, |name| format!("{}
-{}", name.split(' ').next_back().unwrap_or(name), chosen.tier));
+        let want = slots.get(label.0).map_or_else(String::new, |name| name.split(' ').next_back().unwrap_or(name).chars().take(5).collect());
         if text.0 != want {
             text.0 = want;
         }
@@ -584,6 +586,21 @@ mod tests {
         press(&mut app, KeyCode::Digit1);
         assert_eq!(pool(&app, player), 7.0);
         assert_eq!(casted(&mut app).len(), 1);
+    }
+
+    #[test]
+    fn the_chosen_prayer_is_what_c_casts() {
+        let (mut app, player) = delve(true, 10.0);
+        let mut mercy = fb_character::casting::Written::divine_light();
+        mercy.name = "Hand of Mercy".into();
+        mercy.reach = "touch".into();
+        app.world_mut().get_mut::<DelverSpellbook>(player).unwrap().0.save(mercy).unwrap();
+        app.world_mut().resource_mut::<Chosen>().name = "Hand of Mercy".into();
+        press(&mut app, KeyCode::KeyC);
+        let casts = casted(&mut app);
+        assert_eq!(casts.len(), 1);
+        assert_eq!((casts[0].written.name.as_str(), casts[0].written.reach.as_str(), casts[0].cost), ("Hand of Mercy", "touch", 2.0));
+        assert_eq!(pool(&app, player), 8.0);
     }
 
     #[test]

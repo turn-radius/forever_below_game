@@ -337,7 +337,9 @@ pub fn spawn_slots(parent: &mut ChildSpawnerCommands, fonts: &UiFonts, style: Sl
                 Text::new(""),
                 TextFont::from_font_size(style.number).with_font(fonts.mono.clone()),
                 TextColor(BRIGHT),
-                TextLayout::justify(Justify::Center),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                // Along the bottom edge, clear of the number at the top left.
+                Node { position_type: PositionType::Absolute, left: px(0), right: px(0), bottom: px(1), justify_content: JustifyContent::Center, ..default() },
                 Pickable::IGNORE,
             ));
         }
