@@ -505,6 +505,7 @@ mod tests {
             .init_resource::<GameRules>()
             .init_resource::<crate::game_clock::GameClock>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(crate::combat::RunDice(procgen_rng::Mulberry32::new(7)))
             .add_plugins(CastingPlugin);
         run_delve_systems_while_delving(&mut app);
         let mut character = Character::roll(1);
