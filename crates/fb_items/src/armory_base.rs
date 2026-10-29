@@ -189,8 +189,9 @@ pub fn find_weight(name: &str) -> u32 {
     }
     match name {
         "Scroll" | "Note" => 10,
-        // A lantern is found three times as often as a censer, which only clerics keep.
-        "Lantern" => 3,
+        // A lantern is found nine times as often as a censer: clerics start with theirs, and a
+        // censer lying loose is a rare find.
+        "Lantern" => 9,
         _ => 1,
     }
 }
