@@ -85,6 +85,7 @@ pub mod simulate;
 pub mod soak;
 pub mod smoke;
 pub mod sparkle;
+pub mod time_left;
 pub mod staged;
 pub mod status;
 pub mod swing_practice;

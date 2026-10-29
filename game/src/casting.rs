@@ -70,6 +70,9 @@ impl Plugin for CastingPlugin {
                     spawn_hud,
                     show_chosen,
                     show_slot_labels,
+                    dress_ability_slots,
+                    show_ability_icons,
+                    show_time_left,
                 )
                     .chain()
                     .in_set(DelveSystems),
@@ -316,6 +319,8 @@ pub struct DivineLight {
     pub feet: f32,
     /// The game time it goes out, seconds.
     pub expires: f64,
+    /// Game seconds it lasts in all, from its cast to `expires`.
+    pub lasts: f64,
     /// Game seconds it fades over at the end.
     pub fade: f64,
     /// The light's intensity at full, set when it first lights.
@@ -325,6 +330,14 @@ pub struct DivineLight {
 }
 
 impl DivineLight {
+    /// The share of its time it has left at game time `now`, 1 when cast to 0 when out.
+    pub fn time_left(&self, now: f64) -> f32 {
+        if self.lasts <= 0.0 {
+            return 0.0;
+        }
+        ((self.expires - now) / self.lasts).clamp(0.0, 1.0) as f32
+    }
+
     /// How bright it is at game time `now`: 1 until it begins to fade, then down to 0.
     pub fn brightness(&self, now: f64) -> f32 {
         if self.fade <= 0.0 {
@@ -479,7 +492,7 @@ fn set_divine_light(commands: &mut Commands, cast: &fb_character::casting::Cast,
     let peak = lit.0.intensity;
     commands.spawn((
         Name::new(format!("Divine Light, tier {}", cast.tier)),
-        DivineLight { feet: cast.range as f32, expires: now + cast.duration, fade: FADE_SECONDS.min(cast.duration * 0.25), peak, cast_at },
+        DivineLight { feet: cast.range as f32, expires: now + cast.duration, lasts: cast.duration, fade: FADE_SECONDS.min(cast.duration * 0.25), peak, cast_at },
         lit,
         Transform::from_translation(at),
         Visibility::default(),
@@ -718,6 +731,7 @@ fn debug_cast(
         let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
         for mut light in &mut lights {
             light.expires = now + lasts;
+            light.lasts = lasts;
             light.fade = light.fade.min(lasts);
         }
     }
@@ -779,12 +793,136 @@ fn show_chosen(chosen: Res<Chosen>, rules: Res<GameRules>, keymap: Res<Keymap>, 
     }
 }
 
-/// Each slot holding a prayer names it, along its bottom edge.
-fn show_slot_labels(slots: Res<AbilitySlots>, mut labels: Query<(&AbilityLabel, &mut Text)>) {
+/// The written prayer called `name` in the delver's book, if any.
+fn written<'a>(books: &'a Query<&DelverSpellbook, With<Player>>, name: &str) -> Option<&'a fb_character::casting::Written> {
+    books.iter().next().and_then(|b| b.0.find(name))
+}
+
+/// Each slot holding a prayer names it, along its bottom edge, unless an icon stands for it
+/// ([`AbilityIcon`]).
+fn show_slot_labels(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, With<Player>>, mut labels: Query<(&AbilityLabel, &mut Text)>) {
     for (label, mut text) in &mut labels {
-        let want = slots.get(label.0).map_or_else(String::new, |name| name.split(' ').next_back().unwrap_or(name).chars().take(5).collect());
+        let pictured = slots.get(label.0).and_then(|name| written(&books, name)).is_some_and(|w| icon_for(&w.effect).is_some());
+        let want = slots.get(label.0).filter(|_| !pictured).map_or_else(String::new, |name| name.split(' ').next_back().unwrap_or(name).chars().take(5).collect());
         if text.0 != want {
             text.0 = want;
+        }
+    }
+}
+
+/// The pictures that stand for prayers in a quickslot, by effect: Divine Light's bauble.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbilityPicture {
+    Bauble,
+}
+
+/// The picture for a prayer of `effect`, if it has one; a prayer without one is named instead.
+pub fn icon_for(effect: &str) -> Option<AbilityPicture> {
+    match effect {
+        "light" => Some(AbilityPicture::Bauble),
+        _ => None,
+    }
+}
+
+/// The side of a prayer's picture, pixels.
+const ICON_SIZE: u32 = 64;
+
+/// The bauble's picture: a soft gold heart with a near-white core in a wide glow, one tilted
+/// orbit of motes and a few loose sparks drifting off it, in sRGB with straight alpha. One
+/// orbit, not crossed rings, so it never reads as an atom.
+pub fn bauble_icon_pixels() -> Vec<[u8; 4]> {
+    let n = ICON_SIZE as f32;
+    let rim = HOLY_RIM.to_srgba();
+    let core = HOLY_CORE.to_srgba();
+    let mut out = Vec::with_capacity((ICON_SIZE * ICON_SIZE) as usize);
+    for y in 0..ICON_SIZE {
+        for x in 0..ICON_SIZE {
+            let p = Vec2::new((x as f32 + 0.5) / n * 2.0 - 1.0, (y as f32 + 0.5) / n * 2.0 - 1.0);
+            let r = p.length();
+            let heart = (-(r / 0.16).powi(2)).exp() * 1.4 + (-(r / 0.4).powi(2)).exp() * 0.5 + (-r * 3.2).exp() * 0.25;
+            // One orbit, tilted, its motes brightest along the front and fading round the back.
+            let q = Vec2::from_angle(-0.45).rotate(p);
+            let e = Vec2::new(q.x / 0.78, q.y / 0.32);
+            let off = (e.length() - 1.0).abs() * 0.3;
+            let along = e.y.atan2(e.x);
+            let motes = (0.5 + 0.5 * (along * 6.0).cos()).powi(6) * (0.45 + 0.55 * along.sin().max(0.0));
+            let orbit = (-(off / 0.03).powi(2)).exp() * (0.15 + 0.85 * motes);
+            // A few loose sparks off the orbit.
+            let sparks: f32 = [(0.62_f32, -0.55_f32), (-0.7, 0.35), (0.25, 0.72)].iter().map(|&(x, y)| (-((p - Vec2::new(x, y)).length() / 0.05).powi(2)).exp() * 0.8).sum();
+            let light = (heart + orbit + sparks).min(1.0);
+            let white = ((-(r / 0.16).powi(2)).exp() * 1.2).min(1.0);
+            let mix = |a: f32, b: f32| ((a + (b - a) * white) * 255.0).round() as u8;
+            out.push([mix(rim.red, core.red), mix(rim.green, core.green), mix(rim.blue, core.blue), (light * 255.0).round() as u8]);
+        }
+    }
+    out
+}
+
+/// The picture of a prayer in a quickslot, a child of the slot under its number.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AbilityIcon(pub usize);
+
+/// Gives each quickslot its prayer picture and its [`crate::time_left::TimeLeft`] veil, once.
+fn dress_ability_slots(
+    mut commands: Commands,
+    slots: Query<(Entity, &crate::quickslots::QuickSlot), Without<crate::time_left::TimeLeft>>,
+    images: Option<ResMut<Assets<Image>>>,
+    mut bauble: Local<Option<Handle<Image>>>,
+) {
+    let Some(mut images) = images else { return };
+    for (entity, slot) in &slots {
+        let picture = bauble
+            .get_or_insert_with(|| {
+                let data = bauble_icon_pixels().into_iter().flatten().collect();
+                let size = bevy::render::render_resource::Extent3d { width: ICON_SIZE, height: ICON_SIZE, depth_or_array_layers: 1 };
+                images.add(Image::new(
+                    size,
+                    bevy::render::render_resource::TextureDimension::D2,
+                    data,
+                    bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                    bevy::asset::RenderAssetUsages::default(),
+                ))
+            })
+            .clone();
+        commands.entity(entity).insert(crate::time_left::TimeLeft(None)).with_child((
+            AbilityIcon(slot.0),
+            ImageNode::new(picture),
+            Node { position_type: PositionType::Absolute, width: percent(86), height: percent(86), ..default() },
+            // Under the slot's number and above its square.
+            ZIndex(-1),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Shows each slot's prayer picture while it holds a prayer that has one.
+fn show_ability_icons(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, With<Player>>, mut icons: Query<(&AbilityIcon, &mut Visibility)>) {
+    for (icon, mut shown) in &mut icons {
+        let pictured = slots.get(icon.0).and_then(|name| written(&books, name)).is_some_and(|w| icon_for(&w.effect) == Some(AbilityPicture::Bauble));
+        let want = if pictured { Visibility::Inherited } else { Visibility::Hidden };
+        if *shown != want {
+            *shown = want;
+        }
+    }
+}
+
+/// Veils each slot holding Divine Light by the time its bauble has left, swept clockwise as it
+/// runs down; nothing while no light burns or the slot holds something else.
+fn show_time_left(
+    slots: Res<AbilitySlots>,
+    books: Query<&DelverSpellbook, With<Player>>,
+    clock: Option<Res<GameClock>>,
+    lights: Query<&DivineLight>,
+    mut veils: Query<(&crate::quickslots::QuickSlot, &mut crate::time_left::TimeLeft)>,
+) {
+    let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+    let left = lights.iter().map(|l| l.time_left(now)).reduce(f32::max);
+    for (slot, mut time) in &mut veils {
+        let light = slots.get(slot.0).and_then(|name| written(&books, name)).is_some_and(|w| w.effect == "light");
+        let want = if light { left } else { None };
+        if time.0 != want {
+            time.0 = want;
         }
     }
 }
@@ -1033,6 +1171,64 @@ mod tests {
         app.update();
         app.update();
         assert!(on_hands(&mut app).is_empty(), "out with the bauble");
+    }
+
+    #[test]
+    fn the_time_left_runs_from_one_at_the_cast_to_none_at_the_end() {
+        let light = DivineLight { feet: 20.0, expires: 700.0, lasts: 600.0, fade: 120.0, peak: 1.0, cast_at: 0.0 };
+        assert_eq!(light.time_left(100.0), 1.0);
+        assert_eq!(light.time_left(400.0), 0.5);
+        assert_eq!(light.time_left(700.0), 0.0);
+        assert_eq!(light.time_left(900.0), 0.0);
+    }
+
+    #[test]
+    fn the_bauble_icon_is_a_bright_heart_on_clear_ground() {
+        let pixels = bauble_icon_pixels();
+        let side = ICON_SIZE as usize;
+        assert_eq!(pixels.len(), side * side);
+        let middle = pixels[side / 2 * side + side / 2];
+        assert!(middle[3] > 240 && middle[0] > 240 && middle[2] > 200, "a near-white heart: {middle:?}");
+        assert!(pixels[0][3] < 10, "clear in the corner: {:?}", pixels[0]);
+        let ring = (0..side * side)
+            .filter(|&i| {
+                let (x, y) = ((i % side) as f32 / side as f32 * 2.0 - 1.0, (i / side) as f32 / side as f32 * 2.0 - 1.0);
+                (0.6..0.85).contains(&Vec2::new(x, y).length())
+            })
+            .map(|i| pixels[i][3])
+            .max()
+            .unwrap_or(0);
+        assert!(ring > 120, "motes on the orbits stand out well clear of the heart: {ring}");
+        assert_eq!(icon_for("light"), Some(AbilityPicture::Bauble));
+        assert_eq!(icon_for("frighten"), None, "other prayers are named");
+    }
+
+    #[test]
+    fn a_slot_holding_divine_light_shows_its_picture_and_its_time_left() {
+        let (mut app, _) = delve(true, 10.0);
+        app.init_resource::<Assets<Image>>();
+        let slot = app.world_mut().spawn((crate::quickslots::QuickSlot(0), Node::default())).id();
+        app.world_mut().entity_mut(slot).with_child((AbilityLabel(0), Text::new("")));
+        app.update();
+        app.update();
+        let shown = |app: &mut App| app.world_mut().query::<(&AbilityIcon, &Visibility)>().iter(app.world()).map(|(_, v)| *v).next();
+        let label = |app: &mut App| app.world_mut().query::<(&AbilityLabel, &Text)>().iter(app.world()).map(|(_, t)| t.0.clone()).next().unwrap();
+        let left = |app: &mut App| app.world().get::<crate::time_left::TimeLeft>(slot).copied().unwrap().0;
+        assert_eq!(app.world().resource::<AbilitySlots>().get(0), Some("Divine Light"));
+        assert_eq!(shown(&mut app), Some(Visibility::Inherited), "the bauble stands for it");
+        assert_eq!(label(&mut app), "", "not named as well");
+        assert_eq!(left(&mut app), None, "no veil before it is cast");
+        cast_at_tier(&mut app, 1);
+        app.update();
+        let lasts = lit(&mut app)[0].0.lasts;
+        assert!(left(&mut app).is_some_and(|l| l > 0.99), "all its time left at the cast");
+        app.world_mut().resource_mut::<GameClock>().advance(lasts * 0.25);
+        app.update();
+        assert!(left(&mut app).is_some_and(|l| (l - 0.75).abs() < 0.01), "a quarter gone: {:?}", left(&mut app));
+        app.world_mut().resource_mut::<GameClock>().advance(lasts);
+        app.update();
+        app.update();
+        assert_eq!(left(&mut app), None, "gone with the light");
     }
 
     #[test]
