@@ -12,7 +12,7 @@ use super::icon::Icons;
 use super::items::{Inventory, ItemId, Location};
 use super::{Dragging, Hovered};
 use crate::keymap::{Action, ActionInput};
-use crate::play::{Screen, ScreenOpen};
+use crate::play::{CardsCovered, Screen, ScreenOpen};
 use crate::ui::{ACCENT, BAD, BG, FAINT, GOLD, INK, LINE, MUTED, OK, UiFonts, coin_spans, numbers_line, rarity_color};
 
 /// The price line under a card's title, its coins each in their metal.
@@ -752,7 +752,7 @@ pub fn after_hover_delay(subject: Option<(ItemId, CardAnchor)>, now: f32, delay:
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn show_card(
     mut commands: Commands,
-    open: Res<ScreenOpen>,
+    (open, covered): (Res<ScreenOpen>, CardsCovered),
     hovered: Res<Hovered>,
     dragging: Res<Dragging>,
     aimed: Option<Res<crate::carry::Aimed>>,
@@ -775,8 +775,8 @@ pub fn show_card(
     // keys. Only the crosshair's card: the crosshair still holds the container after the screen
     // opens on it, and the cards of the items in the screen are theirs.
     let aimed_container = aimed_entity.is_some_and(|entity| containers.contains(entity));
-    // No card over the menu.
-    let subject = if open.is(Screen::Menu) { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
+    // No card over the menu, the map or the fall screens.
+    let subject = if covered.is_covered() { None } else { card_subject(open.is(Screen::Inventory), *hovered, dragging.0.is_some_and(|d| d.active), aimed_item) };
     let delay = tuning.map_or(0.0, |t| t.interface.hover_delay);
     let subject = after_hover_delay(subject, time.map_or(0.0, |t| t.elapsed_secs()), delay, &mut hovered_since);
     for (card, mut node, mut visibility, computed, target) in &mut cards {
@@ -1322,6 +1322,57 @@ mod tests {
         let texts = keys(&mut app);
         assert!(texts.iter().any(|t| t == "E "), "{texts:?}");
         assert!(!texts.iter().any(|t| t == "F "), "{texts:?}");
+    }
+
+    /// The card shows over a floor item while aimed at, hides behind the map and the fall screens,
+    /// and returns when they close.
+    #[test]
+    fn the_aimed_card_hides_behind_the_map_and_the_fall_screens() {
+        use crate::combat::{revival::Unconscious, vitals::Fallen};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<Hovered>()
+            .init_resource::<Dragging>()
+            .init_resource::<ShownCard>()
+            .init_resource::<UiFonts>()
+            .init_resource::<crate::inventory::icon::IconCache>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::carry::Aimed>()
+            .insert_resource(Inventory::default())
+            .add_systems(Update, show_card);
+        let dagger = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Dagger", 7).unwrap());
+        let item = app.world().resource::<Inventory>().item(dagger).unwrap();
+        let spot = fb_level::ItemSpot { x: 0.0, y: 0.0, yaw: 0.0, family: item.shape.family(), seed: item.seed };
+        let floor = app.world_mut().spawn(crate::carry::FloorItem { id: dagger, spot, min: Vec3::ZERO, max: Vec3::ONE }).id();
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = Some(floor);
+        let card = app.world_mut().spawn((ItemCard, Node::default(), Visibility::Hidden, ComputedNode::default(), ComputedUiRenderTargetInfo::default())).id();
+        let visible = |app: &mut App| {
+            app.update();
+            app.update();
+            *app.world().get::<Visibility>(card).unwrap() != Visibility::Hidden
+        };
+        assert!(visible(&mut app), "aimed at a floor item");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Map);
+        assert!(!visible(&mut app), "no card over the map");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        assert!(visible(&mut app), "the card returns with the map closed");
+        app.world_mut().insert_resource(Unconscious);
+        assert!(!visible(&mut app), "no card over the unconscious screen");
+        app.world_mut().remove_resource::<Unconscious>();
+        assert!(visible(&mut app));
+        app.world_mut().insert_resource(Fallen(1.0));
+        assert!(!visible(&mut app), "no card over the fall screen");
+        app.world_mut().remove_resource::<Fallen>();
+        let wake = app.world_mut().spawn(crate::combat::revival::WakeCard::default()).id();
+        assert!(!visible(&mut app), "no card over the wake card");
+        app.world_mut().entity_mut(wake).despawn();
+        assert!(visible(&mut app), "the card returns once the wake card is gone");
+        app.world_mut().resource_mut::<crate::carry::Aimed>().0 = None;
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.world_mut().resource_mut::<Hovered>().0 = Some((dagger, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        assert!(visible(&mut app), "the inventory shows the hovered item's card");
     }
 
     /// The text of every node in the world, for the card's keys.

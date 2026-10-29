@@ -206,6 +206,24 @@ impl ScreenOpen {
     }
 }
 
+/// Whether something covers the level's inspect cards: the map or the pause menu, the "You fall
+/// unconscious" overlay ([`crate::combat::revival`]) or the fall screen ([`crate::combat::vitals`]) or the wake card after it.
+/// The cards come back when it closes, if they are still aimed at. The inventory does not cover
+/// them: it shows the hovered item's own card.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CardsCovered<'w, 's> {
+    open: Option<Res<'w, ScreenOpen>>,
+    unconscious: Option<Res<'w, crate::combat::revival::Unconscious>>,
+    fallen: Option<Res<'w, crate::combat::vitals::Fallen>>,
+    wake: Query<'w, 's, (), With<crate::combat::revival::WakeCard>>,
+}
+
+impl CardsCovered<'_, '_> {
+    pub fn is_covered(&self) -> bool {
+        self.open.as_ref().is_some_and(|o| o.is(Screen::Menu) || o.is(Screen::Map)) || self.unconscious.is_some() || self.fallen.is_some() || !self.wake.is_empty()
+    }
+}
+
 /// Run condition: no screen is open over the level, the delver is not between levels
 /// ([`crate::travel`]) or asleep ([`crate::camp`]) and the debug inspector is closed
 /// ([`crate::inspect`]), no roll shows on the dice panel ([`crate::dice`]) and the wake card is
