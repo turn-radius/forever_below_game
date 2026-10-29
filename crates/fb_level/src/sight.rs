@@ -171,12 +171,14 @@ mod tests {
             roles: Vec::new(),
             props: Vec::new(),
             banners: Vec::new(),
+            niches: Vec::new(),
             crystals: Vec::new(),
             creatures: Vec::new(),
             stairs: Vec::new(),
             webs: Vec::new(),
             past: None,
             purposes: Vec::new(),
+            daises: Vec::new(),
         }
     }
 

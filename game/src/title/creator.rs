@@ -20,11 +20,10 @@ use bevy::{
 use fb_body::{BodyShape, BodySpec, Folk, ShapeSlider};
 use procgen_rng::Mulberry32;
 
-use crate::character::{Character, ChosenDelver, Class, Sex, modifier};
+use crate::character::{Character, Class, Sex, modifier};
 use crate::keymap::{Action, ActionInput};
-use crate::launch::{AppState, clock_seed};
+use crate::launch::clock_seed;
 use crate::menu::{ButtonInk, MenuButton, MenuCommand, fraction_along};
-use crate::play::CurrentLevel;
 use crate::title::NewDelveSeed;
 use crate::inventory::doll::doll_leaf;
 use crate::inventory::{DollAssets, Icons};
@@ -212,20 +211,20 @@ pub fn open_creator(commands: &mut Commands) {
 }
 
 /// Begins a delve as `delver`, into `seed`'s level or one from the clock.
-pub fn begin_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed: &NewDelveSeed, delver: Character) {
+pub fn begin_delve(commands: &mut Commands, seed: &NewDelveSeed, delver: Character) {
     let seed = seed.0.unwrap_or_else(clock_seed);
     info!("title: {} goes down into level {seed}", delver.name);
-    commands.insert_resource(CurrentLevel(fb_level::generate(seed, 1)));
-    commands.insert_resource(ChosenDelver(delver));
+    // The level is made off the main thread under the loading screen, and the delve opens on it
+    // when it is ready ([`crate::loading`]).
     commands.remove_resource::<Draft>();
-    next.set(AppState::Delving);
+    crate::loading::start_delve(commands, seed, 1, None, crate::loading::Opening::New(delver));
 }
 
 /// Begins a delve the player chose (the creator's Begin, or Continue as): [`begin_delve`], and
 /// when no `--seed` names the level, one that may save and that replaces any saved delve
 /// ([`crate::save::begin_players_delve`]).
-fn begin_players_delve(commands: &mut Commands, next: &mut NextState<AppState>, seed: &NewDelveSeed, delver: Character) {
-    begin_delve(commands, next, seed, delver);
+fn begin_players_delve(commands: &mut Commands, seed: &NewDelveSeed, delver: Character) {
+    begin_delve(commands, seed, delver);
     if seed.0.is_none() {
         commands.queue(crate::save::begin_players_delve);
     }
@@ -243,16 +242,15 @@ pub fn run_creator(
     mut chosen: MessageReader<MenuCommand>,
     mut typed: MessageReader<KeyboardInput>,
     seed: Res<NewDelveSeed>,
-    mut next: ResMut<NextState<AppState>>,
 ) {
     let Some(mut draft) = draft else {
         for command in chosen.read() {
             match command {
                 // `FB_NEW_DELVE` begins without the creator, as a delver rolled from the clock.
-                MenuCommand::Creator(CreatorCommand::Begin) => begin_delve(&mut commands, &mut next, &seed, Draft::roll(clock_seed()).character()),
+                MenuCommand::Creator(CreatorCommand::Begin) => begin_delve(&mut commands, &seed, Draft::roll(clock_seed()).character()),
                 MenuCommand::Continue => {
                     if let Some(delver) = last.as_ref().and_then(|l| l.0.clone()) {
-                        begin_players_delve(&mut commands, &mut next, &seed, delver);
+                        begin_players_delve(&mut commands, &seed, delver);
                     }
                 }
                 _ => {}
@@ -294,7 +292,7 @@ pub fn run_creator(
         if let Some(mut last) = last {
             last.0 = Some(delver.clone());
         }
-        begin_players_delve(&mut commands, &mut next, &seed, delver);
+        begin_players_delve(&mut commands, &seed, delver);
     }
 }
 

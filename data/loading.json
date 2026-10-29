@@ -1,0 +1,47 @@
+{
+ "line": [
+  "#rumour#",
+  "#rumour#",
+  "#stair#",
+  "#stair#",
+  "#counsel#"
+ ],
+ "rumour": [
+  "They say a door stands open somewhere below, and that whoever finds it forgets the way back.",
+  "I have heard the stairs go on without end. I have also heard they do not. I believe both.",
+  "Some say the way out is a rumour the deep feeds us to keep us walking. Keep walking anyway.",
+  "The first door shut behind you. They say the last one opens for those who stop looking.",
+  "Every faction tells it differently. All of them say the way out is down.",
+  "Those who come back up are never the ones who went down."
+ ],
+ "stair": [
+  "The stair turns once more, and the air #air#.",
+  "Each step down, the dark #dark#.",
+  "Somewhere below, #below#.",
+  "The stair is worn hollow by feet that did not come back up."
+ ],
+ "air": [
+  "grows colder",
+  "tastes of old iron",
+  "smells of wet stone and tallow",
+  "hums, very faintly, with something far beneath"
+ ],
+ "dark": [
+  "grows thicker",
+  "leans in to listen",
+  "learns your name",
+  "keeps its own counsel"
+ ],
+ "below": [
+  "water drips into a pool no one has seen",
+  "a bell rings that has no rope",
+  "something drags its chain from one room to the next",
+  "a torch gutters in a hand that is not yours"
+ ],
+ "counsel": [
+  "Keep your light close. The dark does not keep you.",
+  "Eat when you can, sleep when you must, and count your coin twice.",
+  "Not every door is a way out. Some are only a way further in.",
+  "A pack is light until the third stair."
+ ]
+}

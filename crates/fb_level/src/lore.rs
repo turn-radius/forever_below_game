@@ -208,7 +208,6 @@ fn folk(f: Folk) -> Thing {
 fn class(c: ClassKind) -> Thing {
     let (one, many) = match c {
         ClassKind::Fighter => ("fighter", "fighters"),
-        ClassKind::Ranger => ("ranger", "rangers"),
         ClassKind::Mage => ("mage", "mages"),
         ClassKind::Cleric => ("cleric", "clerics"),
     };

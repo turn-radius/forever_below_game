@@ -27,10 +27,9 @@ graze_chance = 0.5
 graze_damage = 1
 
 # The sides of each class's hit die, taken at its highest at first level (SRD "Hit Points at 1st
-# Level": fighter p. 24, ranger p. 35, cleric p. 15, wizard p. 52 for the mage).
+# Level": fighter p. 24, cleric p. 15, wizard p. 52 for the mage).
 [combat.hit_dice]
 fighter = 10
-ranger = 10
 mage = 6
 cleric = 8
 
@@ -325,6 +324,8 @@ sleep_clock_ratio = 900.0
 wake_distance = 80.0
 # Sleepiness, from 0 rested to 1 spent, the delver must have reached to fall asleep.
 tired_from = 0.25
+# Game hours a delver who lies down in a camp without being tired naps before waking.
+nap_hours = 1.0
 
 [revival]
 # Times a delver brought to 0 hit points may come to in one world; the next fall ends the run.

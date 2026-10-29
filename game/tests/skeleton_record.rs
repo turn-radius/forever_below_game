@@ -48,11 +48,8 @@ fn headless_game() -> App {
     app
 }
 
-fn run(app: &mut App, frames: usize) {
-    for _ in 0..frames {
-        app.update();
-    }
-}
+mod common;
+use common::run;
 
 /// A new delve in level 1207, a second in. The delver is made too hardy for the level's rats to
 /// down between stairs, which would stop the round trips these tests take: what bites where
@@ -232,7 +229,7 @@ fn a_living_skeleton_comes_back_in_its_gear_where_it_stood_and_as_hurt() {
     app.world_mut().write_message(UseStair(StairKind::Up));
     let mut again = None;
     for _ in 0..200 {
-        app.update();
+        run(&mut app, 1);
         if depth(&app) == 2 {
             again = skeleton_at(&mut app, spot);
             if again.is_some() {

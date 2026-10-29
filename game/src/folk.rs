@@ -56,7 +56,7 @@ impl Plugin for FolkPlugin {
             .add_systems(
                 Update,
                 (
-                    spawn_folk.run_if(resource_exists_and_changed::<CurrentLevel>),
+                    spawn_folk.run_if(crate::loading::laid_out_at(5)),
                     idle_folk,
                     turn_heads,
                     (aim_at_folk, meet_aimed_folk, spawn_folk_card, show_folk_card).chain(),
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn an_archer_carries_what_it_shoots_and_no_one_else_carries_anything() {
         let mut archers = 0;
-        // Several worlds, since a world's factions may wear no ranger's outfit.
+        // Several worlds, since a world's factions may wear no bow-carrying fighter's outfit.
         let spots: Vec<(FolkSpot, FactionSpec)> = (1..=8)
             .flat_map(|world| {
                 let level = fb_level::generate(world, 1);
