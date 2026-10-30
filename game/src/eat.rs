@@ -604,9 +604,16 @@ mod tests {
         assert!(lexicon.known_share(DenizenKind::Minotaur) > 0.0 && lexicon.known_share(DenizenKind::Cyclops) == 0.0);
         assert_eq!(lexicon.known_words(DenizenKind::Minotaur).len(), teaching.words.len());
         assert!(app.world().resource::<Inventory>().item(id).is_some(), "the scroll is kept");
+        // A known topic is swapped for an unknown one, so reading again teaches more, until the
+        // tongue is whole and the scroll has nothing new.
+        for _ in 0..3 {
+            press_u(&mut app);
+        }
+        assert_eq!(app.world().resource::<Toast>().text, "There is nothing new in it.");
+        let whole = app.world().resource::<crate::record::WorldRecord>().lexicon().clone();
+        assert_eq!(whole.known_share(DenizenKind::Minotaur), 1.0);
         press_u(&mut app);
-        assert_eq!(app.world().resource::<Toast>().text, "You already know these words.");
-        assert_eq!(app.world().resource::<crate::record::WorldRecord>().lexicon(), &lexicon);
+        assert_eq!(app.world().resource::<crate::record::WorldRecord>().lexicon(), &whole);
     }
 
     #[test]

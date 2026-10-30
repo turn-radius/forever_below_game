@@ -33,13 +33,14 @@ impl Plugin for ReadingPlugin {
 
 /// Reads a book or scroll written in a denizen tongue: the words it teaches join the `lexicon`
 /// for the rest of the delve. Returns the toast's line, "You learn 12 words of Minotaur speech:
-/// greetings and trade.", counting only the words that were new, or "You already know these
-/// words." when none were.
+/// greetings and trade.", counting only the words that were new, or "There is nothing new in it."
+/// when the tongue is already complete. Topics the writing covers that are known are swapped for
+/// ones not yet known.
 pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &fb_denizens::tongue::Teaching) -> String {
     let learned = lexicon.learn_teaching(teaching);
     let n = learned.len();
     if n == 0 {
-        return "You already know these words.".to_string();
+        return if lexicon.is_complete(teaching.kind) { "There is nothing new in it.".to_string() } else { "You already know these words.".to_string() };
     }
     format!("You learn {n} {} of {}: {}.", if n == 1 { "word" } else { "words" }, fb_denizens::tongue::tongue_name(teaching.kind), teaching.topic_list())
 }
@@ -237,9 +238,15 @@ mod tests {
         let mut lexicon = Lexicon::new();
         let said = study(&mut lexicon, &greetings);
         assert_eq!(said, format!("You learn {} words of Minotaur speech: greetings and trade.", greetings.words.len()));
-        assert_eq!(study(&mut lexicon, &greetings), "You already know these words.");
+        // Rereading swaps the known topics for unknown ones, until the tongue is whole.
+        let again = study(&mut lexicon, &greetings);
+        assert!(again.starts_with("You learn "), "{again}");
+        assert!(study(&mut lexicon, &greetings).starts_with("You learn "));
+        assert_eq!(study(&mut lexicon, &greetings), "You learn 6 words of Minotaur speech: greetings and trade.");
+        assert!(lexicon.is_complete(fb_denizens::DenizenKind::Minotaur));
+        assert_eq!(study(&mut lexicon, &greetings), "There is nothing new in it.");
         let more = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]);
-        assert!(study(&mut lexicon, &more).contains("of Minotaur speech: trade and requests"));
+        assert_eq!(study(&mut lexicon, &more), "There is nothing new in it.");
     }
 
     #[test]

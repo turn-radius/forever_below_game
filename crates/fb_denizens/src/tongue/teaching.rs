@@ -1,5 +1,7 @@
 //! What one book or scroll teaches: a fixed set of words of one tongue, rolled from the item's
-//! seed.
+//! seed. A scroll covers three or four of the seven topics and a book five to seven; reading
+//! swaps topics already known for ones not yet known (see `Lexicon::learn_teaching`), so three
+//! writings teach a whole tongue.
 
 use procgen_rng::Mulberry32;
 use serde::{Deserialize, Serialize};
@@ -10,17 +12,17 @@ use crate::DenizenKind;
 /// How much a piece of writing teaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TeachingSize {
-    /// One or two topics' phrases.
+    /// Three or four topics' phrases.
     Scroll,
-    /// Three to five topics' phrases.
+    /// Five to seven topics' phrases.
     Book,
 }
 
 impl TeachingSize {
     fn topics(self) -> (u32, u32) {
         match self {
-            TeachingSize::Scroll => (1, 2),
-            TeachingSize::Book => (3, 5),
+            TeachingSize::Scroll => (3, 4),
+            TeachingSize::Book => (5, 7),
         }
     }
 }

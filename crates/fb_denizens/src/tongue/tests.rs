@@ -126,11 +126,13 @@ fn learning_reports_only_new_words_and_words_stay_learned() {
     let mut lex = Lexicon::new();
     let scroll = Teaching::of_topics(kind, &[Topic::Threat]);
     assert_eq!(lex.learn_teaching(&scroll).len(), 6);
-    assert!(lex.learn_teaching(&scroll).is_empty());
+    assert!(lex.learn(kind, &scroll.words).is_empty());
+    // Threat is known, so it is swapped for the first topic not yet known (greetings).
     let more = Teaching::of_topics(kind, &[Topic::Threat, Topic::Place]);
-    assert_eq!(lex.learn_teaching(&more).len(), 6);
-    assert_eq!(lex.known_words(kind).len(), 12);
-    assert!((lex.known_share(kind) - 12.0 / VOCABULARY.len() as f32).abs() < 1e-6);
+    assert_eq!(lex.learn_teaching(&more).len(), 12);
+    assert_eq!(lex.known_words(kind).len(), 18);
+    assert!(lex.topic_known(kind, Topic::Greeting) && lex.topic_known(kind, Topic::Place));
+    assert!((lex.known_share(kind) - 18.0 / VOCABULARY.len() as f32).abs() < 1e-6);
 }
 
 #[test]
@@ -151,8 +153,8 @@ fn teaching_is_rolled_from_the_seed() {
             assert_eq!(Teaching::roll(seed, kind, TeachingSize::Scroll), Teaching::roll(seed, kind, TeachingSize::Scroll));
             let scroll = Teaching::roll(seed, kind, TeachingSize::Scroll);
             let book = Teaching::roll(seed, kind, TeachingSize::Book);
-            assert!((1..=2).contains(&scroll.topics.len()), "{seed}");
-            assert!((3..=5).contains(&book.topics.len()), "{seed}");
+            assert!((3..=4).contains(&scroll.topics.len()), "{seed}");
+            assert!((5..=7).contains(&book.topics.len()), "{seed}");
             assert!(scroll.description().starts_with(&format!("{} phrases: ", kind.label())));
             // Teaching what it says it does.
             let mut lex = Lexicon::new();
@@ -160,7 +162,7 @@ fn teaching_is_rolled_from_the_seed() {
             assert!(book.topics.iter().all(|t| lex.topic_readable(kind, *t)));
         }
     }
-    for (size, lo, hi) in [(TeachingSize::Scroll, 1, 2), (TeachingSize::Book, 3, 5)] {
+    for (size, lo, hi) in [(TeachingSize::Scroll, 3, 4), (TeachingSize::Book, 5, 7)] {
         let counts: HashSet<usize> = (0..200u32).map(|s| Teaching::roll(s, DenizenKind::Faun, size).topics.len()).collect();
         assert!(counts.contains(&lo) && counts.contains(&hi), "{size:?}: {counts:?}");
     }
@@ -277,4 +279,42 @@ fn a_teaching_round_trips_through_json() {
     for w in VOCABULARY {
         assert_eq!(word(w.key), Some(*w));
     }
+}
+
+#[test]
+fn any_three_scrolls_in_any_order_complete_a_tongue() {
+    const ORDERS: [[usize; 3]; 6] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    for kind in DenizenKind::ALL {
+        for seed in 0..120u32 {
+            let scrolls: Vec<_> = (0..3).map(|i| Teaching::roll(seed * 3 + i, kind, TeachingSize::Scroll)).collect();
+            for order in ORDERS {
+                let mut lex = Lexicon::new();
+                for i in order {
+                    lex.learn_teaching(&scrolls[i]);
+                }
+                assert_eq!(lex.known_share(kind), 1.0, "{kind:?} {seed} {order:?}");
+                assert!(lex.is_complete(kind));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_book_teaches_at_least_half_a_tongue() {
+    for seed in 0..100u32 {
+        let mut lex = Lexicon::new();
+        lex.learn_teaching(&Teaching::roll(seed, DenizenKind::Cyclops, TeachingSize::Book));
+        assert!(lex.known_share(DenizenKind::Cyclops) >= 0.5, "{seed}");
+    }
+}
+
+#[test]
+fn a_complete_tongue_learns_nothing_more() {
+    let kind = DenizenKind::Faun;
+    let mut lex = Lexicon::new();
+    lex.learn_teaching(&Teaching::of_topics(kind, &Topic::ALL));
+    assert!(lex.is_complete(kind));
+    let before = lex.clone();
+    assert!(lex.learn_teaching(&Teaching::roll(5, kind, TeachingSize::Book)).is_empty());
+    assert_eq!(lex, before);
 }
