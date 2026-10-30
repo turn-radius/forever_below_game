@@ -298,12 +298,40 @@ fn a_friendly_healer_offers_heal_and_says_what_they_can_tend() {
     let labels: Vec<_> = talk.topics.iter().map(|t| t.label()).collect();
     assert_eq!(labels, ["Who are you?", "Your trade", "Barter", "Heal", "This level", "Persuade", "The way out"]);
     press(&mut app, KeyCode::Digit4);
+    // Heal opens the healer's screen, which says what they can tend ([`crate::healer`]).
+    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+    assert_eq!(sent, vec![ServiceChosen { folk, service: Service::Heal }]);
+    assert!(lines::grammar().symbols["heal_offer"].contains(&crate::healer::offer(app.world().resource::<Talk>().speaker.as_ref().unwrap())));
+}
+
+/// A friendly healer's talk with the healer's opening system and a delver of `hp` of 12.
+fn healer_talk(hp: i32) -> (App, Entity) {
+    let mut app = talk_app();
+    app.init_resource::<crate::healer::Healing>().add_systems(Update, crate::healer::open_heal.after(talk).in_set(DelveSystems));
+    app.world_mut().spawn((crate::play::Player, crate::combat::Health { hp, max: 12 }));
+    let folk = stand_in(&mut app, 0, healer(), None);
+    standing(&mut app, folk, 30);
+    talk_to(&mut app, folk);
+    press(&mut app, KeyCode::Digit4);
+    (app, folk)
+}
+
+#[test]
+fn heal_opens_the_healers_screen_for_a_hurt_delver() {
+    let (app, folk) = healer_talk(6);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Heal));
+    assert!(app.world().resource::<crate::healer::Healing>().is_open());
+    // The screen is the talk going on: the folk are still held.
+    assert_eq!(phase(&app, folk), Phase::Held);
+}
+
+#[test]
+fn a_healer_with_nothing_to_tend_says_so_and_opens_no_screen() {
+    let (app, _) = healer_talk(12);
+    assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
     let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("an answer");
     assert_eq!(topic, Topic::Service(Service::Heal));
-    assert!(lines::grammar().symbols["heal_offer"].contains(&said), "{said}");
-    // Barter opens its screen; Heal answers in the panel until its own screen exists.
-    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
-    assert!(sent.is_empty(), "{sent:?}");
+    assert!(lines::grammar().symbols["heal_nothing"].contains(&said), "{said}");
 }
 
 #[test]

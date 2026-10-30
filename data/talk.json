@@ -36,6 +36,11 @@
   "Hurt, poisoned, lamed? Bring coin and I will see what the prayers can mend.",
   "The gods mend what they will and I do the asking. It costs, delver."
  ],
+ "heal_nothing": [
+  "You are whole, delver. There is nothing here for me to tend.",
+  "No wound, no venom. Come back when the abyss has had its way with you.",
+  "I see nothing to mend. Keep your coin."
+ ],
  "heal_refuse_wary": [
   "I tend only those #faction# trusts, and it does not trust you yet. Earn it first.",
   "No. My hands are for friends of #faction#, and you have not shown yourself one.",

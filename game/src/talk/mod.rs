@@ -21,9 +21,9 @@
 //!   the delver while the panel is open ends the talk (not a parley, which is with such a folk).
 //! - What folk say is written in [`lines`] from the grammars in `data/talk.json`, drawn from the
 //!   folk's own seed, so the same folk always say the same thing.
-//! - Commission and Enchant list for the trades that offer them and answer "Not yet."
-//!   until their screens exist. When one does, [`service_ready`] says so for it and choosing the
-//!   topic sends a [`ServiceChosen`] for that screen to open on.
+//! - A service lists for the trades that offer it and answers "Not yet." until its screen
+//!   exists. When one does, [`service_ready`] says so for it and choosing the topic sends a
+//!   [`ServiceChosen`] for that screen to open on.
 //!
 //! - A denizen (minotaur, faun, ...) answers in its own tongue ([`fb_denizens::tongue`]). Standing
 //!   works as for folk (Hostile and Wary ones snort or turn away and open a parley, the rest open the panel), but
@@ -109,10 +109,10 @@ fn reset_talk(mut talk: ResMut<Talk>, mut persuading: ResMut<Persuading>) {
 }
 
 /// Whether a service's screen exists to open: the barter screen ([`crate::barter`]), the
-/// commission screen ([`crate::commission`]) and the enchanter's bench ([`crate::enchanter`]).
-/// Whatever builds another flips its arm.
+/// commission screen ([`crate::commission`]), the enchanter's bench ([`crate::enchanter`]) and the
+/// healer's screen ([`crate::healer`]). Whatever builds another flips its arm.
 pub fn service_ready(service: Service) -> bool {
-    matches!(service, Service::Barter | Service::Commission | Service::Order | Service::Enchant)
+    matches!(service, Service::Barter | Service::Commission | Service::Order | Service::Enchant | Service::Heal)
 }
 
 /// The delver chose a service of the folk they talk to, and its screen should open. Sent only for
@@ -151,7 +151,7 @@ pub struct Talk {
     /// The folk is Hostile, or has turned on the delver: a failed persuasion ends the parley and
     /// they attack, and a success makes a truce ([`WorldRecord::make_truce`]).
     hostile: bool,
-    revision: u32,
+    pub(crate) revision: u32,
 }
 
 impl Talk {
@@ -579,7 +579,7 @@ fn end_talk(
         Err(_) => true,
     };
     // The enchanter's bench is the talk going on, and holds the folk the same.
-    let talking = open.is(Screen::Talk) || open.is(Screen::Enchant);
+    let talking = open.is(Screen::Talk) || open.is(Screen::Enchant) || open.is(Screen::Heal);
     if talking && gone {
         let turned = folk.get(entity).is_ok_and(|(hostility, _, dead)| !dead && !talk.parley && hostility.is_some_and(|h| h.is_hostile()));
         if let (true, Some(speaker)) = (turned, talk.speaker.as_ref()) {
