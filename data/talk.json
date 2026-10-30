@@ -31,6 +31,26 @@
   "Move along, stranger.",
   "Take your questions elsewhere."
  ],
+ "heal_offer": [
+  "I can close wounds and ease what ails you, for coin. Tell me where it hurts.",
+  "Hurt, poisoned, lamed? Bring coin and I will see what the prayers can mend.",
+  "The gods mend what they will and I do the asking. It costs, delver."
+ ],
+ "heal_nothing": [
+  "You are whole, delver. There is nothing here for me to tend.",
+  "No wound, no venom. Come back when the abyss has had its way with you.",
+  "I see nothing to mend. Keep your coin."
+ ],
+ "heal_refuse_wary": [
+  "I tend only those #faction# trusts, and it does not trust you yet. Earn it first.",
+  "No. My hands are for friends of #faction#, and you have not shown yourself one.",
+  "Not for you. #faction.capitalize# are wary of you, and I will not heal what we may have to fight."
+ ],
+ "heal_refuse_hostile": [
+  "Heal you? #faction.capitalize# would sooner see you bleed. Get away from me.",
+  "I will not lay a hand on you except to push you out. There is blood between us.",
+  "Pray to your own gods, delver. I will not waste mine on an enemy."
+ ],
  "parley_hostile": [
   "Stay back. One more step and I stop talking.",
   "You have a nerve, delver. Say it quick.",
@@ -102,6 +122,11 @@
   "I work the weave in made things: an edge here, a ward there. I can break old work apart as well.",
   "What an item is, I can alter. For a price, and not always kindly.",
   "I know how to take the magic out of a thing, and how to put it in."
+ ],
+ "trade_healer": [
+  "I tend the hurt of #faction#, and anyone with coin to spare. Incense and censers I sell besides.",
+  "Wounds close for those who pray and pay. I do both, and I burn incense for the rest.",
+  "The deep breaks people and I mend them, as the gods and your purse allow."
  ],
  "trade_guard": [
   "I keep the ground of #faction#. Whatever lies within these walls is theirs, and it is not yours to take.",

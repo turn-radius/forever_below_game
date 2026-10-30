@@ -687,6 +687,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("commission::CommissionStage", "the commission screen's figure"),
         ("commission::Turn", "the commission screen's turn"),
         ("enchanter::Bench", "no screen is open to lie down"),
+        ("healer::Healing", "no screen is open to lie down; what was healed is in the body and the revives"),
         ("reading::OpenPage", "no screen is open to lie down"),
         ("map::screen::MapView", "the map's view of itself"),
         ("map::screen::PlanImage", "an image"),

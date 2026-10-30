@@ -344,6 +344,18 @@ alone_hit_points = 0.25
 # Game hours a delver lies unconscious alone before coming to; hunger and thirst go on.
 hours_alone = 4.0
 
+[healer]
+# What a faction's healer charges. Our own. Copper pieces (100 cp to the gold piece) for each
+# hit point missing, and to cure poison. Disease is not in the game yet.
+per_hit_point = 5.0
+cure_poison = 50.0
+# To heal one permanent wound left by falling unconscious; it also gives back one revive.
+wound = 500.0
+# Share of the price a Friendly faction's healer charges, and an Allied one's. An Indifferent
+# faction's charges all of it; a Hostile or Wary one's will not tend the delver.
+friendly = 0.75
+allied = 0.5
+
 [protection]
 # Divine Protection: a cleric brought to 0 hit points rolls a Wisdom save (d20 + modifier)
 # against this DC; a pass stands them up instead of falling, and spends no revive.

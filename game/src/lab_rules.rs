@@ -385,6 +385,11 @@ const LABELS: &[(&str, &str)] = &[
     ("revival/hall_fee", "Coin a faction takes (share)"),
     ("revival/alone_hit_points", "Hit points on coming to alone (share)"),
     ("revival/hours_alone", "Hours unconscious alone"),
+    ("healer/per_hit_point", "Copper for each hit point missing"),
+    ("healer/cure_poison", "Copper to cure poison"),
+    ("healer/wound", "Copper to heal a wound"),
+    ("healer/friendly", "Price at a Friendly faction (share)"),
+    ("healer/allied", "Price at an Allied faction (share)"),
 ];
 
 /// The words for an effect's field, by what follows `effects/<id>/`; `None` for one the lab
@@ -455,7 +460,7 @@ pub fn sections(edited: &RuleSet, saved: &RuleSet) -> Vec<Section> {
     for name in names {
         out.push(Section { title: name.clone(), fields: under(&format!("creatures/{name}/")) });
     }
-    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth"), ("Camp", "camp"), ("Revival", "revival")] {
+    for (title, key) in [("Needs", "needs"), ("Exhaustion", "exhaustion"), ("Stamina", "stamina"), ("Mana", "mana"), ("Load", "load"), ("Visibility", "visibility"), ("Warmth", "warmth"), ("Camp", "camp"), ("Revival", "revival"), ("Healer", "healer")] {
         out.push(Section { title: title.into(), fields: under(&format!("{key}/")) });
     }
     for (id, def) in &edited.rules.effects {
