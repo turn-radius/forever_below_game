@@ -797,6 +797,13 @@ pub fn show_card(
             let fallback = crate::keymap::Keymap::default();
             let keymap = keymap.as_deref().unwrap_or(&fallback);
             let mut text = card_text(item, Some((&inventory, id)));
+            // A prayer scroll is worth what its term costs under the loaded rules, as it is when bartering.
+            if item.prayer().is_some()
+                && let Price::Worth(_) = text.price
+            {
+                let costs = crate::barter::prayer_costs(crate::rules::GameRules::of(&rules));
+                text.price = Price::Worth(Coins::from_copper(crate::barter::worth_copper(item, &costs)));
+            }
             if let Some(price) = barter.as_deref().and_then(|b| b.tag(&inventory, id)) {
                 text.price = price;
             }

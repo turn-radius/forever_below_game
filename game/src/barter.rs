@@ -134,7 +134,7 @@ pub type PrayerCosts = BTreeMap<String, f64>;
 
 /// The costs of the terms a prayer scroll may teach under `rules`.
 pub fn prayer_costs(rules: &fb_character::rules::Rules) -> PrayerCosts {
-    crate::rules::prayer_pool(rules).into_iter().map(|id| { let cost = rules.casting.terms[&id].cost; (id, cost) }).collect()
+    crate::rules::prayer_pool(rules).into_iter().filter_map(|id| { let cost = rules.casting.terms.get(&id)?.cost; Some((id, cost)) }).collect()
 }
 
 /// What the whole stack is worth, in copper: its value, and for a prayer scroll that much again
