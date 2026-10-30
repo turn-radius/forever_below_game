@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn f_over_a_prayer_scroll_unlocks_its_term_for_a_cleric_once_and_teaches_a_fighter_nothing() {
         use crate::casting::DelverSpellbook;
-        let term = "cone".to_string();
+        let term = "heal".to_string();
         let unlocked = |world: &App, player| world.world().get::<DelverSpellbook>(player).unwrap().0.unlocked.contains(&term);
         let (mut world, player) = app();
         let mut cleric = Character::roll(3);
@@ -608,10 +608,14 @@ mod tests {
         assert_eq!(crate::interact::use_of(&scroll), Some(crate::interact::Verb::Read));
         let id = stow(&mut world, scroll);
         hover(&mut world, id);
+        let before = world.world().get::<DelverSpellbook>(player).unwrap();
+        assert!(fb_character::casting::compose(&before.0.unlocked, fb_character::Casting::Divine, "Mend", "heal", "touch", "short").is_err(), "Heal is locked before the scroll");
         assert!(!unlocked(&world, player));
         press_u(&mut world);
         assert!(world.world().resource::<Toast>().text.starts_with("You learn the "), "{}", world.world().resource::<Toast>().text);
         assert!(unlocked(&world, player));
+        let book = world.world().get::<DelverSpellbook>(player).unwrap();
+        assert!(fb_character::casting::compose(&book.0.unlocked, fb_character::Casting::Divine, "Mend", "heal", "touch", "short").is_ok(), "Heal can now be written");
         assert!(world.world().resource::<Inventory>().item(id).is_some(), "the scroll is kept");
         press_u(&mut world);
         assert!(world.world().resource::<Toast>().text.starts_with("You already know the "), "{}", world.world().resource::<Toast>().text);

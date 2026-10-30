@@ -502,7 +502,7 @@ mod tests {
         for left_out in ["light", "ward", "self", "bane", "frighten", "charm", "arcane_light"] {
             assert!(!terms.iter().any(|t| t == left_out), "{left_out}");
         }
-        assert!(terms.iter().any(|t| t == "cone"));
+        assert_eq!(terms, ["cone", "cure", "heal"], "every Divine term a cleric does not start with, bar a devotion's");
         assert!(terms.iter().all(|t| defaults().casting.terms[t].school == Casting::Divine && !defaults().casting.terms[t].known));
     }
 
