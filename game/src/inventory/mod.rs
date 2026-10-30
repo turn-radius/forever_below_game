@@ -164,7 +164,7 @@ impl Plugin for InventoryPlugin {
                         (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
                         (bags::settle_click, bags::open_for_capture.run_if(|| env_flag("FB_OPEN_BAGS")), bags::place_windows).chain(),
                         build_screen,
-                        (bags::close_windows, scroll_column, scroll_shelf).chain(),
+                        (bags::close_windows, bags::drag_for_capture.run_if(|| std::env::var("FB_DRAG_WINDOW").is_ok()), bags::drag_windows, scroll_column, scroll_shelf).chain(),
                         drag_items,
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
@@ -1184,7 +1184,7 @@ pub(crate) fn build_screen(
                     }
                 }
                 for (z, &id) in windows.order.iter().filter(|&&id| !windows.hidden.contains(&id) && !windows.left.contains(&id)).enumerate() {
-                    let at = windows.at.get(&id).copied().unwrap_or_default();
+                    let at = windows.position(id).unwrap_or_default();
                     mine.bag_window(root, &mut icons, id, at, z as i32 + 1);
                 }
             }
@@ -4115,5 +4115,143 @@ mod tests {
         let crosses: Vec<ItemId> = world.query::<&bags::BagClose>().iter(world).map(|c| c.0).collect();
         assert_eq!(crosses, vec![chest]);
         assert_ne!(chest, shelf);
+    }
+
+    /// A window for `id` as laid out at `at` with a title bar over its top, and the mouse over `cursor`.
+    fn drag_app(at: Vec2, left: Vec<ItemId>) -> (App, ItemId) {
+        let (mut app, pack, _) = bag_screen_app();
+        app.add_systems(Update, bags::drag_windows);
+        {
+            let mut windows = app.world_mut().resource_mut::<bags::BagWindows>();
+            windows.order = vec![pack];
+            windows.at.insert(pack, at);
+            windows.left = left;
+        }
+        let size = Vec2::new(300.0, 200.0);
+        let node = |size: Vec2, centre: Vec2| (ComputedNode { size, inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(centre)));
+        app.world_mut().spawn((bags::BagWindow(pack), Node::default(), ZIndex(1), node(size, at + size * 0.5)));
+        app.world_mut().spawn((bags::BagTitle(pack), node(Vec2::new(300.0, 36.0), at + Vec2::new(150.0, 18.0))));
+        (app, pack)
+    }
+
+    fn mouse_to(app: &mut App, point: Vec2) {
+        let world = app.world_mut();
+        world.query_filtered::<&mut Window, With<PrimaryWindow>>().single_mut(world).unwrap().set_cursor_position(Some(point));
+    }
+
+    fn mouse(app: &mut App, press: Option<bool>) {
+        let mut buttons = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        buttons.clear();
+        match press {
+            Some(true) => buttons.press(MouseButton::Left),
+            Some(false) => buttons.release(MouseButton::Left),
+            None => {}
+        }
+        app.update();
+    }
+
+    #[test]
+    fn a_window_is_dragged_by_its_title_bar_and_stays_where_it_is_let_go() {
+        let (mut app, pack) = drag_app(Vec2::new(700.0, 100.0), vec![]);
+        mouse_to(&mut app, Vec2::new(750.0, 110.0));
+        mouse(&mut app, Some(true));
+        assert!(app.world().resource::<bags::BagWindows>().grab.is_some_and(|g| g.id == pack), "taken by the title bar");
+        mouse_to(&mut app, Vec2::new(800.0, 310.0));
+        mouse(&mut app, None);
+        assert_eq!(app.world().resource::<bags::BagWindows>().position(pack), Some(Vec2::new(750.0, 300.0)), "it follows by the grip, lower");
+        mouse(&mut app, Some(false));
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.grab.is_none());
+        assert_eq!(windows.moved[&pack], Vec2::new(750.0, 300.0), "kept where it was dropped");
+    }
+
+    #[test]
+    fn a_title_bar_clicked_without_moving_does_not_pin_the_window() {
+        let (mut app, pack) = drag_app(Vec2::new(700.0, 100.0), vec![]);
+        mouse_to(&mut app, Vec2::new(750.0, 110.0));
+        mouse(&mut app, Some(true));
+        mouse(&mut app, Some(false));
+        assert!(app.world().resource::<bags::BagWindows>().moved.is_empty(), "still laid out in the columns");
+        assert!(app.world().resource::<bags::BagWindows>().is_open(pack));
+    }
+
+    #[test]
+    fn a_dragged_window_stays_on_screen_and_off_the_header() {
+        let (mut app, pack) = drag_app(Vec2::new(700.0, 100.0), vec![]);
+        // The window is 1280 by 720 here with no scale, and the mouse stays inside it.
+        mouse_to(&mut app, Vec2::new(750.0, 110.0));
+        mouse(&mut app, Some(true));
+        for (to, expect) in [
+            (Vec2::new(1270.0, 710.0), Vec2::new(1280.0 - 300.0, 720.0 - 200.0)),
+            (Vec2::new(1.0, 1.0), bags::drag_area(Vec2::new(1280.0, 720.0), false).min),
+        ] {
+            mouse_to(&mut app, to);
+            mouse(&mut app, None);
+            assert_eq!(app.world().resource::<bags::BagWindows>().position(pack), Some(expect), "dragged to {to}");
+        }
+    }
+
+    #[test]
+    fn in_a_barter_the_delver_s_windows_cannot_be_dragged_onto_the_trader_s_side() {
+        let (mut app, pack) = drag_app(Vec2::new(700.0, 100.0), vec![bags::FLOOR]);
+        mouse_to(&mut app, Vec2::new(750.0, 110.0));
+        mouse(&mut app, Some(true));
+        mouse_to(&mut app, Vec2::new(10.0, 300.0));
+        mouse(&mut app, None);
+        mouse(&mut app, Some(false));
+        let at = app.world().resource::<bags::BagWindows>().moved[&pack];
+        assert_eq!(at.x, 640.0, "stopped at the middle of a 1280 wide screen");
+    }
+
+    #[test]
+    fn the_other_party_s_windows_do_not_move_when_dragged() {
+        let (mut app, pack) = drag_app(Vec2::new(100.0, 100.0), vec![bags::FLOOR]);
+        // The window on the left is the floor's, as the trader's wares are; here its title bar is where the pack's was.
+        app.world_mut().resource_mut::<bags::BagWindows>().left = vec![pack];
+        mouse_to(&mut app, Vec2::new(150.0, 110.0));
+        mouse(&mut app, Some(true));
+        mouse_to(&mut app, Vec2::new(250.0, 310.0));
+        mouse(&mut app, None);
+        mouse(&mut app, Some(false));
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.grab.is_none() && windows.moved.is_empty(), "not taken");
+    }
+
+    #[test]
+    fn a_press_inside_a_window_below_its_title_does_not_take_the_window() {
+        let (mut app, _) = drag_app(Vec2::new(700.0, 100.0), vec![]);
+        mouse_to(&mut app, Vec2::new(750.0, 200.0));
+        mouse(&mut app, Some(true));
+        mouse_to(&mut app, Vec2::new(850.0, 300.0));
+        mouse(&mut app, None);
+        mouse(&mut app, Some(false));
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.grab.is_none() && windows.moved.is_empty(), "a grid's press moves an item, not the window");
+    }
+
+    #[test]
+    fn dragging_an_item_inside_a_window_still_moves_the_item() {
+        let (mut app, pack) = drag_app(Vec2::new(700.0, 100.0), vec![]);
+        // The pack's grid inside the window, under the title bar, with the sack in its first cell.
+        app.world_mut().spawn((
+            GridView::Container(pack),
+            ComputedNode { size: Vec2::new(200.0, 200.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(810.0, 250.0))),
+        ));
+        let sack = app.world().resource::<Inventory>().grid(pack).and_then(|g| g.at_cell(0, 0).copied()).map(|e| e.id).unwrap();
+        mouse_to(&mut app, Vec2::new(730.0, 170.0));
+        mouse(&mut app, Some(true));
+        assert!(app.world().resource::<bags::BagWindows>().grab.is_none(), "no window was taken");
+        assert!(app.world().resource::<Dragging>().0.is_some_and(|d| d.id == sack), "the sack is what was taken up");
+    }
+
+    #[test]
+    fn leaving_the_delve_forgets_where_windows_were_left() {
+        let (mut app, pack) = drag_app(Vec2::new(700.0, 100.0), vec![]);
+        app.world_mut().resource_mut::<bags::BagWindows>().moved.insert(pack, Vec2::new(800.0, 300.0));
+        app.init_resource::<DollStage>();
+        bevy::ecs::system::RunSystemOnce::run_system_once(app.world_mut(), leave_the_delve).unwrap();
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().moved.is_empty());
     }
 }
