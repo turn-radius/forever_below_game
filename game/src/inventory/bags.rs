@@ -1,21 +1,22 @@
 //! Bags and containers opened as windows on the inventory screen. Double-clicking a bag the
 //! delver carries (the pack on the back, the satchel, the belt pouch, a sack inside one) opens
-//! its grid as a window to the right of the doll, and double-clicking it again, or its cross,
+//! its grid as a window on the right, and double-clicking it again, or its cross,
 //! closes it. A bag set down underfoot or standing in the level opens on a single click. Windows
-//! lay out in columns beside the doll, never over it or each other; with no room for another
-//! the oldest closes ([`column_layout`]). Each grid is a drop target by its laid-out rectangle
+//! lay out in columns, never over the doll or each other; with no room for another
+//! the oldest is left out ([`column_layout`]). Each grid is a drop target by its laid-out rectangle
 //! ([`super::target_under`]), so items go between windows.
 //!
-//! With another party on the screen (a trader's shelf, a body being searched, a container
-//! standing in the level, a bag set down underfoot) the screen has two sides. The other party's
-//! windows, the floor under them and any bag of theirs opened from them lay out on the left
-//! half, and the delver's doll, drawn smaller, and their own windows on the right half
-//! ([`party_areas`]), by the same code ([`fit_sizes`]). The left is always laid out
-//! automatically.
+//! Every inventory screen is the same three regions ([`regions`]). The left is the world side: the
+//! floor underfoot alone, with a trader's card over the wares, a body, or a container in front of
+//! it, and any bag of theirs opened from them, laid out by [`fit_sizes`]. The middle is the
+//! delver's header, doll, quickslots and help, at one size and place. The right is the delver's own
+//! windows, laid out in columns the same way. Opening a barrel or starting a barter fills the left
+//! only.
 //!
-//! The delver's own windows are dragged by their title bar ([`drag_windows`]) anywhere on their
-//! side ([`drag_area`]): right of the header when alone, right of the middle when another party
-//! is on the left. A dragged window comes out of the columns and is remembered where it was left
+//! Every bag the delver wears opens as a window the first time it is carried ([`BagWindows::seen`]),
+//! at the start of a delve and when one is put on later; after that what the delver closes stays
+//! closed. Their windows are dragged by their title bar ([`drag_windows`]) anywhere on the right
+//! region ([`drag_area`]). A dragged window comes out of the columns and is remembered where it was left
 //! ([`BagWindows::moved`]); the ones not dragged still lay out in the columns, and may sit under a
 //! dragged one, which is raised to the front when taken.
 //!
@@ -55,10 +56,11 @@ const AREA_MARGIN_PX: f32 = 16.0;
 // The two-sided screen, logical pixels.
 /// The window standing for the floor underfoot on the left side, which has no item of its own.
 pub const FLOOR: ItemId = ItemId(u32::MAX);
-/// How much of its size the doll is drawn at with another party on the screen.
-pub const PARTY_DOLL_SCALE: f32 = 0.6;
-/// The width of the delver's column (header, doll and quickslots) on the right half.
-pub const PARTY_COLUMN_PX: f32 = 400.0;
+/// The width of the world side on the left, which holds the floor, a trader's card over the wares, a body
+/// or a container, whichever the screen is for.
+pub const LEFT_PX: f32 = 580.0;
+/// The width of the delver's column (header, doll, quickslots and help) in the middle: the doll's frame.
+pub const MIDDLE_PX: f32 = super::doll::FRAME.x;
 /// How tall the trader's card with its Accept and Cancel is, over the wares.
 const BARTER_PANEL_PX: f32 = 300.0;
 /// The narrowest the trader's wares are, so the card's lines fit over a small shelf.
@@ -69,15 +71,21 @@ const SHELF_MIN_CONTENT_PX: f32 = 340.0;
 pub struct BagWindows {
     /// Everything opened and not closed, oldest first: the remembered set.
     pub order: Vec<ItemId>,
+    /// The bags the delver carries that have been opened once already, on their own as they were
+    /// first carried ([`place_windows`]); one in `order` is open, one not is shut and stays so until
+    /// the delver opens it. A bag put away and taken up again is new.
+    pub seen: Vec<ItemId>,
+    /// The bags set down underfoot whose windows the delver shut, which stay shut while the bag lies
+    /// there (one set down shows on the left by itself); a click on the bag opens it again.
+    pub shut: Vec<ItemId>,
     /// Those of `order` the screen had no room for at the last layout, which come back by themselves
     /// when room frees (another window closes, or a smaller one is in the way).
     pub hidden: Vec<ItemId>,
     /// How much the windows' cells are shrunk from the screen's, 1 down to what lets them all fit
     /// ([`fit_windows`]).
     pub scale: f32,
-    /// The windows on the left half while another party is on the screen, in the order they were
-    /// laid out: the trader's shelf, container or body, the floor ([`FLOOR`]), bags set down and the
-    /// other party's own bags. Empty when the screen has one side.
+    /// The windows of the world side on the left, in the order they were laid out: the trader's shelf,
+    /// container or body, the floor ([`FLOOR`]), bags set down and the other party's own bags.
     pub left: Vec<ItemId>,
     /// [`BagWindows::scale`] for the left half.
     pub left_scale: f32,
@@ -96,7 +104,7 @@ pub struct BagWindows {
 
 impl Default for BagWindows {
     fn default() -> Self {
-        BagWindows { order: Vec::new(), hidden: Vec::new(), scale: 1.0, left: Vec::new(), left_scale: 1.0, at: HashMap::new(), moved: HashMap::new(), grab: None, pending: None }
+        BagWindows { order: Vec::new(), seen: Vec::new(), shut: Vec::new(), hidden: Vec::new(), scale: 1.0, left: Vec::new(), left_scale: 1.0, at: HashMap::new(), moved: HashMap::new(), grab: None, pending: None }
     }
 }
 
@@ -108,11 +116,6 @@ impl BagWindows {
     /// Whether `id` has a window on the screen: laid out on the left, or open and not left out.
     pub fn is_shown(&self, id: ItemId) -> bool {
         self.left.contains(&id) || (self.is_open(id) && !self.hidden.contains(&id))
-    }
-
-    /// Whether the screen has another party on the left and the delver on the right.
-    pub fn two_sided(&self) -> bool {
-        !self.left.is_empty()
     }
 
     /// How much a grid's cells are shrunk to fit its window ([`fit_sizes`]); 1 for one not in a window.
@@ -145,14 +148,20 @@ impl BagWindows {
         if self.is_shown(id) {
             self.close(id);
         } else {
-            self.close(id);
+            self.order.retain(|&o| o != id);
+            self.hidden.retain(|&o| o != id);
+            self.shut.retain(|&o| o != id);
             self.order.push(id);
         }
     }
 
+    /// Shuts `id`'s window. One on the left (a bag set down) is kept shut, as it would show by itself.
     pub fn close(&mut self, id: ItemId) {
         self.order.retain(|&o| o != id);
         self.hidden.retain(|&o| o != id);
+        if id != FLOOR && self.left.contains(&id) && !self.shut.contains(&id) {
+            self.shut.push(id);
+        }
     }
 
     /// Brings `id` in front of the others. False if it already was, or is not open.
@@ -292,13 +301,11 @@ pub fn clamp_into(at: Vec2, size: Vec2, area: Rect) -> Vec2 {
     at.clamp(area.min, (area.max - size).max(area.min))
 }
 
-/// Where the delver's windows may be dragged on a screen of `screen` interface pixels: everything
-/// where the window columns start: right of the doll, quickslots and help when alone, and right of the
-/// delver's column (header, doll, quickslots) with another party on the left, so a window never
-/// covers what drops go to.
-pub fn drag_area(screen: Vec2, two_sided: bool) -> Rect {
-    let left = if two_sided { party_areas(screen).1.min.x } else { windows_area(screen).min.x } - AREA_MARGIN_PX;
-    Rect::from_corners(Vec2::new(left.clamp(0.0, screen.x), 0.0), screen)
+/// Where the delver's windows may be dragged on a screen of `screen` interface pixels: the whole right
+/// region, where the window columns start, so a window never covers the doll, quickslots and help
+/// whose drops they would swallow, nor the world side.
+pub fn drag_area(screen: Vec2) -> Rect {
+    Rect::from_corners(Vec2::new((regions(screen).2.min.x - AREA_MARGIN_PX).clamp(0.0, screen.x), 0.0), screen)
 }
 
 /// The size of the interface in its logical pixels: that of the view it is drawn in (the held
@@ -309,24 +316,17 @@ fn ui_size(window: &Window, scale: Option<&UiScale>, cameras: &Query<&Camera, Or
     view.unwrap_or_else(|| Vec2::new(window.width(), window.height())) / scale.map_or(1.0, |s| s.0.max(f32::EPSILON))
 }
 
-/// Where the windows' columns lie on a screen of `screen` interface pixels: from just right of the
-/// doll (the ledger sits at the screen's left in the inventory, [`super::LEDGER_PAD_PX`] in, its leaf and
-/// the doll one after the other) to the screen's right edge, and the screen's height less its margins.
-pub fn windows_area(screen: Vec2) -> Rect {
-    let doll_right = super::LEDGER_PAD_PX + super::SOLO_LEAF_PX + super::LEDGER_GAP_PX + super::doll::FRAME.x;
-    Rect::from_corners(Vec2::new(doll_right + AREA_MARGIN_PX, AREA_MARGIN_PX), Vec2::new(screen.x - AREA_MARGIN_PX, (screen.y - AREA_MARGIN_PX).max(AREA_MARGIN_PX)))
-}
-
-/// Where the windows lie with another party on the screen, logical pixels, for a screen of `screen`
-/// interface pixels: the left half for the other party's, and for the delver's the right half
-/// beside the column of the header, doll and quickslots ([`PARTY_COLUMN_PX`]), which sits at the
-/// middle of the screen. Both run the screen's height.
-pub fn party_areas(screen: Vec2) -> (Rect, Rect) {
+/// Where the windows lie on a screen of `screen` interface pixels, the same for every inventory screen:
+/// the left for the world side (the floor, a trader's card over the wares, a body, a container), the
+/// middle beside it for the delver's column (header, doll, quickslots, help) and the rest for the
+/// delver's windows. Each runs the screen's height less its margins; the middle is no window's area,
+/// so it is the column's own rectangle.
+pub fn regions(screen: Vec2) -> (Rect, Rect, Rect) {
     let (top, bottom) = (AREA_MARGIN_PX, (screen.y - AREA_MARGIN_PX).max(AREA_MARGIN_PX));
-    let middle = screen.x * 0.5;
-    let left = Rect::from_corners(Vec2::new(AREA_MARGIN_PX, top), Vec2::new((middle - AREA_MARGIN_PX).max(AREA_MARGIN_PX), bottom));
-    let right_from = middle + super::LEDGER_PAD_PX + PARTY_COLUMN_PX + AREA_MARGIN_PX;
-    (left, Rect::from_corners(Vec2::new(right_from, top), Vec2::new((screen.x - AREA_MARGIN_PX).max(right_from), bottom)))
+    let left = Rect::from_corners(Vec2::new(AREA_MARGIN_PX, top), Vec2::new(LEFT_PX - AREA_MARGIN_PX, bottom));
+    let middle = Rect::from_corners(Vec2::new(LEFT_PX, top), Vec2::new(LEFT_PX + MIDDLE_PX, bottom));
+    let right_from = LEFT_PX + MIDDLE_PX + AREA_MARGIN_PX;
+    (left, middle, Rect::from_corners(Vec2::new(right_from, top), Vec2::new((screen.x - AREA_MARGIN_PX).max(right_from), bottom)))
 }
 
 /// The shares of a cell the windows' grids are drawn at, biggest first: the first that lets every open
@@ -435,11 +435,11 @@ pub fn settle_click(time: Res<Time<Real>>, mut windows: ResMut<BagWindows>, inve
     }
 }
 
-/// Drops windows whose container is out of reach and, while the inventory page shows them, lays
-/// the open ones out in columns beside the doll, shrinking their cells to fit them and, when they
-/// still do not all fit, hiding the oldest. With another party on the screen (a trader's shelf, an
-/// opened container, a body, a bag set down) its windows go on the left half and the delver's on
-/// the right, each laid out by the same code ([`fit_sizes`]).
+/// Opens every bag the delver newly carries, drops windows whose container is out of reach and, while
+/// the inventory page shows them, lays them out: the world side's (the trader's shelf, an opened
+/// container or body, the floor, bags set down and their own bags) in the left region and the delver's
+/// in the right, each in columns by the same code ([`fit_sizes`]), shrinking cells to fit and, when
+/// they still do not all fit, hiding the oldest.
 #[allow(clippy::too_many_arguments)]
 pub fn place_windows(
     mut windows: ResMut<BagWindows>,
@@ -468,6 +468,25 @@ pub fn place_windows(
     for id in lost {
         windows.moved.remove(&id);
     }
+    // Every bag the delver wears or carries opens as a window when it is first carried: the first time
+    // the inventory opens in a delve, and again for one newly worn or picked up. After that the
+    // remembered set rules, so a bag the delver closed stays shut.
+    let carried = inventory.carried_containers();
+    if windows.seen.iter().any(|id| !carried.contains(id)) {
+        windows.seen.retain(|id| carried.contains(id));
+    }
+    for id in carried {
+        if !windows.seen.contains(&id) {
+            windows.seen.push(id);
+            if !windows.is_open(id) {
+                windows.order.push(id);
+            }
+        }
+    }
+    // A bag set down that was shut is forgotten once it leaves the floor.
+    if windows.shut.iter().any(|id| !underfoot.bags.contains(id)) {
+        windows.shut.retain(|id| underfoot.bags.contains(id));
+    }
     // Windows are laid out only where they are drawn: the inventory page.
     if !open.is(Screen::Inventory) || *tab != SheetTab::Inventory {
         return;
@@ -477,37 +496,29 @@ pub fn place_windows(
     if screen.x < 1.0 || screen.y < 1.0 {
         return;
     }
-    // The other party: what the screen was opened on, then what of theirs is open (a body's bag, a
-    // bag set down), none of which is the delver's.
-    let primaries: Vec<ItemId> = showing.0.into_iter().chain(windows.order.iter().copied().filter(|id| near.contains(id))).collect();
-    let others: Vec<ItemId> = windows.order.iter().copied().filter(|&id| !inventory.is_carried(id) && !primaries.contains(&id)).collect();
-    let two_sided = !primaries.is_empty() || !others.is_empty();
+    // The world side: what the screen was opened on, then what of it is open (a body's bag, a bag set
+    // down), none of which is the delver's. The floor sits under it; a trader's stall has none.
+    let mut left: Vec<ItemId> = showing.0.into_iter().chain(windows.order.iter().copied().filter(|id| near.contains(id))).collect();
+    let mut keep = left.len();
+    if !barter.active() {
+        left.push(FLOOR);
+        let set_down: Vec<ItemId> = underfoot.bags.iter().copied().filter(|b| !left.contains(b) && !windows.shut.contains(b)).collect();
+        left.extend(set_down);
+        keep += 1;
+    }
+    let theirs: Vec<ItemId> = windows.order.iter().copied().filter(|&id| !inventory.is_carried(id) && !left.contains(&id)).collect();
+    left.extend(theirs);
     let mine: Vec<ItemId> = windows.order.iter().copied().filter(|&id| inventory.is_carried(id)).collect();
-    let (left, left_scale, mut placed, right_area) = if two_sided {
-        // The floor sits under the other party, and bags set down by it; a trader's stall has none.
-        let mut left = primaries;
-        let mut keep = left.len();
-        if !barter.active() {
-            left.push(FLOOR);
-            let set_down: Vec<ItemId> = underfoot.bags.iter().copied().filter(|b| !left.contains(b)).collect();
-            left.extend(set_down);
-            keep += 1;
-        }
-        let theirs: Vec<ItemId> = others.iter().copied().filter(|b| !left.contains(b)).collect();
-        left.extend(theirs);
-        let (area, right_area) = party_areas(screen);
-        let (scale, _, placed) = fit_sizes(|id, cell| party_size(&inventory, &underfoot, shelf, id, cell), &left, keep, cell, area);
-        (placed.iter().map(|p| p.0).collect(), scale, placed, right_area)
-    } else {
-        (Vec::new(), 1.0, Vec::new(), windows_area(screen))
-    };
+    let (left_area, _, right_area) = regions(screen);
+    let (left_scale, _, mut placed) = fit_sizes(|id, cell| party_size(&inventory, &underfoot, shelf, id, cell), &left, keep, cell, left_area);
+    let left: Vec<ItemId> = placed.iter().map(|p| p.0).collect();
     // What has no room is hidden, not closed: it is still remembered and comes back when room frees.
     // The windows the delver dragged are kept where they were left, inside their side, and the rest lay out in columns.
     let (dragged, free): (Vec<ItemId>, Vec<ItemId>) = mine.iter().partition(|id| windows.moved.contains_key(id));
     let (free_scale, _, mine_placed) = fit_windows(&inventory, &free, cell, right_area);
     placed.extend(mine_placed);
     // A dragged window shrinks with the others, and more if it would not fit its side otherwise.
-    let area = drag_area(screen, two_sided);
+    let area = drag_area(screen);
     let alone = WINDOW_SCALES
         .into_iter()
         .find(|&s| dragged.iter().all(|&id| window_size(&inventory, id, cell * s).is_none_or(|size| size.x <= area.width() && size.y <= area.height())))
@@ -589,7 +600,7 @@ pub fn drag_windows(
         live = point - grab.offset;
     }
     if let Some(size) = size {
-        live = clamp_into(live, size, drag_area(screen, windows.two_sided()));
+        live = clamp_into(live, size, drag_area(screen));
     }
     // Moved past a click, it comes to the front; a click leaves the order, and so the columns, alone.
     if live.distance(grab.from) >= WINDOW_CLICK_PX {
@@ -787,8 +798,8 @@ mod tests {
         let sizes: Vec<(ItemId, Vec2)> = [pack, inner, pack].into_iter().filter_map(|id| Some((id, window_size(&inventory, id, cell)?))).collect();
         // The interface is laid out in 1920 by 1080 whatever the window (1280 by 720, 1920 by 1080).
         for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2560.0, 1080.0), Vec2::new(1920.0, 1440.0)] {
-            let area = windows_area(screen);
-            assert!(area.min.x > super::super::SOLO_LEAF_PX + super::super::doll::FRAME.x, "{screen}: right of the doll");
+            let area = regions(screen).2;
+            assert!(area.min.x > LEFT_PX + MIDDLE_PX, "{screen}: right of the doll");
             let (skipped, placed) = column_layout(&sizes[..2], area);
             assert_eq!((skipped, placed.len()), (0, 2), "{screen}: {sizes:?} in {area:?}");
             no_overlap(&placed, &sizes, area);
@@ -831,13 +842,15 @@ mod tests {
     }
 
     #[test]
-    fn the_two_sides_are_the_screen_s_halves_with_the_delver_s_column_at_the_middle() {
+    fn the_three_regions_run_left_to_right_the_same_whatever_is_on_the_screen() {
         for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2560.0, 1080.0)] {
-            let (left, right) = party_areas(screen);
-            assert!(left.max.x <= screen.x * 0.5 && right.min.x > screen.x * 0.5 + PARTY_COLUMN_PX, "{screen}: {left:?} {right:?}");
+            let (left, middle, right) = regions(screen);
+            assert!(left.max.x <= middle.min.x && middle.max.x < right.min.x, "{screen}: {left:?} {middle:?} {right:?}");
+            assert_eq!(middle.width(), super::super::doll::FRAME.x, "the middle holds the whole doll");
             assert_eq!((left.min.y, left.max.y), (right.min.y, right.max.y), "both run the screen's height");
             assert!(right.max.x <= screen.x && left.min.x >= 0.0);
         }
+        assert_eq!(regions(Vec2::new(1920.0, 1080.0)).2.width(), 1920.0 - LEFT_PX - MIDDLE_PX - 2.0 * AREA_MARGIN_PX);
     }
 
     #[test]
@@ -881,7 +894,8 @@ mod tests {
 
     fn place_app(inventory: Inventory) -> App {
         let mut app = App::new();
-        app.init_resource::<BagWindows>()
+        // Every bag the inventory is made with has been offered already, so none opens on its own here.
+        app.insert_resource(BagWindows { seen: inventory.carried_containers(), ..default() })
             .init_resource::<Tuning>()
             .init_resource::<Underfoot>()
             .init_resource::<OpenContainer>()
@@ -927,7 +941,7 @@ mod tests {
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         app.update();
         let windows = app.world().resource::<BagWindows>();
-        let area = windows_area(Vec2::new(1920.0, 1080.0));
+        let area = regions(Vec2::new(1920.0, 1080.0)).2;
         assert_eq!(windows.order, vec![pack, inner]);
         assert_eq!(windows.at[&pack], area.min, "the first window is the area's corner, right of the doll");
         assert_ne!(windows.at[&inner], windows.at[&pack]);
@@ -963,7 +977,7 @@ mod tests {
     #[test]
     fn a_pack_a_satchel_and_a_belt_all_fit_beside_the_doll_at_any_seed() {
         let screen = Vec2::new(1920.0, 1080.0);
-        let area = windows_area(screen);
+        let area = regions(screen).2;
         for seed in 1..400u32 {
             let (inventory, bags) = three_bags((seed, seed * 7 % 400 + 1, seed * 13 % 400 + 1));
             let (scale, skipped, placed) = fit_windows(&inventory, &bags, 72.0, area);
@@ -990,17 +1004,18 @@ mod tests {
             let inventory = app.world().resource::<Inventory>();
             let sizes: Vec<(ItemId, Vec2)> = bags.iter().map(|&id| (id, window_size(inventory, id, 72.0 * windows.scale).unwrap())).collect();
             let placed: Vec<(ItemId, Vec2)> = bags.iter().map(|id| (*id, windows.at[id])).collect();
-            no_overlap(&placed, &sizes, windows_area(Vec2::new(1920.0, 1080.0)));
+            no_overlap(&placed, &sizes, regions(Vec2::new(1920.0, 1080.0)).2);
         }
     }
 
     #[test]
     fn windows_pushed_out_for_room_come_back_when_room_frees() {
-        let (inventory, pack, inner, loose) = bags();
+        let (mut inventory, pack, inner, _) = bags();
+        let loose = inventory.add(fb_items::roll_item("Satchel", 3).unwrap());
+        inventory.wear(loose, Slot::Satchel).unwrap();
         let mut app = place_app(inventory);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
-        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
         // A screen just tall enough for two of the three.
         let hidden_at = |app: &mut App, height: f32| {
             app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().resolution.set(1920.0, height);
@@ -1045,7 +1060,7 @@ mod tests {
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().insert_resource(UiScale(1280.0 / 1920.0));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
-        let area = windows_area(Vec2::new(1920.0, 1080.0));
+        let area = regions(Vec2::new(1920.0, 1080.0)).2;
         let left_at = Vec2::new(1200.0, 120.0);
         app.world_mut().resource_mut::<BagWindows>().moved.insert(pack, left_at);
         app.world_mut().resource_mut::<BagWindows>().order = vec![pack];
@@ -1083,7 +1098,7 @@ mod tests {
             let windows = app.world().resource::<BagWindows>();
             let size = window_size(app.world().resource::<Inventory>(), pack, 72.0 * windows.scale).unwrap();
             let at = windows.at[&pack];
-            assert!(at.x >= drag_area(screen, false).min.x && at.y >= 0.0, "{screen}: {at}");
+            assert!(at.x >= drag_area(screen).min.x && at.y >= 0.0, "{screen}: {at}");
             assert!(at.x + size.x <= screen.x + 0.01 && at.y + size.y <= screen.y + 0.01, "{screen}: {at} {size}");
         }
         let windows = app.world().resource::<BagWindows>();
@@ -1094,13 +1109,9 @@ mod tests {
     #[test]
     fn the_delver_s_windows_are_dragged_where_the_columns_start_clear_of_the_doll_and_quickslots() {
         let screen = Vec2::new(1920.0, 1080.0);
-        let alone = drag_area(screen, false);
-        let doll_right = super::super::LEDGER_PAD_PX + super::super::SOLO_LEAF_PX + super::super::LEDGER_GAP_PX + super::super::doll::FRAME.x;
-        assert_eq!((alone.min, alone.max), (Vec2::new(windows_area(screen).min.x - AREA_MARGIN_PX, 0.0), screen));
-        assert!(alone.min.x >= doll_right, "right of the doll, which the area's margin sits beside");
-        let party = drag_area(screen, true);
-        assert_eq!((party.min, party.max), (Vec2::new(party_areas(screen).1.min.x - AREA_MARGIN_PX, 0.0), screen));
-        assert!(party.min.x >= 960.0 + super::super::LEDGER_PAD_PX + PARTY_COLUMN_PX, "right of the delver's column, never on the other party's half");
+        let party = drag_area(screen);
+        assert_eq!((party.min, party.max), (Vec2::new(regions(screen).2.min.x - AREA_MARGIN_PX, 0.0), screen));
+        assert!(party.min.x >= LEFT_PX + MIDDLE_PX, "right of the delver's column, never on the world side");
         let size = Vec2::new(300.0, 200.0);
         for at in [Vec2::splat(-500.0), Vec2::splat(9999.0), Vec2::new(1000.0, 500.0)] {
             let put = clamp_into(at, size, party);
