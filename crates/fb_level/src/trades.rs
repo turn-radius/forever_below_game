@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn every_healer_stocks_three_incenses_and_two_censers_and_nobody_else_does() {
-        use fb_items::stock::{Line, stock};
+        use fb_items::stock::{Line, stock, stock_with};
         let (mut healers, mut others) = (0, 0);
         for world in 1..=6 {
             for depth in [1, 3, 6] {
@@ -434,6 +434,9 @@ mod tests {
                         kinds.dedup();
                         assert!(kinds.len() >= 3 && wares.iter().filter(|i| i.is_censer()).count() >= 2, "world {world} depth {depth}");
                         assert_eq!(wares, stock(&shop, depth, f.0.seed));
+                        let pool = ["heal".to_string(), "cure".to_string()];
+                        let scrolls = stock_with(&shop, depth, f.0.seed, &pool).iter().filter(|i| i.prayer().is_some()).count();
+                        assert!((1..=2).contains(&scrolls), "world {world} depth {depth}: {scrolls} prayer scrolls");
                         healers += 1;
                     } else {
                         assert_ne!(shop.line, Line::Sacred);

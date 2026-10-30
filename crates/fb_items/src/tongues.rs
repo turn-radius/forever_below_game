@@ -135,7 +135,13 @@ impl Item {
     /// or below may be written in a tongue ([`SCROLL_NEAR`], [`BOOK_NEAR`] by its ground and
     /// [`SCROLL_FAR`], [`BOOK_FAR`] elsewhere). Otherwise as [`Item::in_world`]. Pure in the
     /// item's seed, the lore and `near`; one already written in a tongue is left as it is.
-    pub fn in_world_near(mut self, lore: &Lore, near: Option<DenizenKind>) -> Item {
+    pub fn in_world_near(self, lore: &Lore, near: Option<DenizenKind>) -> Item {
+        self.in_world_at(lore, near, false)
+    }
+
+    /// [`Item::in_world_near`] with whether the spot lies by a shrine or in a faction's hall
+    /// (`holy`), where a scroll is more often a prayer ([`Item::prayer`]).
+    pub fn in_world_at(mut self, lore: &Lore, near: Option<DenizenKind>, holy: bool) -> Item {
         if self.teaching.is_none() && fb_denizens::denizens_at(lore.depth) {
             let (size, here, there) = match &self.shape {
                 armory::Item::Writing(s) if s.piece.kind == WritingKind::Book => (TeachingSize::Book, BOOK_NEAR, BOOK_FAR),
@@ -149,7 +155,7 @@ impl Item {
                 self.teaching = Some(Teaching::roll(self.seed, kind, size));
             }
         }
-        self.in_world(lore)
+        self.rolled_prayer(&lore.prayers, holy).in_world(lore)
     }
 }
 

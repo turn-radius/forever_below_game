@@ -168,7 +168,7 @@ mod tests {
         let unlocked = ["bane", "frighten", "charm", "around", "touch", "short", "light", "self"].map(String::from).into();
         let written = compose(&unlocked, fb_character::Casting::Divine, "Test", effect, reach, "short").unwrap();
         let p = written.preview(tier);
-        app.world_mut().write_message(Casted(Cast { written, tier, cost: p.cost, range: p.range, duration: p.duration }));
+        app.world_mut().write_message(Casted(Cast { written, tier, cost: p.cost, range: p.range, duration: p.duration, power: p.power }));
         app.update();
     }
 
@@ -210,7 +210,7 @@ mod tests {
         let unlocked = ["frighten", "cone", "short"].map(String::from).into();
         let written = compose(&unlocked, fb_character::Casting::Divine, "Test", "frighten", "cone", "short").unwrap();
         let p = written.preview(1);
-        app.world_mut().write_message(Casted(Cast { written, tier: 1, cost: p.cost, range: p.range, duration: p.duration }));
+        app.world_mut().write_message(Casted(Cast { written, tier: 1, cost: p.cost, range: p.range, duration: p.duration, power: p.power }));
         app.update();
         assert!(ahead.iter().all(|&r| hit(&app, r)), "the cone reaches ahead");
         assert!(behind.iter().all(|&r| !hit(&app, r)), "not behind");

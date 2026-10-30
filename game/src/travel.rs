@@ -139,20 +139,20 @@ pub struct Prepared {
 impl Prepared {
     /// The level at `depth` of the abyss of `run_seed`, with its stone and folk, its loot rolled
     /// against `odds`.
-    pub fn make(run_seed: u32, depth: u32, odds: fb_items::Odds) -> Self {
-        Prepared::make_after(run_seed, depth, odds, None)
+    pub fn make(run_seed: u32, depth: u32, odds: fb_items::Odds, prayers: Vec<String>) -> Self {
+        Prepared::make_after(run_seed, depth, odds, prayers, None)
     }
 
     /// [`Prepared::make`] for a level as `left` left it, if it was visited before: the same
     /// level [`Abyss::level_at`] gives with the record applied to it.
-    pub fn make_after(run_seed: u32, depth: u32, odds: fb_items::Odds, left: Option<&LevelRecord>) -> Self {
+    pub fn make_after(run_seed: u32, depth: u32, odds: fb_items::Odds, prayers: Vec<String>, left: Option<&LevelRecord>) -> Self {
         let mut level = Abyss::new(run_seed).level_at(depth);
         if let Some(left) = left {
             left.apply_to(&mut level);
         }
         let stone = stone_chunks(&level);
         let folk = build_figures(&level.folk, &level.factions, depth);
-        let staging = Staging::make(&level, odds);
+        let staging = Staging::make(&level, odds, prayers);
         Prepared { level, stone, folk, staging }
     }
 
@@ -345,6 +345,7 @@ fn prefetch_below(
     journey: Option<Res<Journey>>,
     character: Option<Res<crate::character::Character>>,
     inventory: Option<Res<crate::inventory::Inventory>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     mut waited: Local<(u32, u32)>,
 ) {
     // A journey makes its own level, or has taken the prefetch.
@@ -370,7 +371,8 @@ fn prefetch_below(
     // Its loot rolls for the luck worn now; if that changes before the stair down, the level's
     // loot is rolled again on arrival (`crate::staged::Staged::take_items`).
     let odds = crate::character::loot_odds(character.as_deref(), inventory.as_deref(), key.1);
-    commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1, odds))));
+    let prayers = crate::rules::prayer_pool(crate::rules::GameRules::of(&rules));
+    commands.insert_resource(Below(Fitting::start(key, move || Prepared::make(key.0, key.1, odds, prayers))));
 }
 
 /// F at a stair uses it, unless an item or container is under the crosshair. A delver at 0 hit
@@ -502,6 +504,7 @@ fn start_level_load(
     mut below: Option<ResMut<Below>>,
     character: Option<Res<crate::character::Character>>,
     inventory: Option<Res<crate::inventory::Inventory>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     clock: Option<ResMut<Time<Virtual>>>,
 ) {
     // The world holds still while the screen is black and the level is made: nothing acts, burns
@@ -522,7 +525,8 @@ fn start_level_load(
         }
         None => {
             let odds = crate::character::loot_odds(character.as_deref(), inventory.as_deref(), to);
-            Fitting::start(key, move || Prepared::make_after(key.0, key.1, odds, left.as_ref()))
+            let prayers = crate::rules::prayer_pool(crate::rules::GameRules::of(&rules));
+            Fitting::start(key, move || Prepared::make_after(key.0, key.1, odds, prayers, left.as_ref()))
         }
     };
     journey.job = Some(job);
@@ -700,7 +704,7 @@ mod tests {
 
     #[test]
     fn the_level_made_in_the_background_is_the_one_made_in_place() {
-        let background = Fitting::start((1207, 2), || Prepared::make(1207, 2, fb_items::Odds::loot(2))).wait().expect("the job runs");
+        let background = Fitting::start((1207, 2), || Prepared::make(1207, 2, fb_items::Odds::loot(2), vec![])).wait().expect("the job runs");
         let level = Abyss::new(1207).level_at(2);
         assert_eq!(background.level, level);
         assert_eq!(background.stone, stone_chunks(&level));
@@ -725,17 +729,17 @@ mod tests {
         assert!(!level.items.is_empty(), "the level generates floor items");
         left.apply_to(&mut level);
         assert!(level.items.is_empty());
-        let made = Prepared::make_after(1207, 2, fb_items::Odds::loot(2), Some(&left));
+        let made = Prepared::make_after(1207, 2, fb_items::Odds::loot(2), vec![], Some(&left));
         assert_eq!(made.level, level, "the record is applied to the level made off the thread");
         assert_eq!(made.stone, stone_chunks(&level));
         assert!(made.staging.items.is_empty(), "no loot is rolled for a floor the record sets");
         // Without a record it is the level as generated.
-        assert_eq!(Prepared::make_after(1207, 2, fb_items::Odds::loot(2), None).level, abyss.level_at(2));
+        assert_eq!(Prepared::make_after(1207, 2, fb_items::Odds::loot(2), vec![], None).level, abyss.level_at(2));
     }
 
     #[test]
     fn settling_a_prepared_level_hands_its_parts_to_the_systems_that_lay_it_out() {
-        let made = Prepared::make(1207, 2, fb_items::Odds::loot(2));
+        let made = Prepared::make(1207, 2, fb_items::Odds::loot(2), vec![]);
         let (mut staged, mut stone, mut figures) = (Staged::default(), PreparedStone::default(), FolkFigures::default());
         let level = made.settle(&mut staged, &mut stone, &mut figures);
         assert_eq!(level, Abyss::new(1207).level_at(2));

@@ -28,6 +28,7 @@ pub mod naming;
 pub mod notes;
 pub mod oil;
 pub mod outfit;
+pub mod prayers;
 pub mod profile;
 pub mod provision;
 pub mod range;

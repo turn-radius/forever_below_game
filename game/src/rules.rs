@@ -47,6 +47,16 @@ impl GameRules {
     }
 }
 
+/// The terms a prayer scroll found on a level may teach under `rules` ([`fb_items::notes::Lore::prayers`]).
+pub fn prayer_pool(rules: &Rules) -> Vec<String> {
+    fb_character::casting::Spellbook::scroll_terms(rules, fb_character::Casting::Divine)
+}
+
+/// What `level` knows of itself, with the prayers `rules` let a scroll teach.
+pub fn level_lore(level: &fb_level::Level, rules: &Rules) -> fb_items::notes::Lore {
+    fb_items::notes::Lore { prayers: prayer_pool(rules), ..level.lore() }
+}
+
 /// The `data` folder, beside the asset root: `BEVY_ASSET_ROOT` (made absolute, as
 /// [`crate::tuning::asset_file_path`] does) or the game crate's folder, then `../data`.
 pub fn data_folder() -> String {
