@@ -366,12 +366,10 @@ pub struct Glow {
 /// and its motes loosen from their orbits.
 pub fn glow(age: f32, left: f32, t: f32) -> Glow {
     let risen = (age / RISE_SECONDS).clamp(0.0, 1.0);
-    // An ease that overshoots and settles back: a bloom.
-    let (c1, c3) = (1.70158, 2.70158);
-    let bloom = (1.0 + c3 * (risen - 1.0).powi(3) + c1 * (risen - 1.0).powi(2)).max(0.0);
+    // The curves any lasting glow follows (`fb_effects::envelope`), shared with effects' lights.
+    let bloom = fb_effects::envelope::bloom(risen);
     let dying = 1.0 - left.clamp(0.0, 1.0);
-    let flutter = (0.5 + 0.5 * (t * 17.0 + 3.0 * (t * 5.3).sin()).sin()) * (0.5 + 0.5 * (t * 29.0 + 1.3).sin());
-    let sputter = 1.0 - 0.7 * dying.powf(1.5) * flutter;
+    let sputter = fb_effects::envelope::sputter(left, t);
     let gathering = (1.0 - risen).powi(2);
     Glow {
         light: bloom * left * sputter,
@@ -557,11 +555,28 @@ fn fade_the_light(mut commands: Commands, clock: Option<Res<GameClock>>, time: R
 /// How bright the bauble's light on the view model's stage is close up, against a held
 /// torch's there (`crate::carry`'s 1.8, scaled by the tuning's holy against torch peak), and how
 /// far it reaches, view model units.
-const HOLY_STAGE_PEAK: f32 = 1.1;
+pub(crate) const HOLY_STAGE_PEAK: f32 = 1.1;
 const HOLY_STAGE_REACH: f32 = 40.0;
 /// The furthest from the eye the bauble's stage light stands, so what is held is lit about as
 /// a held light lights it however far ahead the bauble floats.
 const HOLY_STAGE_NEAR: f32 = 18.0;
+
+/// Where a light at `place` in the level stands on the view model's stage, seen from `eye`:
+/// no further out than [`HOLY_STAGE_NEAR`], so what is held is lit about as a held light lights
+/// it however far off the light is. Shared with the effects' lights (`crate::effects`).
+pub(crate) fn stage_spot(eye: &GlobalTransform, place: Vec3) -> Vec3 {
+    eye.affine().inverse().transform_point3(place).clamp_length_max(HOLY_STAGE_NEAR)
+}
+
+/// A light for the view model's stage in `color`, `peak` times full close up and out to
+/// [`HOLY_STAGE_REACH`], put out, and the intensity it is at full. The caller sets its
+/// intensity each frame, gives it the stage layer and parents it to the stage camera.
+pub(crate) fn stage_light(color: Color, peak: f32, exposure: Option<&bevy::camera::Exposure>) -> (PointLight, f32) {
+    let mut light = crate::light::point_light(color, peak, HOLY_STAGE_REACH, &exposure.copied().unwrap_or_default());
+    let full = light.intensity;
+    light.intensity = 0.0;
+    (light, full)
+}
 
 /// The light a [`DivineLight`] casts on the view model's stage, a child of the view model
 /// camera: the level's lights never reach what is held, so without it a cleric with no torch
@@ -593,8 +608,7 @@ fn light_the_hands(
             continue;
         };
         if let Some(eye) = eye {
-            let seen = eye.affine().inverse().transform_point3(place.translation());
-            at.translation = seen.clamp_length_max(HOLY_STAGE_NEAR);
+            at.translation = stage_spot(eye, place.translation());
         }
         light.intensity = stage.peak * glow(t - bauble.cast_at, bauble.brightness(now), t).light;
     }
@@ -604,9 +618,7 @@ fn light_the_hands(
             continue;
         }
         let (r, g, b) = (HOLY_LIGHT.0, HOLY_LIGHT.1, HOLY_LIGHT.2);
-        let mut light = crate::light::point_light(Color::srgb(r, g, b), HOLY_STAGE_PEAK, HOLY_STAGE_REACH, &exposure.copied().unwrap_or_default());
-        let peak = light.intensity;
-        light.intensity = 0.0;
+        let (light, peak) = stage_light(Color::srgb(r, g, b), HOLY_STAGE_PEAK, exposure);
         commands.spawn((
             Name::new("Divine Light on the hands"),
             BaubleStageLight { of: bauble, peak },

@@ -20,6 +20,7 @@ pub mod creature_view;
 pub mod creatures;
 pub mod doll_view;
 pub mod eat;
+pub mod effects;
 pub mod deeds;
 pub mod devotion;
 pub mod enchanter;

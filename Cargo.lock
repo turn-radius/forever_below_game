@@ -2743,6 +2743,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_effects"
+version = "0.1.0"
+dependencies = [
+ "procgen_rng",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "fb_faction"
 version = "0.1.0"
 dependencies = [
@@ -2909,6 +2918,7 @@ dependencies = [
  "fb_character",
  "fb_creatures",
  "fb_denizens",
+ "fb_effects",
  "fb_faction",
  "fb_items",
  "fb_level",

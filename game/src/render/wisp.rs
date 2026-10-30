@@ -1,7 +1,10 @@
 //! Wisps: soft light drawn on a flat card turned to the eye ([`WispMaterial`], `wisp.wesl`), for
 //! glows that are light rather than a thing, such as Divine Light's bauble
-//! (`crate::casting`). A heart is a bright core in a softer body whose edge wavers and ripples,
-//! so it shimmers like heat over a flame; a mote is a small soft dot. Both are unlit and added
+//! (`crate::casting`) and the particles of data-driven effects (`crate::effects`). A heart is a
+//! bright core in a softer body whose edge wavers and ripples, so it shimmers like heat over a
+//! flame; a mote is a small soft dot; a spark is a streak, brightest at its head; a beam is a
+//! tall shaft brightest at its foot; a ring is a thin ring (laid flat on the floor by whoever
+//! places it). All are unlit and added
 //! onto what is behind them, so they glow in the dark, light nothing and cast no shadow, and
 //! being transparent they stay out of the prepasses the screen ink reads, so are never outlined.
 
@@ -17,7 +20,7 @@ pub(super) const SHADER_PATH: &str = "embedded://forever_below/render/wisp.wesl"
 
 /// A wisp's light: `color` at its rim and `core` at its middle, at `strength` (0 for none).
 /// `wobble` is how far a heart's edge wavers (0 holds it round); `phase` sets each wisp's own
-/// moment so two do not shimmer together; `mote` is 1 for a small soft dot, 0 for a heart.
+/// moment so two do not shimmer together; `kind` is the card's picture ([`WispKind`]).
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy, PartialEq)]
 pub struct WispMaterial {
     #[uniform(0)]
@@ -31,18 +34,33 @@ pub struct WispMaterial {
     #[uniform(0)]
     pub phase: f32,
     #[uniform(0)]
-    pub mote: f32,
+    pub kind: f32,
+}
+
+/// The pictures a wisp card can show; the number is what `wisp.wesl` switches on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WispKind {
+    Heart = 0,
+    Mote = 1,
+    Spark = 2,
+    Beam = 3,
+    Ring = 4,
 }
 
 impl WispMaterial {
+    /// A card of `kind` in `color` round a `core`, at `strength`.
+    pub fn card(kind: WispKind, color: Color, core: Color, strength: f32, phase: f32) -> WispMaterial {
+        WispMaterial { color: color.into(), core: core.into(), strength, wobble: if kind == WispKind::Heart { 1.0 } else { 0.0 }, phase, kind: kind as u32 as f32 }
+    }
+
     /// A heart of `color` round a `core`.
     pub fn heart(color: Color, core: Color, phase: f32) -> WispMaterial {
-        WispMaterial { color: color.into(), core: core.into(), strength: 1.0, wobble: 1.0, phase, mote: 0.0 }
+        WispMaterial { color: color.into(), core: core.into(), strength: 1.0, wobble: 1.0, phase, kind: WispKind::Heart as u32 as f32 }
     }
 
     /// A mote of `color`.
     pub fn mote(color: Color) -> WispMaterial {
-        WispMaterial { color: color.into(), core: Color::WHITE.into(), strength: 1.0, wobble: 0.0, phase: 0.0, mote: 1.0 }
+        WispMaterial { color: color.into(), core: Color::WHITE.into(), strength: 1.0, wobble: 0.0, phase: 0.0, kind: WispKind::Mote as u32 as f32 }
     }
 }
 

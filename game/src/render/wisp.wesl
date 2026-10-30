@@ -2,7 +2,9 @@
 // is behind it. A heart is a tight near-white core in a softer body and a faint wide halo; its
 // edge wavers by a few drifting harmonics about its middle, and fine ripples run out through
 // the body, so it shimmers and seems to bend the air round it. A mote is a small soft dot that
-// twinkles. The sizes and rates are our own, tuned against captures.
+// twinkles. A spark is a streak along the card's height, brightest at its head (the top); a
+// beam is a shaft soft at its sides, brightest at its foot (the bottom) and fading as it
+// rises; a ring is a thin bright ring with a faint glow inside it. The sizes and rates are our own, tuned against captures.
 
 import bevy_pbr::render::{
     forward_io::VertexOutput,
@@ -15,7 +17,7 @@ struct Wisp {
     strength: f32,
     wobble: f32,
     phase: f32,
-    mote: f32,
+    kind: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> wisp: Wisp;
@@ -58,13 +60,48 @@ fn mote(p: vec2<f32>) -> vec3<f32> {
     return mix(wisp.color.rgb, wisp.core.rgb, exp(-pow(r / 0.12, 2.0))) * dot * edge;
 }
 
+fn spark(p: vec2<f32>) -> vec3<f32> {
+    // 0 at the tail, 1 at the head.
+    let h = (1.0 - p.y) * 0.5;
+    let across = exp(-pow(p.x / 0.2, 2.0));
+    let along = smoothstep(0.0, 0.6, h) * (1.0 - smoothstep(0.9, 1.0, h));
+    let head = exp(-pow((h - 0.9) / 0.1, 2.0));
+    let edge = 1.0 - smoothstep(0.8, 1.0, abs(p.x));
+    return mix(wisp.color.rgb, wisp.core.rgb, clamp(head + across * 0.3, 0.0, 1.0)) * across * (along * 0.9 + head * 0.9) * edge;
+}
+
+fn beam(p: vec2<f32>) -> vec3<f32> {
+    // 0 at the foot, 1 at the top.
+    let h = (1.0 - p.y) * 0.5;
+    let sides = 1.0 - smoothstep(0.0, 1.0, abs(p.x));
+    let core = exp(-pow(p.x / 0.28, 2.0));
+    let rise = pow(1.0 - h, 1.5) * (1.0 - smoothstep(0.85, 1.0, h));
+    return mix(wisp.color.rgb, wisp.core.rgb, core) * (sides * sides * 0.6 + core * 0.9) * rise;
+}
+
+fn ring(p: vec2<f32>) -> vec3<f32> {
+    let r = length(p);
+    let band = exp(-pow((r - 0.82) / 0.07, 2.0));
+    let glow = exp(-pow((r - 0.82) / 0.22, 2.0)) * 0.35;
+    let inside = (1.0 - smoothstep(0.0, 0.82, r)) * 0.06;
+    let edge = 1.0 - smoothstep(0.9, 1.0, r);
+    return mix(wisp.color.rgb, wisp.core.rgb, band) * (band * 1.3 + glow + inside) * edge;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let p = in.uv * 2.0 - 1.0;
     let t = view_bindings::globals.time + wisp.phase;
     var light: vec3<f32>;
-    if wisp.mote > 0.5 {
+    let kind = i32(wisp.kind + 0.5);
+    if kind == 1 {
         light = mote(p);
+    } else if kind == 2 {
+        light = spark(p);
+    } else if kind == 3 {
+        light = beam(p);
+    } else if kind == 4 {
+        light = ring(p);
     } else {
         light = heart(p, t);
     }

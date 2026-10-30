@@ -14,6 +14,7 @@ crates/fb_denizens      the denizens of the abyss: their kinds, the depth they l
 crates/armory           Spline Armory in Rust: item state from a seed, mesh data from a state
 crates/fb_items         Forever Below items: rarity, affixes, stats, footprints, history
 crates/fb_body          procedural folk bodies and the fitting of worn and held gear
+crates/fb_effects       spell and item effects as data (data/effects/*.toml) and their particle simulation
 game/                   the Bevy app (binary: forever_below)
 fixtures/               example generator output from the prototypes (reference only)
 data/                   game tables extracted from the plate prototype (JSON)

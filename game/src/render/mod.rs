@@ -17,7 +17,7 @@ pub use item::{
 };
 pub use outline::{ARMORY_INK, ATTRIBUTE_OUTLINE_NORMAL, OutlineMaterial};
 pub use screen_ink::{InkStyle, ScreenInk, ScreenInkExempt};
-pub use wisp::{WispMaterial, wisp_card};
+pub use wisp::{WispKind, WispMaterial, wisp_card};
 pub use toon::{Decay, Etch, EtchStyle, MinWidth, Pattern, Shimmer, ToonBands, ToonExtension, ToonMaterial, ToonUniform};
 
 use bevy::{asset::embedded_asset, light::cluster::GlobalClusterSettings, prelude::*, shader::load_shader_library};

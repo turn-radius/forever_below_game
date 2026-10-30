@@ -1,0 +1,92 @@
+# A sample effect: a shaft of light drops on the target, a ring runs out along the floor, sparks
+# fly, and motes rise. Used by the tests and `FB_PLAY_EFFECT=test_burst`. See docs/effects.md.
+name = "test_burst"
+length = 1.6
+lasts = false
+bloom_in = 0.15
+sputter_out = 0.5
+
+[light]
+at = "above_target"
+peak = 1.4
+reach = 140.0
+colour = [1.0, 0.85, 0.5]
+follows = { flash = { at_s = 0.25 } }
+
+[[emitters]]
+name = "shaft"
+card = "beam"
+tail = 60.0
+size = [{ at = 0.0, size = 2.0 }, { at = 0.3, size = 9.0 }, { at = 1.0, size = 4.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.8] }, { at = 1.0, rgb = [1.0, 0.75, 0.35] }]
+
+[emitters.spawn]
+at = "targets_feet"
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.9
+start = 0.2
+
+[[emitters]]
+name = "ring"
+card = "ring"
+size = [{ at = 0.0, size = 4.0 }, { at = 0.5, size = 26.0 }, { at = 1.0, size = 40.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.75] }, { at = 1.0, rgb = [1.0, 0.6, 0.2] }]
+
+[emitters.spawn]
+at = "targets_feet"
+nudge = [0.0, 0.2, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.8
+start = 0.25
+
+[[emitters]]
+name = "sparks"
+card = "spark"
+tail = 0.06
+size = [{ at = 0.0, size = 0.7 }, { at = 1.0, size = 0.2 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.98, 0.85] }, { at = 0.6, rgb = [1.0, 0.8, 0.4] }, { at = 1.0, rgb = [0.9, 0.4, 0.15] }]
+
+[emitters.spawn]
+at = "targets_feet"
+nudge = [0.0, 1.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 36
+life = 0.9
+start = 0.25
+
+[emitters.motion]
+kind = "burst"
+speed = 45.0
+scatter = 6.0
+gravity = 60.0
+
+[[emitters]]
+name = "motes"
+card = "mote"
+size = [{ at = 0.0, size = 0.6 }, { at = 0.5, size = 1.2 }, { at = 1.0, size = 0.3 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.7] }, { at = 1.0, rgb = [1.0, 0.7, 0.3] }]
+
+[emitters.spawn]
+shape = "disc"
+at = "targets_feet"
+spread = 8.0
+
+[emitters.timing]
+kind = "stream"
+count = 24
+life = 1.0
+start = 0.2
+end = 1.0
+
+[emitters.motion]
+kind = "rise"
+speed = 10.0
+scatter = 2.0
