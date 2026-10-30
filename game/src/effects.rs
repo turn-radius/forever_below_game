@@ -127,12 +127,14 @@ pub struct PlayEffect {
     pub targets: Vec<EffectTarget>,
     /// Seeds its particles: the same seed plays the same.
     pub seed: u32,
+    /// The entity it is the effect of, so it can be found and stopped again ([`Playing::owner`]).
+    pub owner: Option<Entity>,
 }
 
 impl PlayEffect {
     /// `name` from the delver's eye, on nothing in particular.
     pub fn new(name: &str, seed: u32) -> PlayEffect {
-        PlayEffect { name: name.to_string(), caster: Caster::Delver, targets: Vec::new(), seed }
+        PlayEffect { name: name.to_string(), caster: Caster::Delver, targets: Vec::new(), seed, owner: None }
     }
 
     /// Also plays on `entity`, `height` units tall.
@@ -144,6 +146,12 @@ impl PlayEffect {
     /// Also plays on the floor at `point`.
     pub fn at(mut self, point: Vec3) -> PlayEffect {
         self.targets.push(EffectTarget::Point(point));
+        self
+    }
+
+    /// Marks it as the effect of `owner`, to stop it by (a lasting one needs this).
+    pub fn owned_by(mut self, owner: Entity) -> PlayEffect {
+        self.owner = Some(owner);
         self
     }
 
@@ -169,9 +177,21 @@ pub struct Playing {
     cards: Vec<Entity>,
     /// Counts up from the first effect played, so the oldest is the lowest.
     serial: u64,
+    /// The entity it is the effect of, if it was played as one's ([`PlayEffect::owned_by`]).
+    owner: Option<Entity>,
 }
 
 impl Playing {
+    /// The entity it is the effect of, if any.
+    pub fn owner(&self) -> Option<Entity> {
+        self.owner
+    }
+
+    /// The effect's name.
+    pub fn name(&self) -> &str {
+        &self.sim.effect().name
+    }
+
     /// The particles it drew last step.
     pub fn particles(&self) -> &[ParticleOut] {
         &self.particles
@@ -326,6 +346,7 @@ fn start_effects(
             lights: Vec::new(),
             cards: Vec::new(),
             serial: *serial,
+            owner: request.owner,
         };
         let entity = commands.spawn((Name::new(format!("Effect {}", request.name)), playing, Transform::default(), Visibility::default())).id();
         live.push((*serial, entity));
@@ -728,5 +749,36 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<EffectLibrary>().get("test_burst").unwrap().length, 9.0);
+    }
+
+    #[test]
+    fn the_shield_shimmer_holds_until_its_prayer_ends_and_then_sputters_out() {
+        let mut app = app();
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        app.add_systems(Update, crate::prayers::hold_the_shimmer.in_set(DelveSystems));
+        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("shield", 1).owned_by(shield));
+        for _ in 0..200 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 1, "a lasting effect holds past its length while the shield stands");
+        assert!(!app.world_mut().query::<&Playing>().single(app.world()).unwrap().particles().is_empty());
+        app.world_mut().despawn(shield);
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 0, "it goes with the shield");
+    }
+
+    #[test]
+    fn the_new_effects_validate() {
+        for (name, text) in [
+            ("smite", include_str!("../../data/effects/smite.toml")),
+            ("shield", include_str!("../../data/effects/shield.toml")),
+            ("shield_struck", include_str!("../../data/effects/shield_struck.toml")),
+        ] {
+            let effect = Effect::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(effect.name, name);
+        }
     }
 }

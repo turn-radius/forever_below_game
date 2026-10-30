@@ -38,6 +38,7 @@ use crate::casting::{Casted, cast_requests};
 use crate::combat::RunDice;
 use crate::combat::feedback::{Corpse, Struck};
 use crate::creatures::Critter;
+use crate::effects::{PlayEffect, Playing};
 use crate::creatures::behaviour::AttackOnDelver;
 use crate::game_clock::GameClock;
 use crate::launch::AppState;
@@ -97,7 +98,34 @@ pub fn register(app: &mut App) {
         .add_message::<ShieldStruck>()
         .add_message::<AttackOnDelver>()
         .add_message::<Struck>()
-        .add_systems(Update, (smite_the_seen, raise_the_shield, end_the_shield, ripple_the_shield).chain().after(cast_requests).in_set(DelveSystems));
+        .add_message::<PlayEffect>()
+        .add_systems(
+            Update,
+            (smite_the_seen, raise_the_shield, end_the_shield, ripple_the_shield, show_the_prayers, hold_the_shimmer, debug_blow).chain().after(cast_requests).in_set(DelveSystems),
+        );
+}
+
+/// The effect the shield plays for as long as it stands, and the one a blow on it plays.
+const SHIELD_EFFECT: &str = "shield";
+const SHIELD_STRUCK_EFFECT: &str = "shield_struck";
+/// The shimmer sputters out this many game seconds before the shield ends.
+const SHIELD_SPUTTER: f64 = 12.0;
+/// How far from the delver's feet a blow's ripple plays, toward where it came from, units.
+const RIPPLE_REACH: f32 = 9.0;
+/// And this far ahead of them, units.
+const RIPPLE_AHEAD: f32 = 14.0;
+
+/// How tall a creature stands, world units, for the effects that anchor to its head and middle.
+fn height_of(critter: &Critter) -> f32 {
+    use fb_creatures::Creature;
+    let rolled = match &critter.creature {
+        Creature::Skeleton(s) => s.height(),
+        Creature::Troll(t) => t.height(),
+        Creature::Rat(r) => r.height(),
+        Creature::Jackalope(j) => j.height(),
+        other => other.radius() * 2.0,
+    };
+    (rolled * critter.size).max(critter.radius)
 }
 
 /// A creature that is still on its feet, and is not the delver.
@@ -192,6 +220,76 @@ fn ripple_the_shield(mut blows: MessageReader<AttackOnDelver>, shields: Query<&S
         if let (Some(caster), false) = (players.iter().next(), shields.is_empty()) {
             struck.write(ShieldStruck { caster, from: blow.attacker_pos, damage: blow.damage });
         }
+    }
+}
+
+/// Plays what a prayer shows: Smite's pillar on each creature it fell on, following it, and the
+/// shield's shimmer for as long as its [`ShieldPrayer`] stands; a blow on the shield plays a ripple
+/// toward where it came from.
+fn show_the_prayers(
+    mut landed: MessageReader<PrayerLanded>,
+    mut struck: MessageReader<ShieldStruck>,
+    mut plays: MessageWriter<PlayEffect>,
+    creatures: Query<&Critter>,
+    fresh: Query<Entity, Added<ShieldPrayer>>,
+    players: Query<&Transform, With<Player>>,
+    mut seed: Local<u32>,
+) {
+    for PrayerLanded { effect, targets, .. } in landed.read() {
+        if effect != "smite" {
+            continue;
+        }
+        *seed = seed.wrapping_add(1);
+        let mut play = PlayEffect::new("smite", *seed);
+        for &target in targets {
+            let height = creatures.get(target).map_or(17.0, height_of);
+            play = play.on(target, height);
+        }
+        plays.write(play);
+    }
+    for shield in &fresh {
+        *seed = seed.wrapping_add(1);
+        plays.write(PlayEffect::new(SHIELD_EFFECT, *seed).owned_by(shield));
+    }
+    for blow in struck.read() {
+        let Ok(me) = players.get(blow.caster) else { continue };
+        let away = (blow.from - me.translation.xz()).normalize_or_zero();
+        *seed = seed.wrapping_add(1);
+        // Toward the blow and a little ahead, so it shows at that edge of the view and not behind it.
+        let ahead = me.forward().as_vec3().with_y(0.0).normalize_or_zero();
+        plays.write(PlayEffect::new(SHIELD_STRUCK_EFFECT, *seed).at(me.translation + Vec3::new(away.x, 0.0, away.y) * RIPPLE_REACH + ahead * RIPPLE_AHEAD));
+    }
+}
+
+/// Lets the shimmer go with its shield: it sputters out as the shield nears its end, and at once
+/// when the shield is gone or replaced.
+pub(crate) fn hold_the_shimmer(clock: Option<Res<GameClock>>, shields: Query<&ShieldPrayer>, mut shimmers: Query<&mut Playing>) {
+    let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+    for mut shimmer in &mut shimmers {
+        let Some(owner) = shimmer.owner() else { continue };
+        let ending = match shields.get(owner) {
+            Ok(shield) => shield.expires - now <= SHIELD_SPUTTER,
+            Err(_) => true,
+        };
+        if ending && shimmer.name() == SHIELD_EFFECT {
+            shimmer.stop();
+        }
+    }
+}
+
+/// For captures (`FB_PRAY_BLOW=60,120`): that many frames after the cast, a blow lands on the
+/// shielded delver from their left.
+fn debug_blow(mut frames: Local<u32>, shields: Query<&ShieldPrayer>, players: Query<(Entity, &Transform), With<Player>>, mut struck: MessageWriter<ShieldStruck>) {
+    *frames += 1;
+    let Ok(list) = std::env::var("FB_PRAY_BLOW") else { return };
+    let Some((caster, me)) = players.iter().next() else { return };
+    if shields.is_empty() {
+        *frames = 0;
+        return;
+    }
+    if list.split(',').filter_map(|n| n.trim().parse::<u32>().ok()).any(|n| n == *frames) {
+        let left = me.left().as_vec3().xz();
+        struck.write(ShieldStruck { caster, from: me.translation.xz() + left * 30.0, damage: 3 });
     }
 }
 
@@ -417,5 +515,42 @@ mod tests {
         assert_eq!((mana(&app, player), blows(&app).len()), (20.0, 0));
         smite(&mut app, 2);
         assert_eq!((mana(&app, player), blows(&app).len()), (14.0, 1));
+    }
+
+    fn plays(app: &App) -> Vec<PlayEffect> {
+        app.world().resource::<Messages<PlayEffect>>().iter_current_update_messages().cloned().collect()
+    }
+
+    #[test]
+    fn smite_plays_its_pillar_on_the_creature_it_fell_on() {
+        let (mut app, _) = delve(10.0);
+        let target = creature(&mut app, Species::Skeleton, AHEAD, 1);
+        smite(&mut app, 1);
+        let sent = plays(&app);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].name, "smite");
+        assert!(matches!(sent[0].targets.as_slice(), [crate::effects::EffectTarget::Entity { entity, height }] if *entity == target && *height > 0.0), "{:?}", sent[0].targets);
+    }
+
+    #[test]
+    fn a_new_shield_starts_the_lasting_shimmer_it_owns() {
+        let (mut app, _, _) = shielded();
+        shield(&mut app, 1);
+        let owner = app.world_mut().query_filtered::<Entity, With<ShieldPrayer>>().single(app.world()).unwrap();
+        let started: Vec<PlayEffect> = plays(&app).into_iter().filter(|p| p.name == "shield").collect();
+        assert!(started.len() <= 1 && started.iter().all(|p| p.owner == Some(owner)));
+    }
+
+    #[test]
+    fn a_blow_on_the_shield_plays_the_ripple_toward_it() {
+        let (mut app, player, _) = shielded();
+        shield(&mut app, 1);
+        app.world_mut().write_message(ShieldStruck { caster: player, from: Vec2::new(30.0, 0.0), damage: 2 });
+        app.update();
+        let ripple = plays(&app).into_iter().find(|p| p.name == "shield_struck").expect("a ripple");
+        match ripple.targets.as_slice() {
+            [crate::effects::EffectTarget::Point(at)] => assert!(at.x > 0.0, "toward the blow: {at}"),
+            other => panic!("{other:?}"),
+        }
     }
 }
