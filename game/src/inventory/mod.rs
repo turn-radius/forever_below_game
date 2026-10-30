@@ -78,8 +78,15 @@ const LEAF_MAX_PX: f32 = 900.0;
 /// The left page's width on every tab, so the header and tabs never move when switching. The
 /// interface scale grows it with the window.
 pub const LEAF_PX: f32 = 620.0;
-/// The same while bartering, wide enough for the trader's shelf beside a pack.
-const BARTER_LEAF_MAX_PX: f32 = 1000.0;
+/// The ledger's padding, and the gap between its leaf and the doll, in logical pixels.
+const LEDGER_PAD_PX: f32 = 22.0;
+const LEDGER_GAP_PX: f32 = 28.0;
+/// The ledger's height as a share of the screen's.
+const LEDGER_HEIGHT: f32 = 0.92;
+/// The left page's width on the inventory tab with no barter: narrower than [`LEAF_PX`], since only the
+/// header and what lies underfoot are on it and the delver's bags open as windows beside the doll,
+/// which want the room (a pack's is nearly 700 pixels wide).
+pub const SOLO_LEAF_PX: f32 = 480.0;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
 const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
@@ -97,7 +104,7 @@ const TOAST_SECONDS: f32 = 3.6;
 /// What the help line under the grids says (the plate's `.hint`).
 pub fn help_text(keymap: &Keymap) -> String {
     format!(
-        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click to wear or take off, or to empty a purse into your own. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
+        "Drag things between the pack, the doll and the floor. A bag keeps what is in it; set one down and it opens underfoot. {turn} while dragging to turn an item. Double-click wears or takes off clothing and gear, opens or closes a bag you carry, or empties a purse into your own; a bag is put on or taken off by dragging. Drop food, a light or a weapon on a quickslot to bind it, and the keys {slots} use it.",
         turn = keymap.label(Action::TurnItem),
         slots = keymap.label(Action::Quickslot),
     )
@@ -157,7 +164,7 @@ impl Plugin for InventoryPlugin {
                         (factions::note_levels_met, meet_for_capture.run_if(|| std::env::var("FB_MEET").is_ok()), header::click_tabs, reset_scroll_on_tab).chain(),
                         (bags::settle_click, bags::open_for_capture.run_if(|| env_flag("FB_OPEN_BAGS")), bags::place_windows).chain(),
                         build_screen,
-                        (bags::drag_windows, scroll_column, scroll_shelf).chain(),
+                        (bags::close_windows, bags::drag_for_capture.run_if(|| std::env::var("FB_DRAG_WINDOW").is_ok()), bags::drag_windows, scroll_column, scroll_shelf).chain(),
                         drag_items,
                         unhang_without_belt,
                         crate::enchanting::scrap_for_capture.run_if(|| env_flag("FB_SCRAP")),
@@ -1033,6 +1040,8 @@ pub(crate) fn build_screen(
     let fallback = Keymap::default();
     let keymap = keymap.as_deref().unwrap_or(&fallback);
     let screen = ScreenLayout { inventory: &inventory, barter: &barter, fonts: &fonts, cell: tuning.interface.cell_size };
+    // With another party on the screen, the delver is the right half and the other party the left.
+    let two_sided = *tab == SheetTab::Inventory && windows.two_sided();
     commands
         .spawn((
             Name::new("Inventory"),
@@ -1042,7 +1051,8 @@ pub(crate) fn build_screen(
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
-                justify_content: JustifyContent::Center,
+                // The inventory sits at the left, so the bags' windows have the room beside the doll.
+                justify_content: if *tab == SheetTab::Inventory { JustifyContent::FlexStart } else { JustifyContent::Center },
                 align_items: AlignItems::Center,
                 ..default()
             },
@@ -1056,21 +1066,44 @@ pub(crate) fn build_screen(
                 Ledger,
                 Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: px(28),
-                    padding: UiRect::all(px(22)),
-                    max_width: percent(94),
+                    column_gap: px(LEDGER_GAP_PX),
+                    padding: if two_sided { UiRect::ZERO } else { UiRect::all(px(LEDGER_PAD_PX)) },
+                    // Across the whole screen when it has two sides, so the other party's windows are on the page.
+                    width: if two_sided { percent(100) } else { Val::Auto },
+                    max_width: percent(if two_sided { 100 } else { 94 }),
+                    justify_content: if two_sided { JustifyContent::FlexEnd } else { JustifyContent::FlexStart },
                     // One height on every tab, so the header and tabs sit at the same place
                     // whatever the page holds; the pages scroll inside it.
-                    height: if barter.active() { Val::Auto } else { percent(92) },
-                    max_height: percent(92),
+                    height: percent(LEDGER_HEIGHT * 100.0),
+                    max_height: percent(LEDGER_HEIGHT * 100.0),
                     ..default()
                 },
             ))
             .with_children(|ledger| {
+                if two_sided {
+                    // The right half: who the delver is over the doll, drawn smaller, with the quickslots
+                    // and the help; their windows are laid out beside it ([`bags::party_areas`]).
+                    ledger.spawn(Node { width: percent(50), flex_direction: FlexDirection::Column, row_gap: px(12), padding: UiRect::all(px(LEDGER_PAD_PX)), ..default() }).with_children(|right| {
+                        right
+                            .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(bags::PARTY_COLUMN_PX), ..default() }, LeafPage))
+                            .with_children(|leaf| header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab));
+                        right
+                            .spawn((bags::DollColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(bags::PARTY_COLUMN_PX), ..default() }))
+                            .with_children(|column| {
+                                doll::doll_leaf_scaled(column, &doll_assets, &inventory, &fonts, &mut icons, bags::PARTY_DOLL_SCALE);
+                                column.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|strip| {
+                                    strip.spawn((Text::new("quickslots"), UiFonts::style(&fonts.display, 18.0, INK)));
+                                    crate::quickslots::strip_in_two_rows(strip, &fonts);
+                                });
+                                column.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
+                            });
+                    });
+                    return;
+                }
                 ledger
                     // Wide enough for a pack and a belt pouch side by side, and for underfoot
                     // and a bag set down beside it.
-                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(if barter.active() { BARTER_LEAF_MAX_PX } else { LEAF_MAX_PX }), width: if barter.active() { Val::Auto } else { px(LEAF_PX) }, ..default() }, LeafPage))
+                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(LEAF_MAX_PX), width: if *tab == SheetTab::Inventory { px(SOLO_LEAF_PX) } else { px(LEAF_PX) }, ..default() }, LeafPage))
                     .with_children(|leaf| {
                         header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
                         if *tab != SheetTab::Inventory {
@@ -1101,54 +1134,20 @@ pub(crate) fn build_screen(
                             Node { flex_direction: FlexDirection::Column, row_gap: px(16), min_height: px(0), overflow: Overflow::scroll_y(), ..default() },
                         ))
                         .with_children(|leaf| {
-                        let popped = |id: ItemId| !barter.active() && windows.is_open(id);
-                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
-                            .with_children(|row| {
-                                // A bag opened as a window leaves the column until it is closed.
-                                let carried = screen.inventory.carried_containers();
-                                let none_carried = carried.is_empty();
-                                let carried: Vec<ItemId> = carried.into_iter().filter(|&c| !popped(c)).collect();
-                                if none_carried {
-                                    row.spawn((
-                                        Text::new("Nothing to carry things in. Find a pack, a sack or a belt with a pouch."),
-                                        UiFonts::style(&fonts.body, 14.0, MUTED),
-                                    ));
-                                }
-                                // The trader's shelf before the pack, with the balance above it.
-                                if let Some(shelf) = barter.session.as_ref().map(|s| s.shelf).filter(|&s| showing.0 == Some(s)) {
-                                    row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(10), ..default() }).with_children(|column| {
-                                        if let Some(grid) = inventory.grid(shelf) {
-                                            crate::barter::panel(column, &fonts, &barter, &inventory, grid_size(grid, screen.cell).x);
-                                        }
-                                        screen.container_in(column, &mut icons, shelf, GridView::Container(shelf), "", Some(shelf_scrolled.0));
-                                    });
-                                }
-                                if barter.active() {
-                                    // Stacked beside the shelf, not wrapped under it.
-                                    row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(16), ..default() }).with_children(|stack| {
-                                        for container in carried {
-                                            screen.container(stack, &mut icons, container, GridView::Container(container), "");
-                                        }
-                                    });
-                                } else {
-                                    for container in carried {
-                                        screen.container(row, &mut icons, container, GridView::Container(container), "");
-                                    }
-                                }
-                            });
-                        leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
-                            .with_children(|row| {
-                                if let Some(container) = showing.0.filter(|&c| !barter.session.as_ref().is_some_and(|s| s.shelf == c) && !popped(c)) {
-                                    screen.container(row, &mut icons, container, GridView::Container(container), "");
-                                }
-                                // Nothing lies about in the trader's stall.
-                                if !barter.active() {
+                            // The delver's bags open as windows beside the doll.
+                            if screen.inventory.carried_containers().is_empty() {
+                                leaf.spawn((
+                                    Text::new("Nothing to carry things in. Find a pack, a sack or a belt with a pouch."),
+                                    UiFonts::style(&fonts.body, 14.0, MUTED),
+                                ));
+                            }
+                            leaf.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(18), row_gap: px(16), align_items: AlignItems::FlexStart, flex_shrink: 0.0, ..default() })
+                                .with_children(|row| {
                                     screen.underfoot(row, &mut icons, &underfoot);
-                                    for &bag in underfoot.bags.iter().filter(|&&b| !popped(b)) {
+                                    for &bag in underfoot.bags.iter().filter(|&&b| !windows.is_shown(b)) {
                                         screen.container(row, &mut icons, bag, GridView::Container(bag), " \u{b7} underfoot");
                                     }
-                                }
-                            });
+                                });
                         });
                     });
                 // The doll, with the quickslots and the help under it, leaving the left leaf's
@@ -1167,11 +1166,26 @@ pub(crate) fn build_screen(
                         leaf.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
                     });
             });
-            // Opened bags float over the ledger, the last opened in front.
-            if *tab == SheetTab::Inventory && !barter.active() {
-                for (z, &id) in windows.order.iter().enumerate() {
+            // Opened bags float over the ledger, the last opened in front. The other party's go on the
+            // left, laid out by [`bags::place_windows`], and the delver's beside the doll.
+            if *tab == SheetTab::Inventory {
+                // Their cells shrink to fit them ([`bags::fit_sizes`]).
+                let mine = ScreenLayout { cell: screen.cell * windows.scale, ..screen };
+                let theirs = ScreenLayout { cell: screen.cell * windows.left_scale, ..screen };
+                let shelf = barter.session.as_ref().map(|s| s.shelf);
+                for (z, &id) in windows.left.iter().enumerate() {
                     let at = windows.at.get(&id).copied().unwrap_or_default();
-                    screen.bag_window(root, &mut icons, id, at, z as i32 + 1);
+                    if id == bags::FLOOR {
+                        theirs.floor_window(root, &mut icons, &underfoot, at, z as i32 + 1);
+                    } else if shelf == Some(id) {
+                        theirs.shelf_window(root, &mut icons, id, at, shelf_scrolled.0, z as i32 + 1);
+                    } else {
+                        theirs.bag_window(root, &mut icons, id, at, z as i32 + 1);
+                    }
+                }
+                for (z, &id) in windows.order.iter().filter(|&&id| !windows.hidden.contains(&id) && !windows.left.contains(&id)).enumerate() {
+                    let at = windows.position(id).unwrap_or_default();
+                    mine.bag_window(root, &mut icons, id, at, z as i32 + 1);
                 }
             }
             root.spawn((
@@ -1211,7 +1225,25 @@ pub fn cell_tag(price: card::Price) -> Option<(String, Color, Color)> {
     }
 }
 
+/// The frame of a window `size` across at `at`: bordered and padded, over the page.
+fn window_node(at: Vec2, size: Vec2) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: px(at.x),
+        top: px(at.y),
+        width: px(size.x),
+        height: px(size.y),
+        flex_direction: FlexDirection::Column,
+        row_gap: px(bags::GAP_PX),
+        padding: UiRect::all(px(bags::PAD_PX)),
+        border: UiRect::all(px(bags::BORDER_PX)),
+        border_radius: BorderRadius::all(px(GRID_RADIUS_PX)),
+        ..default()
+    }
+}
+
 /// What the screen is built from.
+#[derive(Clone, Copy)]
 struct ScreenLayout<'a> {
     inventory: &'a Inventory,
     /// While bartering, what tags the items' cells with their prices ([`cell_tag`]).
@@ -1277,25 +1309,7 @@ impl ScreenLayout<'_> {
         let label = item.profile.holds.as_ref().map_or_else(|| item.name.clone(), |h| h.label.clone());
         let size = bags::window_size(self.inventory, id, self.cell).unwrap_or_default();
         parent
-            .spawn((
-                bags::BagWindow(id),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(at.x),
-                    top: px(at.y),
-                    width: px(size.x),
-                    height: px(size.y),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(bags::GAP_PX),
-                    padding: UiRect::all(px(bags::PAD_PX)),
-                    border: UiRect::all(px(bags::BORDER_PX)),
-                    border_radius: BorderRadius::all(px(GRID_RADIUS_PX)),
-                    ..default()
-                },
-                BackgroundColor(BG),
-                BorderColor::all(LINE),
-                ZIndex(z),
-            ))
+            .spawn((bags::BagWindow(id), window_node(at, size), BackgroundColor(BG), BorderColor::all(LINE), ZIndex(z)))
             .with_children(|window| {
                 window.spawn((bags::BagTitle(id), Node { align_items: AlignItems::Center, column_gap: px(8), height: px(bags::TITLE_PX), flex_shrink: 0.0, ..default() })).with_children(|head| {
                     let icon_size = icon::icon_size(item, false).as_vec2();
@@ -1313,6 +1327,35 @@ impl ScreenLayout<'_> {
                 });
                 self.grid_with_fittings(window, icons, id, grid);
             });
+    }
+
+    /// The floor underfoot as a window on the other party's side, under the name it has on the left page.
+    fn floor_window(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, underfoot: &Underfoot, at: Vec2, z: i32) {
+        let size = bags::floor_size(underfoot, self.cell);
+        parent
+            .spawn((bags::BagWindow(bags::FLOOR), window_node(at, size), BackgroundColor(BG), BorderColor::all(LINE), ZIndex(z)))
+            .with_children(|window| {
+                window.spawn(Node { align_items: AlignItems::Center, column_gap: px(10), height: px(bags::TITLE_PX), flex_shrink: 0.0, ..default() }).with_children(|head| {
+                    head.spawn((Text::new("underfoot"), UiFonts::style(&self.fonts.display, 18.0, INK)));
+                    if underfoot.grid.is_empty() {
+                        head.spawn((Text::new("Bare stone. Drop things here."), UiFonts::style(&self.fonts.body, 14.0, MUTED)));
+                    }
+                });
+                self.grid(window, icons, GridView::Underfoot, &underfoot.grid, true);
+            });
+    }
+
+    /// The trader's card over their wares as a window on the other party's side, the wares scrolling
+    /// inside it from `scroll` pixels down.
+    fn shelf_window(&self, parent: &mut ChildSpawnerCommands, icons: &mut Icons, shelf: ItemId, at: Vec2, scroll: f32, z: i32) {
+        let Some(grid) = self.inventory.grid(shelf) else { return };
+        let size = bags::shelf_size(self.inventory, shelf, self.cell).unwrap_or_default();
+        // The card is as tall as its lines make it.
+        let node = Node { height: Val::Auto, row_gap: px(10), ..window_node(at, size) };
+        parent.spawn((bags::BagWindow(shelf), node, BackgroundColor(BG), BorderColor::all(LINE), ZIndex(z))).with_children(|window| {
+            crate::barter::panel(window, self.fonts, self.barter, self.inventory, bags::shelf_content_width(grid_size(grid, self.cell).x));
+            self.container_in(window, icons, shelf, GridView::Container(shelf), "", Some(scroll));
+        });
     }
 
     /// A container's main grid with, beside it or under it, the item slots of the fittings a pack or belt
@@ -1501,14 +1544,18 @@ fn target_under(
     shelf: Option<(GridView, Rect)>,
     windows: &[Rect],
     cell: f32,
+    window_cell: &dyn Fn(GridView) -> f32,
 ) -> Target {
     // A window floats over everything, the doll and the quickslots too: under the mouse it takes
     // the drop (a grid in it, else the page), and what lies behind it does not count. `windows` is front first.
     if let Some(window) = windows.iter().find(|w| w.contains(point)) {
         for (view, node, transform) in grids {
             let rect = node_rect(node, transform);
-            if rect.contains(point) && window.contains(rect.center()) {
-                return Target::Cell { view: *view, cell: cell_under(rect, point, cell) };
+            // The trader's wares are clipped to their own scroll area, and may reach past their window.
+            let shelved = shelf.is_some_and(|(shelved, _)| shelved == *view);
+            let in_shelf = shelf.is_none_or(|(shelved, area)| shelved != *view || area.contains(point));
+            if rect.contains(point) && (shelved || window.contains(rect.center())) && in_shelf {
+                return Target::Cell { view: *view, cell: cell_under(rect, point, window_cell(*view)) };
             }
         }
         for (slot, node, transform) in fslots {
@@ -1692,11 +1739,13 @@ fn drag_items(
         ResMut<Quickslots>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ScrollColumn>>,
         Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
-        Query<(&bags::BagWindow, &ComputedNode, &UiGlobalTransform)>,
+        Query<(&bags::BagWindow, &ComputedNode, &UiGlobalTransform, &ZIndex)>,
     ),
     mut last_click: Local<Option<(ItemId, f32)>>,
 ) {
     let cell_px = tuning.interface.cell_size;
+    // A grid in a window has its cells shrunk to fit ([`bags::fit_sizes`]).
+    let cell_of = |view: GridView| cell_px * bag_windows.cell_scale(view);
     let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     if !open.is(Screen::Inventory) {
         dragging.0 = None;
@@ -1708,15 +1757,18 @@ fn drag_items(
     let column = columns.iter().next().map(|(n, t)| node_rect(n, t));
     // The shelf's grid is clipped to its own scroll area.
     let shelf = barter.session.as_ref().zip(shelf_areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
-    // The open windows' rectangles, front first.
-    let window_rects: Vec<Rect> = bag_windows.order.iter().rev().filter_map(|id| window_frames.iter().find(|(w, ..)| w.0 == *id)).map(|(_, n, t)| node_rect(n, t)).collect();
-    let target = target_under(point, &drops, &grids, &slots, &fslots, doll, ledger, column, shelf, &window_rects, cell_px);
+    // The windows' rectangles on both sides of the screen, front first.
+    let mut frames: Vec<(i32, Rect)> = window_frames.iter().map(|(_, n, t, z)| (z.0, node_rect(n, t))).collect();
+    frames.sort_by_key(|&(z, _)| std::cmp::Reverse(z));
+    let window_rects: Vec<Rect> = frames.into_iter().map(|(_, rect)| rect).collect();
+    let target = target_under(point, &drops, &grids, &slots, &fslots, doll, ledger, column, shelf, &window_rects, cell_px, &cell_of);
 
     // What the mouse is over: an item in a grid, or one worn in a slot, with its rectangle
     // and how it would be taken up.
     let over: Option<(Rect, Drag)> = match target {
         Target::Cell { view, cell } => grid_of(&inventory, &underfoot, view).and_then(|g| g.at_cell(cell.x, cell.y).copied()).and_then(|entry| {
             let (_, node, transform) = grids.iter().find(|(v, ..)| **v == view)?;
+            let cell_px = cell_of(view);
             let min = node_rect(node, transform).min + Vec2::new(entry.at.x as f32, entry.at.y as f32) * cell_px + LINE_PX;
             let rect = Rect::from_corners(min, min + Vec2::new(entry.size.cols as f32, entry.size.rows as f32) * cell_px - LINE_PX);
             let grab = cell - IVec2::new(entry.at.x as i32, entry.at.y as i32);
@@ -1767,12 +1819,17 @@ fn drag_items(
         } else if last_click.take().is_some_and(|(id, at)| id == drag.id && now - at <= DOUBLE_CLICK_SECONDS) {
             // A double-click is not a click on a bag's window.
             bag_windows.bypass_change_detection().pending = None;
+            // On a bag the delver carries it opens or closes the bag's window; worn gear is taken off by dragging.
+            if bags::opens_by_double_click(&inventory, drag.id) {
+                bag_windows.toggle(drag.id);
+                return;
+            }
             (if barter.active() { barter.quick(&mut inventory, drag.id) } else { None }).unwrap_or_else(|| quick(&mut inventory, drag.id))
         } else {
             *last_click = Some((drag.id, now));
-            // A click on a bag opens its grid as a window, or closes it, once the interval for a
-            // second click has passed ([`bags::settle_click`]).
-            if inventory.grid(drag.id).is_some() && !barter.active() {
+            // A click on a bag lying underfoot or in the level opens its grid as a window, or closes
+            // it, once the interval for a second click has passed ([`bags::settle_click`]).
+            if inventory.grid(drag.id).is_some() && !inventory.is_carried(drag.id) && !barter.active() {
                 bag_windows.bypass_change_detection().pending = Some((drag.id, now));
             }
             return;
@@ -1863,10 +1920,12 @@ fn show_drag(
     mut item_icons: Query<&mut ImageNode, (With<ItemIcon>, Without<DragGhost>)>,
     mut slot_borders: Query<(&SlotView, &mut BorderColor), (Without<DropHint>, Without<ItemView>, Without<FittingSlot>)>,
     mut fitting_borders: Query<(&FittingSlot, &mut BorderColor), (Without<DropHint>, Without<ItemView>, Without<SlotView>)>,
-    (tuning, ui_scale): (Res<Tuning>, Option<Res<UiScale>>),
+    (tuning, ui_scale, bag_windows): (Res<Tuning>, Option<Res<UiScale>>, Res<bags::BagWindows>),
     mut icons: Icons,
 ) {
     let cell_px = tuning.interface.cell_size;
+    // A grid in a window has its cells shrunk to fit ([`bags::fit_windows`]).
+    let cell_of = |view: GridView| cell_px * bag_windows.cell_scale(view);
     let drag = dragging.0.filter(|d| d.active);
     let cursor = window.and_then(|w| ui_cursor(&w, ui_scale.as_deref()));
     for (mut node, mut image, mut visibility) in &mut ghosts {
@@ -1878,6 +1937,11 @@ fn show_drag(
         if image.image != handle {
             image.image = handle;
         }
+        // Drawn at the size of the cells under it.
+        let cell_px = match drag.target {
+            Some((Target::Cell { view, .. }, _)) => cell_of(view),
+            _ => cell_px,
+        };
         let at = point - (drag.grab.as_vec2() + 0.5) * cell_px;
         node.left = px(at.x);
         node.top = px(at.y);
@@ -1887,14 +1951,15 @@ fn show_drag(
     }
     for (mut node, mut background, mut border, mut visibility) in &mut hints {
         let shown = drag.and_then(|d| d.target.map(|t| (d, t))).and_then(|(d, (target, fits))| match target {
-            Target::Cell { view, cell } => grids.iter().find(|(v, ..)| **v == view).map(|(_, n, t)| (d, node_rect(n, t), cell, fits)),
+            Target::Cell { view, cell } => grids.iter().find(|(v, ..)| **v == view).map(|(_, n, t)| (d, node_rect(n, t), cell, fits, view)),
             _ => None,
         });
-        let Some((drag, rect, cell, fits)) = shown else {
+        let Some((drag, rect, cell, fits, view)) = shown else {
             *visibility = Visibility::Hidden;
             continue;
         };
         let at = (cell - drag.grab).max(IVec2::ZERO).as_vec2();
+        let cell_px = cell_of(view);
         let min = rect.min + at * cell_px + LINE_PX;
         node.left = px(min.x);
         node.top = px(min.y);
@@ -1962,6 +2027,7 @@ mod tests {
         use crate::keymap::Input;
         let help = help_text(&Keymap::default());
         assert!(help.contains("Right click while dragging") && help.contains("the keys 1 to 0 use it"), "{help}");
+        assert!(help.contains("opens or closes a bag you carry") && help.contains("put on or taken off by dragging"), "{help}");
         let mut keymap = Keymap::default();
         keymap.bindings.iter_mut().find(|b| b.action == Action::TurnItem).unwrap().inputs = vec![Input::Key(KeyCode::KeyR)];
         assert!(help_text(&keymap).contains("R while dragging"));
@@ -2229,6 +2295,7 @@ mod tests {
             let mut views = app.world_mut().query::<(&ItemView, &Node)>();
             views.iter(app.world()).map(|(v, n)| (v.id, n.left, n.top, n.width)).collect::<Vec<_>>()
         };
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
         press(&mut app, KeyCode::KeyI);
         assert!(app.world().resource::<ScreenOpen>().is(Screen::Inventory));
         let first = shown(&mut app);
@@ -2253,13 +2320,15 @@ mod tests {
             inventory.put(knife, pack, Placement::new(0, 0, false)).unwrap();
             knife
         };
+        let pack = app.world().resource::<Inventory>().worn(Slot::Back).unwrap();
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
         press(&mut app, KeyCode::KeyI);
         let initials = |app: &mut App| {
             let mut placeholders = app.world_mut().query_filtered::<&Children, With<icon::IconPlaceholder>>();
             let world = app.world();
             placeholders.iter(world).flat_map(|c| c.iter()).filter_map(|c| world.get::<Text>(c)).map(|t| t.0.clone()).collect::<Vec<_>>()
         };
-        // The knife in its cell, the pack in the back slot and the pack by its grid's name.
+        // The knife in its cell, the pack in the back slot and the pack by its window's name.
         let waiting = initials(&mut app);
         assert_eq!(waiting.len(), 3, "{waiting:?}");
         let name = app.world().resource::<Inventory>().item(knife).unwrap().name.clone();
@@ -2296,7 +2365,7 @@ mod tests {
     }
 
     #[test]
-    fn the_left_page_keeps_one_width_on_every_tab() {
+    fn the_left_page_keeps_one_width_on_the_sheet_tabs_and_is_narrower_on_the_inventory_to_leave_room_for_windows() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
         for tab in SheetTab::ALL {
@@ -2304,7 +2373,7 @@ mod tests {
             app.update();
             let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
             let node = pages.single(app.world()).unwrap();
-            assert_eq!(node.width, px(LEAF_PX), "{tab:?}");
+            assert_eq!(node.width, px(if tab == SheetTab::Inventory { SOLO_LEAF_PX } else { LEAF_PX }), "{tab:?}");
             let mut ledgers = app.world_mut().query_filtered::<&Node, With<Ledger>>();
             let ledger = ledgers.single(app.world()).unwrap();
             assert_eq!((ledger.height, ledger.max_height), (percent(92), percent(92)), "{tab:?}: the ledger holds one height, so the page holds one place");
@@ -2312,15 +2381,10 @@ mod tests {
     }
 
     #[test]
-    fn a_barter_keeps_the_content_sized_ledger_and_tab_does_not_cycle() {
+    fn tab_does_not_cycle_while_bartering() {
         let mut app = screen_app();
         app.insert_resource(crate::barter::Barter::started_for_test());
         press(&mut app, KeyCode::KeyI);
-        let mut ledgers = app.world_mut().query_filtered::<&Node, With<Ledger>>();
-        let ledger = ledgers.single(app.world()).unwrap();
-        assert_eq!((ledger.height, ledger.max_height), (Val::Auto, percent(92)));
-        let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
-        assert_eq!(pages.single(app.world()).unwrap().width, Val::Auto);
         press(&mut app, KeyCode::Tab);
         assert_eq!(*app.world().resource::<SheetTab>(), SheetTab::Inventory, "Tab leaves the trader's shelf up");
     }
@@ -2857,6 +2921,14 @@ mod tests {
         let shelf_id = session.shelf;
         app.world_mut().resource_mut::<crate::barter::Barter>().session = Some(session);
         app.world_mut().resource_mut::<OpenContainer>().0 = Some(shelf_id);
+        // The pack is open on the delver's side, and the screen has its window to lay them out.
+        let pack = app.world().resource::<Inventory>().carried_containers()[0];
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        let mut window = Window::default();
+        window.resolution.set(1280.0, 720.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().insert_resource(UiScale(1280.0 / 1920.0));
+        app.add_systems(Update, bags::place_windows.before(build_screen));
         press(&mut app, KeyCode::KeyI);
         let tags = app.world_mut().query_filtered::<(), With<PriceTag>>().iter(app.world()).count();
         assert_eq!(tags, wares.len() + 1, "the swords on the shelf and the dagger, not the purse or the pack");
@@ -3182,7 +3254,7 @@ mod tests {
 
     #[test]
     fn an_open_container_shows_as_its_own_grid_until_the_screen_closes() {
-        let mut app = screen_app();
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
         app.add_systems(Update, close_container_with_screen.after(switch_screens).before(build_screen));
         let (chest, _) = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>());
         let grids = |app: &mut App| {
@@ -3340,7 +3412,7 @@ mod tests {
         )>::new(&mut world);
         let (drops, grids, slots, fslots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 400.0, 400.0));
-        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, &fslots, None, page, column, None, &[], 72.0);
+        let at = |column: Option<Rect>| target_under(Vec2::new(10.0, 10.0), &drops, &grids, &slots, &fslots, None, page, column, None, &[], 72.0, &|_| 72.0);
         assert!(matches!(at(None), Target::Cell { .. }));
         assert!(matches!(at(Some(Rect::new(0.0, 0.0, 200.0, 200.0))), Target::Cell { cell, .. } if cell == IVec2::ZERO));
         // The column starts below this point: the grid is under the header, clipped away.
@@ -3364,101 +3436,190 @@ mod tests {
         let (drops, grids, slots, fslots) = state.get(&world).unwrap();
         let page = Some(Rect::new(0.0, 0.0, 600.0, 600.0));
         let window = [Rect::new(200.0, 250.0, 400.0, 400.0)];
-        let at = |point: Vec2, windows: &[Rect]| target_under(point, &drops, &grids, &slots, &fslots, None, page, None, None, windows, 72.0);
+        let at = |point: Vec2, windows: &[Rect]| target_under(point, &drops, &grids, &slots, &fslots, None, page, None, None, windows, 72.0, &|_| 72.0);
         assert!(matches!(at(Vec2::new(300.0, 300.0), &[]), Target::Quickslot(1)), "bare, the strip takes it");
         assert!(matches!(at(Vec2::new(300.0, 300.0), &window), Target::Cell { view: GridView::Underfoot, .. }), "the window's grid takes it");
         assert_eq!(at(Vec2::new(210.0, 260.0), &window), Target::Page, "its title bar is the page, not the level");
     }
 
-    #[test]
-    fn a_click_on_a_bag_opens_its_window_and_a_press_on_a_window_rebuilds_nothing() {
+    /// A worn pack and a sack inside it, with a cursor over where they would be clicked.
+    fn bag_screen_app() -> (App, ItemId, ItemId) {
         let mut app = screen_app();
-        let pack = {
+        let (pack, sack) = {
             let mut inventory = app.world_mut().resource_mut::<Inventory>();
             let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
             inventory.wear(pack, Slot::Back).unwrap();
-            pack
+            let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
+            inventory.put(sack, pack, Placement::new(0, 0, false)).unwrap();
+            (pack, sack)
         };
         app.add_systems(Update, bags::settle_click.after(drag_items));
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
         app.world_mut().spawn((window, PrimaryWindow));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
-        let size = app.world().resource::<Inventory>().footprint(pack).unwrap();
-        // The press went down a few pixels from where it comes up: under the threshold, so a click.
-        let press = Vec2::new(100.0 - DRAG_START_PX / 2.0, 100.0);
-        app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id: pack, grab: IVec2::ZERO, size, turned: false, press, active: false, target: None });
+        (app, pack, sack)
+    }
+
+    /// One click on `id`: pressed and let go in the same place, a few pixels from where the drag was taken up.
+    fn click_on(app: &mut App, id: ItemId) {
+        let size = app.world().resource::<Inventory>().footprint(id).unwrap();
+        app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::new(100.0, 100.0), active: false, target: None });
         let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.clear();
         mouse.press(MouseButton::Left);
         mouse.release(MouseButton::Left);
         app.update();
+    }
+
+    fn open_windows(app: &App) -> Vec<ItemId> {
+        app.world().resource::<bags::BagWindows>().order.clone()
+    }
+
+    #[test]
+    fn double_clicking_a_worn_bag_opens_its_window_and_doing_it_again_closes_it() {
+        let (mut app, pack, sack) = bag_screen_app();
+        click_on(&mut app, pack);
+        assert!(open_windows(&app).is_empty(), "one click opens nothing, however long it waits");
+        click_on(&mut app, pack);
+        assert_eq!(open_windows(&app), vec![pack]);
+        assert!(app.world().resource::<Inventory>().worn(Slot::Back) == Some(pack), "it was not taken off");
+        // Twice more, once the first double-click is over.
+        app.world_mut().resource_mut::<Time<Real>>().advance_to(std::time::Duration::from_secs(5));
+        click_on(&mut app, pack);
+        click_on(&mut app, pack);
+        assert!(open_windows(&app).is_empty(), "closed again");
+        // A bag inside a bag opens its own window the same way.
+        app.world_mut().resource_mut::<Time<Real>>().advance_to(std::time::Duration::from_secs(10));
+        click_on(&mut app, sack);
+        click_on(&mut app, sack);
+        assert_eq!(open_windows(&app), vec![sack]);
+        assert_eq!(app.world().resource::<Inventory>().location(sack).map(|l| matches!(l, Location::In { container, .. } if container == pack)), Some(true), "the sack stayed in the pack");
+    }
+
+    #[test]
+    fn a_click_on_a_bag_underfoot_opens_its_window_once_the_double_click_interval_passes() {
+        let (mut app, ..) = bag_screen_app();
+        let loose = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Sack", 4).unwrap());
+        click_on(&mut app, loose);
         let windows = app.world().resource::<bags::BagWindows>();
-        assert!(windows.pending.is_some_and(|(id, _)| id == pack), "a click, not a drag");
-        assert!(!windows.is_open(pack), "opens once the double-click interval has passed");
-        app.world_mut().resource_mut::<bags::BagWindows>().pending = Some((pack, -10.0));
+        assert!(windows.pending.is_some_and(|(id, _)| id == loose), "a click, not a drag");
+        assert!(!windows.is_open(loose));
+        app.world_mut().resource_mut::<bags::BagWindows>().pending = Some((loose, -10.0));
         app.update();
-        assert!(app.world().resource::<bags::BagWindows>().is_open(pack));
+        assert!(app.world().resource::<bags::BagWindows>().is_open(loose));
     }
 
     #[test]
-    fn a_double_click_on_a_bag_never_toggles_its_window() {
-        let mut app = screen_app();
-        let pack = {
-            let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
-            inventory.wear(pack, Slot::Back).unwrap();
-            pack
-        };
-        app.add_systems(Update, bags::settle_click.after(drag_items));
-        let mut window = Window::default();
-        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
-        let size = app.world().resource::<Inventory>().footprint(pack).unwrap();
-        for _ in 0..2 {
-            app.world_mut().resource_mut::<Dragging>().0 = Some(Drag { id: pack, grab: IVec2::ZERO, size, turned: false, press: Vec2::new(100.0, 100.0), active: false, target: None });
-            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
-            mouse.clear();
-            mouse.press(MouseButton::Left);
-            mouse.release(MouseButton::Left);
-            app.update();
-        }
-        let windows = app.world().resource::<bags::BagWindows>();
-        assert_eq!(windows.pending, None, "the second click cancelled the first");
-        assert!(!windows.is_open(pack));
+    fn a_bag_the_delver_carries_never_opens_from_a_single_click() {
+        let (mut app, pack, _) = bag_screen_app();
+        click_on(&mut app, pack);
+        assert_eq!(app.world().resource::<bags::BagWindows>().pending, None);
     }
 
     #[test]
-    fn pressing_the_front_window_does_not_mark_the_windows_changed() {
-        #[derive(Resource, Default)]
-        struct Seen(bool);
-        fn probe(windows: Res<bags::BagWindows>, mut seen: ResMut<Seen>) {
-            seen.0 |= windows.is_changed();
-        }
-        let mut app = screen_app();
-        let pack = {
-            let mut inventory = app.world_mut().resource_mut::<Inventory>();
-            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
-            inventory.wear(pack, Slot::Back).unwrap();
-            pack
-        };
-        app.init_resource::<Seen>().add_systems(Update, (bags::drag_windows, probe).chain());
-        let mut window = Window::default();
-        window.set_cursor_position(Some(Vec2::new(150.0, 150.0)));
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+    fn the_cross_on_a_window_closes_it() {
+        let (mut app, pack, _) = bag_screen_app();
+        app.add_systems(Update, bags::close_windows);
         app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
         app.world_mut().spawn((
-            bags::BagWindow(pack),
+            bags::BagClose(pack),
             Node::default(),
-            ComputedNode { size: Vec2::new(200.0, 200.0), inverse_scale_factor: 1.0, ..default() },
-            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(150.0, 150.0))),
+            ComputedNode { size: Vec2::new(26.0, 26.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(100.0, 100.0))),
         ));
         app.update();
-        app.world_mut().resource_mut::<Seen>().0 = false;
+        assert_eq!(open_windows(&app), vec![pack], "nothing pressed");
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         app.update();
-        assert!(!app.world().resource::<Seen>().0, "a press on the window already in front changes nothing");
+        assert!(open_windows(&app).is_empty());
+    }
+
+    #[test]
+    fn a_double_click_on_a_bag_underfoot_still_takes_it_up() {
+        let (mut app, _, _) = bag_screen_app();
+        let loose = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Sack", 4).unwrap());
+        assert_eq!(app.world().resource::<Inventory>().location(loose), Some(Location::Loose));
+        click_on(&mut app, loose);
+        click_on(&mut app, loose);
+        let inventory = app.world().resource::<Inventory>();
+        assert!(inventory.is_carried(loose), "taken up");
+        assert!(matches!(inventory.location(loose), Some(Location::In { .. } | Location::Worn(_))), "worn or stowed, not lying");
+        assert!(open_windows(&app).is_empty(), "and no window opened");
+    }
+
+    #[test]
+    fn windows_keep_off_the_doll_column_at_1280_by_720_and_1920_by_1080() {
+        for (view, scale) in [(Vec2::new(1280.0, 720.0), 1280.0 / 1920.0), (Vec2::new(1920.0, 1080.0), 1.0)] {
+            let (mut app, pack, sack) = bag_screen_app();
+            let satchel = {
+                let mut inventory = app.world_mut().resource_mut::<Inventory>();
+                let satchel = inventory.add(fb_items::roll_item("Satchel", 5).unwrap());
+                inventory.wear(satchel, Slot::Satchel).unwrap();
+                satchel
+            };
+            let mut window = app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap();
+            window.resolution.set(view.x, view.y);
+            app.world_mut().insert_resource(UiScale(scale));
+            app.add_systems(Update, bags::place_windows.before(build_screen));
+            app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack, sack, satchel];
+            app.update();
+            app.update();
+            // The doll column's right edge, from the nodes the screen was built with: the ledger at the screen's
+            // left, its padding, the left page, the gap and the doll column.
+            let world = app.world_mut();
+            let ledger = world.query_filtered::<&Node, With<Ledger>>().single(world).unwrap().clone();
+            let leaf = world.query_filtered::<&Node, With<LeafPage>>().single(world).unwrap().clone();
+            let doll = world.query_filtered::<&Node, With<bags::DollColumn>>().single(world).unwrap().clone();
+            let root = world.query_filtered::<&Node, With<InventoryScreen>>().single(world).unwrap().clone();
+            assert_eq!(root.justify_content, JustifyContent::FlexStart, "the ledger sits at the left");
+            let (Val::Px(pad), Val::Px(gap), Val::Px(leaf_w), Val::Px(doll_w)) = (ledger.padding.left, ledger.column_gap, leaf.width, doll.width) else { panic!("fixed widths") };
+            let doll_right = pad + leaf_w + gap + doll_w;
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert!(windows.hidden.is_empty());
+            let logical = view / scale;
+            let area = bags::windows_area(logical);
+            assert!(area.min.x > doll_right, "{view}: the windows' area starts right of the doll column's edge at {doll_right}");
+            for id in [pack, sack, satchel] {
+                assert!(windows.at[&id].x >= doll_right, "{view}: {id:?} at {}", windows.at[&id]);
+            }
+        }
+    }
+
+    /// Whether the grid of `id` is on the screen, and inside a bag's window.
+    fn shown_in_window(app: &mut App, id: ItemId) -> (bool, bool) {
+        let world = app.world_mut();
+        let grids: Vec<Entity> = world.query::<(Entity, &GridView)>().iter(world).filter(|(_, v)| **v == GridView::Container(id)).map(|(e, _)| e).collect();
+        let in_window = grids.iter().any(|&g| {
+            let mut at = Some(g);
+            while let Some(e) = at {
+                if world.get::<bags::BagWindow>(e).is_some_and(|w| w.0 == id) {
+                    return true;
+                }
+                at = world.get::<ChildOf>(e).map(|c| c.parent());
+            }
+            false
+        });
+        (!grids.is_empty(), in_window)
+    }
+
+    #[test]
+    fn the_open_windows_come_back_when_the_inventory_reopens_and_the_pack_does_not_open_on_its_own() {
+        let (mut app, pack, sack) = bag_screen_app();
+        app.update();
+        assert_eq!(shown_in_window(&mut app, pack), (false, false), "the pack is not shown until it is opened");
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack, sack];
+        app.update();
+        assert_eq!(shown_in_window(&mut app, pack), (true, true));
+        assert_eq!(shown_in_window(&mut app, sack), (true, true));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        assert_eq!(shown_in_window(&mut app, pack), (false, false));
+        assert_eq!(open_windows(&app), vec![pack, sack], "remembered while the screen is shut");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.update();
+        assert_eq!(shown_in_window(&mut app, pack), (true, true));
+        assert_eq!(shown_in_window(&mut app, sack), (true, true));
     }
 
     /// A pack rolled with both a lashing and a strap, worn, with a tent tied on and a spear strapped;
@@ -3655,5 +3816,727 @@ mod tests {
         inventory.put(b, pouch, Placement::new(1, 0, false)).unwrap();
         assert!(!inventory.fold_into_stacks(b));
         assert_eq!((inventory.item(a).unwrap().quantity, inventory.item(b).unwrap().quantity), (1, 1), "one piece to a place");
+    }
+
+    #[test]
+    fn a_drop_into_a_shrunk_window_lands_in_the_cell_under_the_mouse() {
+        let mut inventory = Inventory::default();
+        let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+        inventory.wear(pack, Slot::Back).unwrap();
+        let sack = inventory.add(fb_items::roll_item("Sack", 3).unwrap());
+        inventory.put(sack, pack, Placement::new(0, 0, false)).unwrap();
+        let blade = inventory.add(dagger());
+        inventory.stow(blade).unwrap();
+        // The sack's grid, 72 pixel cells shrunk to 36 in its window, drawn at (250, 250).
+        let mut world = World::new();
+        let rect = Rect::from_corners(Vec2::new(250.0, 250.0), Vec2::new(250.0, 250.0) + grid_size(inventory.grid(sack).unwrap(), 36.0));
+        world.spawn((GridView::Container(sack), ComputedNode { size: rect.size(), inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(rect.center()))));
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
+        )>::new(&mut world);
+        let (drops, grids, slots, fslots) = state.get(&world).unwrap();
+        let window = [Rect::from_corners(rect.min - Vec2::splat(12.0), rect.max + Vec2::splat(12.0))];
+        // Over the third cell across and the second down by the 36 pixel cells; the 72 pixel ones would say the first.
+        let point = rect.min + Vec2::new(2.5 * 36.0, 1.5 * 36.0);
+        let at = |window_cell: f32| target_under(point, &drops, &grids, &slots, &fslots, None, None, None, None, &window, 72.0, &move |_| window_cell);
+        assert_eq!(at(36.0), Target::Cell { view: GridView::Container(sack), cell: IVec2::new(2, 1) });
+        assert_eq!(at(72.0), Target::Cell { view: GridView::Container(sack), cell: IVec2::new(1, 0) }, "at the wrong size it is another cell");
+        // Let go there, the item goes in the cell under the mouse.
+        let drag = Drag { id: blade, grab: IVec2::ZERO, size: Footprint { cols: 1, rows: 2 }, turned: false, press: Vec2::ZERO, active: true, target: None };
+        assert_eq!(drop_at(&mut inventory, &drag, at(36.0), 6), Ok(vec![]));
+        assert_eq!(inventory.location(blade), Some(Location::In { container: sack, at: Placement::new(2, 1, false) }));
+    }
+
+    /// A screen of `view` pixels with a window, laying out windows as the game does.
+    fn party_app(view: Vec2) -> App {
+        let mut app = screen_app();
+        let mut window = Window::default();
+        window.resolution.set(view.x, view.y);
+        app.world_mut().spawn((window, PrimaryWindow));
+        // The interface is laid out in 1920 by 1080 whatever the window.
+        app.world_mut().insert_resource(UiScale(view.x / 1920.0));
+        app.init_resource::<crate::remains::NearBodies>().add_systems(Update, bags::place_windows.before(build_screen));
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app
+    }
+
+    /// The delver wearing a pack, and the trader's shelf of swords set up as a barter would, returning both.
+    fn trade_in(app: &mut App) -> (ItemId, ItemId) {
+        let spot = fb_level::generate(1207, 1).folk[0];
+        let trade = fb_faction::Trade { profession: fb_faction::Profession::Weaponsmith, tier: fb_faction::Tier::Apprentice, style: None };
+        let person = crate::folk::person_1207(&fb_level::FolkSpot { trade: Some(trade), ..spot });
+        let wares: Vec<_> = (1..4).filter_map(|s| fb_items::roll_item("Sword", s)).collect();
+        let shelf = crate::shelf::Shelf { day: 0, wares, sold: vec![], purse: 6000 };
+        let (pack, session) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            let session = crate::barter::begin(&mut inventory, Entity::PLACEHOLDER, &person, fb_faction::Band::Neutral, &shelf).unwrap();
+            (pack, session)
+        };
+        let shelf = session.shelf;
+        app.world_mut().resource_mut::<crate::barter::Barter>().session = Some(session);
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(shelf);
+        (pack, shelf)
+    }
+
+    /// Where a window sits and how big it is, in interface pixels, at the cell scale it was laid out with.
+    fn window_rect(app: &App, id: ItemId) -> Rect {
+        let windows = app.world().resource::<bags::BagWindows>();
+        let (inventory, underfoot) = (app.world().resource::<Inventory>(), app.world().resource::<Underfoot>());
+        let cell = app.world().resource::<Tuning>().interface.cell_size;
+        let shelf = app.world().resource::<crate::barter::Barter>().session.as_ref().map(|s| s.shelf);
+        let (cell, from_left) = if windows.left.contains(&id) { (cell * windows.left_scale, true) } else { (cell * windows.scale, false) };
+        let size = if from_left { bags::party_size(inventory, underfoot, shelf, id, cell) } else { bags::window_size(inventory, id, cell) }.expect("a window with a size");
+        Rect::from_corners(windows.at[&id], windows.at[&id] + size)
+    }
+
+    const SCREENS: [Vec2; 2] = [Vec2::new(1280.0, 720.0), Vec2::new(1920.0, 1080.0)];
+
+    fn assert_apart(app: &App, ids: &[ItemId]) {
+        let rects: Vec<(ItemId, Rect)> = ids.iter().map(|&id| (id, window_rect(app, id))).collect();
+        for (n, (id, rect)) in rects.iter().enumerate() {
+            assert!(rect.min.x >= 0.0 && rect.min.y >= 0.0 && rect.max.x <= 1920.0 && rect.max.y <= 1080.0, "{id:?} {rect:?} is on the screen");
+            for (other, theirs) in &rects[..n] {
+                assert!(rect.intersect(*theirs).is_empty(), "{id:?} {rect:?} overlaps {other:?} {theirs:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_barter_puts_the_card_and_wares_on_the_left_and_the_pack_on_the_right_with_nothing_to_scroll() {
+        for view in SCREENS {
+            let mut app = party_app(view);
+            let (pack, shelf) = trade_in(&mut app);
+            app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+            app.update();
+            app.update();
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert_eq!(windows.left, vec![shelf], "{view}: the trader is the left, and nothing lies about in their stall");
+            assert!(windows.hidden.is_empty() && windows.is_shown(pack), "{view}");
+            let (wares, mine) = (window_rect(&app, shelf), window_rect(&app, pack));
+            assert!(wares.max.x < 960.0 && mine.min.x > 960.0, "{view}: wares {wares:?} on the left half, pack {mine:?} on the right");
+            assert_apart(&app, &[shelf, pack]);
+            let world = app.world_mut();
+            assert_eq!(world.query_filtered::<(), With<ScrollColumn>>().iter(world).count(), 0, "{view}: no column scrolls");
+            let buttons: Vec<crate::barter::Act> = world.query::<&crate::barter::BarterButton>().iter(world).map(|b| b.0).collect();
+            assert_eq!(buttons.len(), 2, "{view}: Accept and Cancel are above the wares");
+            // The card is in the shelf's window, over the wares' grid, and the pack's grid is in its own.
+            let in_window = |world: &mut World, id: ItemId| {
+                let grids: Vec<Entity> = world.query::<(Entity, &GridView)>().iter(world).filter(|(_, v)| **v == GridView::Container(id)).map(|(e, _)| e).collect();
+                grids.iter().any(|&g| {
+                    let mut at = Some(g);
+                    while let Some(e) = at {
+                        if world.get::<bags::BagWindow>(e).is_some_and(|w| w.0 == id) {
+                            return true;
+                        }
+                        at = world.get::<ChildOf>(e).map(|c| c.parent());
+                    }
+                    false
+                })
+            };
+            assert!(in_window(world, shelf) && in_window(world, pack), "{view}");
+            let underfoot = world.query::<&GridView>().iter(world).filter(|v| **v == GridView::Underfoot).count();
+            assert_eq!(underfoot, 0, "{view}: no floor in a trader's stall");
+        }
+    }
+
+    #[test]
+    fn an_opened_container_is_on_the_left_with_the_floor_under_it_and_the_delver_s_windows_on_the_right() {
+        for view in SCREENS {
+            let mut app = party_app(view);
+            let (pack, chest) = {
+                let mut inventory = app.world_mut().resource_mut::<Inventory>();
+                let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+                inventory.wear(pack, Slot::Back).unwrap();
+                (pack, chest_with_bread(&mut inventory).0)
+            };
+            app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+            app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+            app.update();
+            app.update();
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert_eq!(windows.left, vec![chest, bags::FLOOR], "{view}: the barrel, then the floor under it");
+            assert_eq!(windows.order, vec![pack], "{view}: the delver's open windows are kept");
+            assert!(windows.is_shown(pack) && windows.hidden.is_empty());
+            let (barrel, floor, mine) = (window_rect(&app, chest), window_rect(&app, bags::FLOOR), window_rect(&app, pack));
+            assert!(barrel.max.x < 960.0 && floor.max.x < 960.0 && mine.min.x > 960.0, "{view}: {barrel:?} {floor:?} {mine:?}");
+            assert!(floor.min.y >= barrel.max.y || floor.min.x >= barrel.max.x, "{view}: the floor sits under the barrel, or beside it with no room");
+            assert_apart(&app, &[chest, bags::FLOOR, pack]);
+            // Its cross puts it away, and the screen has one side again.
+            app.world_mut().resource_mut::<OpenContainer>().0 = None;
+            app.update();
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert!(!windows.two_sided() && windows.is_shown(pack), "{view}");
+            let world = app.world_mut();
+            let page: Vec<GridView> = world.query::<&GridView>().iter(world).copied().collect();
+            assert!(page.contains(&GridView::Underfoot), "{view}: the floor is on the left page as it always was");
+        }
+    }
+
+    #[test]
+    fn the_floor_shows_in_the_left_window_not_the_page_while_another_party_is_there() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let chest = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>()).0;
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        let floors: Vec<Entity> = world.query::<(Entity, &GridView)>().iter(world).filter(|(_, v)| **v == GridView::Underfoot).map(|(e, _)| e).collect();
+        assert_eq!(floors.len(), 1);
+        let mut at = Some(floors[0]);
+        let mut window = None;
+        while let Some(e) = at {
+            window = window.or(world.get::<bags::BagWindow>(e).map(|w| w.0));
+            at = world.get::<ChildOf>(e).map(|c| c.parent());
+        }
+        assert_eq!(window, Some(bags::FLOOR), "the one floor grid is in the floor's window");
+    }
+
+    #[test]
+    fn a_searched_body_and_the_satchel_it_wore_are_on_the_left_beside_each_other() {
+        for view in SCREENS {
+            let mut app = party_app(view);
+            let (pack, stock) = {
+                let mut inventory = app.world_mut().resource_mut::<Inventory>();
+                let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+                inventory.wear(pack, Slot::Back).unwrap();
+                let satchel = fb_items::roll_item("Satchel", 3).unwrap();
+                let stock = crate::remains::stock_body(&mut inventory, 9, "Grub", vec![(Slot::Satchel, satchel)], vec![fb_items::roll_item("Bread", 1).unwrap()]).unwrap();
+                (pack, stock)
+            };
+            let satchel = stock.kit.iter().find(|(s, _)| *s == Slot::Satchel).unwrap().1;
+            app.world_mut().resource_mut::<crate::remains::NearBodies>().0 = vec![stock.container];
+            app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack, stock.container, satchel];
+            app.update();
+            app.update();
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert_eq!(windows.left, vec![stock.container, bags::FLOOR, satchel], "{view}: the body, the floor under it, and its satchel");
+            assert!(windows.is_shown(pack) && windows.hidden.is_empty(), "{view}");
+            let (body, bag, mine) = (window_rect(&app, stock.container), window_rect(&app, satchel), window_rect(&app, pack));
+            assert!(body.max.x < 960.0 && bag.max.x < 960.0 && mine.min.x > 960.0, "{view}: {body:?} {bag:?} {mine:?}");
+            assert_apart(&app, &[stock.container, bags::FLOOR, satchel, pack]);
+        }
+    }
+
+    #[test]
+    fn a_bag_set_down_underfoot_opens_on_the_left_and_none_of_the_other_party_is_ever_the_delver_s() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let (pack, loose) = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            (pack, inventory.add(fb_items::roll_item("Sack", 4).unwrap()))
+        };
+        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.update();
+        assert!(!app.world().resource::<bags::BagWindows>().two_sided(), "a bag lying there, shut, is a page's");
+        app.world_mut().resource_mut::<bags::BagWindows>().order.push(loose);
+        app.update();
+        app.update();
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert_eq!(windows.left, vec![bags::FLOOR, loose], "the floor, and the bag set down on it");
+        assert!(window_rect(&app, loose).max.x < 960.0 && window_rect(&app, pack).min.x > 960.0);
+    }
+
+    #[test]
+    fn with_no_other_party_the_screen_keeps_one_side() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.update();
+        app.update();
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(!windows.two_sided() && windows.left.is_empty());
+        assert_eq!(windows.at[&pack], bags::windows_area(Vec2::new(1920.0, 1080.0)).min, "the pack is beside the doll as in #850");
+        let world = app.world_mut();
+        let doll = world.query_filtered::<&Node, With<bags::DollColumn>>().single(world).unwrap().width;
+        assert_eq!(doll, px(doll::FRAME.x), "the doll is its full size");
+        assert_eq!(world.query_filtered::<(), With<ScrollColumn>>().iter(world).count(), 1, "and the left page is as it was");
+    }
+
+    #[test]
+    fn the_doll_is_drawn_smaller_with_another_party_and_the_delver_s_column_sits_at_the_middle() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let chest = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>()).0;
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        let slot = world.query::<(&SlotView, &Node)>().iter(world).find(|(s, _)| s.0 == Slot::Head).map(|(_, n)| n.width).unwrap();
+        assert_eq!(slot, px(doll::BIG_SLOT * bags::PARTY_DOLL_SCALE), "a big slot at the doll's smaller size");
+        let column = world.query_filtered::<&Node, With<bags::DollColumn>>().single(world).unwrap().width;
+        assert_eq!(column, px(bags::PARTY_COLUMN_PX));
+        let ledger = world.query_filtered::<&Node, With<Ledger>>().single(world).unwrap();
+        assert_eq!((ledger.width, ledger.justify_content), (percent(100), JustifyContent::FlexEnd), "the ledger spans the page, the delver on its right half");
+        // Every slot of the strip is still there to drop on.
+        assert_eq!(world.query::<&QuickslotDrop>().iter(world).count(), crate::quickslots::SLOTS);
+    }
+
+    #[test]
+    fn a_trader_s_window_has_no_cross_and_a_barrel_s_has_one_that_shuts_it() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let (_, shelf) = trade_in(&mut app);
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(world.query::<&bags::BagClose>().iter(world).count(), 0, "a barter ends with Accept or Cancel");
+        app.world_mut().resource_mut::<crate::barter::Barter>().session = None;
+        app.world_mut().resource_mut::<OpenContainer>().0 = None;
+        let chest = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>()).0;
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        let crosses: Vec<ItemId> = world.query::<&bags::BagClose>().iter(world).map(|c| c.0).collect();
+        assert_eq!(crosses, vec![chest]);
+        assert_ne!(chest, shelf);
+    }
+
+    /// A window for `id` as laid out at `at` with a title bar over its top, and the mouse over `cursor`.
+    fn drag_app(at: Vec2, left: Vec<ItemId>) -> (App, ItemId) {
+        let (mut app, pack, _) = bag_screen_app();
+        {
+            let world = app.world_mut();
+            world.query_filtered::<&mut Window, With<PrimaryWindow>>().single_mut(world).unwrap().resolution.set(1920.0, 1080.0);
+        }
+        app.add_systems(Update, bags::drag_windows);
+        {
+            let mut windows = app.world_mut().resource_mut::<bags::BagWindows>();
+            windows.order = vec![pack];
+            windows.at.insert(pack, at);
+            windows.left = left;
+        }
+        let size = Vec2::new(300.0, 200.0);
+        let node = |size: Vec2, centre: Vec2| (ComputedNode { size, inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(centre)));
+        app.world_mut().spawn((bags::BagWindow(pack), Node::default(), ZIndex(1), node(size, at + size * 0.5)));
+        app.world_mut().spawn((bags::BagTitle(pack), node(Vec2::new(300.0, 36.0), at + Vec2::new(150.0, 18.0))));
+        (app, pack)
+    }
+
+    fn mouse_to(app: &mut App, point: Vec2) {
+        let world = app.world_mut();
+        world.query_filtered::<&mut Window, With<PrimaryWindow>>().single_mut(world).unwrap().set_cursor_position(Some(point));
+    }
+
+    fn mouse(app: &mut App, press: Option<bool>) {
+        let mut buttons = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        buttons.clear();
+        match press {
+            Some(true) => buttons.press(MouseButton::Left),
+            Some(false) => buttons.release(MouseButton::Left),
+            None => {}
+        }
+        app.update();
+    }
+
+    #[test]
+    fn a_window_is_dragged_by_its_title_bar_and_stays_where_it_is_let_go() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        mouse_to(&mut app, Vec2::new(1350.0, 110.0));
+        mouse(&mut app, Some(true));
+        assert!(app.world().resource::<bags::BagWindows>().grab.is_some_and(|g| g.id == pack), "taken by the title bar");
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack, ItemId(999)];
+        mouse_to(&mut app, Vec2::new(1400.0, 310.0));
+        mouse(&mut app, None);
+        assert_eq!(app.world().resource::<bags::BagWindows>().order, vec![ItemId(999), pack], "moved, it is in front");
+        assert_eq!(app.world().resource::<bags::BagWindows>().position(pack), Some(Vec2::new(1350.0, 300.0)), "it follows by the grip, lower");
+        mouse(&mut app, Some(false));
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.grab.is_none());
+        assert_eq!(windows.moved[&pack], Vec2::new(1350.0, 300.0), "kept where it was dropped");
+    }
+
+    #[test]
+    fn a_title_bar_clicked_without_moving_does_not_pin_the_window() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack, ItemId(999)];
+        mouse_to(&mut app, Vec2::new(1350.0, 110.0));
+        mouse(&mut app, Some(true));
+        mouse(&mut app, Some(false));
+        assert_eq!(app.world().resource::<bags::BagWindows>().order, vec![pack, ItemId(999)], "a click leaves the order, so the columns, alone");
+        assert!(app.world().resource::<bags::BagWindows>().moved.is_empty(), "still laid out in the columns");
+        assert!(app.world().resource::<bags::BagWindows>().is_open(pack));
+    }
+
+    #[test]
+    fn a_dragged_window_stays_on_screen_and_off_the_header() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        // The window is 1280 by 720 here with no scale, and the mouse stays inside it.
+        mouse_to(&mut app, Vec2::new(1350.0, 110.0));
+        mouse(&mut app, Some(true));
+        for (to, expect) in [
+            (Vec2::new(1910.0, 1070.0), Vec2::new(1920.0 - 300.0, 1080.0 - 200.0)),
+            (Vec2::new(1.0, 1.0), bags::drag_area(Vec2::new(1920.0, 1080.0), false).min),
+        ] {
+            mouse_to(&mut app, to);
+            mouse(&mut app, None);
+            assert_eq!(app.world().resource::<bags::BagWindows>().position(pack), Some(expect), "dragged to {to}");
+        }
+    }
+
+    #[test]
+    fn in_a_barter_the_delver_s_windows_cannot_be_dragged_onto_the_trader_s_side() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![bags::FLOOR]);
+        mouse_to(&mut app, Vec2::new(1350.0, 110.0));
+        mouse(&mut app, Some(true));
+        mouse_to(&mut app, Vec2::new(10.0, 300.0));
+        mouse(&mut app, None);
+        mouse(&mut app, Some(false));
+        let at = app.world().resource::<bags::BagWindows>().moved[&pack];
+        assert_eq!(at.x, bags::drag_area(Vec2::new(1920.0, 1080.0), true).min.x, "stopped where the delver's column ends, past the middle");
+        assert!(at.x > 960.0);
+    }
+
+    #[test]
+    fn the_other_party_s_windows_do_not_move_when_dragged() {
+        let (mut app, pack) = drag_app(Vec2::new(100.0, 100.0), vec![bags::FLOOR]);
+        // The window on the left is the floor's, as the trader's wares are; here its title bar is where the pack's was.
+        app.world_mut().resource_mut::<bags::BagWindows>().left = vec![pack];
+        mouse_to(&mut app, Vec2::new(150.0, 110.0));
+        mouse(&mut app, Some(true));
+        mouse_to(&mut app, Vec2::new(250.0, 310.0));
+        mouse(&mut app, None);
+        mouse(&mut app, Some(false));
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.grab.is_none() && windows.moved.is_empty(), "not taken");
+    }
+
+    #[test]
+    fn the_cross_on_a_title_bar_does_not_take_the_window() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        app.world_mut().spawn((
+            bags::BagClose(pack),
+            ComputedNode { size: Vec2::splat(26.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(1573.0, 118.0))),
+        ));
+        mouse_to(&mut app, Vec2::new(1573.0, 118.0));
+        mouse(&mut app, Some(true));
+        assert!(app.world().resource::<bags::BagWindows>().grab.is_none());
+    }
+
+    #[test]
+    fn a_title_bar_over_another_window_s_grid_takes_the_window_and_not_the_item_behind_it() {
+        let (mut app, pack) = drag_app(Vec2::new(1320.0, 100.0), vec![]);
+        // The pack's grid in a window behind the title bar, whose first cell holds the sack.
+        app.world_mut().spawn((
+            GridView::Container(pack),
+            ComputedNode { size: Vec2::new(80.0, 200.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(1290.0, 190.0))),
+        ));
+        mouse_to(&mut app, Vec2::new(1325.0, 110.0));
+        mouse(&mut app, Some(true));
+        assert!(app.world().resource::<bags::BagWindows>().grab.is_some_and(|g| g.id == pack), "the window in front was taken");
+        assert!(app.world().resource::<Dragging>().0.is_none(), "and no item under it");
+    }
+
+    #[test]
+    fn a_drop_over_two_overlapping_windows_goes_to_the_one_in_front() {
+        let mut world = World::new();
+        let rect_at = |centre: Vec2, size: Vec2| (ComputedNode { size, inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(centre)));
+        world.spawn((GridView::Container(ItemId(1)), rect_at(Vec2::splat(350.0), Vec2::splat(400.0))));
+        world.spawn((GridView::Container(ItemId(2)), rect_at(Vec2::splat(50.0), Vec2::splat(400.0))));
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
+        )>::new(&mut world);
+        let (drops, grids, slots, fslots) = state.get(&world).unwrap();
+        // Window 1 at (100, 100) over window 2 at (0, 0); the point is in both grids.
+        let (one, two) = (Rect::new(100.0, 100.0, 400.0, 400.0), Rect::new(0.0, 0.0, 300.0, 300.0));
+        let at = |windows: &[Rect]| target_under(Vec2::splat(200.0), &drops, &grids, &slots, &fslots, None, None, None, None, windows, 72.0, &|_| 72.0);
+        assert!(matches!(at(&[one, two]), Target::Cell { view: GridView::Container(ItemId(1)), .. }), "the front one takes it");
+        assert!(matches!(at(&[two, one]), Target::Cell { view: GridView::Container(ItemId(2)), .. }), "raised, the other does");
+    }
+
+    #[test]
+    fn a_press_inside_a_window_below_its_title_does_not_take_the_window() {
+        let (mut app, _) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        mouse_to(&mut app, Vec2::new(1350.0, 200.0));
+        mouse(&mut app, Some(true));
+        mouse_to(&mut app, Vec2::new(1450.0, 300.0));
+        mouse(&mut app, None);
+        mouse(&mut app, Some(false));
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert!(windows.grab.is_none() && windows.moved.is_empty(), "a grid's press moves an item, not the window");
+    }
+
+    #[test]
+    fn dragging_an_item_inside_a_window_still_moves_the_item() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        // The pack's grid inside the window, under the title bar, with the sack in its first cell.
+        app.world_mut().spawn((
+            GridView::Container(pack),
+            ComputedNode { size: Vec2::new(200.0, 200.0), inverse_scale_factor: 1.0, ..default() },
+            UiGlobalTransform::from(bevy::math::Affine2::from_translation(Vec2::new(1410.0, 250.0))),
+        ));
+        let sack = app.world().resource::<Inventory>().grid(pack).and_then(|g| g.at_cell(0, 0).copied()).map(|e| e.id).unwrap();
+        mouse_to(&mut app, Vec2::new(1330.0, 170.0));
+        mouse(&mut app, Some(true));
+        assert!(app.world().resource::<bags::BagWindows>().grab.is_none(), "no window was taken");
+        assert!(app.world().resource::<Dragging>().0.is_some_and(|d| d.id == sack), "the sack is what was taken up");
+    }
+
+    #[test]
+    fn leaving_the_delve_forgets_where_windows_were_left() {
+        let (mut app, pack) = drag_app(Vec2::new(1300.0, 100.0), vec![]);
+        app.world_mut().resource_mut::<bags::BagWindows>().moved.insert(pack, Vec2::new(1400.0, 300.0));
+        app.init_resource::<DollStage>();
+        bevy::ecs::system::RunSystemOnce::run_system_once(app.world_mut(), leave_the_delve).unwrap();
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().moved.is_empty());
+    }
+
+    /// Gives every window, grid and the shelf's scroll area the rectangle the layout would, as the
+    /// screen's nodes have none without a renderer, and the ledger the whole page.
+    fn lay_out(app: &mut App) {
+        let edge = bags::PAD_PX + bags::BORDER_PX;
+        let cell = app.world().resource::<Tuning>().interface.cell_size;
+        let shelf = app.world().resource::<crate::barter::Barter>().session.as_ref().map(|s| s.shelf);
+        let mut nodes: Vec<(Entity, Rect)> = Vec::new();
+        let ids: Vec<(Entity, ItemId)> = {
+            let world = app.world_mut();
+            world.query::<(Entity, &bags::BagWindow)>().iter(world).map(|(e, w)| (e, w.0)).collect()
+        };
+        for (frame, id) in ids {
+            let rect = window_rect(app, id);
+            nodes.push((frame, rect));
+            let windows = app.world().resource::<bags::BagWindows>();
+            let view = if id == bags::FLOOR { GridView::Underfoot } else { GridView::Container(id) };
+            let cell = cell * windows.cell_scale(view);
+            let inventory = app.world().resource::<Inventory>();
+            let grid = if id == bags::FLOOR { app.world().resource::<Underfoot>().grid.clone() } else { inventory.grid(id).unwrap().clone() };
+            let size = grid_size(&grid, cell);
+            let above = if shelf == Some(id) { 300.0 + 10.0 + 36.0 + 4.0 } else { bags::TITLE_PX + bags::GAP_PX };
+            let min = rect.min + Vec2::new(edge, edge + above);
+            let world = app.world_mut();
+            let grids: Vec<Entity> = world.query::<(Entity, &GridView)>().iter(world).filter(|(_, v)| **v == view).map(|(e, _)| e).collect();
+            for g in grids {
+                nodes.push((g, Rect::from_corners(min, min + size)));
+            }
+            if shelf == Some(id) {
+                let areas: Vec<Entity> = world.query_filtered::<Entity, With<ShelfScroll>>().iter(world).collect();
+                for a in areas {
+                    nodes.push((a, Rect::from_corners(min, min + Vec2::new(size.x, shelf_view_height(size.y)))));
+                }
+            }
+        }
+        let world = app.world_mut();
+        let ledgers: Vec<Entity> = world.query_filtered::<Entity, With<Ledger>>().iter(world).collect();
+        for l in ledgers {
+            nodes.push((l, Rect::from_corners(Vec2::ZERO, Vec2::new(1920.0, 1080.0))));
+        }
+        for (entity, rect) in nodes {
+            world.entity_mut(entity).insert((ComputedNode { size: rect.size(), inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(rect.center()))));
+        }
+    }
+
+    /// The centre of cell `cell` of the grid of `view`, in interface pixels, after [`lay_out`].
+    fn cell_centre(app: &mut App, view: GridView, cell: IVec2) -> Vec2 {
+        let scale = app.world().resource::<bags::BagWindows>().cell_scale(view) * app.world().resource::<Tuning>().interface.cell_size;
+        let world = app.world_mut();
+        let (node, transform) = world.query::<(&GridView, &ComputedNode, &UiGlobalTransform)>().iter(world).find(|(v, ..)| **v == view).map(|(_, n, t)| (*n, *t)).unwrap();
+        node_rect(&node, &transform).min + (cell.as_vec2() + 0.5) * scale
+    }
+
+    /// Lets go of an active drag of `id` with the mouse over `at` (interface pixels), as the screen does.
+    fn drop_at_point(app: &mut App, id: ItemId, at: Vec2) {
+        let scale = app.world().resource::<UiScale>().0;
+        let world = app.world_mut();
+        world.query::<&mut Window>().single_mut(world).unwrap().set_cursor_position(Some(at * scale));
+        let size = world.resource::<Inventory>().footprint(id).unwrap();
+        world.resource_mut::<Dragging>().0 = Some(Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None });
+        let mut mouse = world.resource_mut::<ButtonInput<MouseButton>>();
+        mouse.press(MouseButton::Left);
+        mouse.clear();
+        mouse.release(MouseButton::Left);
+        app.update();
+    }
+
+    /// A barter laid out with the pack open, the delver holding a dagger in it and 40 gp.
+    fn laid_out_barter() -> (App, ItemId, ItemId, ItemId) {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let (pack, shelf) = trade_in(&mut app);
+        let dagger = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            inventory.add_coins(fb_items::Coins::from_copper(4000));
+            let dagger = inventory.add(fb_items::roll_item("Dagger", 6).unwrap());
+            inventory.put(dagger, pack, Placement::new(0, 0, false)).unwrap();
+            dagger
+        };
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.update();
+        app.update();
+        lay_out(&mut app);
+        (app, pack, shelf, dagger)
+    }
+
+    /// A cell of `view` where `id` may be let go, by the trade's own reckoning.
+    fn room_in(app: &App, view: GridView, id: ItemId) -> IVec2 {
+        let inventory = app.world().resource::<Inventory>();
+        let grid = match view {
+            GridView::Container(c) => inventory.grid(c).unwrap(),
+            GridView::Underfoot => &app.world().resource::<Underfoot>().grid,
+        };
+        let size = inventory.footprint(id).unwrap();
+        let barter = app.world().resource::<crate::barter::Barter>();
+        let drag = Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
+        (0..grid.rows as i32)
+            .flat_map(|y| (0..grid.cols as i32).map(move |x| IVec2::new(x, y)))
+            .rev()
+            .find(|&cell| barter.check(inventory, &drag, Target::Cell { view, cell }).is_some_and(|r| r.is_ok()))
+            .expect("room")
+    }
+
+    fn deal_of(app: &App) -> crate::barter::Deal {
+        app.world().resource::<crate::barter::Barter>().session.as_ref().unwrap().deal(app.world().resource::<Inventory>())
+    }
+
+    #[test]
+    fn dragging_a_ware_from_the_shelf_to_a_cell_of_the_pack_buys_it_through_the_laid_out_windows() {
+        let (mut app, pack, shelf, _) = laid_out_barter();
+        let ware = app.world().resource::<Inventory>().grid(shelf).unwrap().entries()[0];
+        let free = room_in(&app, GridView::Container(pack), ware.id);
+        let at = cell_centre(&mut app, GridView::Container(pack), free);
+        assert!(at.x > 960.0, "the pack is on the right: {at}");
+        drop_at_point(&mut app, ware.id, at);
+        assert_eq!(deal_of(&app).buying, vec![ware.id], "bought, as dragging it to the pack ever did");
+        assert!(matches!(app.world().resource::<Inventory>().location(ware.id), Some(Location::In { container, .. }) if container == pack));
+    }
+
+    #[test]
+    fn dragging_a_thing_of_the_delver_s_from_their_window_onto_the_shelf_offers_it_for_sale() {
+        let (mut app, _, shelf, dagger) = laid_out_barter();
+        let bare = room_in(&app, GridView::Container(shelf), dagger);
+        let at = cell_centre(&mut app, GridView::Container(shelf), bare);
+        assert!(at.x < 960.0, "on the shelf, on the left: {at}");
+        drop_at_point(&mut app, dagger, at);
+        assert_eq!(deal_of(&app).selling, vec![dagger], "offered for sale, as dragging it to the shelf ever did");
+        assert!(matches!(app.world().resource::<Inventory>().location(dagger), Some(Location::In { container, .. }) if container == shelf));
+    }
+
+    /// The target under `point` over the laid-out screen, found as dragging finds it.
+    fn target_at(app: &mut App, point: Vec2) -> Target {
+        let world = app.world_mut();
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&ComputedNode, &UiGlobalTransform), With<Ledger>>,
+            Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
+            Query<(&bags::BagWindow, &ComputedNode, &UiGlobalTransform, &ZIndex)>,
+        )>::new(world);
+        let (drops, grids, slots, fslots, ledgers, areas, frames) = state.get(world).unwrap();
+        let barter = world.resource::<crate::barter::Barter>();
+        let shelf = barter.session.as_ref().zip(areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
+        let mut rects: Vec<(i32, Rect)> = frames.iter().map(|(_, n, t, z)| (z.0, node_rect(n, t))).collect();
+        rects.sort_by_key(|&(z, _)| std::cmp::Reverse(z));
+        let rects: Vec<Rect> = rects.into_iter().map(|(_, r)| r).collect();
+        let windows = world.resource::<bags::BagWindows>();
+        let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
+        let cell = world.resource::<Tuning>().interface.cell_size;
+        target_under(point, &drops, &grids, &slots, &fslots, None, ledger, None, shelf, &rects, cell, &|view| cell * windows.cell_scale(view))
+    }
+
+    #[test]
+    fn the_left_side_resolves_the_floor_the_wares_the_card_and_empty_space() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let chest = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>()).0;
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+        app.update();
+        app.update();
+        lay_out(&mut app);
+        // The floor window, its grid's first cell: the item is set down.
+        let floor = cell_centre(&mut app, GridView::Underfoot, IVec2::ZERO);
+        assert_eq!(target_at(&mut app, floor), Target::Cell { view: GridView::Underfoot, cell: IVec2::ZERO });
+        assert_eq!(target_at(&mut app, floor + Vec2::new(0.0, -50.0)), Target::Page, "its title bar is the page");
+        // Empty space on the left, away from every window.
+        assert_eq!(target_at(&mut app, Vec2::new(900.0, 1000.0)), Target::Page, "empty left space is the page, not the level");
+
+        let (mut app, _, shelf, _) = laid_out_barter();
+        let ware = cell_centre(&mut app, GridView::Container(shelf), IVec2::new(1, 1));
+        assert_eq!(target_at(&mut app, ware), Target::Cell { view: GridView::Container(shelf), cell: IVec2::new(1, 1) }, "the wares' scroll area");
+        let area = {
+            let world = app.world_mut();
+            let (n, t) = world.query_filtered::<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>().single(world).unwrap();
+            node_rect(n, t)
+        };
+        let card = Vec2::new(area.center().x, area.min.y - 100.0);
+        assert_eq!(target_at(&mut app, card), Target::Page, "the card over the wares takes nothing");
+        // The grid scrolled up under the card is still clipped to the area.
+        assert_eq!(target_at(&mut app, Vec2::new(900.0, 1000.0)), Target::Page);
+    }
+
+    #[test]
+    fn a_barter_ended_by_cancel_returns_the_screen_to_one_side_with_the_delver_s_windows_as_they_were() {
+        for opened_by_barter in [false, true] {
+            let mut app = party_app(Vec2::new(1280.0, 720.0));
+            let (pack, _) = trade_in(&mut app);
+            app.add_systems(Update, crate::barter::close_barter.before(bags::place_windows));
+            let folk = app.world_mut().spawn_empty().id();
+            app.world_mut().resource_mut::<crate::barter::Barter>().session.as_mut().unwrap().folk = folk;
+            app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+            app.world_mut().resource_mut::<crate::barter::Barter>().session.as_mut().unwrap().opened_pack = opened_by_barter.then_some(pack);
+            app.update();
+            app.update();
+            assert!(app.world().resource::<bags::BagWindows>().two_sided());
+            // Cancel shuts the screen; the barter ends with it.
+            app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+            app.update();
+            assert!(!app.world().resource::<crate::barter::Barter>().active());
+            assert_eq!(app.world().resource::<OpenContainer>().0, None);
+            app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+            app.update();
+            app.update();
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert!(!windows.two_sided() && windows.left.is_empty(), "one side again");
+            assert_eq!(windows.order, if opened_by_barter { vec![] } else { vec![pack] }, "the delver's windows, less the one the barter opened");
+            let world = app.world_mut();
+            assert_eq!(world.query_filtered::<(), With<crate::barter::BarterButton>>().iter(world).count(), 0, "no card");
+            assert_eq!(world.query::<&bags::BagWindow>().iter(world).filter(|w| w.0 != pack).count(), 0, "no window left of the trader's");
+        }
+    }
+
+    #[test]
+    fn accepting_settles_the_deal_and_leaves_the_barter_up_until_the_screen_closes() {
+        let (mut app, pack, shelf, _) = laid_out_barter();
+        app.add_systems(Update, crate::barter::close_barter.before(bags::place_windows));
+        let folk = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<crate::barter::Barter>().session.as_mut().unwrap().folk = folk;
+        // Changing the trader rebuilds the screen, so its nodes are laid out again.
+        app.update();
+        lay_out(&mut app);
+        let ware = app.world().resource::<Inventory>().grid(shelf).unwrap().entries()[0].id;
+        let free = room_in(&app, GridView::Container(pack), ware);
+        let at = cell_centre(&mut app, GridView::Container(pack), free);
+        drop_at_point(&mut app, ware, at);
+        let wares: Vec<_> = (1..4).filter_map(|s| fb_items::roll_item("Sword", s)).collect();
+        let mut shelved = crate::shelf::Shelf { day: 0, wares, sold: vec![], purse: 6000 };
+        let mut barter = app.world_mut().remove_resource::<crate::barter::Barter>().unwrap();
+        let mut inventory = app.world_mut().remove_resource::<Inventory>().unwrap();
+        let receipt = crate::barter::settle(&mut inventory, barter.session.as_mut().unwrap(), &mut shelved).expect("settles");
+        assert_eq!(receipt.bought, 1);
+        app.insert_resource(barter).insert_resource(inventory);
+        app.update();
+        assert!(app.world().resource::<crate::barter::Barter>().active() && app.world().resource::<bags::BagWindows>().two_sided(), "Accept leaves the trade up for more");
+        assert!(matches!(app.world().resource::<Inventory>().location(ware), Some(Location::In { container, .. }) if container == pack), "and what was bought is the delver's");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.update();
+        app.update();
+        assert!(!app.world().resource::<bags::BagWindows>().two_sided(), "closing the screen ends it: one side");
+        assert!(matches!(app.world().resource::<Inventory>().location(ware), Some(Location::In { container, .. }) if container == pack), "and the purchase stays");
     }
 }

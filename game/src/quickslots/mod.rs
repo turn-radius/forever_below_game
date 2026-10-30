@@ -455,6 +455,14 @@ pub fn strip(parent: &mut ChildSpawnerCommands, fonts: &UiFonts) {
     spawn_slots(parent, fonts, style, true, row);
 }
 
+/// [`strip`] in two rows of five, for the narrow column beside another party's windows.
+pub fn strip_in_two_rows(parent: &mut ChildSpawnerCommands, fonts: &UiFonts) {
+    let style = SlotStyle { size: px(STRIP_SIZE), gap: px(STRIP_GAP), number: FontSize::Px(12.0) };
+    let width = (SLOTS / 2) as f32 * (STRIP_SIZE + STRIP_GAP);
+    let row = Node { flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap, width: px(width), column_gap: style.gap, row_gap: style.gap, ..default() };
+    spawn_slots(parent, fonts, style, true, row);
+}
+
 /// A slot on the strip, and the gap between them, in logical pixels.
 pub const STRIP_SIZE: f32 = 50.0;
 pub const STRIP_GAP: f32 = 6.0;

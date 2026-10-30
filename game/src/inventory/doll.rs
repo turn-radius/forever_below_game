@@ -512,26 +512,33 @@ pub fn turn_seal(time: Res<Time<Real>>, mut bands: Query<(&SealBand, &mut UiTran
 
 /// Builds the doll's leaf: the seal, the doll, and the slots with their labels.
 pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, inventory: &Inventory, fonts: &UiFonts, icons: &mut Icons) {
+    doll_leaf_scaled(parent, assets, inventory, fonts, icons, 1.0);
+}
+
+/// [`doll_leaf`] drawn `scale` times its size, every place, slot and rune with it, to share the
+/// screen with another party's windows.
+pub fn doll_leaf_scaled(parent: &mut ChildSpawnerCommands, assets: &DollAssets, inventory: &Inventory, fonts: &UiFonts, icons: &mut Icons, scale: f32) {
     let seal = Seal { r: seal_radius() };
     let side = seal.r * 2.12;
-    let centre = FRAME * 0.5;
+    let frame_size = FRAME * scale;
+    let centre = frame_size * 0.5;
     let [outer, middle, inner] = seal.bands([15.0 * 0.7 + 4.0, 12.0 * 0.7 + 4.0, 12.0 * 0.7 + 4.0]);
     let rune_ink = GOLD.with_alpha(RUNE_ALPHA);
-    let glyph_inks = [(15.0, rune_ink), (12.0, rune_ink), (12.0, rune_ink)];
-    parent.spawn(Node { width: px(FRAME.x), height: px(FRAME.y), flex_shrink: 0.0, ..default() }).with_children(|frame| {
+    let glyph_inks = [(15.0 * scale, rune_ink), (12.0 * scale, rune_ink), (12.0 * scale, rune_ink)];
+    parent.spawn(Node { width: px(frame_size.x), height: px(frame_size.y), flex_shrink: 0.0, ..default() }).with_children(|frame| {
         if let Some(side) = light_side(inventory) {
             let glow_x = match side {
-                SlotSide::Left => centre.x - GLOW_OFFSET.x,
-                SlotSide::Right => centre.x + GLOW_OFFSET.x,
+                SlotSide::Left => centre.x - GLOW_OFFSET.x * scale,
+                SlotSide::Right => centre.x + GLOW_OFFSET.x * scale,
             };
             frame.spawn((
                 LightGlow,
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(glow_x - GLOW_SIZE * 0.5),
-                    top: px(centre.y + GLOW_OFFSET.y - GLOW_SIZE * 0.5),
-                    width: px(GLOW_SIZE),
-                    height: px(GLOW_SIZE),
+                    left: px(glow_x - GLOW_SIZE * scale * 0.5),
+                    top: px(centre.y + (GLOW_OFFSET.y - GLOW_SIZE * 0.5) * scale),
+                    width: px(GLOW_SIZE * scale),
+                    height: px(GLOW_SIZE * scale),
                     ..default()
                 },
                 ImageNode::new(assets.glow.clone()),
@@ -543,10 +550,10 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                     SealBand(band),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: px(centre.x - side * 0.5),
-                        top: px(centre.y - side * 0.5),
-                        width: px(side),
-                        height: px(side),
+                        left: px(centre.x - side * scale * 0.5),
+                        top: px(centre.y - side * scale * 0.5),
+                        width: px(side * scale),
+                        height: px(side * scale),
                         ..default()
                     },
                     UiTransform::IDENTITY,
@@ -555,11 +562,11 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                 .with_children(|layer| {
                     let (size, colour) = glyph_inks[band];
                     for glyph in glyphs {
-                        rune(layer, fonts, &glyph, side, size, colour);
+                        rune(layer, fonts, &glyph, side, size, colour, scale);
                     }
                     if band == 1 {
                         for (point, text) in seal.star_points().into_iter().zip(seal.medallion_runes()) {
-                            rune(layer, fonts, &Glyph { text, at: point, turn: 0.0 }, side, 13.0, GOLD.with_alpha(0.6));
+                            rune(layer, fonts, &Glyph { text, at: point, turn: 0.0 }, side, 13.0 * scale, GOLD.with_alpha(0.6), scale);
                         }
                     }
                 });
@@ -568,20 +575,21 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
             DollView { image: assets.doll.clone() },
             Node {
                 position_type: PositionType::Absolute,
-                left: px(centre.x - DOLL_SIZE * 0.5),
-                top: px(centre.y - DOLL_SIZE * 0.5),
-                width: px(DOLL_SIZE),
-                height: px(DOLL_SIZE),
+                left: px(centre.x - DOLL_SIZE * scale * 0.5),
+                top: px(centre.y - DOLL_SIZE * scale * 0.5),
+                width: px(DOLL_SIZE * scale),
+                height: px(DOLL_SIZE * scale),
                 ..default()
             },
             ImageNode::new(assets.doll.clone()),
         ));
         for place in slot_places() {
-            let size = match place.size {
-                SlotSize::Big => BIG_SLOT,
-                SlotSize::Small => SMALL_SLOT,
-            };
-            let x = px(FRAME.x * place.x_percent / 100.0);
+            let size = scale
+                * match place.size {
+                    SlotSize::Big => BIG_SLOT,
+                    SlotSize::Small => SMALL_SLOT,
+                };
+            let x = px(frame_size.x * place.x_percent / 100.0);
             let worn = inventory.worn(place.slot).and_then(|id| inventory.item(id));
             let (left, right) = match place.side {
                 SlotSide::Left => (x, Val::Auto),
@@ -594,12 +602,12 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                         position_type: PositionType::Absolute,
                         left,
                         right,
-                        top: px(FRAME.y * place.y_percent / 100.0),
+                        top: px(frame_size.y * place.y_percent / 100.0),
                         width: px(size),
                         height: px(size),
-                        padding: UiRect::all(px(4)),
+                        padding: UiRect::all(px(4.0 * scale)),
                         border: UiRect::all(px(1.5)),
-                        border_radius: BorderRadius::all(px(8)),
+                        border_radius: BorderRadius::all(px(8.0 * scale)),
                         ..default()
                     },
                     BackgroundColor(BG.with_alpha(0.8)),
@@ -608,7 +616,7 @@ pub fn doll_leaf(parent: &mut ChildSpawnerCommands, assets: &DollAssets, invento
                 ))
                 .with_children(|slot| {
                     slot_contents(slot, icons, fonts, inventory, inventory.worn(place.slot), size);
-                    let font = if place.size == SlotSize::Big { 14.0 } else { 12.0 };
+                    let font = (if place.size == SlotSize::Big { 14.0 } else { 12.0 }) * scale.max(0.75);
                     let (label_left, label_right) = match place.side {
                         SlotSide::Left => (px(0), Val::Auto),
                         SlotSide::Right => (Val::Auto, px(0)),
@@ -674,15 +682,15 @@ pub(super) fn slot_node(size: f32) -> Node {
 }
 
 /// One rune of a band, centred on its place in a layer `side` across, turned to its circle.
-fn rune(layer: &mut ChildSpawnerCommands, fonts: &UiFonts, glyph: &Glyph, side: f32, size: f32, colour: Color) {
+fn rune(layer: &mut ChildSpawnerCommands, fonts: &UiFonts, glyph: &Glyph, side: f32, size: f32, colour: Color, scale: f32) {
     layer
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: px(side * 0.5 + glyph.at[0] - GLYPH_BOX * 0.5),
-                top: px(side * 0.5 + glyph.at[1] - GLYPH_BOX * 0.5),
-                width: px(GLYPH_BOX),
-                height: px(GLYPH_BOX),
+                left: px((side * 0.5 + glyph.at[0] - GLYPH_BOX * 0.5) * scale),
+                top: px((side * 0.5 + glyph.at[1] - GLYPH_BOX * 0.5) * scale),
+                width: px(GLYPH_BOX * scale),
+                height: px(GLYPH_BOX * scale),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
