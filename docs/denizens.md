@@ -9,7 +9,7 @@ Minotaurs, cyclopes, fauns and demons do not speak human languages. Each `Denize
 - **Lines.** A line of talk names the words it needs: `needs(kind, topic)` gives a topic's core words (the first three), `needs_with` adds more by key. `Lexicon::readable` is true once all are learned.
 - **Lexicon.** The words learned per tongue, saved with the delve record; they stay learned for the rest of the delve. The next delver starts with none.
 - **Barter and quests.** `can_barter` needs the greeting and trade phrases; `can_take_quests` needs the greeting and quest phrases. `known_share` is for display only.
-- **Teaching.** A scroll teaches every word of three or four topics, a book of five to seven, rolled from the item's seed. The card reads like "Minotaur phrases: greetings and trade" and names the topics it rolled. Reading swaps each covered topic already fully known for the next topic not yet known (table order), so any three scrolls of a tongue, in any order, teach all of it, and a complete tongue learns nothing more ("There is nothing new in it.").
+- **Teaching.** A scroll teaches every word of three or four topics, a book of five to seven, rolled from the item's seed. The card reads like "Minotaur phrases: greetings and trade" and names the topics it rolled. Reading swaps each covered topic already fully known for the next topic not yet known (table order), so any three scrolls of a tongue, in any order, teach all of it, and a complete tongue learns nothing more ("There is nothing new in it."). Each copy teaches once: it is marked read on the item (`Teaching::studied`, kept in saves), and reading it again says "You have learned all this writing can teach."; another copy still teaches.
 
 ## Writing in a tongue
 

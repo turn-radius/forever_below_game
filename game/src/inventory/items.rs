@@ -217,6 +217,11 @@ impl Inventory {
         }
     }
 
+    /// The teaching on the book or scroll `id`, to mark it read.
+    pub fn teaching_mut(&mut self, id: ItemId) -> Option<&mut fb_denizens::tongue::Teaching> {
+        self.items.get_mut(&id)?.teaching.as_mut()
+    }
+
     pub fn item(&self, id: ItemId) -> Option<&Item> {
         self.items.get(&id)
     }

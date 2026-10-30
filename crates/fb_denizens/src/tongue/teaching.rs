@@ -37,6 +37,9 @@ pub struct Teaching {
     pub topics: Vec<Topic>,
     /// Every word of those topics.
     pub words: Vec<Word>,
+    /// Whether this copy has been read. A writing teaches once, on the first reading; the item
+    /// keeps this as it is now, so another copy still teaches.
+    pub studied: bool,
 }
 
 /// A [`Teaching`] as saved: words by key, so a word the vocabulary no longer has is dropped.
@@ -45,17 +48,19 @@ struct TeachingSaved {
     kind: DenizenKind,
     topics: Vec<Topic>,
     keys: Vec<String>,
+    #[serde(default)]
+    studied: bool,
 }
 
 impl From<Teaching> for TeachingSaved {
     fn from(t: Teaching) -> Self {
-        TeachingSaved { kind: t.kind, topics: t.topics, keys: t.words.iter().map(|w| w.key.to_string()).collect() }
+        TeachingSaved { kind: t.kind, topics: t.topics, keys: t.words.iter().map(|w| w.key.to_string()).collect(), studied: t.studied }
     }
 }
 
 impl From<TeachingSaved> for Teaching {
     fn from(s: TeachingSaved) -> Self {
-        Teaching { kind: s.kind, topics: s.topics, words: s.keys.iter().filter_map(|k| word(k)).collect() }
+        Teaching { kind: s.kind, topics: s.topics, words: s.keys.iter().filter_map(|k| word(k)).collect(), studied: s.studied }
     }
 }
 
@@ -78,7 +83,7 @@ impl Teaching {
     pub fn of_topics(kind: DenizenKind, topics: &[Topic]) -> Self {
         let topics: Vec<Topic> = Topic::ALL.iter().filter(|t| topics.contains(t)).copied().collect();
         let words = topics.iter().flat_map(|t| t.words()).copied().collect();
-        Teaching { kind, topics, words }
+        Teaching { kind, topics, words, studied: false }
     }
 
     /// The topics in a phrase ("greetings and trade", "greetings, trade and quests").
