@@ -64,12 +64,34 @@ impl Plugin for SwingPlugin {
     }
 }
 
-/// Whether `hand` holds a lit torch, so a blow with it is fire as well as a club's
-/// bludgeoning: a troll's regeneration stops at it (`crate::creatures::trolls`). A lantern's
-/// glass and an unlit or spent torch are not.
+/// Whether `hand` holds a lit torch, or a censer with incense burning in it, so a blow with it
+/// is fire as well as a club's bludgeoning: a troll's regeneration stops at it
+/// (`crate::creatures::trolls`). A lantern's glass, an unlit or spent torch, and a cold or
+/// empty censer are not. Swinging spends nothing: the fuel burns by the clock alone
+/// (`crate::kindle`).
 pub fn flaming_blow(inventory: &Inventory, hand: Slot) -> bool {
-    inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true))
+    inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| (item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true)) || item.burning_incense().is_some())
 }
+
+/// The fire a flaming blow adds to its damage: one die of `rules.combat.fire_sides`, multiplied
+/// against what is vulnerable to fire and none against what is immune. `species` is the creature
+/// struck (`None` for folk, who take it as it is).
+pub fn fire_damage(rules: &fb_character::rules::Rules, species: Option<fb_creatures::Species>, rng: &mut procgen_rng::Mulberry32) -> u32 {
+    let rolled = rng.int(1, rules.combat.fire_sides.max(1));
+    let Some(block) = species.map(fb_creatures::Species::stat_block) else { return rolled };
+    if block.immunities.contains(&fb_creatures::DamageType::Fire) {
+        0
+    } else if block.vulnerabilities.contains(&fb_creatures::DamageType::Fire) {
+        rolled * rules.combat.fire_vulnerable_multiplier
+    } else {
+        rolled
+    }
+}
+
+/// How far behind the hand a censer's bowl turns on its chain, seconds at the usual pace.
+const FLAIL_LAG: f32 = 0.05;
+/// Radians the bowl hangs out per view unit a second of the fist's sideways travel.
+const FLAIL_SWING: f32 = 0.03;
 
 /// How long a swing takes, seconds, and when in it the blow lands. Our own: about two swings a
 /// second, quicker than the SRD's one attack in a 6-second round (p. 90), as a real-time fight
@@ -146,7 +168,11 @@ impl Swing {
 
     /// The path an item held as `grip` follows.
     pub fn path(&self, grip: Grip) -> SwingPath {
-        SwingPath::new(self.strike, self.side(), grip, self.toward, self.flourish)
+        if self.weapon.kind == SwingKind::Flail {
+            SwingPath::flail(self.strike, self.side(), grip, self.toward, self.flourish)
+        } else {
+            SwingPath::new(self.strike, self.side(), grip, self.toward, self.flourish)
+        }
     }
 }
 
@@ -287,6 +313,11 @@ impl Strikeable<'_, '_> {
         let creatures = self.creatures.iter().flat_map(|(entity, critter, t, bones)| body_targets(entity, critter, t, bones, &self.shapes));
         let folk = self.folk.iter().map(|(entity, denizen, t, _)| Target::on_floor(entity, t.translation.xz(), denizen.radius));
         creatures.chain(folk).collect()
+    }
+
+    /// The species of `target`, if it is a creature (folk are none).
+    pub fn species(&self, target: Entity) -> Option<fb_creatures::Species> {
+        self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species)
     }
 
     /// The kind of creature `target` is, if it is one (folk are none).
@@ -446,13 +477,18 @@ fn land_blows(
                 if attack.hit {
                     let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
                     let damage = rolled + super::bane_damage_with_devotion(&swing.weapon.bane, &swing.weapon.devout, strikeable.kin(target), &mut dice.0);
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
-                    if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
+                    let burning = inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand));
+                    let fire = if burning { fire_damage(rules, strikeable.species(target), &mut dice.0) } else { 0 };
+                    if burning {
+                        info!("swing: {damage} + {fire} fire");
+                    }
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false, fire });
+                    if burning {
                         burned.write(Burned { target });
                     }
                 } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
                     info!("swing: grazes for {damage}");
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true, fire: 0 });
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
@@ -577,6 +613,7 @@ impl Strike {
             SwingKind::Chop => &[(Overhead, 4), (HighRight, 3), (HighLeft, 2), (FromRight, 1)],
             SwingKind::Slash => &[(HighRight, 3), (FromRight, 3), (HighLeft, 2), (FromLeft, 2), (Overhead, 1), (Rising, 1)],
             SwingKind::Sweep => &[(FromRight, 3), (FromLeft, 3), (Overhead, 1), (Rising, 1)],
+            SwingKind::Flail => &[(FromRight, 3), (HighRight, 2), (FromLeft, 2), (HighLeft, 1)],
             SwingKind::Thrust | SwingKind::Punch => &[(Stab, 1)],
         }
     }
@@ -632,6 +669,9 @@ const FOLLOWED: f32 = 0.5;
 /// so the grip, with no hand drawn round it, never looms at the eye.
 const SWEEP_ACROSS: f32 = 3.5;
 const SWEEP_DEPTH: f32 = 1.0;
+/// A censer's arc: wider, and centred on where the blow heads, view model units. Our own.
+const FLAIL_ACROSS: f32 = 6.0;
+const FLAIL_PULL: f32 = 0.9;
 /// How far toward the middle of the view a strike's arc is centred, as a share of the fist's
 /// offset from it at rest, and how far toward where it heads. Our own.
 const SWEEP_PULL: f32 = 0.15;
@@ -685,6 +725,17 @@ impl SwingPath {
     /// a little more or less, swung a little wider or tighter. A strike thrown by the hand on
     /// the left `side` is mirrored: its forehand comes from the upper left.
     pub fn new(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
+        SwingPath::build(strike, side, grip, toward, flourish, SWEEP_ACROSS, SWEEP_PULL)
+    }
+
+    /// The path of a censer on its chain: the arc is centred where the blow heads, so the bowl
+    /// passes through the crosshair (or the creature) as it lands, coming in from the side it
+    /// was drawn back on and swinging on past.
+    pub fn flail(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
+        SwingPath::build(strike, side, grip, toward, flourish, FLAIL_ACROSS, FLAIL_PULL)
+    }
+
+    fn build(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3, sweep_across: f32, sweep_pull: f32) -> SwingPath {
         let aim = (toward - grip.fist).normalize_or(Vec3::NEG_Z);
         let travel = strike.travel();
         let travel = if side == Side::Left { Vec2::new(-travel.x, travel.y) } else { travel };
@@ -703,8 +754,8 @@ impl SwingPath {
             let through = SwingPose { offset: drive, turn: square };
             (back, through, None, back.offset.lerp(through.offset, 0.5) - travel * STAB_HOOK)
         } else {
-            let centre = Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * SWEEP_PULL + aim * SWEEP_REACH;
-            let sweep = Sweep { aim, travel, square, centre, across: SWEEP_ACROSS * (1.0 + 0.2 * flourish.z) };
+            let centre = Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * sweep_pull + aim * SWEEP_REACH;
+            let sweep = Sweep { aim, travel, square, centre, across: sweep_across * (1.0 + 0.2 * flourish.z) };
             let (from, to) = (WOUND + 0.25 * flourish.y, FOLLOWED);
             (sweep.pose(from), sweep.pose(to), Some((sweep, from, to)), Vec3::ZERO)
         };
@@ -756,7 +807,17 @@ pub(super) fn swing_held(swings: Query<&Swing, With<Player>>, mut held: Query<(&
     for (item, mut transform, parent) in &mut held {
         if item.hand == swing.hand && view_models.contains(parent.parent()) {
             let grip = Grip::of(*transform, hold, item.point);
-            *transform = swing.path(grip).at(swing.t).apply(*transform, hold.fist);
+            let path = swing.path(grip);
+            let mut pose = path.at(swing.t);
+            if swing.weapon.kind == SwingKind::Flail {
+                // The bowl hangs plumb on its chain and trails the hand: it swings out the way
+                // the fist is moving, a pendulum, and is never turned over.
+                let before = path.at((swing.t - FLAIL_LAG).max(0.0)).offset;
+                let drag = (pose.offset - before) / FLAIL_LAG;
+                let out = (-drag.x * FLAIL_SWING).clamp(-0.9, 0.9);
+                pose.turn = Quat::from_rotation_z(out);
+            }
+            *transform = pose.apply(*transform, hold.fist);
         }
     }
 }
@@ -862,6 +923,88 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         app.update();
         app.world().get::<Swing>(delver).copied()
+    }
+
+    /// An inventory with `item` in the main hand.
+    fn holding(item: fb_items::Item) -> Inventory {
+        let mut inventory = Inventory::default();
+        let id = inventory.add(item);
+        inventory.wear(id, Slot::Mainhand).unwrap();
+        inventory
+    }
+
+    fn censer(incense: bool, lit: bool) -> fb_items::Item {
+        let mut censer = fb_items::roll_item(fb_items::CENSER, 7).unwrap();
+        censer.shape.load_incense(armory::incense::IncenseKind::Cedar);
+        censer.shape.set_lit(true).unwrap();
+        if !incense {
+            // Burnt right down, it goes out.
+            censer.burn(1.0e9);
+        }
+        if !lit && incense {
+            censer.shape.set_lit(false).unwrap();
+        }
+        censer
+    }
+
+    #[test]
+    fn a_lit_censer_with_incense_burns_what_it_strikes_as_a_torch_does() {
+        let mut torch = fb_items::roll_item("Torch", 7).unwrap();
+        torch.shape.set_lit(true).unwrap();
+        assert!(flaming_blow(&holding(torch), Slot::Mainhand));
+        assert!(flaming_blow(&holding(censer(true, true)), Slot::Mainhand), "lit, with incense");
+        assert!(!flaming_blow(&holding(censer(true, false)), Slot::Mainhand), "unlit");
+        assert!(!flaming_blow(&holding(censer(false, true)), Slot::Mainhand), "burnt down to nothing");
+        let mut lantern = fb_items::roll_item("Lantern", 7).unwrap();
+        let _ = lantern.shape.set_lit(true);
+        assert!(!flaming_blow(&holding(lantern), Slot::Mainhand), "a lantern's glass does not burn");
+    }
+
+    /// What a blow with `held` in the main hand adds in fire to a rat, from seeded dice.
+    fn fire_on_a_rat(held: fb_items::Item, seed: u32) -> u32 {
+        let inventory = holding(held);
+        if !flaming_blow(&inventory, Slot::Mainhand) {
+            return 0;
+        }
+        fire_damage(fb_character::rules::defaults(), Some(fb_creatures::Species::Rat), &mut procgen_rng::Mulberry32::new(seed))
+    }
+
+    #[test]
+    fn a_lit_torch_or_censer_adds_one_to_four_fire_and_a_cold_one_adds_none() {
+        let mut torch = fb_items::roll_item("Torch", 7).unwrap();
+        torch.shape.set_lit(true).unwrap();
+        for seed in 1..40 {
+            assert!((1..=4).contains(&fire_on_a_rat(torch.clone(), seed)), "torch, seed {seed}");
+            assert!((1..=4).contains(&fire_on_a_rat(censer(true, true), seed)), "censer, seed {seed}");
+            assert_eq!(fire_on_a_rat(censer(true, false), seed), 0, "unlit");
+            assert_eq!(fire_on_a_rat(censer(false, true), seed), 0, "burnt down");
+        }
+        let seen: std::collections::HashSet<u32> = (1..80).map(|seed| fire_on_a_rat(torch.clone(), seed)).collect();
+        assert_eq!(seen.len(), 4, "the whole d4");
+    }
+
+    #[test]
+    fn fire_takes_what_a_stat_block_says() {
+        // Nothing here is vulnerable to or immune to fire yet, so every creature and folk takes the roll.
+        for species in [Some(fb_creatures::Species::Skeleton), Some(fb_creatures::Species::Troll), None] {
+            let fire = fire_damage(fb_character::rules::defaults(), species, &mut procgen_rng::Mulberry32::new(5));
+            assert!((1..=4).contains(&fire));
+        }
+    }
+
+    #[test]
+    fn swinging_a_censer_is_a_flail_and_spends_no_incense() {
+        let lit = censer(true, true);
+        let before = lit.fuel_left();
+        let inventory = holding(lit);
+        let character = Character::default();
+        let weapon = Weapon::held_in(Slot::Mainhand, &inventory, &character);
+        assert_eq!(weapon.kind, SwingKind::Flail);
+        assert!(flaming_blow(&inventory, Slot::Mainhand));
+        let id = inventory.worn(Slot::Mainhand).unwrap();
+        assert_eq!(inventory.item(id).unwrap().fuel_left(), before, "the blow takes nothing from the coals");
+        let sword = Weapon::held_in(Slot::Mainhand, &holding(fb_items::roll_item("Sword", 3).unwrap()), &character);
+        assert!(weapon.reach < sword.reach, "a censer on its chain reaches less than a sword");
     }
 
     #[test]
@@ -1125,6 +1268,24 @@ mod tests {
             if base == "Spear" {
                 let screen = on_screen(thrown).unwrap();
                 assert!(screen.length() < 0.15, "{base} {seed}: point at {screen} on the screen");
+            }
+        }
+    }
+
+    #[test]
+    fn a_censer_flail_swings_through_the_crosshair() {
+        let view = crate::tuning::Tuning::default().view;
+        for seed in [2, 7, 1207] {
+            let (rest, _, _) = held("Censer", seed);
+            // A light is swung from its middle: no point.
+            let grip = Grip::of(rest, view_hold(fb_body::Hold::Lantern, Side::Right), None);
+            for &(strike, _) in Strike::choices(SwingKind::Flail) {
+                let path = SwingPath::flail(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
+                let at = |t: f32| path.at(t).apply(rest, grip.fist).translation;
+                let landed = crate::view_model::on_screen(at(LANDS), view.held_fov_degrees).unwrap();
+                assert!(landed.length() < 0.35, "{strike:?} seed {seed}: the bowl lands at {landed}");
+                let drawn = crate::view_model::on_screen(at(DRAWN * SWING_TIME), view.held_fov_degrees).unwrap();
+                assert!(drawn.distance(landed) > 0.3, "{strike:?}: it is thrown across the screen, {drawn} to {landed}");
             }
         }
     }

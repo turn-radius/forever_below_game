@@ -33,8 +33,10 @@ pub fn light_to_toggle(inventory: &Inventory, hip: bool) -> Option<ItemId> {
 
 /// Lights `id` or puts it out, and says so.
 pub fn toggle_and_say(inventory: &mut Inventory, id: ItemId) -> String {
-    let what = inventory.item(id).map_or("light".to_string(), |item| item.shape.family().key().to_string());
+    let censer = inventory.item(id).is_some_and(fb_items::Item::is_censer);
+    let what = if censer { "censer".to_string() } else { inventory.item(id).map_or("light".to_string(), |item| item.shape.family().key().to_string()) };
     match inventory.toggle_light(id) {
+        Err(Unlit::Empty) if censer => "The censer has no incense to burn".to_string(),
         Ok(true) => format!("You light the {what}"),
         Ok(false) => format!("You put out the {what}"),
         Err(Unlit::Spent) => format!("The {what} is spent and will not light"),
@@ -53,6 +55,9 @@ pub fn refill_and_say(inventory: &mut Inventory, flask: ItemId) -> String {
     let lanterns = inventory.equipped_lanterns();
     let what = if lanterns.len() > 1 { "lanterns" } else { "lantern" };
     if lanterns.is_empty() {
+        if !inventory.equipped_censers().is_empty() && inventory.item(flask).is_some_and(fb_items::Item::has_oil) {
+            return "A censer burns incense, not oil".to_string();
+        }
         return "You hold no lantern to fill".to_string();
     }
     if !inventory.item(flask).is_some_and(fb_items::Item::has_oil) {
@@ -272,11 +277,11 @@ mod tests {
         let mut inventory = Inventory::default();
         equip(&mut inventory, fb_items::roll_item("Belt", 1).unwrap(), Slot::Belt);
         let censer = equip(&mut inventory, spent_censer(), Slot::Hip);
-        assert_eq!(toggle_and_say(&mut inventory, censer), "The lantern is out of fuel and will not light");
+        assert_eq!(toggle_and_say(&mut inventory, censer), "The censer has no incense to burn");
         let incense = inventory.add(dish(IncenseKind::Myrrh));
         assert_eq!(refill_and_say(&mut inventory, incense), "You heap myrrh on the coals");
         assert!(inventory.item(incense).is_none(), "the dish is used up");
-        assert_eq!(toggle_and_say(&mut inventory, censer), "You light the lantern");
+        assert_eq!(toggle_and_say(&mut inventory, censer), "You light the censer");
         assert_eq!(inventory.item(censer).unwrap().burning_incense(), Some(IncenseKind::Myrrh));
         // Burning uses it up, wherever the censer hangs, and then it goes out.
         assert!(inventory.burn_lights(armory::kindle::INCENSE_SECONDS * 0.5));
@@ -289,7 +294,7 @@ mod tests {
         let spare = inventory.add(dish(IncenseKind::Cedar));
         assert_eq!(refill_and_say(&mut inventory, spare), "Your censer is already full");
         let flask = inventory.add(oil(1.0));
-        assert_eq!(refill_and_say(&mut inventory, flask), "You hold no lantern to fill");
+        assert_eq!(refill_and_say(&mut inventory, flask), "A censer burns incense, not oil");
     }
 
     #[test]

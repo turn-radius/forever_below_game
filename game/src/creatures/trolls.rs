@@ -378,7 +378,7 @@ mod tests {
             if app.world().get::<Corpse>(troll).is_some() {
                 return;
             }
-            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::new(0.0, 0.0), bludgeoning: true, critical: false, by_ally: false, graze: false });
+            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::new(0.0, 0.0), bludgeoning: true, critical: false, by_ally: false, graze: false, fire: 0 });
             app.update();
         }
         panic!("the troll never fell");
@@ -591,7 +591,7 @@ mod tests {
             if app.world().get::<Corpse>(troll).is_some() {
                 break;
             }
-            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::ZERO, bludgeoning: true, critical: false, by_ally: false, graze: false });
+            app.world_mut().write_message(Struck { target: troll, damage: 500, from: Vec2::ZERO, bludgeoning: true, critical: false, by_ally: false, graze: false, fire: 0 });
             app.update();
             note(&mut app);
         }
@@ -696,7 +696,7 @@ mod tests {
         run(&mut app, 2.0);
         let charred = colour_of(&app, &skin[0]);
         assert!(luma(charred) < luma(SKIN.to_srgba()));
-        let struck = Struck { target: troll, damage: 1, from: Vec2::new(0.0, 50.0), bludgeoning: true, critical: false, by_ally: false, graze: false };
+        let struck = Struck { target: troll, damage: 1, from: Vec2::new(0.0, 50.0), bludgeoning: true, critical: false, by_ally: false, graze: false, fire: 0 };
         app.world_mut().write_message(struck);
         app.update();
         assert!(luma(colour_of(&app, &skin[0])) > luma(charred) + 0.2, "it flashes");

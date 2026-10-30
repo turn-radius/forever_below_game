@@ -346,7 +346,7 @@ fn played(name: &str) -> (App, Snapshot, Standing, PathBuf) {
     critters.sort_by_key(|c| c.1);
     let (dead, hurt) = (critters[0].0, critters[1].0);
     app.world_mut().get_mut::<Health>(hurt).unwrap().hp -= 1;
-    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false });
+    app.world_mut().write_message(Struck { target: dead, damage: 10_000, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false, fire: 0 });
     run(&mut app, 60);
     let (entity, container) = {
         let world = app.world_mut();
@@ -654,7 +654,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("folk::FolkFigures", "folk figures made ahead"),
         ("travel::Below", "the level below being made"),
         ("travel::Journey", "a journey between levels: none while asleep"),
-        ("inventory::bags::BagWindows", "which bags are open as windows: screen state, closed with the screen"),
+        ("inventory::bags::BagWindows", "which bags are open as windows: screen state kept for the delve, not saved"),
         ("remains::NearBodies", "the bodies in reach, found again each frame"),
         // The moment.
         ("play::ScreenOpen", "no screen is open to lie down"),
