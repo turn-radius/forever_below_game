@@ -23,6 +23,8 @@ pub enum Line {
     General,
     /// Potions, healing draughts and elixirs.
     Potions,
+    /// Incense and censers: a healer's wares (prayer scrolls come with the healers' later work).
+    Sacred,
 }
 
 /// How skilled the trader is, which caps what rarity their wares come in.
@@ -157,6 +159,7 @@ impl Line {
                 "Rope", "Pack", "Satchel", "Sack", "Purse",
             ],
             Line::Potions => &["Vial", "Small potion", "Potion", "Large potion", "Healing vial", "Small healing draught", "Healing draught", "Large healing draught", "Elixir of the Hare", "Elixir of Vigil", "Elixir of Fasting", "Elixir of Embers"],
+            Line::Sacred => &["Incense", "Censer"],
         }
     }
 
@@ -168,6 +171,7 @@ impl Line {
             Line::Camp => "tentmaker",
             Line::General => "general goods merchant",
             Line::Potions => "alchemist",
+            Line::Sacred => "healer",
         }
     }
 }
@@ -212,6 +216,9 @@ pub(crate) fn flawed(item: &Item) -> bool {
 /// four. Each piece carries the maker's line in its history. Rolls meshes, so keep counts
 /// modest.
 pub fn stock(shop: &Shop, depth: u32, seed: u32) -> Vec<Item> {
+    if shop.line == Line::Sacred {
+        return sacred_stock(shop, depth, seed);
+    }
     let mut rng = Mulberry32::new(seed ^ 0x570C_45E1);
     let (lo, hi) = shop.grade.size();
     let count = rng.int(lo, hi) as usize;
@@ -234,6 +241,51 @@ pub fn stock(shop: &Shop, depth: u32, seed: u32) -> Vec<Item> {
         };
         let piece_seed = seed.wrapping_mul(0x9E37_79B1).wrapping_add((i as u32 + 1).wrapping_mul(0x85EB_CA6B));
         if let Some(mut item) = (0..6).filter_map(|k| roll_item_with(base, piece_seed.wrapping_add(k), odds)).find(|i| !flawed(i)) {
+            let c = dress::condition_mut(&mut item.shape);
+            *c = Condition::of(ConditionState::Pristine);
+            c.state = ConditionState::Custom;
+            c.wear = rng.range_f32(shop.grade.finish_wear().0, shop.grade.finish_wear().1);
+            item.history.push(maker.clone());
+            wares.push(item);
+        }
+    }
+    wares
+}
+
+/// How many censers and dishes of incense a healer of `grade` keeps, as `(censers, dishes)`
+/// (our own): every grade shows all three incenses and two censers at least, and finer healers
+/// keep more of each.
+fn sacred_counts(grade: Grade, rng: &mut Mulberry32) -> (usize, usize) {
+    let (censers, dishes) = match grade {
+        Grade::Novice => (2, (3, 4)),
+        Grade::Apprentice => (2, (5, 5)),
+        Grade::Expert => (3, (6, 7)),
+        Grade::Master => (4, (8, 9)),
+    };
+    (censers, rng.int(dishes.0, dishes.1) as usize)
+}
+
+/// A healer's shelf: always every kind of incense and at least two censers, however the dice
+/// fall. The kinds go round in a seeded order so the extra dishes repeat evenly.
+fn sacred_stock(shop: &Shop, depth: u32, seed: u32) -> Vec<Item> {
+    use armory::incense::IncenseKind;
+    let mut rng = Mulberry32::new(seed ^ 0x570C_45E1);
+    let (censers, dishes) = sacred_counts(shop.grade, &mut rng);
+    let odds = Odds::loot(depth + shop.grade.bonus_depth()).capped(shop.grade.cap());
+    let mut kinds = IncenseKind::ALL;
+    for i in (1..kinds.len()).rev() {
+        kinds.swap(i, rng.int(0, i as u32) as usize);
+    }
+    let maker = shop.maker_line();
+    let mut wares = Vec::with_capacity(censers + dishes);
+    let plan = (0..dishes).map(|n| ("Incense", Some(kinds[n % kinds.len()]))).chain((0..censers).map(|_| ("Censer", None)));
+    for (i, (base, kind)) in plan.enumerate() {
+        let piece_seed = seed.wrapping_mul(0x9E37_79B1).wrapping_add((i as u32 + 1).wrapping_mul(0x85EB_CA6B));
+        let fits = |item: &Item| (kind.is_none() || item.incense_kind() == kind) && !flawed(item);
+        let rolled = (0..48).filter_map(|k| roll_item_with(base, piece_seed.wrapping_add(k), odds)).find(fits);
+        // Plain common stock if the dice never gave one: the shelf must not come up short.
+        let rolled = rolled.or_else(|| (48..96).filter_map(|k| roll_item_with(base, piece_seed.wrapping_add(k), Odds::default().capped(Rarity::Common))).find(fits));
+        if let Some(mut item) = rolled {
             let c = dress::condition_mut(&mut item.shape);
             *c = Condition::of(ConditionState::Pristine);
             c.state = ConditionState::Custom;
@@ -328,6 +380,56 @@ mod tests {
         for base in lines.iter().flat_map(|l| l.bases()).chain(leans.iter().flat_map(|l| l.bases())) {
             assert!(roll_item_with(base, 1, Odds::default()).is_some(), "{base} rolls nothing");
         }
+    }
+
+    fn sacred_shelf(grade: Grade, seed: u32) -> Vec<Item> {
+        stock(&shop(Line::Sacred, grade, None), 4, seed)
+    }
+
+    #[test]
+    fn a_healer_always_shows_every_incense_and_two_censers() {
+        for grade in [Grade::Novice, Grade::Apprentice, Grade::Expert, Grade::Master] {
+            for seed in 0..40 {
+                let wares = sacred_shelf(grade, seed);
+                let mut kinds: Vec<_> = wares.iter().filter_map(Item::incense_kind).map(|k| k.name()).collect();
+                kinds.sort();
+                kinds.dedup();
+                assert_eq!(kinds.len(), 3, "{} seed {seed}: {kinds:?}", grade.label());
+                assert!(wares.iter().filter(|i| i.is_censer()).count() >= 2, "{} seed {seed}", grade.label());
+                assert!(wares.iter().all(|i| Line::Sacred.bases().contains(&i.base.as_str())));
+            }
+        }
+    }
+
+    #[test]
+    fn a_finer_healer_keeps_more_and_finer_wares() {
+        let grades = [Grade::Novice, Grade::Apprentice, Grade::Expert];
+        let counts: Vec<(usize, usize)> = grades
+            .iter()
+            .map(|&g| (0..12).map(|s| sacred_shelf(g, s)).fold((usize::MAX, usize::MAX), |(a, b), w| (a.min(w.iter().filter(|i| i.is_censer()).count()), b.min(w.len()))))
+            .collect();
+        assert!(counts.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 < w[1].1), "{counts:?}");
+        let best = |g: Grade| (0..12).flat_map(|s| sacred_shelf(g, s)).map(|i| i.rarity).max().unwrap();
+        assert!(best(Grade::Novice) == Rarity::Common && best(Grade::Expert) >= best(Grade::Apprentice), "rarity");
+    }
+
+    #[test]
+    fn only_healers_stock_censers_and_incense() {
+        for line in [Line::Armour, Line::Weapons, Line::Bows, Line::Camp, Line::General, Line::Potions] {
+            assert!(!line.bases().iter().any(|b| *b == "Censer" || *b == "Incense"), "{line:?}");
+        }
+        for seed in 0..3 {
+            for item in stock(&shop(Line::General, Grade::Master, None), 8, seed) {
+                assert!(!item.is_censer() && item.incense_kind().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn a_healers_shelf_is_pure_in_its_arguments() {
+        let s = shop(Line::Sacred, Grade::Apprentice, None);
+        assert_eq!(stock(&s, 4, 9), stock(&s, 4, 9));
+        assert_ne!(stock(&s, 4, 9), stock(&s, 4, 10));
     }
 
     #[test]

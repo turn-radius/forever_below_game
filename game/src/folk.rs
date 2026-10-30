@@ -154,7 +154,7 @@ impl Person {
         let sex = if succubus { fb_body::Sex::Female } else { spot.sex };
         let name_key = if fb_items::tables::syllables().contains_key(folk.key()) { folk.key() } else { Folk::Human.key() };
         let name = fb_items::naming::folk_name(&mut rng, name_key, Some(sex));
-        let outfit = *rng.pick(&faction.outfit_keys());
+        let outfit = spot.outfit(faction).key();
         // A denizen dresses from the row of its own kind, not a delver's class outfit.
         let outfit = denizen_outfit(folk, spot).unwrap_or(outfit);
         let (mut gear, goods) = fb_items::outfit::outfit(outfit).map_or_else(Default::default, |o| {

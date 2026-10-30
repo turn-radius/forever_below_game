@@ -47,6 +47,57 @@ pub(crate) fn plan(level: &Level, strengths: &[usize], layout_seed: u32) -> Vec<
 /// Puts each master the world places on this level among the folk, once they stand.
 pub(crate) fn assign(level: &mut Level, world_seed: u32) {
     place_masters(level, &masters_of(world_seed, &TradeRules::DEFAULT));
+    place_healers(level);
+}
+
+const HEALER_SALT: u32 = 0x4EA1_C1E7;
+
+/// Settles each faction's healer, who is always a cleric. Camps plan a healer ([`camp_trades`]), so
+/// most have one. Where the planned healer's class ([`FolkSpot::class`]) is not cleric, the trade
+/// passes to a plain folk of the camp whose class is, if there is one; else that folk is made a
+/// cleric ([`FolkSpot::cleric`]). A camp left with no healer (a master took theirs, or the room
+/// had no place for them) makes one of the folk by the same rules: a plain folk first, then a
+/// trader whose trade another of the camp keeps, then one who is the camp's only of their trade,
+/// then a guard of a camp with two, and only last the camp's one guard. Masters stay as they are.
+/// Ties go to the lowest seed, so it is a pure function of the level.
+fn place_healers(level: &mut Level) {
+    let cleric = Some(fb_faction::ClassKind::Cleric);
+    for faction in held(level) {
+        let spec = level.faction(faction).clone();
+        if spec.is_denizen() {
+            continue;
+        }
+        let camp: Vec<usize> = (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction).collect();
+        let is_healer = |f: &FolkSpot| f.trade.is_some_and(|t| t.profession == Profession::Healer);
+        let healers: Vec<usize> = camp.iter().copied().filter(|&i| is_healer(&level.folk[i])).collect();
+        if let Some(&first) = healers.first() {
+            if healers.iter().any(|&i| level.folk[i].class(&spec) == cleric) {
+                continue;
+            }
+            let plain_cleric = camp.iter().copied().filter(|&i| level.folk[i].trade.is_none() && level.folk[i].class(&spec) == cleric).min_by_key(|&i| level.folk[i].seed);
+            match plain_cleric {
+                Some(j) => {
+                    level.folk[j].trade = level.folk[first].trade;
+                    level.folk[first].trade = None;
+                }
+                None => level.folk[first].cleric = true,
+            }
+            continue;
+        }
+        let guards = camp.iter().filter(|&&i| is_guard(&level.folk[i])).count();
+        let rank = |i: usize| match level.folk[i].trade {
+            Some(t) if t.tier == Tier::Master => None,
+            None => Some(0),
+            Some(t) if t.profession == Profession::Guard => Some(if guards > 1 { 3 } else { 4 }),
+            Some(t) => Some(if camp.iter().any(|&j| j != i && level.folk[j].trade.is_some_and(|u| u.profession == t.profession)) { 1 } else { 2 }),
+        };
+        // Rank first; a cleric class only breaks a tie.
+        let Some((_, _, _, i)) = camp.iter().copied().filter_map(|i| rank(i).map(|r| (r, level.folk[i].class(&spec) != cleric, level.folk[i].seed, i))).min() else { continue };
+        let tiers = TradeRules::DEFAULT.tiers_at(level.depth);
+        let tier = *Mulberry32::new(level.folk[i].seed ^ HEALER_SALT).weighted(&tiers);
+        level.folk[i].cleric = level.folk[i].class(&spec) != cleric;
+        level.folk[i].trade = Some(Trade { profession: Profession::Healer, tier, style: None });
+    }
 }
 
 /// The trades of a camp of `size` folk holding `rooms` rooms, in order: guards first, then
@@ -67,12 +118,20 @@ fn camp_trades(faction: &FactionSpec, size: usize, rooms: usize, depth: u32, rul
     let guards = 1 + (size >= 4 && working >= 3 && rng.chance(rules.second_guard_odds)) as usize;
     let working = if rooms >= crate::roles::WORKSHOP_ROOMS { working.min(guards + rooms) } else { working };
 
+    // Every camp keeps a healer: the first trader after the guards, who needs no workshop. A camp of
+    // one is its healer alone.
+    let healer = !faction.is_denizen();
+    let guards = if size == 1 && healer { 0 } else { guards };
+    let working = if healer { working.max((guards + 1).min(size)) } else { working };
+
     let tiers = rules.tiers_at(depth);
     let mut offered: Vec<(Profession, u32)> = TRADER_WEIGHTS.to_vec();
     let mut out: Vec<Option<Trade>> = Vec::with_capacity(size);
     for k in 0..size {
         if k < guards {
             out.push(Some(Trade::guard()));
+        } else if healer && k == guards {
+            out.push(Some(Trade { profession: Profession::Healer, tier: *rng.weighted(&tiers), style: None }));
         } else if k < working {
             if offered.is_empty() {
                 offered = TRADER_WEIGHTS.to_vec();
@@ -118,17 +177,21 @@ fn place_masters(level: &mut Level, masters: &Masters) {
         // The faction at the slot, or the next one held with a folk still free (two masters
         // may draw the same small camp).
         let camp_of = |faction| -> Vec<usize> { (0..level.folk.len()).filter(|&i| level.folk[i].faction == faction && !taken.contains(&i)).collect() };
-        let Some(camp) = (0..held.len()).map(|k| camp_of(held[(master.slot as usize + k) % held.len()])).find(|c| !c.is_empty()) else { continue };
-        let guards = camp.iter().filter(|&&i| is_guard(&level.folk[i])).count();
-        // A trader of the master's own trade first, then any trader.
-        let rank = |i: usize| match level.folk[i].trade {
-            Some(t) if t.profession == master.profession => 0,
-            Some(t) if t.profession != Profession::Guard => 1,
-            None => 2,
-            Some(_) if guards > 1 => 3,
-            Some(_) => 4,
+        // A trader of the master's own trade first, then any trader. Never a healer, and never the
+        // camp's only guard: a camp with no one else to give up passes the master to the next.
+        let pick = |camp: Vec<usize>| -> Option<usize> {
+            let guards = camp.iter().filter(|&&i| is_guard(&level.folk[i])).count();
+            let rank = |i: usize| match level.folk[i].trade {
+                Some(t) if t.profession == Profession::Healer => None,
+                Some(t) if t.profession == master.profession => Some(0),
+                Some(t) if t.profession != Profession::Guard => Some(1),
+                None => Some(2),
+                Some(_) if guards > 1 => Some(4),
+                Some(_) => None,
+            };
+            camp.iter().copied().filter_map(|i| rank(i).map(|r| (r, i))).min().map(|(_, i)| i)
         };
-        let Some(i) = camp.iter().copied().min_by_key(|&i| rank(i)) else { continue };
+        let Some(i) = (0..held.len()).find_map(|k| pick(camp_of(held[(master.slot as usize + k) % held.len()]))) else { continue };
         let was = level.folk[i].trade.map(|t| t.profession);
         level.folk[i].trade = Some(master.trade());
         // A master who took the last trader of a trade into their workshop makes it their own.
@@ -266,7 +329,9 @@ mod tests {
                     if camp.is_empty() {
                         continue;
                     }
-                    assert!(camp.iter().any(|f| is_guard(f)), "world {world} depth {depth}: {} has no guard", spec.name);
+                    // A camp of one, whose one is its healer, keeps no guard.
+                    let lone_healer = camp.len() == 1 && camp[0].trade.is_some_and(|t| t.profession == Profession::Healer);
+                    assert!(lone_healer || camp.iter().any(|f| is_guard(f)), "world {world} depth {depth}: {} has no guard", spec.name);
                     if camp.len() >= 4 {
                         assert!(camp.iter().any(|f| f.trade.is_some_and(|t| t.profession != Profession::Guard)), "world {world} depth {depth}: {} has no trader", spec.name);
                     }
@@ -277,6 +342,107 @@ mod tests {
         }
         let share = plain as f64 / folk as f64;
         assert!((0.3..=0.6).contains(&share), "{plain} of {folk} folk have no trade");
+    }
+
+    #[test]
+    fn every_faction_keeps_a_healer_and_every_healer_is_a_cleric() {
+        let (mut camps, mut made) = (0, 0);
+        for world in WORLDS {
+            for depth in [1, 2, 3, 5, 8, 12] {
+                let l = level(world, depth);
+                for spec in l.factions.iter().filter(|f| !f.is_denizen()) {
+                    let camp: Vec<_> = l.folk.iter().filter(|f| f.faction == spec.id).collect();
+                    if camp.is_empty() {
+                        continue;
+                    }
+                    camps += 1;
+                    let healers: Vec<_> = camp.iter().filter(|f| f.trade.is_some_and(|t| t.profession == Profession::Healer)).collect();
+                    assert!(!healers.is_empty(), "world {world} depth {depth}: {} has no healer", spec.name);
+                    made += healers.iter().filter(|f| f.cleric).count();
+                }
+                for f in &l.folk {
+                    let healer = f.trade.is_some_and(|t| t.profession == Profession::Healer);
+                    let cleric = f.class(l.faction(f.faction)) == Some(fb_faction::ClassKind::Cleric);
+                    assert!(!healer || cleric, "world {world} depth {depth}: a healer who is not a cleric: {f:?}");
+                    assert!(healer || !f.cleric, "world {world} depth {depth}: a cleric made for nothing: {f:?}");
+                    assert!(!healer || f.trade.is_some_and(|t| t.tier != Tier::Master), "a master healer");
+                }
+            }
+        }
+        assert!(camps > 100, "{camps} camps");
+        eprintln!("{made} of {camps} camps made a cleric of one of their folk");
+    }
+
+    #[test]
+    fn a_master_displaces_neither_a_healer_nor_a_camps_only_guard() {
+        let rules = TradeRules::DEFAULT;
+        let mut checked = 0;
+        for world in WORLDS {
+            let masters = masters_of(world, &rules);
+            for depth in 6..=14 {
+                let mut l = level(world, depth);
+                let Some(faction) = held(&l).into_iter().find(|f| l.folk.iter().filter(|x| x.faction == *f).count() >= 2) else { continue };
+                // Make the camp a guard and a healer alone, then place every master of the level.
+                l.folk.retain(|f| f.faction != faction || f.trade.is_some_and(|t| t.profession == Profession::Guard || t.profession == Profession::Healer));
+                let mut camp: Vec<usize> = (0..l.folk.len()).filter(|&i| l.folk[i].faction == faction).collect();
+                camp.truncate(2);
+                if camp.len() < 2 || !is_guard(&l.folk[camp[0]]) == !is_guard(&l.folk[camp[1]]) {
+                    continue;
+                }
+                let before: Vec<_> = camp.iter().map(|&i| l.folk[i].trade).collect();
+                place_masters(&mut l, &masters);
+                let after: Vec<_> = camp.iter().map(|&i| l.folk[i].trade).collect();
+                if masters.on(depth).next().is_some() {
+                    checked += 1;
+                }
+                assert_eq!(before, after, "world {world} depth {depth}: a master displaced the guard or healer");
+            }
+        }
+        assert!(checked > 3, "{checked} camps checked");
+    }
+
+    #[test]
+    fn no_camp_with_two_folk_who_are_not_masters_loses_its_last_guard() {
+        for world in WORLDS {
+            for depth in [1, 2, 3, 6, 7, 9, 12] {
+                let l = level(world, depth);
+                for spec in l.factions.iter().filter(|f| !f.is_denizen()) {
+                    let camp: Vec<_> = l.folk.iter().filter(|f| f.faction == spec.id).collect();
+                    let others = camp.iter().filter(|f| f.trade.is_none_or(|t| t.tier != Tier::Master)).count();
+                    if others >= 2 {
+                        assert!(camp.iter().any(|f| is_guard(f)), "world {world} depth {depth}: {} lost its guard", spec.name);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_healer_stocks_three_incenses_and_two_censers_and_nobody_else_does() {
+        use fb_items::stock::{Line, stock};
+        let (mut healers, mut others) = (0, 0);
+        for world in 1..=6 {
+            for depth in [1, 3, 6] {
+                let l = level(world, depth);
+                for f in l.folk.iter().filter_map(|f| f.trade.map(|t| (f, t))) {
+                    let Some(shop) = f.1.shop("Bera", "the Ash Choir") else { continue };
+                    if f.1.profession == Profession::Healer {
+                        assert_eq!(shop.line, Line::Sacred);
+                        let wares = stock(&shop, depth, f.0.seed);
+                        let mut kinds: Vec<_> = wares.iter().filter_map(|i| i.incense_kind()).map(|k| k.name()).collect();
+                        kinds.sort();
+                        kinds.dedup();
+                        assert!(kinds.len() >= 3 && wares.iter().filter(|i| i.is_censer()).count() >= 2, "world {world} depth {depth}");
+                        assert_eq!(wares, stock(&shop, depth, f.0.seed));
+                        healers += 1;
+                    } else {
+                        assert_ne!(shop.line, Line::Sacred);
+                        others += 1;
+                    }
+                }
+            }
+        }
+        assert!(healers >= 18 && others > 0, "{healers} healers, {others} others");
     }
 
     #[test]

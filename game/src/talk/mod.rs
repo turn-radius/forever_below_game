@@ -229,6 +229,7 @@ fn talk_for_capture(
             "strange" => talk.topics.iter().position(|t| *t == Topic::Strange),
             "denizens" => talk.topics.iter().position(|t| matches!(t, Topic::Faction(_))),
             "persuade" => talk.topics.iter().position(|t| *t == Topic::Persuade),
+            "heal" => talk.topics.iter().position(|t| *t == Topic::Service(Service::Heal)),
             _ => None,
         };
         if let Some(n) = std::env::var("FB_TALK_TOPIC").ok().and_then(|v| v.trim().parse::<usize>().ok().or_else(|| by_name(v.trim()).map(|i| i + 1))) {
@@ -303,6 +304,15 @@ fn choose(talk: &mut Talk, topic: Topic, run_seed: Option<u32>, lexicon: &Lexico
     {
         let said = lines::barter_refusal(speaker);
         talk.answer = Some((topic, said));
+        talk.revision += 1;
+        return;
+    }
+    // A healer's Heal: the refusal of a Hostile or Wary one comes first, whatever the Heal screen
+    // later does ([`crate::healer`]).
+    if topic == Topic::Service(Service::Heal)
+        && let Some(refusal) = crate::healer::refusal(speaker, talk.parley)
+    {
+        talk.answer = Some((topic, refusal));
         talk.revision += 1;
         return;
     }
@@ -416,7 +426,7 @@ fn talk(
         // Hostile or not, they hold their blows while the delver parleys.
         commands.entity(entity).insert(Parleying);
         talk.greeting = lines::parley_greeting(&speaker, turned);
-        talk.topics = lines::parley_topics();
+        talk.topics = lines::parley_topics(&speaker);
     } else {
         talk.greeting = lines::greeting(&speaker);
         talk.topics = lines::topics(&speaker);

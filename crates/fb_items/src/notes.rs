@@ -56,7 +56,7 @@ pub struct Trader {
 }
 
 /// The keys of what traders sell, one per trading profession: `wares_<key>` in `data/notes.json`.
-pub const WARES: [&str; 7] = ["armorer", "weaponsmith", "bowyer", "tentmaker", "general_goods", "alchemist", "enchanter"];
+pub const WARES: [&str; 8] = ["armorer", "weaponsmith", "bowyer", "tentmaker", "general_goods", "alchemist", "enchanter", "healer"];
 
 /// A book lying on a level.
 #[derive(Clone, Debug, PartialEq, Eq)]
