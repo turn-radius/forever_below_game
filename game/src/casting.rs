@@ -736,7 +736,8 @@ fn shimmer_baubles(
 /// `FB_PRAY=1` casts once, a moment into the delve; `FB_PRAY_TIER=2` chooses the tier first and
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. `FB_PRAY_TURN=180` turns the
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
-/// the light last only that many game seconds, to see it sputter out. The prayer's quickslot
+/// the light last only that many game seconds, to see it sputter out. `FB_PRAY_NAME=Smite`
+/// casts that prayer instead of the chosen one. The prayer's quickslot
 /// flashes as if its key were pressed, since captures ignore the keyboard. For captures.
 #[allow(clippy::type_complexity)]
 fn debug_cast(
@@ -766,6 +767,11 @@ fn debug_cast(
         }
     }
     if *frames == 60 {
+        if let Ok(name) = std::env::var("FB_PRAY_NAME")
+            && !name.trim().is_empty()
+        {
+            chosen.name = name.trim().to_string();
+        }
         if let Some(tier) = std::env::var("FB_PRAY_TIER").ok().and_then(|v| v.trim().parse::<u8>().ok()) {
             chosen.tier = tier.clamp(1, MAX_TIER);
         }
@@ -846,16 +852,33 @@ fn show_slot_labels(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, Wit
     }
 }
 
-/// The pictures that stand for prayers in a quickslot, by effect: Divine Light's bauble.
+/// The pictures that stand for prayers in a quickslot, by effect: Divine Light's bauble, Smite's
+/// pillar of light and Shield's faint gold shield.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbilityPicture {
     Bauble,
+    Pillar,
+    Shield,
+}
+
+impl AbilityPicture {
+    const ALL: [AbilityPicture; 3] = [AbilityPicture::Bauble, AbilityPicture::Pillar, AbilityPicture::Shield];
+
+    fn pixels(self) -> Vec<[u8; 4]> {
+        match self {
+            AbilityPicture::Bauble => bauble_icon_pixels(),
+            AbilityPicture::Pillar => pillar_icon_pixels(),
+            AbilityPicture::Shield => shield_icon_pixels(),
+        }
+    }
 }
 
 /// The picture for a prayer of `effect`, if it has one; a prayer without one is named instead.
 pub fn icon_for(effect: &str) -> Option<AbilityPicture> {
     match effect {
         "light" => Some(AbilityPicture::Bauble),
+        "smite" => Some(AbilityPicture::Pillar),
+        "shield" => Some(AbilityPicture::Shield),
         _ => None,
     }
 }
@@ -894,48 +917,115 @@ pub fn bauble_icon_pixels() -> Vec<[u8; 4]> {
     out
 }
 
+/// A picture as pixels from `light` (0 to 1 per pixel) and a `tint` that runs from the gold rim
+/// to the near-white core by `white` (0 to 1 per pixel), in sRGB with straight alpha.
+fn icon_from(light: impl Fn(Vec2) -> (f32, f32)) -> Vec<[u8; 4]> {
+    let n = ICON_SIZE as f32;
+    let rim = HOLY_RIM.to_srgba();
+    let core = HOLY_CORE.to_srgba();
+    let mut out = Vec::with_capacity((ICON_SIZE * ICON_SIZE) as usize);
+    for y in 0..ICON_SIZE {
+        for x in 0..ICON_SIZE {
+            let (light, white) = light(Vec2::new((x as f32 + 0.5) / n * 2.0 - 1.0, (y as f32 + 0.5) / n * 2.0 - 1.0));
+            let (light, white) = (light.clamp(0.0, 1.0), white.clamp(0.0, 1.0));
+            let mix = |a: f32, b: f32| ((a + (b - a) * white) * 255.0).round() as u8;
+            out.push([mix(rim.red, core.red), mix(rim.green, core.green), mix(rim.blue, core.blue), (light * 255.0).round() as u8]);
+        }
+    }
+    out
+}
+
+/// Smite's picture: a pillar of near-white light falling onto a flat ring of light on the floor,
+/// with sparks thrown off the foot.
+pub fn pillar_icon_pixels() -> Vec<[u8; 4]> {
+    icon_from(|p| {
+        // The shaft: narrow at the top, widening as it lands, brightest down its middle.
+        let reach = ((p.y + 1.0) / 1.7).clamp(0.0, 1.0);
+        let half = 0.07 + 0.13 * reach;
+        let shaft = (-(p.x / half).powi(2)).exp() * (0.35 + 0.65 * reach) * ((0.75 - p.y) / 0.25).clamp(0.0, 1.0);
+        let core = (-(p.x / (half * 0.35)).powi(2)).exp() * ((0.7 - p.y) / 0.3).clamp(0.0, 1.0);
+        // The ring on the floor, seen from a little above.
+        let q = Vec2::new(p.x / 0.78, (p.y - 0.62) / 0.2);
+        let ring = (-((q.length() - 1.0).abs() / 0.12).powi(2)).exp() * 0.8;
+        let foot = (-(Vec2::new(p.x / 0.22, (p.y - 0.62) / 0.1)).length_squared()).exp();
+        let sparks: f32 = [(0.4_f32, 0.3_f32), (-0.45, 0.4), (0.22, 0.05), (-0.25, 0.12)].iter().map(|&(x, y)| (-((p - Vec2::new(x, y)).length() / 0.045).powi(2)).exp() * 0.85).sum();
+        (shaft * 0.85 + ring + foot * 0.7 + sparks + core, core + foot * 0.9 + shaft * 0.35)
+    })
+}
+
+/// Shield's picture: a faint gold shield outline in a soft glow, a ring of motes inside it.
+pub fn shield_icon_pixels() -> Vec<[u8; 4]> {
+    icon_from(|p| {
+        // A heater shield: straight sides to the middle, then curving in to a point at the foot.
+        let top = -0.7;
+        let half = |y: f32| if y < 0.0 { 0.56 } else { 0.56 * (1.0 - (y / 0.85).powf(1.8)).max(0.0).powf(0.6) };
+        let inside = p.y > top && p.y < 0.85 && p.x.abs() < half(p.y);
+        let edge = if p.y < top || p.y > 0.85 {
+            ((p.y - top).abs().min((p.y - 0.85).abs()) + 0.4).max(0.4)
+        } else {
+            let side = (p.x.abs() - half(p.y)).abs();
+            let lid = (p.y - top).abs().max(if p.x.abs() < half(p.y) { 0.0 } else { side });
+            side.min(lid)
+        };
+        let outline = (-(edge / 0.045).powi(2)).exp() * 0.85;
+        let glow = if inside { 0.16 } else { (-(edge / 0.18).powi(2)).exp() * 0.2 };
+        // A ring of motes inside, brighter toward the top left.
+        let q = Vec2::new(p.x, p.y - 0.05);
+        let along = q.y.atan2(q.x);
+        let motes = (0.5 + 0.5 * (along * 7.0).cos()).powi(8) * (-((q.length() - 0.3) / 0.035).powi(2)).exp() * (0.5 + 0.5 * (-along).cos());
+        (outline + glow + motes * 0.8, outline * 0.35 + motes * 0.6)
+    })
+}
+
 /// The picture of a prayer in a quickslot, a child of the slot under its number.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct AbilityIcon(pub usize);
+pub struct AbilityIcon(pub usize, pub AbilityPicture);
 
 /// Gives each quickslot its prayer picture and its [`crate::time_left::TimeLeft`] veil, once.
 fn dress_ability_slots(
     mut commands: Commands,
     slots: Query<(Entity, &crate::quickslots::QuickSlot), Without<crate::time_left::TimeLeft>>,
     images: Option<ResMut<Assets<Image>>>,
-    mut bauble: Local<Option<Handle<Image>>>,
+    mut pictures: Local<Option<Vec<Handle<Image>>>>,
 ) {
     let Some(mut images) = images else { return };
     for (entity, slot) in &slots {
-        let picture = bauble
-            .get_or_insert_with(|| {
-                let data = bauble_icon_pixels().into_iter().flatten().collect();
-                let size = bevy::render::render_resource::Extent3d { width: ICON_SIZE, height: ICON_SIZE, depth_or_array_layers: 1 };
-                images.add(Image::new(
-                    size,
-                    bevy::render::render_resource::TextureDimension::D2,
-                    data,
-                    bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                    bevy::asset::RenderAssetUsages::default(),
-                ))
-            })
-            .clone();
-        commands.entity(entity).insert(crate::time_left::TimeLeft(None)).with_child((
-            AbilityIcon(slot.0),
-            ImageNode::new(picture),
-            Node { position_type: PositionType::Absolute, width: percent(86), height: percent(86), ..default() },
-            // Under the slot's number and above its square.
-            ZIndex(-1),
-            Visibility::Hidden,
-            Pickable::IGNORE,
-        ));
+        let handles = pictures.get_or_insert_with(|| {
+            AbilityPicture::ALL
+                .iter()
+                .map(|picture| {
+                    let data = picture.pixels().into_iter().flatten().collect();
+                    let size = bevy::render::render_resource::Extent3d { width: ICON_SIZE, height: ICON_SIZE, depth_or_array_layers: 1 };
+                    images.add(Image::new(
+                        size,
+                        bevy::render::render_resource::TextureDimension::D2,
+                        data,
+                        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                        bevy::asset::RenderAssetUsages::default(),
+                    ))
+                })
+                .collect()
+        });
+        commands.entity(entity).insert(crate::time_left::TimeLeft(None)).with_children(|slot_node| {
+            for (picture, handle) in AbilityPicture::ALL.into_iter().zip(handles.iter()) {
+                slot_node.spawn((
+                    AbilityIcon(slot.0, picture),
+                    ImageNode::new(handle.clone()),
+                    Node { position_type: PositionType::Absolute, width: percent(86), height: percent(86), ..default() },
+                    // Under the slot's number and above its square.
+                    ZIndex(-1),
+                    Visibility::Hidden,
+                    Pickable::IGNORE,
+                ));
+            }
+        });
     }
 }
 
 /// Shows each slot's prayer picture while it holds a prayer that has one.
 fn show_ability_icons(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, With<Player>>, mut icons: Query<(&AbilityIcon, &mut Visibility)>) {
     for (icon, mut shown) in &mut icons {
-        let pictured = slots.get(icon.0).and_then(|name| written(&books, name)).is_some_and(|w| icon_for(&w.effect) == Some(AbilityPicture::Bauble));
+        let pictured = slots.get(icon.0).and_then(|name| written(&books, name)).is_some_and(|w| icon_for(&w.effect) == Some(icon.1));
         let want = if pictured { Visibility::Inherited } else { Visibility::Hidden };
         if *shown != want {
             *shown = want;
@@ -1252,6 +1342,18 @@ mod tests {
         assert!(ring > 120, "motes on the orbits stand out well clear of the heart: {ring}");
         assert_eq!(icon_for("light"), Some(AbilityPicture::Bauble));
         assert_eq!(icon_for("frighten"), None, "other prayers are named");
+    }
+
+    #[test]
+    fn smite_and_shield_have_their_own_pictures() {
+        assert_eq!((icon_for("smite"), icon_for("shield")), (Some(AbilityPicture::Pillar), Some(AbilityPicture::Shield)));
+        let side = ICON_SIZE as usize;
+        for picture in [AbilityPicture::Pillar, AbilityPicture::Shield] {
+            let pixels = picture.pixels();
+            assert_eq!(pixels.len(), side * side);
+            assert!(pixels[0][3] < 10, "{picture:?} is clear in the corner");
+            assert!(pixels.iter().map(|p| p[3]).max().unwrap() > 150, "{picture:?} has something bright in it");
+        }
     }
 
     #[test]
