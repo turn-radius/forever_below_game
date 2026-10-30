@@ -189,9 +189,6 @@ pub struct Session {
     pub purse: u64,
     /// What the trader looks like, for the portrait over their shelf.
     pub look: Look,
-    /// The pack whose window the barter opened for the delver to trade from, which it closes again
-    /// when it ends; none if the delver had a bag open already.
-    pub opened_pack: Option<ItemId>,
 }
 
 impl Session {
@@ -398,7 +395,6 @@ impl Barter {
             spot: 0,
             purse: 0,
             look: Look { spec: fb_body::BodySpec::roll(fb_body::Folk::Human, 1), gear: vec![], dirt: 0.0 },
-            opened_pack: None,
         };
         Barter { session: Some(session), ..default() }
     }
@@ -531,7 +527,6 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
         spot: person.spot.seed,
         purse: shelf.purse,
         look: Look::of(person),
-        opened_pack: None,
     })
 }
 
@@ -700,7 +695,6 @@ fn deal_for_capture(
     mut shelves: Query<&mut Shelf>,
     mut record: Option<ResMut<WorldRecord>>,
     clock: Option<Res<crate::game_clock::GameClock>>,
-    mut windows: Option<ResMut<crate::inventory::bags::BagWindows>>,
     mut frames: Local<u32>,
 ) {
     let mode = std::env::var("FB_BARTER").unwrap_or_default();
@@ -714,9 +708,6 @@ fn deal_for_capture(
         if inventory.worn(Slot::Back).is_none() {
             let pack = inventory.add(fb_items::roll_item("Pack", 2).expect("a pack"));
             let _ = inventory.wear(pack, Slot::Back);
-            if let Some(windows) = windows.as_deref_mut() {
-                windows.order.push(pack);
-            }
             let blade = inventory.add(fb_items::roll_item("Dagger", 6).expect("a dagger"));
             let _ = inventory.stow(blade);
         }
@@ -763,7 +754,6 @@ fn open_barter(
     mut inventory: ResMut<Inventory>,
     mut barter: ResMut<Barter>,
     mut showing: ResMut<OpenContainer>,
-    mut windows: Option<ResMut<crate::inventory::bags::BagWindows>>,
     mut toasts: Toasts,
 ) {
     let from_talk = chosen.read().find(|c| c.service == Service::Barter).map(|c| c.folk);
@@ -807,24 +797,7 @@ fn open_barter(
     showing.0 = Some(session.shelf);
     barter.session = Some(session);
     barter.notice = None;
-    if let Some(windows) = windows.as_deref_mut() {
-        let opened = open_pack(&inventory, windows);
-        if let Some(session) = barter.session.as_mut() {
-            session.opened_pack = opened;
-        }
-    }
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
-}
-
-/// Opens the delver's pack on their side to trade from, when none of their bags is open: the
-/// pack, else the first bag they carry. Gives the one opened.
-fn open_pack(inventory: &Inventory, windows: &mut crate::inventory::bags::BagWindows) -> Option<ItemId> {
-    let pack = inventory.worn(Slot::Back).filter(|&p| inventory.grid(p).is_some()).or_else(|| inventory.carried_containers().first().copied())?;
-    if inventory.carried_containers().iter().any(|&c| windows.is_open(c)) {
-        return None;
-    }
-    windows.order.push(pack);
-    Some(pack)
 }
 
 /// What a button on the balance does.
@@ -916,7 +889,6 @@ pub(crate) fn close_barter(
     mut inventory: ResMut<Inventory>,
     mut showing: ResMut<OpenContainer>,
     mut folk: Query<(Option<&Hostility>, Option<&mut Routine>, Has<Corpse>)>,
-    mut windows: Option<ResMut<crate::inventory::bags::BagWindows>>,
     mut toasts: Toasts,
 ) {
     let Some(session) = barter.session.as_ref() else { return };
@@ -937,10 +909,6 @@ pub(crate) fn close_barter(
     let Some(session) = barter.session.take() else { return };
     if let Ok((_, Some(mut routine), _)) = folk.get_mut(session.folk) {
         routine.release();
-    }
-    // The pack the barter opened is shut again, as it was; one the delver had open stays.
-    if let (Some(pack), Some(windows)) = (session.opened_pack, windows.as_deref_mut()) {
-        windows.close(pack);
     }
     end(&mut inventory, session);
     showing.0 = None;
