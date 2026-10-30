@@ -161,6 +161,16 @@ range = 0.0
 seconds = 0.0
 known = true
 
+# Raises the caster's armour class (not the Ward term, which is another thing).
+[casting.terms.shield]
+kind = "effect"
+name = "Shield"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+
 [casting.terms.frighten]
 kind = "effect"
 name = "Frighten"

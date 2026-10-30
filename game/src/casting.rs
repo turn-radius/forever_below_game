@@ -1,11 +1,11 @@
 //! Casting in the game: the prayers and spells every caster shares ([`fb_character::casting`]).
 //!
 //! A caster writes prayers from terms ([`Spellbook`], on the delver as [`DelverSpellbook`] and
-//! saved with them); a cleric starts with Divine Light and Smite written. The Pray key
+//! saved with them); a cleric starts with Divine Light, Smite and Shield written. The Pray key
 //! ([`Action::Pray`], C) casts the chosen prayer at the chosen tier; the tier key
 //! ([`Action::CastTier`], V) steps the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
 //! ([`AbilitySlots`]): the slot's key then casts it at the chosen tier. A cleric starts with
-//! Divine Light and Smite in the first free slots; in the inventory the slot's key with the
+//! Divine Light, Smite and Shield in the first free slots; in the inventory the slot's key with the
 //! mouse over nothing binds the chosen prayer to that slot.
 //!
 //! Every cast goes through a [`CastRequest`] message, which anything can send. [`cast_requests`]
@@ -156,8 +156,8 @@ fn forget_the_abilities(mut slots: ResMut<AbilitySlots>, mut chosen: ResMut<Chos
 }
 
 /// The prayers a new cleric holds in their quickslots, in order, each in the first slot with
-/// nothing in it: Divine Light, Smite.
-const STARTING_PRAYERS: [&str; 2] = ["Divine Light", "Smite"];
+/// nothing in it: Divine Light, Smite, Shield.
+const STARTING_PRAYERS: [&str; 3] = ["Divine Light", "Smite", "Shield"];
 
 /// A new cleric holds their [`STARTING_PRAYERS`] in the first slots with nothing in them.
 fn give_clerics_their_prayer(new: Query<(), Added<Player>>, character: Option<Res<Character>>, items: Res<Quickslots>, mut slots: ResMut<AbilitySlots>) {
@@ -235,6 +235,7 @@ fn bind_ability_hovered(
 }
 
 /// Does each request: spends the mana and sends [`Casted`], or says why not.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cast_requests(
     mut requests: MessageReader<CastRequest>,
     mut done: MessageWriter<Casted>,
@@ -941,20 +942,26 @@ fn show_ability_icons(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, W
     }
 }
 
-/// Veils each slot holding Divine Light by the time its bauble has left, swept clockwise as it
-/// runs down; nothing while no light burns or the slot holds something else.
+/// Veils each slot holding a prayer that lasts by the time it has left, swept clockwise as it
+/// runs down: Divine Light by its bauble's, Shield by its shield's; nothing while none holds or
+/// the slot holds something else.
 fn show_time_left(
     slots: Res<AbilitySlots>,
     books: Query<&DelverSpellbook, With<Player>>,
     clock: Option<Res<GameClock>>,
     lights: Query<&DivineLight>,
+    shields: Query<&crate::prayers::ShieldPrayer>,
     mut veils: Query<(&crate::quickslots::QuickSlot, &mut crate::time_left::TimeLeft)>,
 ) {
     let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
-    let left = lights.iter().map(|l| l.time_left(now)).reduce(f32::max);
+    let light = lights.iter().map(|l| l.time_left(now)).reduce(f32::max);
+    let shield = shields.iter().map(|s| s.time_left(now)).reduce(f32::max);
     for (slot, mut time) in &mut veils {
-        let light = slots.get(slot.0).and_then(|name| written(&books, name)).is_some_and(|w| w.effect == "light");
-        let want = if light { left } else { None };
+        let want = match slots.get(slot.0).and_then(|name| written(&books, name)).map(|w| w.effect.as_str()) {
+            Some("light") => light,
+            Some("shield") => shield,
+            _ => None,
+        };
         if time.0 != want {
             time.0 = want;
         }
@@ -1060,12 +1067,12 @@ mod tests {
     }
 
     #[test]
-    fn a_new_cleric_holds_divine_light_and_smite_in_the_first_two_slots() {
+    fn a_new_cleric_holds_divine_light_smite_and_shield_in_the_first_three_slots() {
         let (app, player) = delve(true, 10.0);
         let slots = app.world().resource::<AbilitySlots>();
-        assert_eq!((slots.get(0), slots.get(1)), (Some("Divine Light"), Some("Smite")));
+        assert_eq!((slots.get(0), slots.get(1), slots.get(2)), (Some("Divine Light"), Some("Smite"), Some("Shield")));
         let book = &app.world().get::<DelverSpellbook>(player).unwrap().0;
-        assert_eq!(book.written.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Divine Light", "Smite"]);
+        assert_eq!(book.written.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Divine Light", "Smite", "Shield"]);
     }
 
     #[test]
@@ -1117,7 +1124,7 @@ mod tests {
         assert_eq!(app.world().resource::<Chosen>().name, "", "a fighter chooses nothing");
         app.world_mut().resource_mut::<Character>().class = crate::character::Class::Cleric;
         app.update();
-        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 2);
+        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 3);
         assert_eq!(app.world().resource::<Chosen>().name, "Divine Light");
     }
 
@@ -1272,6 +1279,28 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(left(&mut app), None, "gone with the light");
+    }
+
+    #[test]
+    fn a_slot_holding_shield_shows_its_time_left_and_only_while_it_holds() {
+        let (mut app, _) = delve(true, 20.0);
+        let slot = app.world_mut().spawn((crate::quickslots::QuickSlot(2), Node::default(), crate::time_left::TimeLeft(None))).id();
+        let light_slot = app.world_mut().spawn((crate::quickslots::QuickSlot(0), Node::default(), crate::time_left::TimeLeft(None))).id();
+        app.update();
+        let left = |app: &App, slot| app.world().get::<crate::time_left::TimeLeft>(slot).copied().unwrap().0;
+        assert_eq!(app.world().resource::<AbilitySlots>().get(2), Some("Shield"));
+        assert_eq!(left(&app, slot), None, "no veil before it is cast");
+        press(&mut app, KeyCode::Digit3);
+        app.update();
+        assert!(left(&app, slot).is_some_and(|l| l > 0.99), "all its time left at the cast");
+        assert_eq!(left(&app, light_slot), None, "Divine Light's slot is not veiled by it");
+        app.world_mut().resource_mut::<GameClock>().advance(600.0 * 0.25);
+        app.update();
+        assert!(left(&app, slot).is_some_and(|l| (l - 0.75).abs() < 0.01), "a quarter gone: {:?}", left(&app, slot));
+        app.world_mut().resource_mut::<GameClock>().advance(600.0);
+        app.update();
+        app.update();
+        assert_eq!(left(&app, slot), None, "gone with the shield");
     }
 
     #[test]

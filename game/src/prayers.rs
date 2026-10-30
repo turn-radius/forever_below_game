@@ -1,4 +1,4 @@
-//! The cleric's fighting prayers: Smite now, Shield next. Both are written from terms like any
+//! The cleric's fighting prayers: Smite and Shield. Both are written from terms like any
 //! prayer ([`fb_character::casting`]) and reacted to here from the [`Casted`] message.
 //!
 //! **Smite** (smite, at one you see, instant) falls on the creature nearest the crosshair within
@@ -12,9 +12,18 @@
 //! mana is spent, so a cast with no one in sight costs nothing, and [`smite_the_seen`] asks again
 //! when the cast has gone through. Both see the same floor in the same frame.
 //!
-//! **The visuals hook**: when a prayer's effect lands on creatures, [`PrayerLanded`] is sent with
-//! the effect's name (`"smite"`), the caster and the creatures it fell on. The effect system plays
-//! the pillar at their feet from it.
+//! **Shield** (shield, self, short) raises the caster's armour class by 2 a tier
+//! ([`fb_character::casting::shield_bonus`]) while a [`ShieldPrayer`] lasts. It is an entity like
+//! Divine Light's bauble, so it is not saved with the delve, as the light is not: it ends when its
+//! game time is up ([`end_the_shield`]), and recasting replaces it, never stacks. The delver's
+//! [`crate::combat::ArmourClass`] and the sheet add it as its own "Shield" term
+//! ([`crate::character::Character::armour_class_shielded`]).
+//!
+//! **The visuals hooks**: [`PrayerLanded`] is sent when a prayer's effect lands, with the
+//! effect's name (`"smite"` on the creature it fell on, `"shield"` on the caster, with no
+//! targets); the effect system plays the pillar at the targets' feet, and the shimmer for as
+//! long as a [`ShieldPrayer`] exists. [`ShieldStruck`] is sent when a blow lands on a shielded
+//! caster, for the ripple.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -26,6 +35,9 @@ use crate::casting::{Casted, cast_requests};
 use crate::combat::RunDice;
 use crate::combat::feedback::{Corpse, Struck};
 use crate::creatures::Critter;
+use crate::creatures::behaviour::AttackOnDelver;
+use crate::game_clock::GameClock;
+use crate::launch::AppState;
 use crate::play::{DelveSystems, Player};
 
 /// A prayer's effect landed on creatures: what the effect system plays it from. `effect` is the
@@ -38,16 +50,62 @@ pub struct PrayerLanded {
     pub targets: Vec<Entity>,
 }
 
-pub fn register(app: &mut App) {
-    app.add_message::<PrayerLanded>().add_message::<Struck>().add_systems(Update, smite_the_seen.after(cast_requests).in_set(DelveSystems));
+/// The Shield prayer on the delver: `bonus` armour class until game time `expires`. At most one
+/// exists; a new cast replaces it.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[require(DespawnOnExit<AppState> = DespawnOnExit(AppState::Delving))]
+pub struct ShieldPrayer {
+    /// The tier it was cast at.
+    pub tier: u8,
+    /// The armour class it adds.
+    pub bonus: i32,
+    /// The game time it ends, seconds.
+    pub expires: f64,
+    /// Game seconds it lasts in all, from its cast to `expires`.
+    pub lasts: f64,
 }
+
+impl ShieldPrayer {
+    /// The share of its time it has left at game time `now`, 1 when cast to 0 when over.
+    pub fn time_left(&self, now: f64) -> f32 {
+        if self.lasts <= 0.0 {
+            return 0.0;
+        }
+        ((self.expires - now) / self.lasts).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// A blow landed on a delver under a [`ShieldPrayer`]: what the ripple and flash are played
+/// from. `from` is where the blow came from on the floor (world `(x, z)`).
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct ShieldStruck {
+    pub caster: Entity,
+    pub from: Vec2,
+    pub damage: u32,
+}
+
+/// The armour class the shields on the delver add (the highest; a recast replaces, never stacks).
+pub fn shield_bonus<'a>(shields: impl IntoIterator<Item = &'a ShieldPrayer>) -> i32 {
+    shields.into_iter().map(|s| s.bonus).max().unwrap_or(0)
+}
+
+pub fn register(app: &mut App) {
+    app.add_message::<PrayerLanded>()
+        .add_message::<ShieldStruck>()
+        .add_message::<AttackOnDelver>()
+        .add_message::<Struck>()
+        .add_systems(Update, (smite_the_seen, raise_the_shield, end_the_shield, ripple_the_shield).chain().after(cast_requests).in_set(DelveSystems));
+}
+
+/// A creature that is still on its feet, and is not the delver.
+type Alive = (Without<Player>, Without<Corpse>);
 
 /// What the cleric can see of the creatures round them: the way [`crate::casting_influence`]
 /// finds those in reach, a wall or a shut door blocking the line.
 #[derive(SystemParam)]
 pub struct Sight<'w, 's> {
     player: Query<'w, 's, (Entity, &'static Transform), With<Player>>,
-    creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform), (Without<Player>, Without<Corpse>)>,
+    creatures: Query<'w, 's, (Entity, &'static Critter, &'static Transform), Alive>,
     level: Option<Res<'w, crate::play::CurrentLevel>>,
     blocked_cells: Option<Res<'w, crate::play::BlockedCells>>,
     doors: Option<Res<'w, crate::doors::Doors>>,
@@ -95,6 +153,42 @@ fn smite_the_seen(mut casts: MessageReader<Casted>, sight: Sight, mut dice: ResM
         // weakness to bludgeoning never doubles it.
         struck.write(Struck { target, damage: 0, from: at.translation.xz(), bludgeoning: false, critical: false, by_ally: false, graze: false, fire: damage });
         landed.write(PrayerLanded { effect: "smite".into(), tier: cast.tier, caster, targets: vec![target] });
+    }
+}
+
+/// Shield: raises it on the caster, replacing any that stood.
+fn raise_the_shield(mut casts: MessageReader<Casted>, mut commands: Commands, clock: Option<Res<GameClock>>, players: Query<Entity, With<Player>>, old: Query<Entity, With<ShieldPrayer>>, mut landed: MessageWriter<PrayerLanded>) {
+    for Casted(cast) in casts.read() {
+        if cast.written.effect != "shield" {
+            continue;
+        }
+        let Some(caster) = players.iter().next() else { continue };
+        let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+        for shield in &old {
+            commands.entity(shield).despawn();
+        }
+        let bonus = fb_character::casting::shield_bonus(cast.tier);
+        commands.spawn((Name::new(format!("Shield, tier {}", cast.tier)), ShieldPrayer { tier: cast.tier, bonus, expires: now + cast.duration, lasts: cast.duration }));
+        landed.write(PrayerLanded { effect: "shield".into(), tier: cast.tier, caster, targets: vec![] });
+    }
+}
+
+/// Lets the shield go when its time is up.
+fn end_the_shield(mut commands: Commands, clock: Option<Res<GameClock>>, shields: Query<(Entity, &ShieldPrayer)>) {
+    let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+    for (entity, shield) in &shields {
+        if now >= shield.expires {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Says each blow that lands on the shielded delver, for the ripple.
+fn ripple_the_shield(mut blows: MessageReader<AttackOnDelver>, shields: Query<&ShieldPrayer>, players: Query<Entity, With<Player>>, mut struck: MessageWriter<ShieldStruck>) {
+    for blow in blows.read() {
+        if let (Some(caster), false) = (players.iter().next(), shields.is_empty()) {
+            struck.write(ShieldStruck { caster, from: blow.attacker_pos, damage: blow.damage });
+        }
     }
 }
 
@@ -220,6 +314,83 @@ mod tests {
         assert_eq!(blows.len(), 1, "one target");
         assert_eq!(blows[0].target, far_ahead);
         assert_ne!(blows[0].target, near_aside);
+    }
+
+    fn shielded() -> (App, Entity, i32) {
+        let (mut app, player) = delve(20.0);
+        app.init_resource::<GameClock>().add_message::<AttackOnDelver>().add_systems(Update, crate::combat::vitals::armour_the_delver.after(end_the_shield));
+        app.update();
+        let base = armour(&app, player);
+        (app, player, base)
+    }
+
+    fn armour(app: &App, player: Entity) -> i32 {
+        app.world().get::<crate::combat::ArmourClass>(player).expect("the delver carries their Armor Class").0
+    }
+
+    fn shield(app: &mut App, tier: u8) {
+        app.world_mut().write_message(CastRequest { name: "Shield".into(), tier });
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn shield_at_tier_two_raises_armour_class_by_four_until_its_time_is_up() {
+        let (mut app, player, base) = shielded();
+        shield(&mut app, 2);
+        assert_eq!(mana(&app, player), 14.0, "shield 2 + self 0 + short 1, twice");
+        assert_eq!(armour(&app, player), base + 4);
+        let shields: Vec<ShieldPrayer> = app.world_mut().query::<&ShieldPrayer>().iter(app.world()).copied().collect();
+        let lasts = shields[0].lasts;
+        let character = app.world().resource::<Character>();
+        let inventory = crate::inventory::Inventory::default();
+        assert_eq!((shields.len(), shields[0].bonus, lasts), (1, 4, 1200.0));
+        let rules = fb_character::rules::defaults();
+        assert_eq!(character.derive_prayed(rules, &inventory, None, shield_bonus(&shields)).armour_class, base + 4, "the sheet shows it");
+        let line = character.armour_class_shielded(rules, &inventory, shield_bonus(&shields)).line();
+        assert!(line.contains("Shield (+4)"), "and explains it: {line}");
+        app.world_mut().resource_mut::<GameClock>().advance(lasts * 0.5);
+        app.update();
+        assert_eq!(armour(&app, player), base + 4, "still holding at half time");
+        app.world_mut().resource_mut::<GameClock>().advance(lasts);
+        app.update();
+        app.update();
+        assert_eq!(armour(&app, player), base, "back when the time is up");
+        assert_eq!(app.world_mut().query::<&ShieldPrayer>().iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn recasting_shield_replaces_it_and_never_stacks() {
+        let (mut app, player, base) = shielded();
+        shield(&mut app, 1);
+        assert_eq!(armour(&app, player), base + 2);
+        shield(&mut app, 1);
+        assert_eq!(armour(&app, player), base + 2, "the same tier again is the same shield");
+        shield(&mut app, 3);
+        assert_eq!(armour(&app, player), base + 6);
+        shield(&mut app, 1);
+        assert_eq!(armour(&app, player), base + 2, "the new cast replaces, even a lesser one");
+        assert_eq!(app.world_mut().query::<&ShieldPrayer>().iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn a_blow_on_a_shielded_caster_is_for_the_ripple() {
+        let (mut app, player, _) = shielded();
+        let blow = AttackOnDelver { attacker: Entity::PLACEHOLDER, species: None, damage: 3, poison: 0, attacker_pos: Vec2::new(5.0, 0.0) };
+        let ripples = |app: &App| app.world().resource::<Messages<ShieldStruck>>().iter_current_update_messages().copied().collect::<Vec<_>>();
+        app.world_mut().write_message(blow);
+        app.update();
+        assert!(ripples(&app).is_empty(), "no shield, no ripple");
+        shield(&mut app, 1);
+        app.world_mut().write_message(blow);
+        app.update();
+        assert_eq!(ripples(&app), vec![ShieldStruck { caster: player, from: Vec2::new(5.0, 0.0), damage: 3 }]);
+    }
+
+    #[test]
+    fn the_shield_reports_its_time_left() {
+        let shield = ShieldPrayer { tier: 1, bonus: 2, expires: 700.0, lasts: 600.0 };
+        assert_eq!((shield.time_left(100.0), shield.time_left(400.0), shield.time_left(900.0)), (1.0, 0.5, 0.0));
     }
 
     #[test]

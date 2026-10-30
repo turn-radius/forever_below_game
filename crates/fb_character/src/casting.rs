@@ -118,6 +118,7 @@ impl Default for CastingRules {
             ("light", term(Effect, "Light", Divine, 1.0, 0.0, 0.0, true)),
             ("ward", term(Effect, "Ward", Divine, 2.0, 0.0, 0.0, true)),
             ("smite", term(Effect, "Smite", Divine, 2.0, 0.0, 0.0, true)),
+            ("shield", term(Effect, "Shield", Divine, 2.0, 0.0, 0.0, true)),
             ("frighten", term(Effect, "Frighten", Divine, 3.0, 0.0, 0.0, false)),
             ("charm", term(Effect, "Charm", Divine, 3.0, 0.0, 0.0, false)),
             ("bane", term(Effect, "Bane", Divine, 2.0, 0.0, 0.0, false)),
@@ -203,6 +204,12 @@ impl Written {
         Written { name: "Smite".into(), school: Casting::Divine, effect: "smite".into(), reach: "sight".into(), duration: "instant".into() }
     }
 
+    /// Shield, which every cleric starts with: shield, self, short. A shimmering ward that raises
+    /// the cleric's armour class ([`shield_bonus`]) for a while.
+    pub fn shield() -> Written {
+        Written { name: "Shield".into(), school: Casting::Divine, effect: "shield".into(), reach: "self".into(), duration: "short".into() }
+    }
+
     fn terms(&self) -> [(&str, TermKind); 3] {
         [(&self.effect, TermKind::Effect), (&self.reach, TermKind::Reach), (&self.duration, TermKind::Duration)]
     }
@@ -268,14 +275,14 @@ pub struct Spellbook {
 }
 
 impl Spellbook {
-    /// What a new caster of `school` has: the terms known from the start, and Divine Light and Smite
-    /// for a cleric. Empty for a martial character.
+    /// What a new caster of `school` has: the terms known from the start, and Divine Light, Smite and
+    /// Shield for a cleric. Empty for a martial character.
     pub fn starting_with(rules: &Rules, school: Casting) -> Spellbook {
         if school == Casting::Martial {
             return Spellbook::default();
         }
         let unlocked = rules.casting.terms.iter().filter(|(_, t)| t.known && t.school == school).map(|(id, _)| id.clone()).collect();
-        let written = if school == Casting::Divine { vec![Written::divine_light(), Written::smite()] } else { vec![] };
+        let written = if school == Casting::Divine { vec![Written::divine_light(), Written::smite(), Written::shield()] } else { vec![] };
         Spellbook { unlocked, written }
     }
 
@@ -362,6 +369,14 @@ pub const SMITE_DIE: u32 = 8;
 pub fn smite_damage(tier: u8, undead: bool, rng: &mut procgen_rng::Mulberry32) -> u32 {
     let rolled: u32 = (0..tier).map(|_| rng.int(1, SMITE_DIE)).sum();
     if undead { rolled * 2 } else { rolled }
+}
+
+/// The armour class Shield adds for each tier. Our own.
+pub const SHIELD_AC_PER_TIER: i32 = 2;
+
+/// What Shield cast at `tier` adds to the caster's armour class while it lasts.
+pub fn shield_bonus(tier: u8) -> i32 {
+    SHIELD_AC_PER_TIER * i32::from(tier)
 }
 
 /// Why a cast did not happen.
@@ -503,16 +518,16 @@ mod tests {
         let mut book = cleric();
         let rules = defaults();
         let ids = |b: &Spellbook, k| b.choices(rules, Casting::Divine, k).into_iter().map(|(id, _)| id.to_string()).collect::<Vec<_>>();
-        assert_eq!(ids(&book, TermKind::Effect), ["light", "smite", "ward"]);
+        assert_eq!(ids(&book, TermKind::Effect), ["light", "shield", "smite", "ward"]);
         assert_eq!(ids(&book, TermKind::Reach), ["around", "self", "sight", "touch"]);
         assert_eq!(ids(&book, TermKind::Duration), ["instant", "long", "short"]);
         book.unlock("charm");
-        assert_eq!(ids(&book, TermKind::Effect), ["charm", "light", "smite", "ward"]);
+        assert_eq!(ids(&book, TermKind::Effect), ["charm", "light", "shield", "smite", "ward"]);
     }
 
     #[test]
-    fn a_cleric_starts_with_divine_light_and_smite_and_a_fighter_with_nothing() {
-        assert_eq!(cleric().written, vec![Written::divine_light(), Written::smite()]);
+    fn a_cleric_starts_with_divine_light_smite_and_shield_and_a_fighter_with_nothing() {
+        assert_eq!(cleric().written, vec![Written::divine_light(), Written::smite(), Written::shield()]);
         assert_eq!(Spellbook::starting(Casting::Martial), Spellbook::default());
     }
 
@@ -527,6 +542,14 @@ mod tests {
     }
 
     #[test]
+    fn shield_is_three_mana_for_ten_minutes_and_two_armour_a_tier() {
+        assert_eq!(Written::shield().preview(1), Preview { tier: 1, cost: 3.0, range: 0.0, duration: 600.0 });
+        assert_eq!(Written::shield().preview(2).duration, 1200.0);
+        assert_eq!((1..=MAX_TIER).map(shield_bonus).collect::<Vec<_>>(), [2, 4, 6]);
+        assert!(Written::shield().validate(&cleric().unlocked).is_ok());
+    }
+
+    #[test]
     fn smite_rolls_a_d8_a_tier_and_the_undead_take_double() {
         let mut dice = procgen_rng::Mulberry32::new(3);
         for tier in 1..=MAX_TIER {
@@ -534,7 +557,7 @@ mod tests {
                 let n = smite_damage(tier, false, &mut dice);
                 assert!((u32::from(tier)..=u32::from(tier) * SMITE_DIE).contains(&n), "tier {tier}: {n}");
                 let m = smite_damage(tier, true, &mut dice);
-                assert!(m % 2 == 0 && (u32::from(tier) * 2..=u32::from(tier) * SMITE_DIE * 2).contains(&m), "tier {tier}: {m}");
+                assert!(m.is_multiple_of(2) && (u32::from(tier) * 2..=u32::from(tier) * SMITE_DIE * 2).contains(&m), "tier {tier}: {m}");
             }
         }
         let (mut a, mut b) = (procgen_rng::Mulberry32::new(9), procgen_rng::Mulberry32::new(9));
@@ -546,10 +569,10 @@ mod tests {
         let mut book = cleric();
         let ward = compose(&book.unlocked, Casting::Divine, "Ward", "ward", "self", "short").unwrap();
         book.save(ward).unwrap();
-        assert_eq!(book.written.len(), 3);
+        assert_eq!(book.written.len(), 4);
         let wider = compose(&book.unlocked, Casting::Divine, "Ward", "ward", "around", "short").unwrap();
         book.save(wider).unwrap();
-        assert_eq!((book.written.len(), book.find("Ward").unwrap().reach.as_str()), (3, "around"));
+        assert_eq!((book.written.len(), book.find("Ward").unwrap().reach.as_str()), (4, "around"));
         let mut bad = Written::divine_light();
         bad.name = "  ".into();
         assert_eq!(book.save(bad), Err(ComposeError::Unnamed));

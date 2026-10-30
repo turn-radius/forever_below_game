@@ -3,7 +3,7 @@
 //! - The delver starts with a 1st-level character's hit points
 //!   ([`super::first_level_hit_points_with`]).
 //! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
-//!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
+//!   what they wear and a Shield prayer, `Character::armour_class_shielded`), kept up as they dress ([`armour_the_delver`]).
 //!   Every creature's and folk's blow rolls to hit against it
 //!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
 //! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
@@ -171,10 +171,10 @@ pub fn starting_health(max: i32, start: Option<i32>) -> Health {
 /// on the delver for every blow at them to roll against, and the chance their shield turns a
 /// hit aside ([`BlockChance`]).
 #[allow(clippy::type_complexity)]
-fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>, Option<&Shunned>), With<Player>>) {
+pub(crate) fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, shields: Query<&crate::prayers::ShieldPrayer>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>, Option<&Shunned>), With<Player>>) {
     let none = Inventory::default();
     let inventory = inventory.as_deref().unwrap_or(&none);
-    let ac = ArmourClass(character.armour_class(inventory).value().round() as i32);
+    let ac = ArmourClass(character.armour_class_shielded(fb_character::rules::defaults(), inventory, crate::prayers::shield_bonus(shields.iter())).value().round() as i32);
     let gear = character.gear(inventory);
     let block = BlockChance(gear.block_chance as f32);
     let shun = Shunned(gear.shun.map(|c| c as f32));

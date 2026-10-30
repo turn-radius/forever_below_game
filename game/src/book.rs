@@ -722,6 +722,18 @@ mod tests {
     }
 
     #[test]
+    fn the_book_composes_shield_for_the_caster_alone() {
+        let (rules, book, mut draft) = start();
+        draft.pick(&rules, &book, Casting::Divine, TermKind::Effect, "shield").unwrap();
+        draft.pick(&rules, &book, Casting::Divine, TermKind::Reach, "self").unwrap();
+        let shield = draft.as_written(Casting::Divine);
+        assert_eq!((shield.effect.as_str(), shield.reach.as_str(), shield.duration.as_str()), ("shield", "self", "short"));
+        let p = shield.preview_with(&rules, 2);
+        assert_eq!((p.cost, p.range, p.duration), (6.0, 0.0, 1200.0));
+        assert_eq!((reaches(p.range).as_str(), lasts(p.duration).as_str()), ("yourself", "20 min"));
+    }
+
+    #[test]
     fn a_locked_term_cannot_be_picked() {
         let (rules, book, mut draft) = start();
         let before = draft.clone();
@@ -754,9 +766,9 @@ mod tests {
         assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Ok(false));
         let written = book.find("Hand of Mercy").expect("kept under its trimmed name");
         assert_eq!((written.effect.as_str(), written.reach.as_str()), ("light", "touch"));
-        assert_eq!(book.written.len(), 3, "Divine Light and Smite are still there");
+        assert_eq!(book.written.len(), 4, "Divine Light, Smite and Shield are still there");
         assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Ok(true), "the same name is rewritten");
-        assert_eq!(book.written.len(), 3);
+        assert_eq!(book.written.len(), 4);
     }
 
     #[test]
@@ -766,7 +778,7 @@ mod tests {
             draft.name = name.into();
             assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Err(ComposeError::Unnamed));
         }
-        assert_eq!(book.written.len(), 2);
+        assert_eq!(book.written.len(), 3);
     }
 
     #[test]
