@@ -48,6 +48,8 @@ pub struct Rules {
     pub revival: crate::revival::RevivalRules,
     /// A cleric's saving throw against falling ([`crate::protection`]).
     pub protection: crate::protection::ProtectionRules,
+    /// What a healer charges to tend the delver ([`crate::healer`]).
+    pub healer: crate::healer::HealerRules,
     /// The creatures' numbers by stat block name. A partial entry keeps the rest of that
     /// creature's defaults; a name no species has is a creature of its own, flat zeros where
     /// the entry is silent.
@@ -75,6 +77,7 @@ impl Default for Rules {
             devotion: crate::devotion::DevotionRules::default(),
             revival: crate::revival::RevivalRules::default(),
             protection: crate::protection::ProtectionRules::default(),
+            healer: crate::healer::HealerRules::default(),
             creatures: default_creatures(),
             effects: crate::effect::shipped(),
         }
