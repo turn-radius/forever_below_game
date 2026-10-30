@@ -168,7 +168,11 @@ impl Swing {
 
     /// The path an item held as `grip` follows.
     pub fn path(&self, grip: Grip) -> SwingPath {
-        SwingPath::new(self.strike, self.side(), grip, self.toward, self.flourish)
+        if self.weapon.kind == SwingKind::Flail {
+            SwingPath::flail(self.strike, self.side(), grip, self.toward, self.flourish)
+        } else {
+            SwingPath::new(self.strike, self.side(), grip, self.toward, self.flourish)
+        }
     }
 }
 
@@ -665,6 +669,9 @@ const FOLLOWED: f32 = 0.5;
 /// so the grip, with no hand drawn round it, never looms at the eye.
 const SWEEP_ACROSS: f32 = 3.5;
 const SWEEP_DEPTH: f32 = 1.0;
+/// A censer's arc: wider, and centred on where the blow heads, view model units. Our own.
+const FLAIL_ACROSS: f32 = 6.0;
+const FLAIL_PULL: f32 = 0.9;
 /// How far toward the middle of the view a strike's arc is centred, as a share of the fist's
 /// offset from it at rest, and how far toward where it heads. Our own.
 const SWEEP_PULL: f32 = 0.15;
@@ -718,6 +725,17 @@ impl SwingPath {
     /// a little more or less, swung a little wider or tighter. A strike thrown by the hand on
     /// the left `side` is mirrored: its forehand comes from the upper left.
     pub fn new(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
+        SwingPath::build(strike, side, grip, toward, flourish, SWEEP_ACROSS, SWEEP_PULL)
+    }
+
+    /// The path of a censer on its chain: the arc is centred where the blow heads, so the bowl
+    /// passes through the crosshair (or the creature) as it lands, coming in from the side it
+    /// was drawn back on and swinging on past.
+    pub fn flail(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3) -> SwingPath {
+        SwingPath::build(strike, side, grip, toward, flourish, FLAIL_ACROSS, FLAIL_PULL)
+    }
+
+    fn build(strike: Strike, side: Side, grip: Grip, toward: Vec3, flourish: Vec3, sweep_across: f32, sweep_pull: f32) -> SwingPath {
         let aim = (toward - grip.fist).normalize_or(Vec3::NEG_Z);
         let travel = strike.travel();
         let travel = if side == Side::Left { Vec2::new(-travel.x, travel.y) } else { travel };
@@ -736,8 +754,8 @@ impl SwingPath {
             let through = SwingPose { offset: drive, turn: square };
             (back, through, None, back.offset.lerp(through.offset, 0.5) - travel * STAB_HOOK)
         } else {
-            let centre = Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * SWEEP_PULL + aim * SWEEP_REACH;
-            let sweep = Sweep { aim, travel, square, centre, across: SWEEP_ACROSS * (1.0 + 0.2 * flourish.z) };
+            let centre = Vec3::new(-grip.fist.x, -grip.fist.y, 0.0) * sweep_pull + aim * SWEEP_REACH;
+            let sweep = Sweep { aim, travel, square, centre, across: sweep_across * (1.0 + 0.2 * flourish.z) };
             let (from, to) = (WOUND + 0.25 * flourish.y, FOLLOWED);
             (sweep.pose(from), sweep.pose(to), Some((sweep, from, to)), Vec3::ZERO)
         };
@@ -1250,6 +1268,24 @@ mod tests {
             if base == "Spear" {
                 let screen = on_screen(thrown).unwrap();
                 assert!(screen.length() < 0.15, "{base} {seed}: point at {screen} on the screen");
+            }
+        }
+    }
+
+    #[test]
+    fn a_censer_flail_swings_through_the_crosshair() {
+        let view = crate::tuning::Tuning::default().view;
+        for seed in [2, 7, 1207] {
+            let (rest, _, _) = held("Censer", seed);
+            // A light is swung from its middle: no point.
+            let grip = Grip::of(rest, view_hold(fb_body::Hold::Lantern, Side::Right), None);
+            for &(strike, _) in Strike::choices(SwingKind::Flail) {
+                let path = SwingPath::flail(strike, Side::Right, grip, CROSSHAIR_AIM, Vec3::ZERO);
+                let at = |t: f32| path.at(t).apply(rest, grip.fist).translation;
+                let landed = crate::view_model::on_screen(at(LANDS), view.held_fov_degrees).unwrap();
+                assert!(landed.length() < 0.35, "{strike:?} seed {seed}: the bowl lands at {landed}");
+                let drawn = crate::view_model::on_screen(at(DRAWN * SWING_TIME), view.held_fov_degrees).unwrap();
+                assert!(drawn.distance(landed) > 0.3, "{strike:?}: it is thrown across the screen, {drawn} to {landed}");
             }
         }
     }
