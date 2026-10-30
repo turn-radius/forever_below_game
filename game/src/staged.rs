@@ -48,13 +48,16 @@ pub struct Staging {
     pub crystals: Vec<StagedPiece>,
     /// What the loot was rolled against: the level's odds with the delver's luck then.
     pub odds: Odds,
+    /// The prayers a scroll in that loot may teach ([`fb_items::notes::Lore::prayers`]).
+    pub prayers: Vec<String>,
 }
 
 impl Staging {
-    /// The parts of `level`, its floor items and containers' loot rolled against `odds`.
-    pub fn make(level: &Level, odds: Odds) -> Self {
+    /// The parts of `level`, its floor items and containers' loot rolled against `odds`, a scroll
+    /// in it teaching a term of `prayers` if it is a prayer.
+    pub fn make(level: &Level, odds: Odds, prayers: Vec<String>) -> Self {
         let creatures = build_creatures(&level.creatures, level.depth);
-        let lore = level.lore();
+        let lore = fb_items::notes::Lore { prayers: prayers.clone(), ..level.lore() };
         let items = level
             .items
             .iter()
@@ -74,7 +77,7 @@ impl Staging {
             .collect();
         let banners = level.banners.iter().map(|spot| banner_piece(level, spot)).collect();
         let crystals = level.crystals.iter().map(|spot| crystal_piece(level, spot)).collect();
-        Staging { creatures, items, props, fixtures: FixtureShapes::make(level), banners, crystals, odds }
+        Staging { creatures, items, props, fixtures: FixtureShapes::make(level), banners, crystals, odds, prayers }
     }
 }
 
@@ -84,6 +87,8 @@ pub struct Staged {
     for_level: Option<(u32, u32)>,
     /// The odds its loot was rolled against.
     odds: Odds,
+    /// The prayers its loot was rolled with.
+    prayers: Vec<String>,
     creatures: Option<Vec<Built>>,
     items: Option<Vec<Option<(Item, ItemMesh)>>>,
     props: Option<Vec<StagedProp>>,
@@ -97,10 +102,11 @@ pub struct Staged {
 impl Staged {
     /// Keeps `staging` as the parts of `level`, in place of whatever was kept.
     pub fn set(&mut self, level: &Level, staging: Staging) {
-        let Staging { creatures, items, props, fixtures, banners, crystals, odds } = staging;
+        let Staging { creatures, items, props, fixtures, banners, crystals, odds, prayers } = staging;
         *self = Staged {
             for_level: Some((level.seed, level.depth)),
             odds,
+            prayers,
             creatures: Some(creatures),
             items: Some(items),
             props: Some(props),
@@ -143,7 +149,7 @@ impl Staged {
     pub fn take_props(&mut self, level: &Level, odds: Odds) -> Option<Vec<StagedProp>> {
         let mut props = self.take_with(level, |s| &mut s.props, |p| p.len() == level.props.len())?;
         if self.odds != odds {
-            let lore = level.lore();
+            let lore = fb_items::notes::Lore { prayers: self.prayers.clone(), ..level.lore() };
             for (staged, spot) in props.iter_mut().zip(&level.props) {
                 staged.contents = level.container_contents(spot, odds, &lore);
             }
@@ -177,7 +183,7 @@ mod tests {
         let other = fb_level::generate(fb_level::depth_seed(1207, 3), 3);
         let odds = Odds::loot(2);
         let mut staged = Staged::default();
-        staged.set(&level, Staging::make(&level, odds));
+        staged.set(&level, Staging::make(&level, odds, vec![]));
         assert!(staged.take_items(&other, odds).is_none(), "not the level it was made for");
         let items = staged.take_items(&level, odds).expect("made for this level");
         assert_eq!(items.len(), level.items.len());
@@ -195,7 +201,7 @@ mod tests {
         let level = fb_level::generate(fb_level::depth_seed(1207, 2), 2);
         let (before, after) = (Odds::loot(2), Odds::loot(2).with_luck(3.0));
         let mut staged = Staged::default();
-        staged.set(&level, Staging::make(&level, before));
+        staged.set(&level, Staging::make(&level, before, vec![]));
         assert!(staged.take_items(&level, after).is_none(), "the floor is rolled in place");
         let props = staged.take_props(&level, after).expect("the shapes still serve");
         for (spot, prop) in level.props.iter().zip(&props) {
@@ -213,7 +219,7 @@ mod tests {
         let (mut items, mut creatures, mut containers, mut banners) = (0, 0, 0, 0);
         for depth in 1..=4 {
             let level = fb_level::generate(fb_level::depth_seed(1207, depth), depth);
-            let staging = Staging::make(&level, Odds::loot(depth));
+            let staging = Staging::make(&level, Odds::loot(depth), vec![]);
 
             assert_eq!(staging.items.len(), level.items.len());
             for (spot, staged) in level.items.iter().zip(&staging.items) {

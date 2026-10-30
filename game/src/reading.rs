@@ -48,19 +48,20 @@ pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &fb_denizens:
 
 /// Reads a prayer scroll teaching the Divine term `term`: a cleric's `spellbook` unlocks it
 /// ("You learn the Heal term. It is ready to write in your book."). One already unlocked says so
-/// and teaches nothing; so does a reader who is no cleric, who is told it is a cleric's prayer. The
-/// scroll is kept either way. Returns the toast's line.
+/// and teaches nothing; so does a reader who is no cleric, who is told it is a cleric's prayer. A
+/// term the loaded `rules` no longer have (a scroll kept from a world with other rules) says the
+/// prayer is lost. The scroll is kept in every case. Returns the toast's line.
 pub fn pray(spellbook: Option<&mut fb_character::casting::Spellbook>, cleric: bool, rules: &fb_character::rules::Rules, term: &str) -> String {
-    let name = rules.casting.terms.get(term).map_or_else(|| term.to_string(), |t| t.name.clone());
+    let Some(rule) = rules.casting.terms.get(term) else {
+        return format!("The prayer of the {} term is lost: nothing in this world answers to it.", fb_items::prayers::term_name(term));
+    };
     let Some(spellbook) = spellbook.filter(|_| cleric) else {
         return "It is a cleric's prayer, and means nothing to you.".to_string();
     };
     if spellbook.unlock_with(rules, term) {
-        format!("You learn the {name} term. It is ready to write in your book.")
-    } else if spellbook.unlocked.contains(term) {
-        format!("You already know the {name} term.")
+        format!("You learn the {} term. It is ready to write in your book.", rule.name)
     } else {
-        "The prayer is unreadable.".to_string()
+        format!("You already know the {} term.", rule.name)
     }
 }
 
@@ -72,7 +73,7 @@ pub fn teaching_for_capture(spec: &str, index: u32) -> Option<fb_items::Item> {
     let mut parts = spec.split(':').map(str::trim);
     let name = parts.next().unwrap_or_default();
     if name.eq_ignore_ascii_case("prayer") {
-        let (mut term, mut seed) = (fb_items::prayers::prayer_terms().first().map(|t| t.id.clone()), 1000 + index);
+        let (mut term, mut seed) = (crate::rules::prayer_pool(fb_character::rules::defaults()).into_iter().next(), 1000 + index);
         for part in parts {
             match part.parse::<u32>() {
                 Ok(n) => seed = n,
@@ -280,7 +281,7 @@ mod tests {
     fn a_prayer_unlocks_for_a_cleric_once_and_teaches_nobody_else() {
         use fb_character::Casting;
         let rules = fb_character::rules::defaults();
-        let term = fb_items::prayers::prayer_terms()[0].id.clone();
+        let term = "cone".to_string();
         let name = &rules.casting.terms[&term].name;
         let mut book = fb_character::casting::Spellbook::starting(Casting::Divine);
         assert!(!book.unlocked.contains(&term));
@@ -291,6 +292,9 @@ mod tests {
         assert!(pray(Some(&mut fighter), false, rules, &term).contains("cleric's prayer"));
         assert!(fighter.unlocked.is_empty());
         assert!(pray(None, false, rules, &term).contains("cleric's prayer"));
+        let lost = pray(Some(&mut book), true, rules, "forgotten");
+        assert!(lost.contains("Forgotten term is lost"), "{lost}");
+        assert!(!book.unlocked.contains("forgotten"));
     }
 
     #[test]

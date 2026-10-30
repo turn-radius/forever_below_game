@@ -315,6 +315,12 @@ impl Spellbook {
         self.follow_devotion_with(defaults(), devotion)
     }
 
+    /// The terms a prayer or spell scroll may teach a caster of `school`: those of the school not
+    /// known from the start and not a devotion's ([`Spellbook::DEVOTION_TERMS`]), in id order.
+    pub fn scroll_terms(rules: &Rules, school: Casting) -> Vec<String> {
+        rules.casting.terms.iter().filter(|(id, t)| t.school == school && !t.known && !Self::DEVOTION_TERMS.contains(&id.as_str())).map(|(id, _)| id.clone()).collect()
+    }
+
     /// The unlocked terms of `kind` for `school`, as (id, term) in id order: the writer's choices.
     pub fn choices<'a>(&self, rules: &'a Rules, school: Casting, kind: TermKind) -> Vec<(&'a str, &'a TermRules)> {
         rules.casting.terms.iter().filter(|(id, t)| t.kind == kind && t.school == school && self.unlocked.contains(*id)).map(|(id, t)| (id.as_str(), t)).collect()
@@ -477,6 +483,16 @@ mod tests {
         assert!(matches!(compose(&book.unlocked, Casting::Divine, "x", "around", "around", "short"), Err(ComposeError::WrongKind { .. })));
         assert!(matches!(compose(&book.unlocked, Casting::Divine, "x", "nonsense", "around", "short"), Err(ComposeError::Unknown(_))));
         assert!(matches!(compose(&book.unlocked, Casting::Arcane, "x", "light", "around", "short"), Err(ComposeError::Locked(_) | ComposeError::WrongSchool { .. })));
+    }
+
+    #[test]
+    fn scroll_terms_leave_out_the_starting_terms_and_a_devotions() {
+        let terms = Spellbook::scroll_terms(defaults(), Casting::Divine);
+        for left_out in ["light", "ward", "self", "bane", "frighten", "charm", "arcane_light"] {
+            assert!(!terms.iter().any(|t| t == left_out), "{left_out}");
+        }
+        assert!(terms.iter().any(|t| t == "cone"));
+        assert!(terms.iter().all(|t| defaults().casting.terms[t].school == Casting::Divine && !defaults().casting.terms[t].known));
     }
 
     #[test]

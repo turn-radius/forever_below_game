@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn f_over_a_prayer_scroll_unlocks_its_term_for_a_cleric_once_and_teaches_a_fighter_nothing() {
         use crate::casting::DelverSpellbook;
-        let term = fb_items::prayers::prayer_terms()[0].id.clone();
+        let term = "cone".to_string();
         let unlocked = |world: &App, player| world.world().get::<DelverSpellbook>(player).unwrap().0.unlocked.contains(&term);
         let (mut world, player) = app();
         let mut cleric = Character::roll(3);

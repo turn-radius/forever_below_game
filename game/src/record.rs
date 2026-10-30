@@ -689,11 +689,11 @@ mod tests {
 
     #[test]
     fn a_prayer_scroll_keeps_its_term_through_a_record() {
-        let term = &fb_items::prayers::prayer_terms()[0].id;
+        let term = "cone";
         let scroll = fb_items::prayers::prayer_scroll(12, term).unwrap();
         let again = through_record(&scroll);
         assert_eq!(again, scroll);
-        assert_eq!(again.prayer(), Some(term.as_str()));
+        assert_eq!(again.prayer(), Some(term));
     }
 
     #[test]

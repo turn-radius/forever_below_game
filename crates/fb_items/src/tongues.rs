@@ -155,7 +155,7 @@ impl Item {
                 self.teaching = Some(Teaching::roll(self.seed, kind, size));
             }
         }
-        self.rolled_prayer(holy).in_world(lore)
+        self.rolled_prayer(&lore.prayers, holy).in_world(lore)
     }
 }
 

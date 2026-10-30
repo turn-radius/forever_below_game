@@ -50,6 +50,7 @@ impl Level {
             books: self.books(),
             tongues: self.tongues(),
             denizens: self.factions.iter().filter_map(|f| Some((f.name.clone(), f.denizen?))).collect(),
+            prayers: Vec::new(),
         }
     }
 
