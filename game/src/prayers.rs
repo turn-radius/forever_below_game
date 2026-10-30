@@ -8,6 +8,9 @@
 //! hit points, callouts, kills, deeds and corpses work as for a sword. The pillar falls from
 //! above, so it comes from the creature's own spot: no shield turns it and it pushes nothing.
 //!
+//! Smite can only be written with the sight reach ([`fb_character::casting::ComposeError::NeedsReach`]),
+//! and only a prayer of the smite effect needs a target, so light + sight casts with no one there.
+//!
 //! Finding the target is done twice: [`crate::casting::cast_requests`] asks [`Sight`] before the
 //! mana is spent, so a cast with no one in sight costs nothing, and [`smite_the_seen`] asks again
 //! when the cast has gone through. Both see the same floor in the same frame.
@@ -149,9 +152,9 @@ fn smite_the_seen(mut casts: MessageReader<Casted>, sight: Sight, mut dice: ResM
         let (Some(caster), Some(target)) = (sight.caster(), sight.nearest_the_crosshair(cast.range)) else { continue };
         let Ok((critter, at)) = creatures.get(target) else { continue };
         let damage = smite_damage(cast.tier, critter.spot.species.foe() == Foe::Undead, &mut dice.0);
-        // Radiant is taken as it is, like the fire of a torch: carried in `fire` so a skeleton's
-        // weakness to bludgeoning never doubles it.
-        struck.write(Struck { target, damage: 0, from: at.translation.xz(), bludgeoning: false, critical: false, by_ally: false, graze: false, fire: damage });
+        // Radiant is taken as it is, like the fire of a torch: carried as `extra` damage so a
+        // skeleton's weakness to bludgeoning never doubles it.
+        struck.write(Struck { target, damage: 0, from: at.translation.xz(), bludgeoning: false, critical: false, by_ally: false, graze: false, extra: damage });
         landed.write(PrayerLanded { effect: "smite".into(), tier: cast.tier, caster, targets: vec![target] });
     }
 }
@@ -391,6 +394,18 @@ mod tests {
     fn the_shield_reports_its_time_left() {
         let shield = ShieldPrayer { tier: 1, bonus: 2, expires: 700.0, lasts: 600.0 };
         assert_eq!((shield.time_left(100.0), shield.time_left(400.0), shield.time_left(900.0)), (1.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn light_at_one_you_see_casts_with_no_one_there() {
+        let (mut app, player) = delve(10.0);
+        let mut glimmer = fb_character::casting::Written::divine_light();
+        glimmer.name = "Glimmer".into();
+        glimmer.reach = "sight".into();
+        app.world_mut().get_mut::<DelverSpellbook>(player).unwrap().0.save(glimmer).unwrap();
+        app.world_mut().write_message(CastRequest { name: "Glimmer".into(), tier: 1 });
+        app.update();
+        assert_eq!(mana(&app, player), 7.0, "light 1 + sight 1 + short 1 spent with no target");
     }
 
     #[test]

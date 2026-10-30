@@ -316,7 +316,7 @@ fn assist(
                     let attack = attack_roll(crate::rules::GameRules::of(&rules), &combatant.weapon, combatant.strength, armour, Odds::Even, &mut fight.rng);
                     if attack.hit {
                         let damage = combatant.weapon.roll(modifier(combatant.strength), &mut fight.rng);
-                        struck.write(Struck { target: creature, damage, from: at, bludgeoning: combatant.weapon.bludgeoning, critical: attack.natural == 20, by_ally: true, graze: false, fire: 0 });
+                        struck.write(Struck { target: creature, damage, from: at, bludgeoning: combatant.weapon.bludgeoning, critical: attack.natural == 20, by_ally: true, graze: false, extra: 0 });
                     }
                 }
             }

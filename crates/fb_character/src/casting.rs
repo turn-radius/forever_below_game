@@ -156,6 +156,8 @@ pub enum ComposeError {
     Locked(String),
     /// A written ability needs a name to be kept.
     Unnamed,
+    /// The effect only works with one reach (Smite falls on what you see).
+    NeedsReach { effect: String, reach: String },
 }
 
 impl ComposeError {
@@ -167,6 +169,7 @@ impl ComposeError {
             ComposeError::WrongSchool { term } => format!("{term} is not yours to write"),
             ComposeError::Locked(t) => format!("You have not unlocked {t}"),
             ComposeError::Unnamed => "Name it first".to_string(),
+            ComposeError::NeedsReach { effect, reach } => format!("{effect} must reach {reach}"),
         }
     }
 }
@@ -227,6 +230,11 @@ impl Written {
             if !unlocked.contains(id) {
                 return Err(ComposeError::Locked(t.name.clone()));
             }
+        }
+        // Smite falls on a creature you see, so it can reach nothing else.
+        if self.effect == "smite" && self.reach != "sight" {
+            let name = |id: &str| rules.casting.terms.get(id).map_or_else(|| id.to_string(), |t| t.name.clone());
+            return Err(ComposeError::NeedsReach { effect: name("smite"), reach: name("sight").to_lowercase() });
         }
         Ok(())
     }
@@ -547,6 +555,18 @@ mod tests {
         assert_eq!(Written::shield().preview(2).duration, 1200.0);
         assert_eq!((1..=MAX_TIER).map(shield_bonus).collect::<Vec<_>>(), [2, 4, 6]);
         assert!(Written::shield().validate(&cleric().unlocked).is_ok());
+    }
+
+    #[test]
+    fn smite_reaches_only_what_you_see_and_light_may_reach_it() {
+        let book = cleric();
+        for reach in ["around", "self", "touch"] {
+            let err = compose(&book.unlocked, Casting::Divine, "x", "smite", reach, "instant").unwrap_err();
+            assert_eq!(err, ComposeError::NeedsReach { effect: "Smite".into(), reach: "at one you see".into() }, "{reach}");
+        }
+        assert_eq!(compose(&book.unlocked, Casting::Divine, "x", "smite", "around", "instant").unwrap_err().say(), "Smite must reach at one you see");
+        assert!(compose(&book.unlocked, Casting::Divine, "x", "light", "sight", "short").is_ok());
+        assert!(compose(&book.unlocked, Casting::Divine, "x", "smite", "sight", "instant").is_ok());
     }
 
     #[test]

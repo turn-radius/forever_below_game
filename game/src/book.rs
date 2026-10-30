@@ -711,9 +711,13 @@ mod tests {
     #[test]
     fn the_book_composes_smite_and_shows_an_instant_prayer_sensibly() {
         let (rules, book, mut draft) = start();
-        for (kind, id) in [(TermKind::Effect, "smite"), (TermKind::Reach, "sight"), (TermKind::Duration, "instant")] {
+        // Smite only reaches what you see, so the reach comes first.
+        let refused = draft.pick(&rules, &book, Casting::Divine, TermKind::Effect, "smite").unwrap_err();
+        assert_eq!(refused.say(), "Smite must reach at one you see");
+        for (kind, id) in [(TermKind::Reach, "sight"), (TermKind::Effect, "smite"), (TermKind::Duration, "instant")] {
             draft.pick(&rules, &book, Casting::Divine, kind, id).unwrap();
         }
+        assert!(draft.pick(&rules, &book, Casting::Divine, TermKind::Reach, "touch").is_err(), "and it keeps it");
         let smite = draft.as_written(Casting::Divine);
         assert_eq!((smite.effect.as_str(), smite.reach.as_str(), smite.duration.as_str()), ("smite", "sight", "instant"));
         let p = smite.preview_with(&rules, 2);

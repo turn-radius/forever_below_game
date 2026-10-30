@@ -260,9 +260,10 @@ pub(crate) fn cast_requests(
         let casting = character.as_deref().map_or(Casting::Martial, |c| c.class.casting());
         let mut pool = mana.0;
         match cast_with(&rules, &mut pool, casting, &book.0.unlocked, written, request.tier) {
-            // A prayer that reaches what you see needs someone in sight. The cast was tried on a
-            // copy of the pool, which is only kept below, so one that finds no one costs nothing.
-            Ok(cast) if cast.written.reach == "sight" && sight.nearest_the_crosshair(cast.range).is_none() => {
+            // Smite needs someone in sight (the range rule `smite_the_seen` uses). The cast was
+            // tried on a copy of the pool, which is only kept below, so one that finds no one
+            // costs nothing.
+            Ok(cast) if cast.written.effect == "smite" && sight.nearest_the_crosshair(cast.range).is_none() => {
                 toast.say("No one is in sight".to_string(), now);
             }
             Ok(cast) => {
