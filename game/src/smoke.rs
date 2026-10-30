@@ -1,49 +1,57 @@
-//! Smoke curling up off a lit censer: give an entity [`Smoke`] and soft puffs rise from a point in
-//! its own space, drift on a slow breeze, spread and fade.
+//! Smoke off a lit censer: give an entity [`Smoke`] and one thin wisp trails up from a point in its
+//! own space, curling on a slow breeze, widening and thinning out as it goes.
 //!
-//! Like the sparkle stars ([`crate::sparkle`]) the puffs are a handful of flat quads moved on the
-//! CPU, each turned to face the delver's eye. A puff is a few overlapping wisps at small offsets
-//! (so the column has thickness seen edge-on), each a noisy cloud cut from a small generated atlas
-//! at its own variant and turn, lighter on top than below, unlit and alpha blended, so the smoke
-//! takes the incense's colour and neither lights
-//! anything nor casts a shadow. Being transparent they stay out of the depth and normal prepasses
-//! the screen ink reads, so they are never outlined. The sizes, rates and the breeze are our own,
+//! The wisp is a ribbon. The emitter drops a point at its bowl every [`STEP`] seconds; each point
+//! keeps the world place it was left, and rises, wanders and is carried by the breeze on its own
+//! by age, so a censer that swings or is carried off bends the wisp behind it. One dynamic mesh per
+//! emitter is rebuilt each frame as a strip along the points, turned across the delver's view, thin
+//! at the bowl and several times wider at the top, clear at both ends. A seeded tileable noise
+//! texture runs along it (U across, V along, scrolling up over time so it curls and wavers rather
+//! than slides). Unlit and alpha blended, so the smoke takes the incense's colour and neither
+//! lights anything nor casts a shadow; being transparent it stays out of the depth and normal
+//! prepasses the screen ink reads, so it is never outlined. The sizes, rates and breeze are our own,
 //! tuned against captures.
 
-use bevy::{asset::RenderAssetUsages, light::NotShadowCaster, mesh::{Indices, PrimitiveTopology}, prelude::*};
+use std::collections::VecDeque;
+
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::{asset::RenderAssetUsages, light::NotShadowCaster, mesh::{Indices, PrimitiveTopology}, prelude::*};
 use procgen_rng::Mulberry32;
 
 use crate::play::{DelveSystems, PlayerCamera};
 
-/// Puffs in the air at once, at full density.
-pub const PUFFS: u32 = 10;
-/// Seconds a puff takes to rise and fade, about: each is given 75% to 125% of it.
-pub const PUFF_LIFE: f32 = 3.4;
-/// How far a puff rises over its life, world units (45 cm).
-pub const PUFF_RISE: f32 = 4.5;
-/// How far the breeze carries a puff over its life, world units.
-pub const PUFF_DRIFT: f32 = 1.4;
-/// A puff's radius as it leaves and at the end of its life, world units.
-pub const PUFF_START: f32 = 0.18;
-pub const PUFF_END: f32 = 0.85;
-/// Most opaque a puff gets at full density.
-pub const PUFF_ALPHA: f32 = 0.7;
-/// Side of one cloud in the atlas, pixels; the atlas is [`VARIANTS`] clouds across by as many down.
-const CLOUD: u32 = 64;
-/// Clouds along one side of the atlas: `ATLAS_SIDE * ATLAS_SIDE` variants.
-const ATLAS_SIDE: u32 = 2;
-pub const VARIANTS: u32 = ATLAS_SIDE * ATLAS_SIDE;
-/// Wisps overlapping in one puff.
-pub const WISPS: usize = 3;
-/// How dark the underside of a wisp is against its top, 0..1 (1 is as bright as the top).
-const UNDERSIDE: f32 = 0.5;
+/// Seconds between the points the emitter drops.
+pub const STEP: f32 = 1.0 / 30.0;
+/// Seconds a point takes to rise and fade, about.
+pub const WISP_LIFE: f32 = 2.2;
+/// How far a point rises over its life, world units (48 cm).
+pub const WISP_RISE: f32 = 4.8;
+/// How far the breeze carries a point over its life, world units.
+pub const WISP_DRIFT: f32 = 1.2;
+/// How far a point wanders sideways at the top of its life, world units.
+pub const WISP_WANDER: f32 = 0.55;
+/// The wisp's half width as it leaves the bowl and at the top of its life, world units.
+pub const WIDTH_START: f32 = 0.08;
+pub const WIDTH_END: f32 = 0.8;
+/// Most opaque the wisp gets at full density.
+pub const PUFF_ALPHA: f32 = 1.0;
+/// Seconds a new end of the wisp takes to fade in (at the bowl, or where the incense ran out).
+const FADE_IN: f32 = 0.3;
+/// Cycles of the noise texture along the whole wisp, and how fast it scrolls up it, cycles a second.
+const V_REPEAT: f32 = 1.8;
+const V_SCROLL: f32 = 0.35;
+/// Extra samples cut between each pair of points, so the strip curves instead of zigzagging.
+const SUBDIVIDE: usize = 2;
+/// Side of the noise texture, pixels.
+const TEX: u32 = 128;
 
 pub struct SmokePlugin;
 
 impl Plugin for SmokePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PuffAssets>().add_systems(Update, (keep_puffs, drift_puffs).chain().in_set(DelveSystems));
+        app.init_resource::<WispAssets>().add_systems(Update, (keep_trails, drift_trails).chain().in_set(DelveSystems));
     }
 }
 
@@ -54,125 +62,152 @@ pub struct Smoke {
     pub position: Vec3,
     /// How wide the smoke starts, world units.
     pub spread: f32,
-    /// How thick it is, 0..1: the share of [`PUFFS`] in the air, and how opaque.
+    /// How thick it is, 0..1: how opaque the wisp is; none at 0 (the incense has run out).
     pub density: f32,
 }
 
-/// One puff, a child of its [`Smoke`].
+/// One point left in the air by the bowl.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrailPoint {
+    /// Where it was left, in the world.
+    pub born: Vec3,
+    /// Seconds since.
+    pub age: f32,
+    /// The emitter's clock when it was left: its sway is smooth in this, so neighbours curl together.
+    pub clock: f32,
+    /// How much of the smoke it carries, 0..1: less the faster the bowl moved as it was left.
+    pub strength: f32,
+    /// Seconds it lasts: shorter the faster the bowl moved.
+    pub life: f32,
+}
+
+/// Most points left in one frame.
+const MAX_CATCH_UP: f32 = 4.0;
+/// Bowl speed, world units a second, below which the smoke is whole, and above which it is gone.
+pub const CALM_SPEED: f32 = 5.0;
+pub const SMEAR_SPEED: f32 = 45.0;
+/// Shortest life a point has, as a share of [`WISP_LIFE`], when the bowl is flying.
+const SMEAR_LIFE: f32 = 0.25;
+/// Weakest a point is left at, at the same speed.
+const SMEAR_STRENGTH: f32 = 0.12;
+/// Furthest apart two neighbouring points can be before no smoke is drawn between them.
+pub const GAP: f32 = 1.2;
+/// Furthest any of the wisp reaches from the bowl, world units; it fades out towards it.
+pub const REACH: f32 = 4.0;
+
+/// How whole the smoke is left by a bowl moving `speed`: 1 when calm, near 0 when flying.
+pub fn calm(speed: f32) -> f32 {
+    let x = ((speed - CALM_SPEED) / (SMEAR_SPEED - CALM_SPEED)).clamp(0.0, 1.0);
+    1.0 - x * x * (3.0 - 2.0 * x)
+}
+
+/// The wisp of a [`Smoke`]: its points, oldest first, and the mesh drawn along them. It is its own
+/// entity, not a child, so it outlives its emitter (a censer put out is drawn again as a new view
+/// model, and the old smoke rises out all the same).
 #[derive(Component, Clone, Debug)]
-pub struct Puff {
-    /// Seconds since it rose; below 0 it waits to.
-    age: f32,
-    life: f32,
-    /// Where it rose from, in the world; `None` until it does.
-    from: Option<Vec3>,
-    /// Its own sway, sideways, and the breeze it is carried on.
-    sway: Vec2,
-    index: u32,
-    rng: Mulberry32,
-    /// How much of it the nearest wall leaves, 0..1, eased.
-    clear: f32,
+pub struct Trail {
+    /// The entity it smokes from.
+    pub owner: Entity,
+    pub points: VecDeque<TrailPoint>,
+    clock: f32,
+    since: f32,
+    phase: Vec2,
+    last_bowl: Option<Vec3>,
+    /// How fast the bowl is moving, eased.
+    pub speed: f32,
 }
 
-/// One wisp of a [`Puff`], a child of it: its own cloud of the atlas, turn and place in the puff.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct Wisp {
-    pub variant: u32,
-    /// Turn of the cloud on its quad, radians.
-    pub turn: f32,
-    /// Where it sits in the puff, in puff radii, world axes.
-    pub offset: Vec3,
-    /// Its size against the puff's.
-    pub size: f32,
-}
-
-impl Wisp {
-    /// The `n`th wisp of a puff rolled from `rng`: a different cloud for each of the puff's wisps.
-    fn roll(rng: &mut Mulberry32, n: usize, first: u32) -> Wisp {
-        let variant = (first + n as u32) % VARIANTS;
-        let turn = rng.range_f32(0.0, std::f32::consts::TAU);
-        let offset = if n == 0 { Vec3::ZERO } else { Vec3::new(rng.range_f32(-0.5, 0.5), rng.range_f32(-0.3, 0.45), rng.range_f32(-0.5, 0.5)) };
-        Wisp { variant, turn, offset, size: if n == 0 { 1.0 } else { rng.range_f32(0.6, 0.9) } }
+impl Trail {
+    fn new(owner: Entity, seed: u32) -> Trail {
+        let mut rng = Mulberry32::new(seed);
+        Trail { owner, points: VecDeque::new(), clock: 0.0, since: 0.0, phase: Vec2::new(rng.range_f32(0.0, 6.28), rng.range_f32(0.0, 6.28)), last_bowl: None, speed: 0.0 }
     }
 
-    /// The material transform that picks this wisp's cloud out of the atlas, turned.
-    pub fn uv_transform(&self) -> bevy::math::Affine2 {
-        let cell = 1.0 / ATLAS_SIDE as f32;
-        let origin = Vec2::new((self.variant % ATLAS_SIDE) as f32, (self.variant / ATLAS_SIDE) as f32) * cell;
-        let turn = Mat2::from_angle(self.turn) * cell;
-        // uv' = origin + cell/2 + turn * (uv - 1/2), the cloud turned about its middle.
-        bevy::math::Affine2::from_mat2_translation(turn, origin + Vec2::splat(cell * 0.5) - turn * Vec2::splat(0.5))
-    }
-}
-
-impl Puff {
-    fn new(index: u32, count: u32, seed: u32) -> Puff {
-        Puff { age: -PUFF_LIFE * index as f32 / count.max(1) as f32, life: PUFF_LIFE, from: None, sway: Vec2::ZERO, index, rng: Mulberry32::new(seed), clear: 1.0 }
-    }
-
-    /// Ages the puff `dt` seconds. Past its life it rises again from a fresh point.
-    fn age(&mut self, dt: f32, world: &GlobalTransform, smoke: &Smoke) {
-        self.age += dt;
-        if self.age >= self.life {
-            self.age -= self.life;
-            self.from = None;
+    /// Ages the points `dt` seconds, drops the ones that have risen out, and, if `bowl` is given,
+    /// leaves a new one there every [`STEP`].
+    pub fn advance(&mut self, dt: f32, bowl: Option<Vec3>) {
+        self.clock += dt;
+        for point in &mut self.points {
+            point.age += dt;
         }
-        if self.age >= 0.0 && self.from.is_none() {
-            let rng = &mut self.rng;
-            let spread = smoke.spread;
-            let at = smoke.position + Vec3::new(rng.range_f32(-spread, spread), 0.0, rng.range_f32(-spread, spread)) * 0.35;
-            self.from = Some(world.transform_point(at));
-            self.life = PUFF_LIFE * rng.range_f32(0.75, 1.25);
-            self.sway = Vec2::from_angle(rng.range_f32(0.0, std::f32::consts::TAU)) * rng.range_f32(0.1, 0.4);
+        self.points.retain(|p| p.age < p.life);
+        let Some(bowl) = bowl else {
+            self.since = 0.0;
+            self.last_bowl = None;
+            self.speed = 0.0;
+            return;
+        };
+        if let Some(last) = self.last_bowl.filter(|_| dt > 0.0) {
+            let raw = bowl.distance(last) / dt;
+            self.speed += (raw - self.speed) * (dt * 25.0).min(1.0);
+        }
+        self.last_bowl = Some(bowl);
+        let c = calm(self.speed);
+        // After a long frame, leave only a few points, not one for every step missed.
+        self.since = (self.since + dt).min(STEP * MAX_CATCH_UP);
+        while self.since >= STEP {
+            self.since -= STEP;
+            self.points.push_back(TrailPoint { born: bowl, age: self.since, clock: self.clock - self.since, strength: SMEAR_STRENGTH + (1.0 - SMEAR_STRENGTH) * c, life: WISP_LIFE * (SMEAR_LIFE + (1.0 - SMEAR_LIFE) * c) });
         }
     }
 
-    /// Where the puff is in the world, its radius and its opacity (0..1), or `None` while it waits.
-    fn pose(&self) -> Option<(Vec3, f32, f32)> {
-        let from = self.from.filter(|_| self.age >= 0.0)?;
-        let (offset, radius, alpha) = curl(self.age / self.life, self.sway);
-        Some((from + offset, radius, alpha))
+    /// Where a point is now.
+    pub fn place(&self, point: &TrailPoint) -> Vec3 {
+        point.born + curl(point.age / WISP_LIFE, point.clock, self.phase)
     }
 }
 
-/// A puff `t` of the way through its life (0 to 1), swaying along `sway`: how far it has come from
-/// where it rose, its radius and its opacity as a share of its most. It rises and slows, is carried
-/// along the breeze (+X, a little), swells, and fades in quickly and out slowly.
-pub fn curl(t: f32, sway: Vec2) -> (Vec3, f32, f32) {
+/// How far a point `t` of the way through its life (0 to 1) has come from where it was left: it
+/// rises and slows, is carried along the breeze (+X, a little), and wanders sideways more the
+/// higher it is, on a sway smooth in `clock` so the points of one wisp curl together.
+pub fn curl(t: f32, clock: f32, phase: Vec2) -> Vec3 {
     let t = t.clamp(0.0, 1.0);
-    let up = PUFF_RISE * t * (1.4 - 0.4 * t);
-    let wander = sway * (t * std::f32::consts::PI * 1.5).sin();
-    let breeze = PUFF_DRIFT * t * t;
-    let radius = PUFF_START + (PUFF_END - PUFF_START) * t.sqrt();
-    let alpha = (t / 0.12).min(1.0) * (1.0 - t).powf(1.4);
-    (Vec3::new(breeze + wander.x, up, wander.y), radius, alpha)
+    let up = WISP_RISE * t * (1.4 - 0.4 * t);
+    let sway = Vec2::new((clock * 2.1 + phase.x).sin() * 0.6 + (clock * 0.9 + phase.y).sin() * 0.4, (clock * 1.7 + phase.y).sin() * 0.6 + (clock * 0.8 + phase.x).sin() * 0.4);
+    let wander = sway * WISP_WANDER * t.sqrt() * t;
+    Vec3::new(WISP_DRIFT * t * t + wander.x, up, wander.y)
 }
 
-/// The one mesh and atlas every wisp is drawn with.
-#[derive(Resource)]
-pub struct PuffAssets {
-    pub mesh: Handle<Mesh>,
-    pub atlas: Handle<Image>,
+/// The half width of the wisp `t` of the way up: thin at the bowl, several times wider at the top.
+pub fn width(t: f32) -> f32 {
+    WIDTH_START + (WIDTH_END - WIDTH_START) * t.clamp(0.0, 1.0)
 }
 
-impl FromWorld for PuffAssets {
-    fn from_world(world: &mut World) -> Self {
-        let mesh = world.resource_mut::<Assets<Mesh>>().add(quad_mesh());
-        let atlas = world.resource_mut::<Assets<Image>>().add(cloud_atlas());
-        PuffAssets { mesh, atlas }
+/// How opaque the wisp is `t` of the way up, `since_end` seconds above its lower end (0..1): clear
+/// at the lower end and at the top, so there is no seam and no hard end.
+pub fn fade(t: f32, since_end: f32) -> f32 {
+    let x = (since_end / FADE_IN).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x) * (1.0 - t.clamp(0.0, 1.0)).powf(0.9)
+}
+
+/// A sample of the wisp placed no further than [`REACH`] from the bowl, with how much of it is left
+/// there (1 near the bowl, 0 at the reach).
+pub fn within_reach(at: Vec3, bowl: Vec3) -> (Vec3, f32) {
+    let off = at - bowl;
+    let x = ((off.length() - REACH * 0.5) / (REACH * 0.5)).clamp(0.0, 1.0);
+    (bowl + off.clamp_length_max(REACH), 1.0 - x * x * (3.0 - 2.0 * x))
+}
+
+/// Takes the smoke out of every segment longer than [`GAP`], so a fast stretch leaves no streamer.
+pub fn break_gaps(samples: &mut [Sample]) {
+    for i in 1..samples.len() {
+        if samples[i].at.distance(samples[i - 1].at) > GAP {
+            samples[i].clear = 0.0;
+            samples[i - 1].clear = 0.0;
+        }
     }
 }
 
-/// A unit-radius square in the XY plane facing +Z, lighter along its top edge than its bottom
-/// (vertex colour, so the shading stays upright however the cloud on it is turned).
-pub fn quad_mesh() -> Mesh {
-    let (top, bottom) = ([1.0, 1.0, 1.0, 1.0], [UNDERSIDE, UNDERSIDE, UNDERSIDE, 1.0]);
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0]])
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]])
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![bottom, bottom, top, top])
-        .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]))
+/// The noise texture every wisp is drawn with.
+#[derive(Resource)]
+pub struct WispAssets {
+    pub texture: Handle<Image>,
+}
+
+impl FromWorld for WispAssets {
+    fn from_world(world: &mut World) -> Self {
+        WispAssets { texture: world.resource_mut::<Assets<Image>>().add(wisp_texture()) }
+    }
 }
 
 /// Smooth value noise on a lattice of `cells` per side, rolled from a seed.
@@ -198,57 +233,50 @@ impl Noise {
         top + (bottom - top) * ty
     }
 
-    /// Three octaves, 0..1.
+    /// Three octaves, 0..1, tiling every whole 1 in x and y (each octave's lattice divides it).
     fn fbm(&self, x: f32, y: f32) -> f32 {
-        (self.at(x, y) * 0.55 + self.at(x * 2.0 + 0.31, y * 2.0 + 0.17) * 0.3 + self.at(x * 4.0 + 0.62, y * 4.0 + 0.43) * 0.15).clamp(0.0, 1.0)
+        (self.at(x, y) * 0.55 + self.at(x * 2.0, y * 2.0) * 0.3 + self.at(x * 4.0, y * 4.0) * 0.15).clamp(0.0, 1.0)
     }
 }
 
-/// One cloud's opacity at `(u, v)` in -1..1 of its cell: an uneven wisp, thick towards the middle,
-/// its edge torn by noise (warped, so the tears curl) and gone before the cell's own edge.
-fn cloud_alpha(noise: &Noise, u: f32, v: f32) -> f32 {
-    let (x, y) = (u * 0.5 + 0.5, v * 0.5 + 0.5);
-    let (wx, wy) = (noise.fbm(x + 0.13, y + 0.71) - 0.5, noise.fbm(x + 0.57, y + 0.29) - 0.5);
-    let body = noise.fbm(x + wx * 0.7, y + wy * 0.7);
-    let d = (u * u + v * v).sqrt();
-    let fall = (1.0 - d / 0.95).clamp(0.0, 1.0);
-    // The cloud is its noise above a threshold that rises towards the rim, softly.
-    let level = (body + 0.5 * fall - 0.45).clamp(0.0, 1.0);
-    let thick = (level / 0.4).clamp(0.0, 1.0);
-    thick * thick * (3.0 - 2.0 * thick) * fall.sqrt()
-}
-
-/// The atlas of [`VARIANTS`] white clouds, each cut from its own seeded noise, clear at the cell's
-/// edge so a turned cloud never shows its cell's borders.
-pub fn cloud_atlas() -> Image {
-    let side = CLOUD * ATLAS_SIDE;
-    let mut data = vec![0u8; (side * side * 4) as usize];
-    for variant in 0..VARIANTS {
-        let noise = Noise::new(&mut Mulberry32::new(0x5eed_0000 + variant * 7919), 5);
-        let (ox, oy) = ((variant % ATLAS_SIDE) * CLOUD, (variant / ATLAS_SIDE) * CLOUD);
-        for y in 0..CLOUD {
-            for x in 0..CLOUD {
-                let (u, v) = ((x as f32 + 0.5) / CLOUD as f32 * 2.0 - 1.0, (y as f32 + 0.5) / CLOUD as f32 * 2.0 - 1.0);
-                let alpha = cloud_alpha(&noise, u, v);
-                let at = (((oy + y) * side + ox + x) * 4) as usize;
-                data[at..at + 4].copy_from_slice(&[255, 255, 255, (alpha * 255.0) as u8]);
-            }
+/// The wisp's texture, [`TEX`] pixels square, white, tileable both ways (so V can scroll): seeded
+/// noise in the alpha, cut across by a soft edge in U (clear at both sides), and a little brighter
+/// in the core than at the edges.
+pub fn wisp_texture() -> Image {
+    let noise = Noise::new(&mut Mulberry32::new(0x5eed_a11c), 5);
+    let mut data = vec![0u8; (TEX * TEX * 4) as usize];
+    for y in 0..TEX {
+        for x in 0..TEX {
+            let (u, v) = ((x as f32 + 0.5) / TEX as f32, (y as f32 + 0.5) / TEX as f32);
+            // Warped, so the tears curl; the warp is itself tileable.
+            let wobble = |s: f32| noise.fbm(u + s, v + 0.5 * s) - 0.5;
+            let body = noise.fbm(u + wobble(0.13) * 0.4, v + wobble(0.57) * 0.4);
+            let thick = ((body - 0.3) / 0.4).clamp(0.0, 1.0);
+            let thick = thick * thick * (3.0 - 2.0 * thick);
+            // 0 at either side, 1 in the middle.
+            let core = (u * std::f32::consts::PI).sin().powf(1.2);
+            let alpha = (0.25 + 0.75 * thick) * core;
+            let light = 0.78 + 0.22 * core;
+            let at = ((y * TEX + x) * 4) as usize;
+            let g = (light * 255.0) as u8;
+            data[at..at + 4].copy_from_slice(&[g, g, g, (alpha * 255.0) as u8]);
         }
     }
-    Image::new(
-        Extent3d { width: side, height: side, depth_or_array_layers: 1 },
+    let mut image = Image::new(
+        Extent3d { width: TEX, height: TEX, depth_or_array_layers: 1 },
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
-    )
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, address_mode_v: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::linear() });
+    image
 }
 
-fn wisp_material(smoke: &Smoke, atlas: &Handle<Image>, wisp: &Wisp) -> StandardMaterial {
+fn wisp_material(smoke: &Smoke, texture: &Handle<Image>) -> StandardMaterial {
     StandardMaterial {
-        base_color: smoke.color.with_alpha(0.0),
-        base_color_texture: Some(atlas.clone()),
-        uv_transform: wisp.uv_transform(),
+        base_color: smoke.color.with_alpha(PUFF_ALPHA * (0.5 + 0.5 * smoke.density.clamp(0.0, 1.0))),
+        base_color_texture: Some(texture.clone()),
         unlit: true,
         alpha_mode: AlphaMode::Blend,
         cull_mode: None,
@@ -257,9 +285,86 @@ fn wisp_material(smoke: &Smoke, atlas: &Handle<Image>, wisp: &Wisp) -> StandardM
     }
 }
 
-/// How much of a puff of `radius` at `at` the walls leave, 0..1: nothing when its middle is in
-/// rock or a shut door, and less the nearer one stands to its middle, so smoke thins out against
-/// a wall and never cuts hard through it. `solid` says whether a level cell is a wall.
+/// One sample along the wisp, for the strip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sample {
+    pub at: Vec3,
+    /// How far up its life, 0..1.
+    pub t: f32,
+    /// Seconds above the lower end of the wisp.
+    pub since_end: f32,
+    /// How much of it the walls leave, 0..1.
+    pub clear: f32,
+}
+
+/// The strip's vertex buffers.
+#[derive(Default, Debug)]
+pub struct Strip {
+    pub positions: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub colors: Vec<[f32; 4]>,
+    pub indices: Vec<u32>,
+}
+
+/// Cuts [`SUBDIVIDE`] samples between each pair of `samples` (Catmull-Rom through their places).
+pub fn smooth(samples: &[Sample]) -> Vec<Sample> {
+    let n = samples.len();
+    let mut out = Vec::with_capacity(n * (SUBDIVIDE + 1));
+    for i in 0..n.saturating_sub(1) {
+        let (p0, p1, p2, p3) = (samples[i.saturating_sub(1)], samples[i], samples[i + 1], samples[(i + 2).min(n - 1)]);
+        for k in 0..=SUBDIVIDE {
+            let f = k as f32 / (SUBDIVIDE + 1) as f32;
+            let (f2, f3) = (f * f, f * f * f);
+            let at = 0.5 * ((2.0 * p1.at) + (p2.at - p0.at) * f + (2.0 * p0.at - 5.0 * p1.at + 4.0 * p2.at - p3.at) * f2 + (3.0 * p1.at - p0.at - 3.0 * p2.at + p3.at) * f3);
+            out.push(Sample { at, t: p1.t + (p2.t - p1.t) * f, since_end: p1.since_end + (p2.since_end - p1.since_end) * f, clear: p1.clear + (p2.clear - p1.clear) * f });
+        }
+    }
+    if let Some(&last) = samples.last() {
+        out.push(last);
+    }
+    out
+}
+
+/// The camera-facing strip along `samples` (lower end first), seen along `forward`: two vertices at
+/// each, across the strip's direction and the view, `width` apart, clear at both ends. `scroll` is
+/// how far the texture has run up it, in cycles.
+pub fn strip(samples: &[Sample], forward: Vec3, scroll: f32) -> Strip {
+    let mut out = Strip::default();
+    let n = samples.len();
+    if n < 2 {
+        return out;
+    }
+    for (i, s) in samples.iter().enumerate() {
+        let tangent = (samples[(i + 1).min(n - 1)].at - samples[i.saturating_sub(1)].at).normalize_or(Vec3::Y);
+        let side = tangent.cross(forward).try_normalize().unwrap_or_else(|| forward.any_orthonormal_vector());
+        let half = width(s.t) * (0.6 + 0.4 * s.clear);
+        let alpha = fade(s.t, s.since_end) * s.clear;
+        let v = s.t * V_REPEAT - scroll;
+        for (u, sign) in [(0.0, -1.0), (1.0, 1.0)] {
+            out.positions.push((s.at + side * half * sign).to_array());
+            out.uvs.push([u, v]);
+            out.colors.push([1.0, 1.0, 1.0, alpha]);
+        }
+    }
+    for i in 0..(n as u32 - 1) {
+        let b = i * 2;
+        out.indices.extend([b, b + 1, b + 3, b, b + 3, b + 2]);
+    }
+    out
+}
+
+fn blank_mesh() -> Mesh {
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, Vec::<[f32; 2]>::new())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new())
+        .with_inserted_indices(Indices::U32(Vec::new()))
+}
+
+/// How much of a point of `radius` at `at` the walls leave, 0..1: nothing when it is in rock or a
+/// shut door, and less the nearer one stands to it, so smoke thins out against a wall and never
+/// cuts hard through it. `solid` says whether a level cell is a wall.
 pub fn wall_clearance(at: Vec3, radius: f32, solid: impl Fn(i32, i32) -> bool) -> f32 {
     let cell = |p: f32| (p / fb_level::CELL).floor() as i32;
     let (cx, cy) = (cell(at.x), cell(at.z));
@@ -295,92 +400,90 @@ impl Walls<'_> {
     }
 }
 
-/// Gives every changed [`Smoke`] its puffs, adding or taking away the difference, each with a few
-/// wisps of its own, each wisp with its own material so it can fade alone.
-fn keep_puffs(
+/// Gives every changed [`Smoke`] a wisp of its own the first time, and keeps its material to the
+/// smoke's colour and density.
+fn keep_trails(
     mut commands: Commands,
-    emitters: Query<(Entity, &Smoke, Option<&Children>), Changed<Smoke>>,
-    puffs: Query<(), With<Puff>>,
-    assets: Res<PuffAssets>,
+    emitters: Query<(Entity, &Smoke), Changed<Smoke>>,
+    trails: Query<(&Trail, &MeshMaterial3d<StandardMaterial>)>,
+    assets: Res<WispAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (emitter, smoke, children) in &emitters {
-        let have: Vec<Entity> = children.into_iter().flatten().copied().filter(|&c| puffs.contains(c)).collect();
-        let want = ((PUFFS as f32 * smoke.density.clamp(0.0, 1.0)).ceil() as u32).max(1);
-        for &extra in have.iter().skip(want as usize) {
-            commands.entity(extra).despawn();
-        }
-        for index in have.len() as u32..want {
-            let seed = emitter.to_bits() as u32 ^ index.wrapping_mul(0x9e37_79b9);
-            let wisps = wisps_of(seed);
-            let puff = commands.spawn((Name::new("Puff"), Puff::new(index, want, seed), Transform::default(), Visibility::Hidden, ChildOf(emitter))).id();
-            for wisp in wisps {
-                commands.spawn((
-                    Name::new("Wisp"),
-                    wisp,
-                    Mesh3d(assets.mesh.clone()),
-                    MeshMaterial3d(materials.add(wisp_material(smoke, &assets.atlas, &wisp))),
-                    NotShadowCaster,
-                    Transform::default(),
-                    Visibility::Inherited,
-                    ChildOf(puff),
-                ));
+    for (emitter, smoke) in &emitters {
+        if let Some((_, material)) = trails.iter().find(|(trail, _)| trail.owner == emitter) {
+            if let Some(mut look) = materials.get_mut(&material.0) {
+                *look = wisp_material(smoke, &assets.texture);
             }
+            continue;
         }
+        let seed = emitter.to_bits() as u32 ^ 0x51ed_270b;
+        commands.spawn((
+            Name::new("Wisp"),
+            Trail::new(emitter, seed),
+            Mesh3d(meshes.add(blank_mesh())),
+            MeshMaterial3d(materials.add(wisp_material(smoke, &assets.texture))),
+            NotShadowCaster,
+            NoFrustumCulling,
+            Transform::default(),
+            Visibility::Hidden,
+        ));
     }
 }
 
-/// The wisps of the puff rolled from `seed`.
-pub fn wisps_of(seed: u32) -> [Wisp; WISPS] {
-    let mut rng = Mulberry32::new(seed ^ 0x51ed_270b);
-    let first = rng.int(0, VARIANTS - 1);
-    std::array::from_fn(|n| Wisp::roll(&mut rng, n, first))
-}
-
-/// Moves every puff along its curl, turned to face the eye, and fades it (and thins it against
-/// walls); hides it while it waits. Puffs keep the world place they rose from, so a censer that
-/// swings or is carried off leaves a bending trail behind it.
+/// Leaves points at each lit bowl, moves them, and rebuilds every wisp's strip across the view.
+/// Points keep the world place they were left, so a censer that swings or is carried off leaves a
+/// bending trail behind it. The strip is built in world space, so its entity sits at the world's
+/// origin, in the render layers of its emitter.
 #[allow(clippy::type_complexity)]
-fn drift_puffs(
+fn drift_trails(
+    mut commands: Commands,
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    emitters: Query<(&Smoke, &GlobalTransform)>,
-    mut puffs: Query<(&mut Puff, &mut Transform, &mut Visibility, &ChildOf, &Children)>,
-    wisps: Query<(&Wisp, &MeshMaterial3d<StandardMaterial>)>,
-    mut wisp_poses: Query<&mut Transform, (With<Wisp>, Without<Puff>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    emitters: Query<(&Smoke, &GlobalTransform, Option<&RenderLayers>)>,
+    mut trails: Query<(Entity, &mut Trail, &mut Visibility, &Mesh3d, Option<&RenderLayers>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
     walls: Walls,
 ) {
-    let facing = eyes.iter().next().map_or(Quat::IDENTITY, |eye| eye.rotation());
-    for (mut puff, mut transform, mut visibility, parent, children) in &mut puffs {
-        let Ok((smoke, world)) = emitters.get(parent.parent()) else { continue };
-        puff.age(time.delta_secs(), world, smoke);
-        let Some((at, radius, alpha)) = puff.pose().filter(|&(_, _, alpha)| alpha > 0.01) else {
-            visibility.set_if_neq(Visibility::Hidden);
-            continue;
-        };
-        // Ease towards what the walls leave, so a puff drifting in thins instead of snapping.
-        let clear = walls.clearance(at, radius);
-        puff.clear += (clear - puff.clear) * (time.delta_secs() * 8.0).min(1.0);
-        let alpha = alpha * puff.clear;
-        if alpha < 0.01 {
-            visibility.set_if_neq(Visibility::Hidden);
+    let forward = eyes.iter().next().map_or(Vec3::NEG_Z, |eye| eye.forward().as_vec3());
+    for (entity, mut trail, mut visibility, mesh, layers) in &mut trails {
+        // Without its emitter (put out and drawn again, or gone) the wisp only rises out.
+        let emitter = emitters.get(trail.owner).ok();
+        if let Some(wanted) = emitter.and_then(|(.., l)| l).filter(|&w| Some(w) != layers) {
+            commands.entity(entity).insert(wanted.clone());
+        }
+        let bowl = emitter.map_or(Vec3::ZERO, |(smoke, world, _)| world.transform_point(smoke.position));
+        let emitting = emitter.is_some_and(|(smoke, ..)| smoke.density > 0.01);
+        trail.advance(time.delta_secs(), emitting.then_some(bowl));
+        if emitter.is_none() && trail.points.is_empty() {
+            commands.entity(entity).despawn();
             continue;
         }
-        let pose = Transform { translation: at, rotation: facing, scale: Vec3::splat(radius * (0.6 + 0.4 * puff.clear)) };
-        *transform = GlobalTransform::from(pose).reparented_to(world);
-        // The wisps sit at offsets fixed in the world, so a puff seen edge-on or from another side
-        // still has thickness.
-        let unturn = facing.inverse();
-        for &child in children {
-            let (Ok((wisp, material)), Ok(mut local)) = (wisps.get(child), wisp_poses.get_mut(child)) else { continue };
-            local.translation = unturn * wisp.offset;
-            local.scale = Vec3::splat(wisp.size);
-            if let Some(mut look) = materials.get_mut(&material.0) {
-                look.base_color = smoke.color.with_alpha(alpha * PUFF_ALPHA * (0.5 + 0.5 * smoke.density) * (1.0 - 0.18 * wisp.offset.length()));
-            }
+        // Lower end first: the live point at the bowl, then the newest left and on up.
+        let mut samples: Vec<Sample> = Vec::with_capacity(trail.points.len() + 1);
+        if emitting && !trail.points.is_empty() {
+            samples.push(Sample { at: bowl, t: 0.0, since_end: 0.0, clear: 1.0 });
         }
-        visibility.set_if_neq(Visibility::Inherited);
+        samples.extend(trail.points.iter().rev().map(|p| {
+            let t = p.age / WISP_LIFE;
+            let (at, near) = within_reach(trail.place(p), bowl);
+            let ends = (1.0 - p.age / p.life).clamp(0.0, 1.0);
+            Sample { at, t, since_end: 0.0, clear: walls.clearance(at, width(t)) * near * p.strength * ends.sqrt() }
+        }));
+        break_gaps(&mut samples);
+        let low = samples.first().map_or(0.0, |s| s.t * WISP_LIFE);
+        for s in &mut samples {
+            s.since_end = (s.t * WISP_LIFE - low).max(0.0);
+        }
+        let strip = strip(&smooth(&samples), forward, time.elapsed_secs() * V_SCROLL);
+        let Some(mut mesh) = meshes.get_mut(&mesh.0) else { continue };
+        let count = strip.positions.len();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, strip.positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; count]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, strip.uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, strip.colors);
+        mesh.insert_indices(Indices::U32(strip.indices));
+        visibility.set_if_neq(if count >= 4 { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
 
@@ -388,16 +491,123 @@ fn drift_puffs(
 mod tests {
     use super::*;
 
+    fn lit(at: Vec3, secs: f32) -> Trail {
+        let mut trail = Trail::new(Entity::PLACEHOLDER, 9);
+        let mut t = 0.0;
+        while t < secs {
+            trail.advance(1.0 / 60.0, Some(at));
+            t += 1.0 / 60.0;
+        }
+        trail
+    }
+
     #[test]
-    fn a_puff_rises_slowing_swells_and_fades_in_and_out() {
-        let sway = Vec2::new(0.3, 0.0);
-        let rows: Vec<(Vec3, f32, f32)> = (0..=10).map(|i| curl(i as f32 / 10.0, sway)).collect();
-        assert!(rows.windows(2).all(|w| w[1].0.y > w[0].0.y && w[1].1 > w[0].1));
-        assert!(rows[1].0.y - rows[0].0.y > rows[10].0.y - rows[9].0.y, "it slows as it rises");
-        assert!((rows[10].0.y - PUFF_RISE).abs() < 1e-4);
-        assert_eq!((rows[0].2, rows[10].2), (0.0, 0.0), "it fades in from nothing and out to nothing");
-        assert!(rows[3].2 > 0.5, "thick early");
-        assert!(rows[10].0.x > rows[5].0.x, "the breeze carries it along");
+    fn points_are_left_at_the_bowl_every_step_and_rise_out_of_the_trail() {
+        let trail = lit(Vec3::new(10.0, 1.0, 0.0), 1.0);
+        assert!((28..=31).contains(&trail.points.len()), "{}", trail.points.len());
+        let ages: Vec<f32> = trail.points.iter().map(|p| p.age).collect();
+        assert!(ages.windows(2).all(|w| w[0] > w[1]), "oldest first");
+        let long = lit(Vec3::ZERO, WISP_LIFE * 2.0);
+        assert!(long.points.len() <= (WISP_LIFE / STEP) as usize + 2, "a short ring: {}", long.points.len());
+    }
+
+    #[test]
+    fn a_point_stays_where_it_was_left_when_its_emitter_moves_on() {
+        let mut trail = lit(Vec3::new(10.0, 1.0, 0.0), 0.5);
+        let born: Vec<Vec3> = trail.points.iter().map(|p| p.born).collect();
+        let before = trail.place(&trail.points[0]);
+        // The censer is swung 6 units on; the points already left are carried only by their own curl.
+        trail.advance(0.5, Some(Vec3::new(16.0, 1.0, 0.0)));
+        assert!(trail.points.iter().zip(&born).all(|(p, &b)| p.born == b), "left where they were born");
+        let after = trail.place(&trail.points[0]);
+        assert!((after.x - before.x).abs() < 1.5 && after.x < 12.0, "{before} -> {after}: still trailing near where it was left");
+        assert!(after.y > before.y);
+        assert_eq!(trail.place(&TrailPoint { born: Vec3::ONE, age: 0.0, clock: 3.0, strength: 1.0, life: WISP_LIFE }), Vec3::ONE, "a new point is at the bowl");
+    }
+
+    #[test]
+    fn points_left_by_a_flying_bowl_are_fainter_and_shorter_lived() {
+        let mut slow = Trail::new(Entity::PLACEHOLDER, 1);
+        let mut fast = Trail::new(Entity::PLACEHOLDER, 1);
+        for i in 0..30 {
+            slow.advance(1.0 / 60.0, Some(Vec3::new(i as f32 * 0.01, 1.0, 0.0)));
+            fast.advance(1.0 / 60.0, Some(Vec3::new(i as f32 * 0.8, 1.0, 0.0)));
+        }
+        let (a, b) = (slow.points.back().unwrap(), fast.points.back().unwrap());
+        assert!(a.strength > 0.95 && b.strength < a.strength * 0.5, "{} {}", a.strength, b.strength);
+        assert!(b.life < a.life * 0.6, "{} {}", b.life, a.life);
+        // Stopped, the next points are whole again within a second.
+        for _ in 0..60 {
+            fast.advance(1.0 / 60.0, Some(Vec3::new(30.0, 1.0, 0.0)));
+        }
+        assert!(fast.points.back().unwrap().strength > 0.95);
+    }
+
+    #[test]
+    fn a_long_gap_between_points_is_clear_and_the_wisp_stays_near_the_bowl() {
+        let line = |gap: f32| -> Vec<Sample> { (0..6).map(|i| Sample { at: Vec3::new(i as f32 * gap, 0.0, 0.0), t: 0.5, since_end: 1.0, clear: 1.0 }).collect() };
+        let mut near = line(0.1);
+        break_gaps(&mut near);
+        assert!(near.iter().all(|s| s.clear == 1.0));
+        let mut far = line(GAP * 3.0);
+        break_gaps(&mut far);
+        let strip = strip(&far, Vec3::NEG_Z, 0.0);
+        assert!(strip.colors.iter().all(|c| c[3] == 0.0), "nothing drawn across the gaps");
+        let width_at = |s: &Strip, i: usize| Vec3::from_array(s.positions[i * 2 + 1]).distance(Vec3::from_array(s.positions[i * 2]));
+        assert!(width_at(&strip, 3) <= width(0.5) * 2.0 + 1e-4, "no wider on a stretch");
+        let (at, left) = within_reach(Vec3::new(40.0, 0.0, 0.0), Vec3::ZERO);
+        assert!(at.length() <= REACH + 1e-4 && left == 0.0);
+        assert_eq!(within_reach(Vec3::new(0.5, 0.0, 0.0), Vec3::ZERO).1, 1.0);
+    }
+
+    #[test]
+    fn a_point_rises_slowing_and_is_carried_along_the_breeze() {
+        let rows: Vec<Vec3> = (0..=10).map(|i| curl(i as f32 / 10.0, 1.0, Vec2::new(1.0, 2.0))).collect();
+        assert!(rows.windows(2).all(|w| w[1].y > w[0].y));
+        assert!(rows[1].y - rows[0].y > rows[10].y - rows[9].y, "it slows as it rises");
+        assert!((rows[10].y - WISP_RISE).abs() < 1e-4);
+        assert!(rows[10].x > rows[5].x - WISP_WANDER, "the breeze carries it along");
+    }
+
+    #[test]
+    fn the_wisp_is_clear_at_both_ends_and_widens_with_age() {
+        assert_eq!(fade(0.0, 0.0), 0.0, "clear at the bowl");
+        assert_eq!(fade(1.0, 5.0), 0.0, "clear at the top");
+        assert!(fade(0.4, 1.0) > 0.3);
+        assert_eq!(fade(0.5, 0.0), 0.0, "and where the incense ran out, from its new lower end");
+        assert!(width(1.0) > width(0.0) * 4.0, "several times wider at the top");
+        assert!((0..10).all(|i| width((i + 1) as f32 / 10.0) > width(i as f32 / 10.0)));
+    }
+
+    #[test]
+    fn the_strip_faces_the_view_with_clear_ends_and_a_growing_width() {
+        let samples: Vec<Sample> = (0..=20).map(|i| Sample { at: Vec3::new(0.0, i as f32 * 0.3, 0.0), t: i as f32 / 20.0, since_end: i as f32 * 0.15, clear: 1.0 }).collect();
+        let smoothed = smooth(&samples);
+        assert!(smoothed.len() > samples.len() * 2, "cut finer");
+        let strip = strip(&smoothed, Vec3::NEG_Z, 0.0);
+        assert_eq!(strip.positions.len(), smoothed.len() * 2);
+        assert_eq!(strip.indices.len(), (smoothed.len() - 1) * 6);
+        let across = |i: usize| (Vec3::from_array(strip.positions[i * 2 + 1]) - Vec3::from_array(strip.positions[i * 2])).length();
+        let last = smoothed.len() - 1;
+        assert!(across(last) > across(1) * 4.0, "{} -> {}", across(1), across(last));
+        assert!(strip.colors[0][3] == 0.0 && strip.colors[last * 2][3] == 0.0, "no hard ends");
+        assert!(strip.colors[smoothed.len()][3] > 0.2, "and solid between");
+        let flat = Vec3::from_array(strip.positions[1]) - Vec3::from_array(strip.positions[0]);
+        assert!(flat.z.abs() < 1e-4, "across the view, not along it: {flat}");
+        assert!(strip.uvs.iter().all(|uv| uv[0] == 0.0 || uv[0] == 1.0));
+    }
+
+    #[test]
+    fn no_wisp_is_left_once_the_incense_runs_out() {
+        let mut trail = lit(Vec3::ZERO, 2.0);
+        assert!(!trail.points.is_empty());
+        let mut t = 0.0;
+        while t < WISP_LIFE + 0.1 {
+            trail.advance(1.0 / 60.0, None);
+            t += 1.0 / 60.0;
+        }
+        assert!(trail.points.is_empty(), "every point rose out");
+        assert!(strip(&smooth(&[]), Vec3::NEG_Z, 0.0).positions.is_empty());
     }
 
     fn smoking_app(density: f32) -> (App, Entity) {
@@ -406,88 +616,101 @@ mod tests {
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<StandardMaterial>>()
-            .init_resource::<PuffAssets>()
-            .add_systems(Update, (keep_puffs, drift_puffs).chain());
+            .init_resource::<WispAssets>()
+            .add_systems(Update, (keep_trails, drift_trails).chain());
         let smoke = Smoke { color: Color::srgb(0.9, 0.9, 0.9), position: Vec3::new(0.0, 1.0, 0.0), spread: 0.4, density };
         let emitter = app.world_mut().spawn((smoke, Transform::from_xyz(10.0, 0.0, 0.0))).id();
         (app, emitter)
     }
 
-    fn puffs_of(app: &App, emitter: Entity) -> Vec<Entity> {
-        app.world().get::<Children>(emitter).map_or(Vec::new(), |c| c.iter().filter(|&p| app.world().get::<Puff>(p).is_some()).collect())
+    fn trails(app: &mut App) -> Vec<Trail> {
+        app.world_mut().query::<&Trail>().iter(app.world()).cloned().collect()
     }
 
     #[test]
-    fn a_smoking_entity_keeps_puffs_by_its_density_and_none_when_it_is_taken_away() {
+    fn a_smoking_entity_gets_one_wisp_and_an_unlit_one_leaves_none() {
         let (mut app, emitter) = smoking_app(1.0);
         app.update();
-        assert_eq!(puffs_of(&app, emitter).len(), PUFFS as usize);
+        app.update();
+        assert_eq!(trails(&mut app).len(), 1);
         app.world_mut().get_mut::<Smoke>(emitter).unwrap().density = 0.5;
         app.update();
-        assert_eq!(puffs_of(&app, emitter).len(), (PUFFS / 2) as usize);
-        // The entity loses its smoke when the censer goes out: its puffs go with the component's owner.
+        assert_eq!(trails(&mut app).len(), 1, "a change keeps the one wisp");
+        let (mut dark, emitter) = smoking_app(0.0);
+        for _ in 0..5 {
+            dark.update();
+        }
+        let _ = emitter;
+        assert!(trails(&mut dark).iter().all(|t| t.points.is_empty()), "no incense, no wisp");
+    }
+
+    fn stepping_app(density: f32) -> (App, Entity) {
+        let (mut app, emitter) = smoking_app(density);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 30.0)));
+        (app, emitter)
+    }
+
+    fn drawn(app: &mut App) -> bool {
+        app.world_mut().query::<(&Trail, &Visibility)>().iter(app.world()).any(|(_, v)| *v != Visibility::Hidden)
+    }
+
+    #[test]
+    fn a_censer_whose_incense_runs_out_keeps_its_wisp_for_a_moment_and_it_fades_within_its_life() {
+        let (mut app, emitter) = stepping_app(1.0);
+        for _ in 0..90 {
+            app.update();
+        }
+        assert!(drawn(&mut app));
+        app.world_mut().get_mut::<Smoke>(emitter).unwrap().density = 0.0;
+        for _ in 0..15 {
+            app.update();
+        }
+        assert!(drawn(&mut app) && !trails(&mut app)[0].points.is_empty(), "still rising out half a second on");
+        for _ in 0..((WISP_LIFE / STEP) as usize + 6) {
+            app.update();
+        }
+        assert!(trails(&mut app).iter().all(|t| t.points.is_empty()), "nothing left within its life");
+        assert!(!drawn(&mut app));
+    }
+
+    #[test]
+    fn a_wisp_outlives_a_censer_that_is_drawn_again_and_then_goes() {
+        let (mut app, emitter) = stepping_app(1.0);
+        for _ in 0..60 {
+            app.update();
+        }
         app.world_mut().entity_mut(emitter).despawn();
-        app.update();
-        assert!(app.world().get_entity(emitter).is_err());
-    }
-
-    #[test]
-    fn puffs_rise_from_the_emitter_one_after_another() {
-        let smoke = Smoke { color: Color::WHITE, position: Vec3::new(0.0, 1.0, 0.0), spread: 0.4, density: 1.0 };
-        let world = GlobalTransform::from_xyz(10.0, 0.0, 0.0);
-        let (mut first, mut later) = (Puff::new(0, 4, 7), Puff::new(1, 4, 8));
-        first.age(0.1, &world, &smoke);
-        later.age(0.1, &world, &smoke);
-        let from = first.from.unwrap();
-        assert!((9.5..=10.5).contains(&from.x) && (from.y - 1.0).abs() < 1e-4, "{from}");
-        assert!(first.pose().is_some() && later.pose().is_none(), "the second waits its turn");
-    }
-
-    #[test]
-    fn puffs_differ_in_cloud_and_turn_and_each_has_distinct_wisps() {
-        let rolls: Vec<[Wisp; WISPS]> = (0..12u32).map(|i| wisps_of(i.wrapping_mul(0x9e37_79b9) ^ 77)).collect();
-        assert_eq!(rolls, (0..12u32).map(|i| wisps_of(i.wrapping_mul(0x9e37_79b9) ^ 77)).collect::<Vec<_>>(), "rolled from the seed alone");
-        let variants: std::collections::BTreeSet<u32> = rolls.iter().map(|w| w[0].variant).collect();
-        assert!(variants.len() >= 3, "{variants:?}");
-        let turns: std::collections::BTreeSet<u32> = rolls.iter().map(|w| w[0].turn.to_bits()).collect();
-        assert_eq!(turns.len(), rolls.len(), "no two puffs turned alike");
-        for wisps in &rolls {
-            let own: std::collections::BTreeSet<u32> = wisps.iter().map(|w| w.variant).collect();
-            assert_eq!(own.len(), WISPS, "a puff's wisps are different clouds");
-            assert!(wisps[1].offset != Vec3::ZERO, "the others sit off its middle, for thickness");
+        for _ in 0..10 {
+            app.update();
         }
+        assert!(drawn(&mut app), "rises on after its emitter is gone");
+        for _ in 0..((WISP_LIFE / STEP) as usize + 6) {
+            app.update();
+        }
+        assert!(trails(&mut app).is_empty(), "then the entity goes too");
     }
 
     #[test]
-    fn the_atlas_is_soft_and_uneven_and_clear_at_each_cells_edge() {
-        let image = cloud_atlas();
+    fn a_long_frame_leaves_only_a_few_points() {
+        let mut trail = Trail::new(Entity::PLACEHOLDER, 3);
+        trail.advance(2.0, Some(Vec3::ZERO));
+        assert!(trail.points.len() <= 4, "{}", trail.points.len());
+    }
+
+    #[test]
+    fn the_texture_is_soft_clear_at_the_sides_and_tiles_up_and_down() {
+        let image = wisp_texture();
         let data = image.data.as_ref().unwrap();
-        let side = (CLOUD * ATLAS_SIDE) as usize;
+        let side = TEX as usize;
         let alpha = |x: usize, y: usize| data[(y * side + x) * 4 + 3];
-        for variant in 0..VARIANTS as usize {
-            let (ox, oy) = (variant % ATLAS_SIDE as usize * CLOUD as usize, variant / ATLAS_SIDE as usize * CLOUD as usize);
-            let c = CLOUD as usize;
-            assert!((0..c).all(|i| alpha(ox + i, oy) == 0 && alpha(ox + i, oy + c - 1) == 0 && alpha(ox, oy + i) == 0 && alpha(ox + c - 1, oy + i) == 0), "variant {variant} touches its edge");
-            let cell: Vec<u8> = (0..c * c).map(|i| alpha(ox + i % c, oy + i / c)).collect();
-            assert!(cell.iter().any(|&a| a > 150), "variant {variant} has a body");
-            let soft = cell.iter().filter(|&&a| (10..240).contains(&a)).count();
-            assert!(soft * 4 > cell.iter().filter(|&&a| a > 0).count(), "variant {variant} has soft edges, not a cut-out");
-        }
-        let cells: Vec<Vec<u8>> = (0..VARIANTS as usize).map(|v| (0..CLOUD as usize * 4).map(|i| alpha(v % 2 * CLOUD as usize + 16 + i % 32, v / 2 * CLOUD as usize + 16 + i / 32)).collect()).collect();
-        assert!(cells.windows(2).all(|w| w[0] != w[1]), "the variants differ");
-    }
-
-    #[test]
-    fn a_puff_stays_where_it_rose_when_its_emitter_moves_on() {
-        let smoke = Smoke { color: Color::WHITE, position: Vec3::new(0.0, 1.0, 0.0), spread: 0.0, density: 1.0 };
-        let mut puff = Puff::new(0, 1, 5);
-        puff.age(0.5, &GlobalTransform::from_xyz(10.0, 0.0, 0.0), &smoke);
-        let before = puff.pose().unwrap().0;
-        // The censer is swung 6 units on; the puff is carried only by its own curl.
-        puff.age(0.5, &GlobalTransform::from_xyz(16.0, 0.0, 0.0), &smoke);
-        let after = puff.pose().unwrap().0;
-        assert!((after.x - before.x).abs() < 1.0 && after.x < 12.0, "{before} -> {after}: still trailing near where it was born");
-        assert!(after.y > before.y);
+        assert!((0..side).all(|y| alpha(0, y) < 12 && alpha(side - 1, y) < 12), "clear at either side");
+        let middle: Vec<u8> = (0..side * side / 2).map(|i| alpha(side / 4 + i % (side / 2), i / (side / 2))).collect();
+        assert!(middle.iter().any(|&a| a > 150) && middle.iter().any(|&a| a < 90), "uneven");
+        let soft = middle.iter().filter(|&&a| (10..240).contains(&a)).count();
+        assert!(soft * 3 > middle.len(), "soft, not a cut-out");
+        let step = |a: usize, b: usize| (0..side).map(|x| (alpha(x, a) as i32 - alpha(x, b) as i32).abs()).max().unwrap();
+        let (seam, ordinary) = (step(0, side - 1), step(40, 41));
+        assert!(seam <= ordinary.max(25) + 15, "tiles: seam {seam}, ordinary step {ordinary}");
     }
 
     #[test]

@@ -190,9 +190,13 @@ pub fn item_light(item: &Item) -> Option<LightAnchor> {
 /// The smoke an Armory item gives off while it burns, if it is a lit censer, in the incense's colour.
 pub fn item_smoke(item: &Item) -> Option<crate::smoke::Smoke> {
     let Item::Lantern(state) = item else { return None };
-    let anchor = Lantern::smoke(state)?;
+    // Put out or spent, a censer keeps its smoke at no density: the wisp rises out, not vanishes.
+    let mut burning = state.clone();
+    burning.flame.lit = true;
+    let anchor = Lantern::smoke(&burning)?;
     let armory::Rgb(r, g, b) = anchor.color;
-    Some(crate::smoke::Smoke { color: Color::srgb(r, g, b), position: Vec3::from_array(anchor.position), spread: anchor.spread, density: anchor.density })
+    let density = if state.flame.lit && state.flame.level > 0.0 { anchor.density } else { 0.0 };
+    Some(crate::smoke::Smoke { color: Color::srgb(r, g, b), position: Vec3::from_array(anchor.position), spread: anchor.spread, density })
 }
 
 /// [`item_light`] of a rolled item, its reach scaled by its light affixes (Gleaming, Smoky:
@@ -1655,14 +1659,14 @@ mod censer_tests {
     }
 
     #[test]
-    fn a_lit_censer_smokes_and_glows_and_an_unlit_one_does_neither() {
+    fn a_lit_censer_smokes_and_glows_and_an_unlit_one_neither() {
         let lit = censer(true);
         let smoke = item_smoke(&lit.shape).expect("a lit censer smokes");
         assert!(smoke.density > 0.0);
         let light = rolled_light(&lit).expect("and glows");
         assert!(light.radius > 0.0 && light.radius < 40.0, "small: {}", light.radius);
         let out = censer(false);
-        assert!(item_smoke(&out.shape).is_none() && rolled_light(&out).is_none());
+        assert!(item_smoke(&out.shape).is_some_and(|s| s.density == 0.0) && rolled_light(&out).is_none(), "out, it smokes no more but keeps its wisp to rise out");
         let lantern = fb_items::roll_item("Lantern", 3).unwrap();
         assert!(item_smoke(&lantern.shape).is_none(), "a lantern does not smoke");
     }
