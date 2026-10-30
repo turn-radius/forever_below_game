@@ -304,7 +304,7 @@ fn masters_work_from_level_six_one_to_a_trade_on_a_level() {
             }
         }
         // Every trade has a master somewhere below, to hear a rumour of.
-        for p in Profession::TRADES {
+        for p in Profession::MASTERABLE {
             assert!(masters.deeper(p, 1).is_some(), "world {seed}: no {p:?} master");
         }
     }
@@ -315,6 +315,7 @@ fn trades_read_as_the_folk_card_writes_them() {
     let t = |profession, tier, style| Trade { profession, tier, style }.label();
     assert_eq!(t(Profession::Weaponsmith, Tier::Apprentice, Some(Style::Blades)), "Apprentice weaponsmith (blades)");
     assert_eq!(t(Profession::Alchemist, Tier::Master, None), "Master alchemist");
+    assert_eq!(t(Profession::Healer, Tier::Expert, None), "Expert healer");
     assert_eq!(Trade::guard().label(), "Guard");
     assert!(Tier::Novice < Tier::Apprentice && Tier::Apprentice < Tier::Expert && Tier::Expert < Tier::Master);
 }

@@ -31,6 +31,7 @@ pub mod fitting;
 pub mod folk;
 pub mod folk_combat;
 pub mod folk_regard;
+pub mod healer;
 pub mod hostility;
 pub mod blessing;
 pub mod identify;

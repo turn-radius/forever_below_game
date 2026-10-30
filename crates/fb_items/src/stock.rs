@@ -23,6 +23,8 @@ pub enum Line {
     General,
     /// Potions, healing draughts and elixirs.
     Potions,
+    /// Incense and censers: a healer's wares (prayer scrolls come with the healers' later work).
+    Sacred,
 }
 
 /// How skilled the trader is, which caps what rarity their wares come in.
@@ -157,6 +159,7 @@ impl Line {
                 "Rope", "Pack", "Satchel", "Sack", "Purse",
             ],
             Line::Potions => &["Vial", "Small potion", "Potion", "Large potion", "Healing vial", "Small healing draught", "Healing draught", "Large healing draught", "Elixir of the Hare", "Elixir of Vigil", "Elixir of Fasting", "Elixir of Embers"],
+            Line::Sacred => &["Incense", "Censer"],
         }
     }
 
@@ -168,6 +171,7 @@ impl Line {
             Line::Camp => "tentmaker",
             Line::General => "general goods merchant",
             Line::Potions => "alchemist",
+            Line::Sacred => "healer",
         }
     }
 }

@@ -150,6 +150,7 @@ pub fn wares(profession: Profession) -> Option<&'static str> {
         Profession::GeneralGoods => "general_goods",
         Profession::Alchemist => "alchemist",
         Profession::Enchanter => "enchanter",
+        Profession::Healer => "healer",
         Profession::Guard => return None,
     })
 }

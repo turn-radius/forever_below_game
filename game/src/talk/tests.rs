@@ -284,6 +284,58 @@ fn an_enchanters_enchant_topic_sends_the_service_on() {
     assert_eq!(app.world().resource::<Talk>().answer, None, "the bench answers, not the panel");
 }
 
+fn healer() -> Option<Trade> {
+    Some(Trade { profession: Profession::Healer, tier: Tier::Apprentice, style: None })
+}
+
+#[test]
+fn a_friendly_healer_offers_heal_and_says_what_they_can_tend() {
+    let mut app = talk_app();
+    let folk = stand_in(&mut app, 0, healer(), None);
+    standing(&mut app, folk, 30);
+    talk_to(&mut app, folk);
+    let talk = app.world().resource::<Talk>();
+    let labels: Vec<_> = talk.topics.iter().map(|t| t.label()).collect();
+    assert_eq!(labels, ["Who are you?", "Your trade", "Barter", "Heal", "This level", "Persuade", "The way out"]);
+    press(&mut app, KeyCode::Digit4);
+    let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("an answer");
+    assert_eq!(topic, Topic::Service(Service::Heal));
+    assert!(lines::grammar().symbols["heal_offer"].contains(&said), "{said}");
+    // Barter opens its screen; Heal answers in the panel until its own screen exists.
+    let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+    assert!(sent.is_empty(), "{sent:?}");
+}
+
+#[test]
+fn a_wary_or_hostile_healer_offers_heal_only_to_refuse_it() {
+    for (amount, band, symbol) in [(-30, Band::Wary, "heal_refuse_wary"), (-100, Band::Hostile, "heal_refuse_hostile")] {
+        let mut app = talk_app();
+        let folk = stand_in(&mut app, 0, healer(), None);
+        standing(&mut app, folk, amount);
+        assert_eq!(app.world().resource::<WorldRecord>().standings.band(faction_of(&app, folk)), band);
+        talk_to(&mut app, folk);
+        assert_eq!(app.world().resource::<Talk>().topics, [Topic::Service(Service::Heal), Topic::Persuade]);
+        press(&mut app, KeyCode::Digit1);
+        let (topic, said) = app.world().resource::<Talk>().answer.clone().expect("a refusal");
+        assert_eq!(topic, Topic::Service(Service::Heal));
+        let faction = app.world().get::<Denizen>(folk).unwrap().person.faction.name.clone();
+        let refusals = &lines::grammar().symbols[symbol];
+        assert!(refusals.iter().any(|r| r.split("#faction").next().is_some_and(|head| said.starts_with(head))), "{band:?}: {said} ({faction})");
+        let sent: Vec<ServiceChosen> = app.world_mut().resource_mut::<Messages<ServiceChosen>>().drain().collect();
+        assert!(sent.is_empty());
+    }
+}
+
+#[test]
+fn only_a_healer_is_offered_heal() {
+    let mut app = talk_app();
+    let folk = stand_in(&mut app, 0, smith(), None);
+    standing(&mut app, folk, 30);
+    talk_to(&mut app, folk);
+    assert!(!app.world().resource::<Talk>().topics.contains(&Topic::Service(Service::Heal)));
+    assert_eq!(crate::healer::refusal(app.world().resource::<Talk>().speaker.as_ref().unwrap(), false), None);
+}
+
 // Denizens speak their tongues.
 
 use fb_denizens::DenizenKind;
