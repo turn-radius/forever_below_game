@@ -75,6 +75,28 @@ pub struct TrailPoint {
     pub age: f32,
     /// The emitter's clock when it was left: its sway is smooth in this, so neighbours curl together.
     pub clock: f32,
+    /// How much of the smoke it carries, 0..1: less the faster the bowl moved as it was left.
+    pub strength: f32,
+    /// Seconds it lasts: shorter the faster the bowl moved.
+    pub life: f32,
+}
+
+/// Bowl speed, world units a second, below which the smoke is whole, and above which it is gone.
+pub const CALM_SPEED: f32 = 5.0;
+pub const SMEAR_SPEED: f32 = 45.0;
+/// Shortest life a point has, as a share of [`WISP_LIFE`], when the bowl is flying.
+const SMEAR_LIFE: f32 = 0.25;
+/// Weakest a point is left at, at the same speed.
+const SMEAR_STRENGTH: f32 = 0.12;
+/// Furthest apart two neighbouring points can be before no smoke is drawn between them.
+pub const GAP: f32 = 1.2;
+/// Furthest any of the wisp reaches from the bowl, world units; it fades out towards it.
+pub const REACH: f32 = 4.0;
+
+/// How whole the smoke is left by a bowl moving `speed`: 1 when calm, near 0 when flying.
+pub fn calm(speed: f32) -> f32 {
+    let x = ((speed - CALM_SPEED) / (SMEAR_SPEED - CALM_SPEED)).clamp(0.0, 1.0);
+    1.0 - x * x * (3.0 - 2.0 * x)
 }
 
 /// The wisp of a [`Smoke`], a child of it: its points, oldest first, and the mesh drawn along them.
@@ -84,12 +106,15 @@ pub struct Trail {
     clock: f32,
     since: f32,
     phase: Vec2,
+    last_bowl: Option<Vec3>,
+    /// How fast the bowl is moving, eased.
+    pub speed: f32,
 }
 
 impl Trail {
     fn new(seed: u32) -> Trail {
         let mut rng = Mulberry32::new(seed);
-        Trail { points: VecDeque::new(), clock: 0.0, since: 0.0, phase: Vec2::new(rng.range_f32(0.0, 6.28), rng.range_f32(0.0, 6.28)) }
+        Trail { points: VecDeque::new(), clock: 0.0, since: 0.0, phase: Vec2::new(rng.range_f32(0.0, 6.28), rng.range_f32(0.0, 6.28)), last_bowl: None, speed: 0.0 }
     }
 
     /// Ages the points `dt` seconds, drops the ones that have risen out, and, if `bowl` is given,
@@ -99,17 +124,23 @@ impl Trail {
         for point in &mut self.points {
             point.age += dt;
         }
-        while self.points.front().is_some_and(|p| p.age >= WISP_LIFE) {
-            self.points.pop_front();
-        }
+        self.points.retain(|p| p.age < p.life);
         let Some(bowl) = bowl else {
             self.since = 0.0;
+            self.last_bowl = None;
+            self.speed = 0.0;
             return;
         };
+        if let Some(last) = self.last_bowl.filter(|_| dt > 0.0) {
+            let raw = bowl.distance(last) / dt;
+            self.speed += (raw - self.speed) * (dt * 25.0).min(1.0);
+        }
+        self.last_bowl = Some(bowl);
+        let c = calm(self.speed);
         self.since += dt;
         while self.since >= STEP {
             self.since -= STEP;
-            self.points.push_back(TrailPoint { born: bowl, age: self.since, clock: self.clock - self.since });
+            self.points.push_back(TrailPoint { born: bowl, age: self.since, clock: self.clock - self.since, strength: SMEAR_STRENGTH + (1.0 - SMEAR_STRENGTH) * c, life: WISP_LIFE * (SMEAR_LIFE + (1.0 - SMEAR_LIFE) * c) });
         }
     }
 
@@ -140,6 +171,24 @@ pub fn width(t: f32) -> f32 {
 pub fn fade(t: f32, since_end: f32) -> f32 {
     let x = (since_end / FADE_IN).clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x) * (1.0 - t.clamp(0.0, 1.0)).powf(0.9)
+}
+
+/// A sample of the wisp placed no further than [`REACH`] from the bowl, with how much of it is left
+/// there (1 near the bowl, 0 at the reach).
+pub fn within_reach(at: Vec3, bowl: Vec3) -> (Vec3, f32) {
+    let off = at - bowl;
+    let x = ((off.length() - REACH * 0.5) / (REACH * 0.5)).clamp(0.0, 1.0);
+    (bowl + off.clamp_length_max(REACH), 1.0 - x * x * (3.0 - 2.0 * x))
+}
+
+/// Takes the smoke out of every segment longer than [`GAP`], so a fast stretch leaves no streamer.
+pub fn break_gaps(samples: &mut [Sample]) {
+    for i in 1..samples.len() {
+        if samples[i].at.distance(samples[i - 1].at) > GAP {
+            samples[i].clear = 0.0;
+            samples[i - 1].clear = 0.0;
+        }
+    }
 }
 
 /// The noise texture every wisp is drawn with.
@@ -406,9 +455,11 @@ fn drift_trails(
         }
         samples.extend(trail.points.iter().rev().map(|p| {
             let t = p.age / WISP_LIFE;
-            let at = trail.place(p);
-            Sample { at, t, since_end: 0.0, clear: walls.clearance(at, width(t)) }
+            let (at, near) = within_reach(trail.place(p), bowl);
+            let ends = (1.0 - p.age / p.life).clamp(0.0, 1.0);
+            Sample { at, t, since_end: 0.0, clear: walls.clearance(at, width(t)) * near * p.strength * ends.sqrt() }
         }));
+        break_gaps(&mut samples);
         let low = samples.first().map_or(0.0, |s| s.t * WISP_LIFE);
         for s in &mut samples {
             s.since_end = (s.t * WISP_LIFE - low).max(0.0);
@@ -461,7 +512,42 @@ mod tests {
         let after = trail.place(&trail.points[0]);
         assert!((after.x - before.x).abs() < 1.5 && after.x < 12.0, "{before} -> {after}: still trailing near where it was left");
         assert!(after.y > before.y);
-        assert_eq!(trail.place(&TrailPoint { born: Vec3::ONE, age: 0.0, clock: 3.0 }), Vec3::ONE, "a new point is at the bowl");
+        assert_eq!(trail.place(&TrailPoint { born: Vec3::ONE, age: 0.0, clock: 3.0, strength: 1.0, life: WISP_LIFE }), Vec3::ONE, "a new point is at the bowl");
+    }
+
+    #[test]
+    fn points_left_by_a_flying_bowl_are_fainter_and_shorter_lived() {
+        let mut slow = Trail::new(1);
+        let mut fast = Trail::new(1);
+        for i in 0..30 {
+            slow.advance(1.0 / 60.0, Some(Vec3::new(i as f32 * 0.01, 1.0, 0.0)));
+            fast.advance(1.0 / 60.0, Some(Vec3::new(i as f32 * 0.8, 1.0, 0.0)));
+        }
+        let (a, b) = (slow.points.back().unwrap(), fast.points.back().unwrap());
+        assert!(a.strength > 0.95 && b.strength < a.strength * 0.5, "{} {}", a.strength, b.strength);
+        assert!(b.life < a.life * 0.6, "{} {}", b.life, a.life);
+        // Stopped, the next points are whole again within a second.
+        for _ in 0..60 {
+            fast.advance(1.0 / 60.0, Some(Vec3::new(30.0, 1.0, 0.0)));
+        }
+        assert!(fast.points.back().unwrap().strength > 0.95);
+    }
+
+    #[test]
+    fn a_long_gap_between_points_is_clear_and_the_wisp_stays_near_the_bowl() {
+        let line = |gap: f32| -> Vec<Sample> { (0..6).map(|i| Sample { at: Vec3::new(i as f32 * gap, 0.0, 0.0), t: 0.5, since_end: 1.0, clear: 1.0 }).collect() };
+        let mut near = line(0.1);
+        break_gaps(&mut near);
+        assert!(near.iter().all(|s| s.clear == 1.0));
+        let mut far = line(GAP * 3.0);
+        break_gaps(&mut far);
+        let strip = strip(&far, Vec3::NEG_Z, 0.0);
+        assert!(strip.colors.iter().all(|c| c[3] == 0.0), "nothing drawn across the gaps");
+        let width_at = |s: &Strip, i: usize| Vec3::from_array(s.positions[i * 2 + 1]).distance(Vec3::from_array(s.positions[i * 2]));
+        assert!(width_at(&strip, 3) <= width(0.5) * 2.0 + 1e-4, "no wider on a stretch");
+        let (at, left) = within_reach(Vec3::new(40.0, 0.0, 0.0), Vec3::ZERO);
+        assert!(at.length() <= REACH + 1e-4 && left == 0.0);
+        assert_eq!(within_reach(Vec3::new(0.5, 0.0, 0.0), Vec3::ZERO).1, 1.0);
     }
 
     #[test]
