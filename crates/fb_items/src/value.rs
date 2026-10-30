@@ -73,11 +73,19 @@ pub struct ValueRules {
     /// How much richer each level below the first makes a purse: its coins times
     /// `1 + step * (depth - 1)`.
     pub coin_depth_step: f64,
+    /// What a healer's prayer scroll is worth in plain scrolls for each point of mana its term
+    /// costs: a Heal scroll (cost 3) at 4 is twelve plain scrolls, a Cure scroll (cost 2) eight.
+    pub prayer_per_cost: f64,
 }
 
 /// `data/value_rules.json`.
 pub static RULES: LazyLock<ValueRules> =
     LazyLock::new(|| serde_json::from_str(include_str!("../../../data/value_rules.json")).unwrap_or_else(|e| panic!("data/value_rules.json: {e}")));
+
+/// What a prayer scroll's price is of a plain scroll's, for a term costing `cost` mana (our own).
+pub fn prayer_factor(cost: f32) -> f64 {
+    f64::from(cost.max(0.0)) * RULES.prayer_per_cost
+}
 
 /// What rarity multiplies the price by (our own).
 pub fn rarity_factor(rarity: Rarity) -> f64 {
@@ -138,6 +146,7 @@ impl Item {
         // Until it is fully known an item is worth what a plain one is: no one pays for magic
         // that has not been found out.
         let (rarity, affixes): (_, &[&Affix]) = if self.is_known() { (self.rarity, &self.affixes) } else { (Rarity::Common, &[]) };
+        let base = if self.prayer.is_some() { self.prayer_cost.map_or(base, |c| base * prayer_factor(c).max(1.0)) } else { base };
         let worth = base * rarity_factor(rarity) * affix_product(affixes) * condition_factor(&self.shape.condition());
         (worth.round() as u64).max(1)
     }

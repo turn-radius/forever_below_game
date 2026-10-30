@@ -216,8 +216,17 @@ pub(crate) fn flawed(item: &Item) -> bool {
 /// four. Each piece carries the maker's line in its history. Rolls meshes, so keep counts
 /// modest.
 pub fn stock(shop: &Shop, depth: u32, seed: u32) -> Vec<Item> {
+    stock_with(shop, depth, seed, &[])
+}
+
+/// [`stock`], with the prayers a healer may sell: each a Divine term id and the mana it costs,
+/// from the game's rules. A healer keeps one to three scrolls of distinct terms from them,
+/// priced by cost ([`crate::value::prayer_factor`]); empty, none, and no other shop sells any.
+pub fn stock_with(shop: &Shop, depth: u32, seed: u32, prayers: &[(String, f32)]) -> Vec<Item> {
     if shop.line == Line::Sacred {
-        return sacred_stock(shop, depth, seed);
+        let mut wares = sacred_stock(shop, depth, seed);
+        wares.extend(prayer_wares(shop, seed, prayers));
+        return wares;
     }
     let mut rng = Mulberry32::new(seed ^ 0x570C_45E1);
     let (lo, hi) = shop.grade.size();
@@ -263,6 +272,31 @@ fn sacred_counts(grade: Grade, rng: &mut Mulberry32) -> (usize, usize) {
         Grade::Master => (4, (8, 9)),
     };
     (censers, rng.int(dishes.0, dishes.1) as usize)
+}
+
+/// The prayer scrolls on a healer's shelf: one to three, distinct terms from `prayers`, rolled on
+/// a stream of their own so the incense and censers stay as they were.
+fn prayer_wares(shop: &Shop, seed: u32, prayers: &[(String, f32)]) -> Vec<Item> {
+    let mut rng = Mulberry32::new(seed ^ 0x9A3E_C0DE);
+    let mut order: Vec<&(String, f32)> = prayers.iter().collect();
+    for i in (1..order.len()).rev() {
+        order.swap(i, rng.int(0, i as u32) as usize);
+    }
+    let count = (rng.int(1, 3) as usize).min(order.len());
+    let maker = shop.maker_line();
+    order
+        .into_iter()
+        .take(count)
+        .enumerate()
+        .filter_map(|(i, (term, cost))| {
+            let mut scroll = crate::prayers::prayer_scroll(seed.wrapping_mul(0xC2B2_AE35).wrapping_add(i as u32 + 1), term)?;
+            scroll.prayer_cost = Some(*cost);
+            let c = dress::condition_mut(&mut scroll.shape);
+            *c = Condition::of(ConditionState::Pristine);
+            scroll.history.push(maker.clone());
+            Some(scroll)
+        })
+        .collect()
 }
 
 /// A healer's shelf: always every kind of incense and at least two censers, however the dice
@@ -423,6 +457,51 @@ mod tests {
                 assert!(!item.is_censer() && item.incense_kind().is_none());
             }
         }
+    }
+
+    fn pool() -> Vec<(String, f32)> {
+        vec![("cone".into(), 4.0), ("cure".into(), 2.0), ("heal".into(), 3.0)]
+    }
+
+    #[test]
+    fn a_healer_sells_one_to_three_prayer_scrolls_of_distinct_terms() {
+        let s = shop(Line::Sacred, Grade::Expert, None);
+        let mut counts = [0; 4];
+        for seed in 0..60 {
+            let scrolls: Vec<_> = stock_with(&s, 4, seed, &pool()).into_iter().filter_map(|i| i.prayer().map(str::to_string)).collect();
+            assert!((1..=3).contains(&scrolls.len()), "seed {seed}: {scrolls:?}");
+            let mut distinct = scrolls.clone();
+            distinct.sort();
+            distinct.dedup();
+            assert_eq!(distinct.len(), scrolls.len());
+            assert!(scrolls.iter().all(|t| pool().iter().any(|(p, _)| p == t)));
+            counts[scrolls.len()] += 1;
+        }
+        assert!(counts[1] > 0 && counts[2] > 0 && counts[3] > 0, "{counts:?}");
+    }
+
+    #[test]
+    fn an_empty_pool_and_other_shops_sell_no_prayers_and_incense_is_unchanged() {
+        let s = shop(Line::Sacred, Grade::Master, None);
+        for seed in 0..12 {
+            assert!(stock_with(&s, 4, seed, &[]).iter().all(|i| i.prayer().is_none()));
+            assert_eq!(stock_with(&s, 4, seed, &[]), sacred_shelf(Grade::Master, seed));
+            let with: Vec<_> = stock_with(&s, 4, seed, &pool()).into_iter().filter(|i| i.prayer().is_none()).collect();
+            assert_eq!(with, sacred_shelf(Grade::Master, seed));
+            assert!(stock_with(&shop(Line::Armour, Grade::Master, None), 4, seed, &pool()).iter().all(|i| i.prayer().is_none()));
+        }
+    }
+
+    #[test]
+    fn a_dearer_term_sells_dearer_and_a_shelf_is_pure() {
+        let s = shop(Line::Sacred, Grade::Apprentice, None);
+        let price = |term: &str| {
+            let scroll = (0..60).flat_map(|seed| stock_with(&s, 4, seed, &pool())).find(|i| i.prayer() == Some(term)).unwrap();
+            scroll.value_copper()
+        };
+        assert!(price("heal") > price("cure"), "{} vs {}", price("heal"), price("cure"));
+        assert!(price("cone") > price("heal"));
+        assert_eq!(stock_with(&s, 4, 9, &pool()), stock_with(&s, 4, 9, &pool()));
     }
 
     #[test]

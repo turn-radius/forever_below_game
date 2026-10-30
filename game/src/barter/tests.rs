@@ -286,17 +286,17 @@ fn a_sold_sword_stays_on_the_shelf_through_a_restock() {
     let person = person(smith());
     let mine = sword(9);
     let shelf = Shelf { day: 0, wares: roll_wares(&person, 0), sold: vec![mine.clone()], purse: 100 };
-    let next = shelf.restocked(&person, 1);
+    let next = shelf.restocked(&person, 1, &[]);
     assert_eq!(next.day, 1);
     assert_eq!(next.sold, vec![mine]);
     assert_ne!(next.wares, roll_wares(&person, 0));
     // The purse is topped up to the tier's, never cut.
     assert_eq!(next.purse, purse_copper(Tier::Apprentice));
-    assert_eq!(Shelf { purse: 99_999, ..next }.restocked(&person, 2).purse, 99_999);
+    assert_eq!(Shelf { purse: 99_999, ..next }.restocked(&person, 2, &[]).purse, 99_999);
 }
 
 fn roll_wares(person: &Person, day: u32) -> Vec<Item> {
-    crate::shelf::roll_shelf(person, day)
+    crate::shelf::roll_shelf(person, day, &[])
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn barter_app() -> App {
 
 fn stand_in(app: &mut App, trade: Option<Trade>) -> Entity {
     let person = person(trade);
-    let shelf = trade.is_some_and(|t| t.shop("", "").is_some()).then(|| shelf_of(crate::shelf::roll_shelf(&person, 0), 6000));
+    let shelf = trade.is_some_and(|t| t.shop("", "").is_some()).then(|| shelf_of(crate::shelf::roll_shelf(&person, 0, &[]), 6000));
     let denizen = Denizen { person, radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
     let mut entity = app.world_mut().spawn(denizen);
     if let Some(shelf) = shelf {
