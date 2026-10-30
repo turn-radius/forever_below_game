@@ -166,6 +166,7 @@ pub struct Eating<'w, 's> {
     character: Option<ResMut<'w, Character>>,
     page: Option<ResMut<'w, crate::reading::OpenPage>>,
     record: Option<ResMut<'w, crate::record::WorldRecord>>,
+    books: Query<'w, 's, &'static mut crate::casting::DelverSpellbook, With<Player>>,
 }
 
 impl Eating<'_, '_> {
@@ -250,6 +251,12 @@ impl Eating<'_, '_> {
         }
         if let (Some(teaching), Some(record)) = (book.teaching(), self.record.as_mut()) {
             return Some(crate::reading::study(&mut record.lexicon, teaching));
+        }
+        if let Some(term) = book.prayer() {
+            let cleric = self.character.as_ref().is_some_and(|c| c.class.casting() == fb_character::Casting::Divine);
+            let rules = crate::rules::GameRules::of(&self.rules);
+            let mut spellbook = self.books.single_mut().ok();
+            return Some(crate::reading::pray(spellbook.as_deref_mut().map(|b| &mut b.0), cleric, rules, term));
         }
         let character = self.character.as_mut()?;
         book.lesson()?;
@@ -585,6 +592,40 @@ mod tests {
         press_u(&mut app);
         assert_eq!(score(&app), before + 1, "a book teaches a delver once");
         assert!(app.world().resource::<Toast>().text.ends_with("has nothing more to teach you"));
+    }
+
+    #[test]
+    fn f_over_a_prayer_scroll_unlocks_its_term_for_a_cleric_once_and_teaches_a_fighter_nothing() {
+        use crate::casting::DelverSpellbook;
+        let term = fb_items::prayers::prayer_terms()[0].id.clone();
+        let unlocked = |world: &App, player| world.world().get::<DelverSpellbook>(player).unwrap().0.unlocked.contains(&term);
+        let (mut world, player) = app();
+        let mut cleric = Character::roll(3);
+        cleric.class = crate::character::Class::Cleric;
+        world.insert_resource(cleric);
+        world.world_mut().entity_mut(player).insert(DelverSpellbook(fb_character::casting::Spellbook::starting(fb_character::Casting::Divine)));
+        let scroll = fb_items::prayers::prayer_scroll(4, &term).unwrap();
+        assert_eq!(crate::interact::use_of(&scroll), Some(crate::interact::Verb::Read));
+        let id = stow(&mut world, scroll);
+        hover(&mut world, id);
+        assert!(!unlocked(&world, player));
+        press_u(&mut world);
+        assert!(world.world().resource::<Toast>().text.starts_with("You learn the "), "{}", world.world().resource::<Toast>().text);
+        assert!(unlocked(&world, player));
+        assert!(world.world().resource::<Inventory>().item(id).is_some(), "the scroll is kept");
+        press_u(&mut world);
+        assert!(world.world().resource::<Toast>().text.starts_with("You already know the "), "{}", world.world().resource::<Toast>().text);
+
+        let (mut world, player) = app();
+        let mut fighter = Character::roll(3);
+        fighter.class = crate::character::Class::Fighter;
+        world.insert_resource(fighter);
+        world.world_mut().entity_mut(player).insert(DelverSpellbook::default());
+        let id = stow(&mut world, fb_items::prayers::prayer_scroll(4, &term).unwrap());
+        hover(&mut world, id);
+        press_u(&mut world);
+        assert!(world.world().resource::<Toast>().text.contains("cleric's prayer"));
+        assert!(!unlocked(&world, player));
     }
 
     #[test]

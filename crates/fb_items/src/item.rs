@@ -127,6 +127,8 @@ pub struct Item {
     pub words: Option<String>,
     /// The words it teaches the reader, if it is written in a denizen tongue ([`Item::teaching`]).
     pub teaching: Option<Teaching>,
+    /// The Divine term a prayer scroll teaches a cleric ([`Item::prayer`]).
+    pub prayer: Option<String>,
     /// How much of its magic the delver has found out ([`Known`]). Everything rolled is fully known
     /// until the game sets a found one unknown ([`Item::unidentified`]); the stats count either way.
     pub known: Known,
@@ -154,6 +156,7 @@ pub struct ItemParts {
     pub odds: Odds,
     pub words: Option<String>,
     pub teaching: Option<Teaching>,
+    pub prayer: Option<String>,
     pub known: Known,
     pub rest_tried: Option<u32>,
     pub quantity: u32,
@@ -161,7 +164,7 @@ pub struct ItemParts {
 
 impl From<Item> for ItemParts {
     fn from(i: Item) -> Self {
-        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, known: i.known, rest_tried: i.rest_tried, quantity: i.quantity }
+        ItemParts { base: i.base, seed: i.seed, shape: i.shape, rarity: i.rarity, affixes: i.affixes, name: i.name, legend: i.legend, history: i.history, coins: i.coins, odds: i.odds, words: i.words, teaching: i.teaching, prayer: i.prayer, known: i.known, rest_tried: i.rest_tried, quantity: i.quantity }
     }
 }
 
@@ -172,7 +175,7 @@ impl Item {
     /// table knows. An item taken apart ([`ItemParts::from`]) and put back together is equal.
     pub fn from_parts(parts: ItemParts) -> Option<Item> {
         crate::armory_base::armory_base(&parts.base)?;
-        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, known, rest_tried, quantity } = parts;
+        let ItemParts { base, seed, shape, rarity, affixes, name, legend, history, coins, odds, words, teaching, prayer, known, rest_tried, quantity } = parts;
         // A potion's base is its size: a record from before sizes (any scale) is made the size
         // its base names, so its bottle, its name's size word and its stack agree.
         let mut shape = shape;
@@ -187,7 +190,7 @@ impl Item {
             a.apply_to_stats(&mut profile.stats);
         }
         profile.fit_capacity();
-        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, known, rest_tried, quantity: quantity.max(1) })
+        Some(Item { base, seed, shape, rarity, affixes, name, legend, profile, coins, odds, history, words, teaching, prayer, known, rest_tried, quantity: quantity.max(1) })
     }
 }
 
@@ -220,6 +223,7 @@ impl Item {
             && self.legend == other.legend
             && self.history == other.history
             && self.teaching == other.teaching
+            && self.prayer == other.prayer
             && self.rest_tried == other.rest_tried
             && self.odds == other.odds
             && self.rarity == other.rarity
@@ -462,7 +466,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
         if let Some(c) = coins {
             profile.description = c.to_string();
         }
-        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None, quantity: 1 });
+        return Some(Item { base: base.to_string(), seed, shape, rarity: Rarity::Common, affixes: vec![], name: noun, legend: None, profile, coins, odds, history: vec![], words: None, teaching: None, prayer: None, known: Known::Full, rest_tried: None, quantity: 1 });
     }
 
     let (rarity, affixes) = roll_rarity_for(&mut rng, &profile.tags, profile.slot, &odds);
@@ -475,7 +479,7 @@ pub fn roll_item_with(base: &str, seed: u32, odds: Odds) -> Option<Item> {
     dress(&mut shape, rarity, &affixes, seed);
     // The fuel it starts with is what the item's `BurnTime` makes of a full one.
     shape.scale_fuel(profile.stats.burn_time);
-    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, known: Known::Full, rest_tried: None, quantity: 1 })
+    Some(Item { base: base.to_string(), seed, shape, rarity, affixes, name, legend, profile, coins: None, odds, history: vec![], words: None, teaching: None, prayer: None, known: Known::Full, rest_tried: None, quantity: 1 })
 }
 
 /// Loot that names only an Armory family and a seed (the level's item spots): a base of that

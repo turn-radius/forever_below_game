@@ -258,6 +258,9 @@ pub struct ItemRecord {
     /// The words it teaches, if it is written in a denizen tongue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teaching: Option<fb_denizens::tongue::Teaching>,
+    /// The Divine term it teaches a cleric, if it is a prayer scroll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prayer: Option<String>,
     /// How much of its magic is known. Absent in a record from before items were unknown, which
     /// reads as fully known.
     #[serde(default, skip_serializing_if = "fb_items::Known::is_full")]
@@ -400,6 +403,7 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         odds: item.odds,
         words: item.words.clone(),
         teaching: item.teaching.clone(),
+        prayer: item.prayer.clone(),
         known: item.known,
         rest_tried: item.rest_tried,
         quantity: item.quantity,
@@ -460,6 +464,7 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         odds: record.odds,
         words: record.words.clone(),
         teaching: record.teaching.clone(),
+        prayer: record.prayer.clone(),
         known: record.known,
         rest_tried: record.rest_tried,
         quantity: record.quantity,
@@ -680,6 +685,15 @@ mod tests {
         assert!(reloaded.lexicon().known_share(fb_denizens::DenizenKind::Faun) > 0.0);
         let fresh = WorldRecord::new_delve(fb_faction::Alignment::LawfulGood, 5);
         assert_eq!(fresh.lexicon().known_share(fb_denizens::DenizenKind::Faun), 0.0, "a new delve starts with none");
+    }
+
+    #[test]
+    fn a_prayer_scroll_keeps_its_term_through_a_record() {
+        let term = &fb_items::prayers::prayer_terms()[0].id;
+        let scroll = fb_items::prayers::prayer_scroll(12, term).unwrap();
+        let again = through_record(&scroll);
+        assert_eq!(again, scroll);
+        assert_eq!(again.prayer(), Some(term.as_str()));
     }
 
     #[test]

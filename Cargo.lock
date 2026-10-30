@@ -2766,6 +2766,7 @@ dependencies = [
  "procgen_rng",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

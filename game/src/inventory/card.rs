@@ -132,6 +132,9 @@ pub fn consume_line(item: &Item) -> Option<String> {
     if let Some(teaching) = item.teaching() {
         return Some(format!("{}\nWritten in {}", teaching.description(), fb_denizens::tongue::tongue_name(teaching.kind)));
     }
+    if let Some(line) = item.prayer_line() {
+        return Some(line);
+    }
     if let Some(stat) = item.lesson() {
         return Some(format!("Teaches {:+} {}", fb_items::lesson::LESSON_POINTS, fb_items::lesson::short_name(stat)));
     }

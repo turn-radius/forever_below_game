@@ -76,6 +76,14 @@ impl Level {
             .map(|(_, kind)| kind)
     }
 
+    /// Whether a spot at (`x`, `y`) lies by a shrine or in a faction's hall: within [`NEAR_GROUND`]
+    /// cells of a shrine's room, or inside a room a faction holds. Prayer scrolls are commoner
+    /// there ([`fb_items::prayers`]).
+    pub fn holy_ground_near(&self, x: f32, y: f32) -> bool {
+        self.rooms_for(crate::Purpose::Shrine).any(|r| self.rooms[r].gap_to(x, y) <= NEAR_GROUND)
+            || self.claims.iter().any(|claim| claim.rooms.iter().any(|&r| self.rooms[r].gap_to(x, y) <= 0.0))
+    }
+
     /// What the container prop `spot` holds as it is found, rolled for `odds`: nothing for
     /// scenery or a container set out empty ([`crate::NO_LOOT`]). The writing in a chest or crate
     /// by a denizen faction's ground may be in its tongue ([`fb_items::Item::in_world_near`]).
@@ -85,7 +93,8 @@ impl Level {
             return Vec::new();
         }
         let near = self.denizen_ground_near(spot.x, spot.y);
-        fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world_near(lore, near)).collect()
+        let holy = self.holy_ground_near(spot.x, spot.y);
+        fb_items::roll_contents(style, loot, odds).into_iter().map(|i| i.in_world_at(lore, near, holy)).collect()
     }
 
     /// The item lying at `spot` as it is found, rolled for `odds` and written on or put in a
@@ -94,7 +103,7 @@ impl Level {
     /// so a level's items share one.
     pub fn floor_item(&self, spot: &crate::ItemSpot, odds: fb_items::Odds, lore: &Lore) -> Option<fb_items::Item> {
         let item = fb_items::roll_loot(spot.family, spot.seed, odds)?;
-        Some(item.in_world_near(lore, self.denizen_ground_near(spot.x, spot.y)))
+        Some(item.in_world_at(lore, self.denizen_ground_near(spot.x, spot.y), self.holy_ground_near(spot.x, spot.y)))
     }
 
     /// Everyone on the level who sells: guards do not.

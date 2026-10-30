@@ -5,6 +5,8 @@
 //! what lies under the cursor.
 //!
 //! `FB_READ=<seed>` writes a note of that seed on the level a moment in and opens it, for captures.
+//! `FB_TEACH=prayer[:term][:seed]` puts a prayer scroll (`fb_items::prayers`) in the pack, and
+//! `FB_TEACH_READ=1` reads it too.
 //! `FB_TEACH=<kind>[:book|scroll][:seed][,...]` puts a book or scroll written in that tongue
 //! (`minotaur`, `cyclops`, `faun`, `demon`) in the pack, and `FB_TEACH_READ=1` reads every one a
 //! moment into the delve, so the toast and the sheet's tongues can be captured.
@@ -44,6 +46,24 @@ pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &fb_denizens:
     format!("You learn {n} {} of {}: {}.", if n == 1 { "word" } else { "words" }, fb_denizens::tongue::tongue_name(teaching.kind), teaching.topic_list())
 }
 
+/// Reads a prayer scroll teaching the Divine term `term`: a cleric's `spellbook` unlocks it
+/// ("You learn the Heal term. It is ready to write in your book."). One already unlocked says so
+/// and teaches nothing; so does a reader who is no cleric, who is told it is a cleric's prayer. The
+/// scroll is kept either way. Returns the toast's line.
+pub fn pray(spellbook: Option<&mut fb_character::casting::Spellbook>, cleric: bool, rules: &fb_character::rules::Rules, term: &str) -> String {
+    let name = rules.casting.terms.get(term).map_or_else(|| term.to_string(), |t| t.name.clone());
+    let Some(spellbook) = spellbook.filter(|_| cleric) else {
+        return "It is a cleric's prayer, and means nothing to you.".to_string();
+    };
+    if spellbook.unlock_with(rules, term) {
+        format!("You learn the {name} term. It is ready to write in your book.")
+    } else if spellbook.unlocked.contains(term) {
+        format!("You already know the {name} term.")
+    } else {
+        "The prayer is unreadable.".to_string()
+    }
+}
+
 /// The book or scroll `FB_TEACH`'s entry `spec` names (`minotaur:scroll:7`), the `index`th of the
 /// list: written in the tongue, rolled from the seed (1000 and the index if none). `None`, with a
 /// warning, for an entry that names no tongue.
@@ -51,6 +71,20 @@ pub fn teaching_for_capture(spec: &str, index: u32) -> Option<fb_items::Item> {
     use fb_denizens::tongue::{Teaching, TeachingSize};
     let mut parts = spec.split(':').map(str::trim);
     let name = parts.next().unwrap_or_default();
+    if name.eq_ignore_ascii_case("prayer") {
+        let (mut term, mut seed) = (fb_items::prayers::prayer_terms().first().map(|t| t.id.clone()), 1000 + index);
+        for part in parts {
+            match part.parse::<u32>() {
+                Ok(n) => seed = n,
+                Err(_) => term = Some(part.to_lowercase()),
+            }
+        }
+        let scroll = term.and_then(|t| fb_items::prayers::prayer_scroll(seed, &t));
+        if scroll.is_none() {
+            warn!("FB_TEACH: no prayer scroll for that term");
+        }
+        return scroll;
+    }
     let Some(kind) = fb_denizens::DenizenKind::ALL.into_iter().find(|k| k.key() == name.to_lowercase()) else {
         warn!("FB_TEACH: no tongue called {name:?}");
         return None;
@@ -81,7 +115,7 @@ fn read_teaching_for_capture(
     if *frames != READ_AT {
         return;
     }
-    let taught: Vec<_> = inventory.carried_containers().into_iter().filter_map(|c| inventory.grid(c)).flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>()).filter(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some())).collect();
+    let taught: Vec<_> = inventory.carried_containers().into_iter().filter_map(|c| inventory.grid(c)).flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>()).filter(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some() || i.prayer().is_some())).collect();
     for id in taught {
         if let Some(line) = eating.read(&inventory, id) {
             toasts.say(line);
@@ -243,12 +277,31 @@ mod tests {
     }
 
     #[test]
+    fn a_prayer_unlocks_for_a_cleric_once_and_teaches_nobody_else() {
+        use fb_character::Casting;
+        let rules = fb_character::rules::defaults();
+        let term = fb_items::prayers::prayer_terms()[0].id.clone();
+        let name = &rules.casting.terms[&term].name;
+        let mut book = fb_character::casting::Spellbook::starting(Casting::Divine);
+        assert!(!book.unlocked.contains(&term));
+        assert_eq!(pray(Some(&mut book), true, rules, &term), format!("You learn the {name} term. It is ready to write in your book."));
+        assert!(book.unlocked.contains(&term));
+        assert_eq!(pray(Some(&mut book), true, rules, &term), format!("You already know the {name} term."));
+        let mut fighter = fb_character::casting::Spellbook::default();
+        assert!(pray(Some(&mut fighter), false, rules, &term).contains("cleric's prayer"));
+        assert!(fighter.unlocked.is_empty());
+        assert!(pray(None, false, rules, &term).contains("cleric's prayer"));
+    }
+
+    #[test]
     fn capture_entries_name_a_tongue_a_size_and_a_seed() {
         let book = teaching_for_capture("Demon:book:5", 0).unwrap();
         assert_eq!((book.base.as_str(), book.seed, book.tongue()), ("Book", 5, Some(fb_denizens::DenizenKind::Demon)));
         let scroll = teaching_for_capture("cyclops", 3).unwrap();
         assert_eq!((scroll.base.as_str(), scroll.seed), ("Scroll", 1003));
         assert!(teaching_for_capture("orc", 0).is_none());
+        let prayer = teaching_for_capture("prayer:cone:9", 0).unwrap();
+        assert_eq!((prayer.base.as_str(), prayer.seed, prayer.prayer()), ("Scroll", 9, Some("cone")));
     }
 
     #[test]
