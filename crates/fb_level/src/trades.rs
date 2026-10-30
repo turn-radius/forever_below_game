@@ -434,7 +434,7 @@ mod tests {
                         kinds.dedup();
                         assert!(kinds.len() >= 3 && wares.iter().filter(|i| i.is_censer()).count() >= 2, "world {world} depth {depth}");
                         assert_eq!(wares, stock(&shop, depth, f.0.seed));
-                        let pool = [("heal".to_string(), 3.0), ("cure".to_string(), 2.0)];
+                        let pool = ["heal".to_string(), "cure".to_string()];
                         let scrolls = stock_with(&shop, depth, f.0.seed, &pool).iter().filter(|i| i.prayer().is_some()).count();
                         assert!((1..=2).contains(&scrolls), "world {world} depth {depth}: {scrolls} prayer scrolls");
                         healers += 1;

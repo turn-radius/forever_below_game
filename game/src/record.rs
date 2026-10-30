@@ -261,9 +261,6 @@ pub struct ItemRecord {
     /// The Divine term it teaches a cleric, if it is a prayer scroll.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prayer: Option<String>,
-    /// The mana that term costs, on a prayer scroll a healer sold.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prayer_cost: Option<f32>,
     /// How much of its magic is known. Absent in a record from before items were unknown, which
     /// reads as fully known.
     #[serde(default, skip_serializing_if = "fb_items::Known::is_full")]
@@ -407,7 +404,6 @@ pub fn item_record(item: &fb_items::Item) -> ItemRecord {
         words: item.words.clone(),
         teaching: item.teaching.clone(),
         prayer: item.prayer.clone(),
-        prayer_cost: item.prayer_cost,
         known: item.known,
         rest_tried: item.rest_tried,
         quantity: item.quantity,
@@ -469,7 +465,6 @@ pub fn rebuild_item(record: &ItemRecord) -> Option<fb_items::Item> {
         words: record.words.clone(),
         teaching: record.teaching.clone(),
         prayer: record.prayer.clone(),
-        prayer_cost: record.prayer_cost,
         known: record.known,
         rest_tried: record.rest_tried,
         quantity: record.quantity,

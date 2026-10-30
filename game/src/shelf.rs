@@ -29,7 +29,7 @@ pub struct Shelf {
 impl Shelf {
     /// A new day's shelf: the rolled wares again, the sold-in ones kept, and the purse
     /// topped up (never cut) to what the trade's tier carries.
-    pub fn restocked(self, person: &Person, day: u32, prayers: &[(String, f32)]) -> Shelf {
+    pub fn restocked(self, person: &Person, day: u32, prayers: &[String]) -> Shelf {
         Shelf { day, wares: roll_shelf(person, day, prayers), purse: self.purse.max(starting_purse(person)), sold: self.sold }
     }
 
@@ -56,10 +56,16 @@ pub fn shelf_seed(spot_seed: u32, day: u32) -> u32 {
 
 /// What `person` has to sell on `day`: empty for someone with no trade, or one who sells
 /// nothing (guards, enchanters). Pure in the person, the day and the prayers a healer may sell
-/// ([`crate::rules::prayer_offers`]).
-pub fn roll_shelf(person: &Person, day: u32, prayers: &[(String, f32)]) -> Vec<Item> {
+/// ([`crate::rules::prayer_pool`]).
+pub fn roll_shelf(person: &Person, day: u32, prayers: &[String]) -> Vec<Item> {
     let Some(shop) = person.spot.trade.and_then(|t| t.shop(&person.name, &person.faction.name)) else { return vec![] };
     fb_items::stock::stock_with(&shop, person.depth, shelf_seed(person.spot.seed, day), prayers)
+}
+
+/// The prayers a healer may sell under the game's rules, built into `pool` the first time a
+/// shelf needs them.
+fn prayers_in<'a>(pool: &'a mut Option<Vec<String>>, rules: &Option<Res<crate::rules::GameRules>>) -> &'a [String] {
+    pool.get_or_insert_with(|| crate::rules::prayer_pool(crate::rules::GameRules::of(rules)))
 }
 
 /// Gives each tradesperson their shelf as they appear: the one the record kept if it is still
@@ -74,7 +80,8 @@ pub fn stock_shelves(
     mut old: Query<(&Denizen, &mut Shelf)>,
 ) {
     let today = clock.as_deref().map_or(0, day_of);
-    let prayers = crate::rules::prayer_offers(crate::rules::GameRules::of(&rules));
+    // The pool is built once, when a shelf first needs stocking, not every frame.
+    let mut pool: Option<Vec<String>> = None;
     for (entity, denizen) in &new {
         let person = &denizen.person;
         if !person.spot.trade.is_some_and(|t| t.shop("", "").is_some()) {
@@ -94,16 +101,16 @@ pub fn stock_shelves(
                     sold: saved.sold.iter().filter_map(rebuild_item).collect(),
                     purse: saved.purse.unwrap_or_else(|| starting_purse(person)),
                 };
-                if saved.day == today { was } else { was.restocked(person, today, &prayers) }
+                if saved.day == today { was } else { was.restocked(person, today, prayers_in(&mut pool, &rules)) }
             }
-            None => Shelf { day: today, wares: roll_shelf(person, today, &prayers), sold: vec![], purse: starting_purse(person) },
+            None => Shelf { day: today, wares: roll_shelf(person, today, prayers_in(&mut pool, &rules)), sold: vec![], purse: starting_purse(person) },
         };
         commands.entity(entity).insert(shelf);
     }
     for (denizen, mut shelf) in &mut old {
         if shelf.day != today {
             let old = std::mem::replace(&mut *shelf, Shelf { day: today, wares: vec![], sold: vec![], purse: 0 });
-            *shelf = old.restocked(&denizen.person, today, &prayers);
+            *shelf = old.restocked(&denizen.person, today, prayers_in(&mut pool, &rules));
         }
     }
 }

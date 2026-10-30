@@ -52,12 +52,6 @@ pub fn prayer_pool(rules: &Rules) -> Vec<String> {
     fb_character::casting::Spellbook::scroll_terms(rules, fb_character::Casting::Divine)
 }
 
-/// The prayers a healer may sell under `rules`: the scroll terms ([`prayer_pool`]) with the mana
-/// each costs, which sets the scroll's price.
-pub fn prayer_offers(rules: &Rules) -> Vec<(String, f32)> {
-    prayer_pool(rules).into_iter().map(|id| { let cost = rules.casting.terms[&id].cost as f32; (id, cost) }).collect()
-}
-
 /// What `level` knows of itself, with the prayers `rules` let a scroll teach.
 pub fn level_lore(level: &fb_level::Level, rules: &Rules) -> fb_items::notes::Lore {
     fb_items::notes::Lore { prayers: prayer_pool(rules), ..level.lore() }
