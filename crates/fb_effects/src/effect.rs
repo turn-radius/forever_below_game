@@ -79,7 +79,7 @@ pub enum Shape {
 
 /// Where and in what shape particles appear.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Spawn {
     pub shape: Shape,
     pub at: Anchor,
@@ -114,7 +114,7 @@ pub enum TimingKind {
 
 /// When an emitter throws, how many, and how long each lives.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Timing {
     pub kind: TimingKind,
     /// Particles per target: all of a burst, or alive at once in a stream.
@@ -160,7 +160,7 @@ pub enum MotionKind {
 
 /// How particles move.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Motion {
     pub kind: MotionKind,
     /// Units a second.
@@ -184,6 +184,7 @@ impl Default for Motion {
 
 /// A size at a share of a particle's life.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SizeStop {
     pub at: f32,
     pub size: f32,
@@ -191,6 +192,7 @@ pub struct SizeStop {
 
 /// A colour (sRGB, 0 to 1) at a share of a particle's life.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ColourStop {
     pub at: f32,
     pub rgb: V3,
@@ -198,7 +200,7 @@ pub struct ColourStop {
 
 /// One kind of particle an effect throws.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Emitter {
     pub name: String,
     pub card: Card,
@@ -235,6 +237,7 @@ pub enum Follows {
 
 /// The light an effect lights the level and what is held with.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Light {
     pub at: Anchor,
     /// How bright at its fullest, as a torch's peak (`crate::light` in the game).
@@ -247,7 +250,7 @@ pub struct Light {
 
 /// A spell's or item's effect.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Effect {
     pub name: String,
     /// Seconds it plays. A once effect ends there; a lasting one loops its timeline over this
@@ -269,46 +272,145 @@ impl Default for Effect {
     }
 }
 
+/// The most particles one emitter may throw at once on one target.
+pub const MAX_COUNT: u32 = 2000;
+
+/// Why an effect file was not taken.
+#[derive(Debug)]
+pub enum EffectError {
+    /// Not valid TOML for an effect: a bad value, a missing table or a key nothing reads.
+    Toml(toml::de::Error),
+    /// Valid TOML, but numbers the simulation cannot play.
+    Invalid(String),
+}
+
+impl std::fmt::Display for EffectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EffectError::Toml(e) => write!(f, "{e}"),
+            EffectError::Invalid(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+impl std::error::Error for EffectError {}
+
 impl Effect {
-    /// The effect a `data/effects/*.toml` file describes. A key left out keeps its default.
-    pub fn from_toml(text: &str) -> Result<Effect, toml::de::Error> {
-        toml::from_str(text)
+    /// The effect a `data/effects/*.toml` file describes, checked ([`Effect::validate`]). A key
+    /// left out keeps its default; a key nothing reads is an error.
+    pub fn from_toml(text: &str) -> Result<Effect, EffectError> {
+        let effect: Effect = toml::from_str(text).map_err(EffectError::Toml)?;
+        effect.validate().map_err(EffectError::Invalid)?;
+        Ok(effect)
     }
 
     /// The effect as TOML text that [`Effect::from_toml`] reads back as the same effect.
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
+
+    /// Whether the simulation can play it: every number finite, a length and lives above 0,
+    /// no more than [`MAX_COUNT`] to a burst, and size and colour stops in order.
+    pub fn validate(&self) -> Result<(), String> {
+        let finite = |what: &str, values: &[f32]| if values.iter().all(|v| v.is_finite()) { Ok(()) } else { Err(format!("{what} is not a finite number")) };
+        finite("length", &[self.length, self.bloom_in, self.sputter_out])?;
+        if self.length <= 0.0 {
+            return Err("length must be above 0".into());
+        }
+        if self.bloom_in < 0.0 || self.sputter_out < 0.0 {
+            return Err("bloom_in and sputter_out cannot be below 0".into());
+        }
+        if let Some(l) = &self.light {
+            finite("light", &[l.peak, l.reach, l.colour[0], l.colour[1], l.colour[2]])?;
+            if let Follows::Flash { at_s } = l.follows {
+                finite("light flash", &[at_s])?;
+            }
+        }
+        for (i, e) in self.emitters.iter().enumerate() {
+            let at = |what: &str| format!("emitter {i} ({}): {what}", e.name);
+            let (s, t, m) = (&e.spawn, &e.timing, &e.motion);
+            finite(&at("spawn"), &[s.nudge[0], s.nudge[1], s.nudge[2], s.spread, s.height, s.arc])?;
+            finite(&at("timing"), &[t.life, t.start, t.end])?;
+            finite(&at("motion"), &[m.speed, m.scatter, m.gravity, m.orbit_radius, m.orbits, m.wind[0], m.wind[1], m.wind[2], e.tail])?;
+            if t.life <= 0.0 {
+                return Err(at("life must be above 0"));
+            }
+            if t.start < 0.0 || t.end < 0.0 {
+                return Err(at("start and end cannot be below 0"));
+            }
+            if t.count > MAX_COUNT {
+                return Err(at(&format!("count {} is over {MAX_COUNT}", t.count)));
+            }
+            for stop in &e.size {
+                finite(&at("size"), &[stop.at, stop.size])?;
+            }
+            for stop in &e.colour {
+                finite(&at("colour"), &[stop.at, stop.rgb[0], stop.rgb[1], stop.rgb[2]])?;
+            }
+            if e.size.windows(2).any(|w| w[1].at < w[0].at) {
+                return Err(at("size stops are not in order of `at`"));
+            }
+            if e.colour.windows(2).any(|w| w[1].at < w[0].at) {
+                return Err(at("colour stops are not in order of `at`"));
+            }
+        }
+        Ok(())
+    }
 }
 
-/// The value of a curve of `(share, value)` stops at `share`: straight between neighbouring
+/// A point on a curve over a particle's life.
+pub trait Stop {
+    type Value: Copy;
+    fn at(&self) -> f32;
+    fn value(&self) -> Self::Value;
+}
+
+impl Stop for SizeStop {
+    type Value = f32;
+    fn at(&self) -> f32 {
+        self.at
+    }
+    fn value(&self) -> f32 {
+        self.size
+    }
+}
+
+impl Stop for ColourStop {
+    type Value = V3;
+    fn at(&self) -> f32 {
+        self.at
+    }
+    fn value(&self) -> V3 {
+        self.rgb
+    }
+}
+
+/// The value of a curve of `stops`, in order of `at`, at `share`: straight between neighbouring
 /// stops, held flat before the first and after the last. `None` for no stops.
-pub fn sample<T: Copy>(stops: &[(f32, T)], share: f32, lerp: impl Fn(T, T, f32) -> T) -> Option<T> {
+pub fn sample<S: Stop>(stops: &[S], share: f32, lerp: impl Fn(S::Value, S::Value, f32) -> S::Value) -> Option<S::Value> {
     let first = stops.first()?;
     let last = stops.last()?;
-    if share <= first.0 {
-        return Some(first.1);
+    if share <= first.at() {
+        return Some(first.value());
     }
-    if share >= last.0 {
-        return Some(last.1);
+    if share >= last.at() {
+        return Some(last.value());
     }
-    let i = stops.windows(2).position(|w| share < w[1].0).unwrap_or(0);
-    let (a, b) = (stops[i], stops[i + 1]);
-    let span = b.0 - a.0;
-    Some(lerp(a.1, b.1, if span > 0.0 { (share - a.0) / span } else { 1.0 }))
+    let i = stops.windows(2).position(|w| share < w[1].at()).unwrap_or(0);
+    let (a, b) = (&stops[i], &stops[i + 1]);
+    let span = b.at() - a.at();
+    Some(lerp(a.value(), b.value(), if span > 0.0 { (share - a.at()) / span } else { 1.0 }))
 }
 
 impl Emitter {
     /// The card size at `share` of a life.
     pub fn size_at(&self, share: f32) -> f32 {
-        let stops: Vec<(f32, f32)> = self.size.iter().map(|s| (s.at, s.size)).collect();
-        sample(&stops, share, |a, b, t| a + (b - a) * t).unwrap_or(1.0)
+        sample(&self.size, share, |a, b, t| a + (b - a) * t).unwrap_or(1.0)
     }
 
     /// The colour at `share` of a life.
     pub fn colour_at(&self, share: f32) -> V3 {
-        let stops: Vec<(f32, V3)> = self.colour.iter().map(|s| (s.at, s.rgb)).collect();
-        sample(&stops, share, |a, b, t| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]).unwrap_or([1.0; 3])
+        sample(&self.colour, share, |a, b, t| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]).unwrap_or([1.0; 3])
     }
 
     /// Whether the emitter is placed by the target, so plays once on each.

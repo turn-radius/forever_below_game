@@ -31,4 +31,27 @@ mod tests {
         assert_eq!(effect.emitters[0].timing, Timing::default());
         assert!(Effect::from_toml("length = \"long\"").is_err());
     }
+
+    #[test]
+    fn a_file_the_simulation_cannot_play_is_refused() {
+        let emitter = |body: &str| format!("[[emitters]]\n{body}\n");
+        let bad = [
+            ("an unknown key", "colour_of_sky = 3".to_string()),
+            ("an unknown key in an emitter", emitter("sparkle = 3")),
+            ("length 0", "length = 0.0".to_string()),
+            ("a negative length", "length = -2.0".to_string()),
+            ("a length that is not a number", "length = nan".to_string()),
+            ("an infinite bloom", "bloom_in = inf".to_string()),
+            ("a life of 0", emitter("[emitters.timing]\nlife = 0.0")),
+            ("a count over the cap", emitter("[emitters.timing]\ncount = 2001")),
+            ("a speed that is not a number", emitter("[emitters.motion]\nspeed = nan")),
+            ("size stops out of order", emitter("size = [{ at = 0.8, size = 1.0 }, { at = 0.2, size = 2.0 }]")),
+            ("colour stops out of order", emitter("colour = [{ at = 0.8, rgb = [1, 1, 1] }, { at = 0.2, rgb = [1, 1, 1] }]")),
+            ("an unknown key in a stop", emitter("size = [{ at = 0.0, size = 1.0, weight = 2 }]")),
+        ];
+        for (what, text) in bad {
+            assert!(Effect::from_toml(&text).is_err(), "{what} was taken");
+        }
+        assert!(Effect::from_toml(&emitter("[emitters.timing]\ncount = 2000")).is_ok());
+    }
 }

@@ -35,6 +35,9 @@ pub struct WispMaterial {
     pub phase: f32,
     #[uniform(0)]
     pub kind: f32,
+    /// 1 for a card whose colour and strength come from its mesh's tag ([`WispMaterial::tagged`]).
+    #[uniform(0)]
+    pub tagged: f32,
 }
 
 /// The pictures a wisp card can show; the number is what `wisp.wesl` switches on.
@@ -48,19 +51,27 @@ pub enum WispKind {
 }
 
 impl WispMaterial {
-    /// A card of `kind` in `color` round a `core`, at `strength`.
-    pub fn card(kind: WispKind, color: Color, core: Color, strength: f32, phase: f32) -> WispMaterial {
-        WispMaterial { color: color.into(), core: core.into(), strength, wobble: if kind == WispKind::Heart { 1.0 } else { 0.0 }, phase, kind: kind as u32 as f32 }
+    /// A card of `kind` whose colour and strength each mesh gives in its [`bevy::mesh::MeshTag`]:
+    /// sRGB red, green, blue and alpha, a byte each, red the lowest. One of these serves every
+    /// card of its kind, so cards change colour without a material of their own to rebuild.
+    pub fn tagged(kind: WispKind) -> WispMaterial {
+        WispMaterial { color: Color::WHITE.into(), core: Color::WHITE.into(), strength: 1.0, wobble: if kind == WispKind::Heart { 1.0 } else { 0.0 }, phase: 0.0, kind: kind as u32 as f32, tagged: 1.0 }
+    }
+
+    /// The tag a tagged card of `rgb` (sRGB) at `alpha` carries.
+    pub fn tag([r, g, b]: [f32; 3], alpha: f32) -> u32 {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+        byte(r) | byte(g) << 8 | byte(b) << 16 | byte(alpha) << 24
     }
 
     /// A heart of `color` round a `core`.
     pub fn heart(color: Color, core: Color, phase: f32) -> WispMaterial {
-        WispMaterial { color: color.into(), core: core.into(), strength: 1.0, wobble: 1.0, phase, kind: WispKind::Heart as u32 as f32 }
+        WispMaterial { color: color.into(), core: core.into(), strength: 1.0, wobble: 1.0, phase, kind: WispKind::Heart as u32 as f32, tagged: 0.0 }
     }
 
     /// A mote of `color`.
     pub fn mote(color: Color) -> WispMaterial {
-        WispMaterial { color: color.into(), core: Color::WHITE.into(), strength: 1.0, wobble: 0.0, phase: 0.0, kind: WispKind::Mote as u32 as f32 }
+        WispMaterial { color: color.into(), core: Color::WHITE.into(), strength: 1.0, wobble: 0.0, phase: 0.0, kind: WispKind::Mote as u32 as f32, tagged: 0.0 }
     }
 }
 

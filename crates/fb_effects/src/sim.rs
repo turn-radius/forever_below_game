@@ -5,6 +5,8 @@
 //! A particle's place is a closed form of its age, from where and how it was thrown, so it does
 //! not drift with the step size.
 
+use std::sync::Arc;
+
 use procgen_rng::Mulberry32;
 
 use crate::effect::{Anchor, Card, Effect, Emitter, Follows, MotionKind, Shape, TimingKind, V3};
@@ -175,7 +177,7 @@ struct Spawner {
 /// A running effect.
 #[derive(Clone, Debug)]
 pub struct Sim {
-    effect: Effect,
+    effect: Arc<Effect>,
     rng: Mulberry32,
     t: f32,
     /// When the effect ends: its length, or never for a lasting one until it is stopped.
@@ -187,7 +189,8 @@ pub struct Sim {
 
 impl Sim {
     /// `effect` playing on `targets` targets, thrown from `seed`.
-    pub fn new(effect: Effect, seed: u32, targets: usize) -> Sim {
+    pub fn new(effect: impl Into<Arc<Effect>>, seed: u32, targets: usize) -> Sim {
+        let effect: Arc<Effect> = effect.into();
         let mut spawners = Vec::new();
         for (emitter, e) in effect.emitters.iter().enumerate() {
             for instance in 0..if e.per_target() { targets } else { 1 } {
@@ -259,7 +262,8 @@ impl Sim {
 
     /// Throws what spawner `s` owes between `t0` and `t1`.
     fn throw(&mut self, s: usize, ctx: &Ctx, t0: f32, t1: f32) {
-        let e = self.effect.emitters[self.spawners[s].emitter].clone();
+        let effect = Arc::clone(&self.effect);
+        let e = &effect.emitters[self.spawners[s].emitter];
         let timing = e.timing;
         let length = self.effect.length.max(1e-3);
         let cycle = if self.effect.lasts { (t1 / length).floor() as u32 } else { 0 };
@@ -273,7 +277,7 @@ impl Sim {
                 if self.spawners[s].fired != Some(cycle) && local >= timing.start && origin + timing.start < self.ends {
                     self.spawners[s].fired = Some(cycle);
                     for _ in 0..timing.count {
-                        self.spawn(s, &e, ctx, origin + timing.start);
+                        self.spawn(s, e, ctx, origin + timing.start);
                     }
                 }
             }
@@ -284,7 +288,7 @@ impl Sim {
                     self.spawners[s].fired = Some(cycle);
                     for i in 0..timing.count {
                         let ago = timing.life * (i as f32 + self.rnd()) / timing.count.max(1) as f32;
-                        self.spawn(s, &e, ctx, t1 - ago);
+                        self.spawn(s, e, ctx, t1 - ago);
                     }
                 }
                 let span = if self.effect.lasts {
@@ -297,7 +301,7 @@ impl Sim {
                 self.spawners[s].carry = carry - n;
                 for k in 0..n as u32 {
                     let born = t1 - (self.spawners[s].carry + (n as u32 - 1 - k) as f32) / rate;
-                    self.spawn(s, &e, ctx, born);
+                    self.spawn(s, e, ctx, born);
                 }
             }
         }
@@ -379,9 +383,15 @@ impl Sim {
 
     /// Every live particle as it is now, in the order thrown.
     pub fn particles(&self) -> Vec<ParticleOut> {
-        self.live
-            .iter()
-            .map(|p| {
+        let mut out = Vec::new();
+        self.particles_into(&mut out);
+        out
+    }
+
+    /// [`Sim::particles`] into `out`, which is cleared first and so keeps its room.
+    pub fn particles_into(&self, out: &mut Vec<ParticleOut>) {
+        out.clear();
+        out.extend(self.live.iter().map(|p| {
                 let e = &self.effect.emitters[p.emitter];
                 let life = e.timing.life.max(1e-3);
                 let age = (self.t - p.born).max(0.0);
@@ -405,14 +415,20 @@ impl Sim {
                     life,
                     tail: e.tail,
                 }
-            })
-            .collect()
+        }));
     }
 
     /// The effect's lights now, one on each target when the light is placed by the target.
     pub fn lights(&self, places: &Places) -> Vec<LightOut> {
-        let Some(light) = self.effect.light else { return Vec::new() };
-        let targets: Vec<Option<Target>> = if light.at.on_target() { places.targets.iter().copied().map(Some).collect() } else { vec![None] };
+        let mut out = Vec::new();
+        self.lights_into(places, &mut out);
+        out
+    }
+
+    /// [`Sim::lights`] into `out`, which is cleared first and so keeps its room.
+    pub fn lights_into(&self, places: &Places, out: &mut Vec<LightOut>) {
+        out.clear();
+        let Some(light) = self.effect.light else { return };
         let length = self.effect.length.max(1e-3);
         let local = if self.effect.lasts { self.t % length } else { self.t };
         let left = if self.t >= self.ends {
@@ -430,21 +446,16 @@ impl Sim {
                 if since < 0.0 { 0.0 } else if since < FLASH_RISE { since / FLASH_RISE } else { (-(since - FLASH_RISE) / FLASH_FALL).exp() }
             }
         };
-        targets
-            .into_iter()
-            .map(|target| {
-                let ctx = Ctx::new(places, target);
-                let there = ctx.at(light.at, [0.0; 3]);
-                let pos = match light.follows {
-                    Follows::Travel => {
-                        let s = (self.t / length).clamp(0.0, 1.0);
-                        lerp(ctx.caster, there, s)
-                    }
-                    _ => there,
-                };
-                LightOut { pos, brightness }
-            })
-            .collect()
+        let count = if light.at.on_target() { places.targets.len() } else { 1 };
+        for i in 0..count {
+            let ctx = Ctx::new(places, if light.at.on_target() { Some(places.targets[i]) } else { None });
+            let there = ctx.at(light.at, [0.0; 3]);
+            let pos = match light.follows {
+                Follows::Travel => lerp(ctx.caster, there, (self.t / length).clamp(0.0, 1.0)),
+                _ => there,
+            };
+            out.push(LightOut { pos, brightness });
+        }
     }
 }
 

@@ -90,3 +90,12 @@ steps give the same particles.
 
 Add the variant to `fb_effects::Card`, a `WispKind` and a function in `wisp.wesl` for it
 (switched on `wisp.kind`), and place it in `place_card` in `game/src/effects.rs`.
+
+## Checks and limits
+
+A file is refused, and the effect keeps its last good version (the asset server logs why), if a
+key is unknown, a number is not finite, `length` or a `life` is 0 or less, a `count` is over
+2000, or size or colour stops are out of order of `at`. Up to 16 effects play at once; starting
+another ends the oldest. One light on the view model's stage serves them all, the nearest
+effect's. Targets are fixed when an effect starts, and one that despawns stays where it was last
+seen. Cards share one material per kind and carry their colour and alpha in the mesh tag.
