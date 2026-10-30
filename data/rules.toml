@@ -25,6 +25,11 @@ proficiency_bonus = 2
 # after the Graze weapon mastery, SRD 5.2 Mastery Properties), and the hit points a graze takes.
 graze_chance = 0.5
 graze_damage = 1
+# The sides of the one die a lit torch's or censer's blow adds as fire damage (our own), and what
+# that fire is multiplied by against a creature vulnerable to it (SRD 5.1 p. 97, "Damage
+# Resistance and Vulnerability"); one immune to fire takes none.
+fire_sides = 4
+fire_vulnerable_multiplier = 2
 
 # The sides of each class's hit die, taken at its highest at first level (SRD "Hit Points at 1st
 # Level": fighter p. 24, cleric p. 15, wizard p. 52 for the mage).

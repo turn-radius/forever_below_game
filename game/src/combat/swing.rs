@@ -73,6 +73,21 @@ pub fn flaming_blow(inventory: &Inventory, hand: Slot) -> bool {
     inventory.worn(hand).and_then(|id| inventory.item(id)).is_some_and(|item| (item.shape.family() == armory::Family::Torch && item.shape.lit() == Some(true)) || item.burning_incense().is_some())
 }
 
+/// The fire a flaming blow adds to its damage: one die of `rules.combat.fire_sides`, multiplied
+/// against what is vulnerable to fire and none against what is immune. `species` is the creature
+/// struck (`None` for folk, who take it as it is).
+pub fn fire_damage(rules: &fb_character::rules::Rules, species: Option<fb_creatures::Species>, rng: &mut procgen_rng::Mulberry32) -> u32 {
+    let rolled = rng.int(1, rules.combat.fire_sides.max(1));
+    let Some(block) = species.map(fb_creatures::Species::stat_block) else { return rolled };
+    if block.immunities.contains(&fb_creatures::DamageType::Fire) {
+        0
+    } else if block.vulnerabilities.contains(&fb_creatures::DamageType::Fire) {
+        rolled * rules.combat.fire_vulnerable_multiplier
+    } else {
+        rolled
+    }
+}
+
 /// How far behind the hand a censer's bowl turns on its chain, seconds at the usual pace.
 const FLAIL_LAG: f32 = 0.05;
 /// Radians the bowl hangs out per view unit a second of the fist's sideways travel.
@@ -296,6 +311,11 @@ impl Strikeable<'_, '_> {
         creatures.chain(folk).collect()
     }
 
+    /// The species of `target`, if it is a creature (folk are none).
+    pub fn species(&self, target: Entity) -> Option<fb_creatures::Species> {
+        self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species)
+    }
+
     /// The kind of creature `target` is, if it is one (folk are none).
     pub fn foe(&self, target: Entity) -> Option<fb_items::Foe> {
         self.creatures.get(target).ok().map(|(_, critter, ..)| critter.spot.species.foe())
@@ -452,9 +472,15 @@ fn land_blows(
                 info!("swing: {}", attack.line());
                 if attack.hit {
                     let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
-                    let damage = rolled + super::bane_damage_with_devotion(&swing.weapon.bane, &swing.weapon.devout, strikeable.kin(target), &mut dice.0);
+                    let mut damage = rolled + super::bane_damage_with_devotion(&swing.weapon.bane, &swing.weapon.devout, strikeable.kin(target), &mut dice.0);
+                    let burning = inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand));
+                    if burning {
+                        let fire = fire_damage(rules, strikeable.species(target), &mut dice.0);
+                        info!("swing: {damage} + {fire} fire");
+                        damage += fire;
+                    }
                     struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
-                    if inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand)) {
+                    if burning {
                         burned.write(Burned { target });
                     }
                 } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
@@ -915,6 +941,38 @@ mod tests {
         let mut lantern = fb_items::roll_item("Lantern", 7).unwrap();
         let _ = lantern.shape.set_lit(true);
         assert!(!flaming_blow(&holding(lantern), Slot::Mainhand), "a lantern's glass does not burn");
+    }
+
+    /// What a blow with `held` in the main hand adds in fire to a rat, from seeded dice.
+    fn fire_on_a_rat(held: fb_items::Item, seed: u32) -> u32 {
+        let inventory = holding(held);
+        if !flaming_blow(&inventory, Slot::Mainhand) {
+            return 0;
+        }
+        fire_damage(fb_character::rules::defaults(), Some(fb_creatures::Species::Rat), &mut procgen_rng::Mulberry32::new(seed))
+    }
+
+    #[test]
+    fn a_lit_torch_or_censer_adds_one_to_four_fire_and_a_cold_one_adds_none() {
+        let mut torch = fb_items::roll_item("Torch", 7).unwrap();
+        torch.shape.set_lit(true).unwrap();
+        for seed in 1..40 {
+            assert!((1..=4).contains(&fire_on_a_rat(torch.clone(), seed)), "torch, seed {seed}");
+            assert!((1..=4).contains(&fire_on_a_rat(censer(true, true), seed)), "censer, seed {seed}");
+            assert_eq!(fire_on_a_rat(censer(true, false), seed), 0, "unlit");
+            assert_eq!(fire_on_a_rat(censer(false, true), seed), 0, "burnt down");
+        }
+        let seen: std::collections::HashSet<u32> = (1..80).map(|seed| fire_on_a_rat(torch.clone(), seed)).collect();
+        assert_eq!(seen.len(), 4, "the whole d4");
+    }
+
+    #[test]
+    fn fire_takes_what_a_stat_block_says() {
+        // Nothing here is vulnerable to or immune to fire yet, so every creature and folk takes the roll.
+        for species in [Some(fb_creatures::Species::Skeleton), Some(fb_creatures::Species::Troll), None] {
+            let fire = fire_damage(fb_character::rules::defaults(), species, &mut procgen_rng::Mulberry32::new(5));
+            assert!((1..=4).contains(&fire));
+        }
     }
 
     #[test]

@@ -315,6 +315,8 @@ const LABELS: &[(&str, &str)] = &[
     ("combat/venom_save_dc", "Venom save difficulty"),
     ("combat/graze_chance", "Chance a miss grazes"),
     ("combat/graze_damage", "Graze damage"),
+    ("combat/fire_sides", "Fire die of a lit torch or censer"),
+    ("combat/fire_vulnerable_multiplier", "Fire against what is vulnerable (\u{d7})"),
     ("combat/hit_dice/fighter", "Fighter hit die"),
     ("combat/hit_dice/mage", "Mage hit die"),
     ("combat/hit_dice/cleric", "Cleric hit die"),

@@ -235,6 +235,13 @@ pub struct CombatRules {
     /// The hit points a graze takes, whatever the weapon and whatever the target is vulnerable
     /// to. Our own.
     pub graze_damage: u32,
+    /// The sides of the die a lit torch's or censer's blow adds as fire damage (one die). Our
+    /// own.
+    pub fire_sides: u32,
+    /// What fire damage is multiplied by against a creature whose stat block is vulnerable to
+    /// fire (SRD 5.1 p. 97, "Damage Resistance and Vulnerability"). One that is immune takes
+    /// none.
+    pub fire_vulnerable_multiplier: u32,
 }
 
 impl Default for CombatRules {
@@ -248,6 +255,8 @@ impl Default for CombatRules {
             proficiency_bonus: crate::combat::PROFICIENCY_BONUS,
             graze_chance: 0.5,
             graze_damage: 1,
+            fire_sides: 4,
+            fire_vulnerable_multiplier: 2,
         }
     }
 }
