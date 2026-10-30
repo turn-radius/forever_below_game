@@ -1,4 +1,4 @@
-//! Picking a lock in play (#833): holding R at a locked claim door shows the dice.
+//! Picking a lock in play (#833): a press of R at a locked claim door shows the dice.
 //!
 //! The whole game runs headless (as in `travel.rs`) and the key goes in as a `KeyboardInput`
 //! message, pressed once and held across frames, as the window's events do. The delver carries
@@ -14,7 +14,7 @@ use bevy::{
 };
 use forever_below::{
     dice::Dice,
-    doors::{AimedDoor, Doors, PICK_SECONDS},
+    doors::{AimedDoor, Doors},
     inventory::Inventory,
     launch::AppState,
     menu::MenuCommand,
@@ -125,7 +125,7 @@ fn stand_back(app: &mut App, body: Entity, cell: (i32, i32), back: f32) -> f32 {
     yaw
 }
 
-/// Holds R from now, with the delver turned away from the door on each frame `away` says, until
+/// Presses R once, with the delver turned away from the door on each frame `away` says, until
 /// the dice show; the frame they did, if they did within four seconds. `jitter` is the
 /// degrees of yaw and pitch the look wanders by (a hand on the mouse, the head bobbing).
 fn hold_until_the_dice(app: &mut App, body: Entity, yaw: f32, away: impl Fn(usize) -> bool, jitter: f32) -> Option<usize> {
@@ -143,10 +143,10 @@ fn hold_until_the_dice(app: &mut App, body: Entity, yaw: f32, away: impl Fn(usiz
 }
 
 #[test]
-fn holding_r_at_a_locked_door_shows_the_dice() {
+fn pressing_r_at_a_locked_door_shows_the_dice() {
     let (mut app, body, yaw, _) = at_a_locked_door(14.0);
     let frame = hold_until_the_dice(&mut app, body, yaw, |_| false, 0.0).expect("the dice show");
-    assert!(frame as f32 / 60.0 >= PICK_SECONDS - 0.1, "not before the hold ends: frame {frame}");
+    assert!(frame < 10, "the dice show at once: frame {frame}");
     // The panel itself is up: the roll's name and its "d20 against N" line.
     run(&mut app, 20);
     let panel = {
@@ -156,24 +156,6 @@ fn holding_r_at_a_locked_door_shows_the_dice() {
     };
     assert_eq!(panel, 1, "the dice panel is on screen");
     key(&mut app, ButtonState::Released);
-}
-
-/// The crosshair slipping off the door (a nudge of the mouse) for a frame in every four does not
-/// stop the pick: R is still down and the time held carries over, so the dice show in about the
-/// hold's 1.5 s, not never.
-#[test]
-fn an_aim_that_drops_a_frame_in_four_still_picks() {
-    let (mut app, body, yaw, _) = at_a_locked_door(14.0);
-    let frame = hold_until_the_dice(&mut app, body, yaw, |f| f % 4 == 3, 0.0).expect("the dice show");
-    assert!(frame as f32 / 60.0 < 2.1, "the dice showed at frame {frame}");
-}
-
-/// An aim gone past the grace starts the hold over.
-#[test]
-fn an_aim_gone_for_good_starts_the_hold_over() {
-    let (mut app, body, yaw, _) = at_a_locked_door(14.0);
-    let frame = hold_until_the_dice(&mut app, body, yaw, |f| (30..60).contains(&f), 0.0).expect("the dice show");
-    assert!(frame >= 60 + 85, "the hold started over once the aim was back: frame {frame}");
 }
 
 /// The delver picks from each distance a body can stand at (a shut door's cell is a wall, so it
