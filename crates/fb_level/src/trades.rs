@@ -418,6 +418,34 @@ mod tests {
     }
 
     #[test]
+    fn every_healer_stocks_three_incenses_and_two_censers_and_nobody_else_does() {
+        use fb_items::stock::{Line, stock};
+        let (mut healers, mut others) = (0, 0);
+        for world in 1..=6 {
+            for depth in [1, 3, 6] {
+                let l = level(world, depth);
+                for f in l.folk.iter().filter_map(|f| f.trade.map(|t| (f, t))) {
+                    let Some(shop) = f.1.shop("Bera", "the Ash Choir") else { continue };
+                    if f.1.profession == Profession::Healer {
+                        assert_eq!(shop.line, Line::Sacred);
+                        let wares = stock(&shop, depth, f.0.seed);
+                        let mut kinds: Vec<_> = wares.iter().filter_map(|i| i.incense_kind()).map(|k| k.name()).collect();
+                        kinds.sort();
+                        kinds.dedup();
+                        assert!(kinds.len() >= 3 && wares.iter().filter(|i| i.is_censer()).count() >= 2, "world {world} depth {depth}");
+                        assert_eq!(wares, stock(&shop, depth, f.0.seed));
+                        healers += 1;
+                    } else {
+                        assert_ne!(shop.line, Line::Sacred);
+                        others += 1;
+                    }
+                }
+            }
+        }
+        assert!(healers >= 18 && others > 0, "{healers} healers, {others} others");
+    }
+
+    #[test]
     fn armorers_lean_to_their_factions_armour() {
         let (mut own, mut all) = (0, 0);
         for world in WORLDS {
