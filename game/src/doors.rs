@@ -84,18 +84,6 @@ pub const GRATE_CLEAR: f32 = 0.75;
 pub const PORTCULLIS_SECONDS: f32 = 1.6;
 /// Seconds a lever's handle takes to be thrown.
 pub const LEVER_SECONDS: f32 = 0.35;
-/// Seconds the pick is held before the roll.
-pub const PICK_SECONDS: f32 = 1.5;
-/// Seconds the crosshair may be off the door, with R still down, before the hold starts over.
-pub const PICK_GRACE: f32 = 0.3;
-
-/// A pick being worked: the door, the seconds held on it and the seconds the aim has been off it.
-#[derive(Clone, Copy, Debug)]
-struct Hold {
-    cell: (i32, i32),
-    held: f32,
-    off: f32,
-}
 /// What lockpicks add to the roll.
 pub const LOCKPICKS_BONUS: i32 = 1;
 /// The roll a Neutral faction's locked door asks for.
@@ -543,11 +531,10 @@ fn prompt_door(
     }
 }
 
-/// F opens and closes the aimed door, G unlocks it with a carried key, and R held picks it.
+/// F opens and closes the aimed door, G unlocks it with a carried key, and a press of R picks it.
 #[allow(clippy::too_many_arguments)]
 fn use_door(
     input: ActionInput,
-    time: Res<Time>,
     aimed: Res<AimedDoor>,
     level: Res<CurrentLevel>,
     mut doors: ResMut<Doors>,
@@ -558,28 +545,15 @@ fn use_door(
     players: Query<&Transform, With<Player>>,
     folk: Query<(&Transform, &Denizen), Without<Corpse>>,
     mut toasts: Toasts,
-    mut picking: Local<Option<Hold>>,
     mut spare: Local<(u32, Option<bool>)>,
     mut pending: ResMut<PickInFlight>,
     mut rolls: MessageWriter<RollRequest>,
 ) {
     let debug = *spare.1.get_or_insert_with(|| std::env::var("FB_DEBUG_PICK").is_ok_and(|v| !v.is_empty() && v != "0"));
-    let held_key = input.pressed(Action::Tertiary);
+    let pressed = input.just_pressed(Action::Tertiary);
     let Some(cell) = aimed.0 else {
-        // The aim slips off the door: the hold waits a moment for it to come back, while R is down.
-        let why = match picking.as_mut() {
-            Some(hold) if held_key && hold.off + time.delta_secs() <= PICK_GRACE => {
-                hold.off += time.delta_secs();
-                "aim off the door, waiting"
-            }
-            Some(_) => {
-                *picking = None;
-                if held_key { "aim off the door past the grace" } else { "R released" }
-            }
-            None => "nothing aimed",
-        };
-        if debug && (held_key || picking.is_some()) {
-            info!("pick: {why} (held {:?})", picking.as_ref().map(|h| h.held));
+        if debug && pressed {
+            info!("pick: nothing aimed");
         }
         return;
     };
@@ -630,35 +604,20 @@ fn use_door(
         toasts.say("The grate can't be picked");
     }
 
-    // Picking: R held at a door that can be picked runs the clock, the roll comes at the end.
+    // Picking: one press of R at a door that can be picked rolls the dice.
     let locked = door.locked(band) && !inside;
-    let eligible = pending.0.is_none() && locked && lockpicks && !grate && !door.open && held_key;
-    if debug && (held_key || picking.is_some()) {
+    let eligible = pending.0.is_none() && locked && lockpicks && !grate && !door.open && pressed;
+    if debug && pressed {
         let distance = feet.map(|f| f.distance(door.centre));
         info!(
-            "pick: aimed {cell:?} at {distance:?} units, held {:?}, eligible {eligible} (in flight {}, locked {locked}, picks {lockpicks}, grate {grate}, open {}, R down {held_key})",
-            picking.as_ref().map(|h| h.held),
+            "pick: aimed {cell:?} at {distance:?} units, eligible {eligible} (in flight {}, locked {locked}, picks {lockpicks}, grate {grate}, open {})",
             pending.0.is_some(),
             door.open
         );
     }
     if !eligible {
-        *picking = None;
         return;
     }
-    // The time held carries over a slip of the aim off this door and back; another door, or a
-    // pause past the grace, starts over (R released ends it above).
-    let held = match *picking {
-        Some(hold) if hold.cell == cell => hold.held,
-        _ => 0.0,
-    };
-    let held = held + time.delta_secs();
-    if held < PICK_SECONDS {
-        *picking = Some(Hold { cell, held, off: 0.0 });
-        toasts.say_once("Picking the lock...");
-        return;
-    }
-    *picking = None;
     let Some(dc) = pick_dc_for(door.kind, band) else { return };
     // Without the run's dice (a bare app), a counter of its own keeps each roll different.
     spare.0 += 1;
@@ -685,8 +644,6 @@ fn use_door(
         "The picks slip".to_string()
     };
     *pending = PickInFlight(Some(Pick { cell, faction, heard, level: (level.0.seed, level.0.depth) }));
-    // The dice show now: "Picking the lock..." has done its work.
-    toasts.clear();
     rolls.write(RollRequest { roll, purpose: RollPurpose::PickLock(cell), result: Some(result) });
 }
 
@@ -1324,13 +1281,15 @@ mod tests {
         (app, (door.x, door.y), door.faction)
     }
 
-    /// Holds R for two seconds, the pick taking 1.5, and returns the rolls the pick sent to the
-    /// dice panel. Nothing has closed them yet.
-    fn hold_the_pick(app: &mut App) -> Vec<RollRequest> {
+    /// Presses R once, with a couple of seconds of held key after, and returns the rolls the
+    /// pick sent to the dice panel. Nothing has closed them yet.
+    fn press_the_pick(app: &mut App) -> Vec<RollRequest> {
         let mut sent = Vec::new();
         for _ in 0..4 {
             app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(500));
             app.update();
+            // As the frame's input does: the press is over, the key stays down.
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
             sent.extend(app.world_mut().resource_mut::<Messages<RollRequest>>().drain());
         }
         sent
@@ -1354,7 +1313,7 @@ mod tests {
         assert_eq!(lines, [("DEX", 3), ("Gloves of Thieves", 2), ("Lockpicks", 1)]);
         // On a door, the target is the faction's mood and the kind's penalty.
         let (mut app, cell, faction) = picking(-30, seed_rolling(7), false, false);
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         assert_eq!(sent.len(), 1);
         let band = band_of(app.world().get_resource::<WorldRecord>(), faction);
         let kind = app.world().resource::<Doors>().0[&cell].kind;
@@ -1364,13 +1323,10 @@ mod tests {
     }
 
     #[test]
-    fn holding_the_pick_opens_a_lock_only_once_the_panel_closes_on_a_success() {
+    fn pressing_the_pick_opens_a_lock_only_once_the_panel_closes_on_a_success() {
         // A natural 20 beats the hardest door (18 against 20 and the picks' 1).
         let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
-        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(500));
-        app.update();
-        assert!(app.world().resource::<Messages<RollRequest>>().is_empty(), "the roll waits for the hold");
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].result.as_deref(), Some("The lock gives"));
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked, "the dice are still showing");
@@ -1384,7 +1340,7 @@ mod tests {
         let standing = |app: &App, f: Faction| app.world().resource::<WorldRecord>().standings.get(f).value();
         // A folk of the faction at the door hears it, though the door is shut between them.
         let (mut app, cell, faction) = picking(-30, miss, true, false);
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         assert_eq!(sent.len(), 1);
         assert!(sent[0].result.as_deref().is_some_and(|r| r.ends_with("heard the picks")), "{:?}", sent[0].result);
         assert_eq!(standing(&app, faction), -30, "not before the panel closes");
@@ -1393,7 +1349,7 @@ mod tests {
         assert_eq!(standing(&app, faction), -30 - NOISE_COST);
         // One out of earshot does not.
         let (mut app, cell, faction) = picking(-30, miss, false, true);
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         assert_eq!(sent[0].result.as_deref(), Some("The picks slip"));
         close_the_panel(&mut app, &sent[0]);
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
@@ -1401,15 +1357,22 @@ mod tests {
     }
 
     #[test]
-    fn the_picking_toast_is_gone_once_the_dice_show() {
-        let (mut app, _, _) = picking(-30, seed_rolling(1), false, false);
-        app.init_resource::<crate::inventory::Toast>();
-        app.world_mut().insert_resource(Time::<Real>::default());
-        app.world_mut().resource_mut::<crate::inventory::Toast>().say("Picking the lock...", 0.0);
-        let sent = hold_the_pick(&mut app);
-        assert_eq!(sent.len(), 1);
-        let now = app.world().resource::<Time<Real>>().elapsed_secs();
-        assert!(!app.world().resource::<crate::inventory::Toast>().showing(now));
+    fn nothing_is_left_showing_once_the_roll_settles() {
+        let toasts_up = |app: &App| {
+            let now = app.world().resource::<Time<Real>>().elapsed_secs();
+            app.world().resource::<crate::inventory::Toast>().showing(now)
+        };
+        for seed in [seed_rolling(1), seed_rolling(20)] {
+            let (mut app, _, _) = picking(-75, seed, false, false);
+            app.init_resource::<crate::inventory::Toast>();
+            app.world_mut().insert_resource(Time::<Real>::default());
+            let sent = press_the_pick(&mut app);
+            assert_eq!(sent.len(), 1, "one press rolls once");
+            assert!(!toasts_up(&app), "no 'Picking' text while the dice show");
+            close_the_panel(&mut app, &sent[0]);
+            assert!(!toasts_up(&app), "nothing left after the roll settles");
+            assert!(app.world().resource::<PickInFlight>().0.is_none());
+        }
     }
 
     #[test]
@@ -1417,25 +1380,41 @@ mod tests {
         let standing = |app: &App, f: Faction| app.world().resource::<WorldRecord>().standings.get(f).value();
         // Success, but the door in that cell now belongs to another faction.
         let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().faction = Faction(250);
         close_the_panel(&mut app, &sent[0]);
         assert!(!app.world().resource::<Doors>().0[&cell].unlocked);
         // A heard miss, but the level is another one.
         let (mut app, _, faction) = picking(-30, seed_rolling(1), true, false);
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         app.world_mut().resource_mut::<CurrentLevel>().0.depth += 1;
         close_the_panel(&mut app, &sent[0]);
         assert_eq!(standing(&app, faction), -30);
     }
 
     #[test]
+    fn a_key_held_down_picks_once() {
+        let (mut app, _, _) = picking(-30, seed_rolling(1), false, false);
+        let sent = press_the_pick(&mut app);
+        assert_eq!(sent.len(), 1);
+        close_the_panel(&mut app, &sent[0]);
+        assert!(press_the_pick(&mut app).is_empty(), "R still down is not a new press");
+    }
+
+    #[test]
     fn no_second_pick_starts_while_the_panel_shows() {
         let (mut app, _, _) = picking(-30, seed_rolling(1), false, false);
-        let sent = hold_the_pick(&mut app);
+        let sent = press_the_pick(&mut app);
         assert_eq!(sent.len(), 1);
-        // R is still held and the panel is still up: another two seconds sends nothing.
-        assert!(hold_the_pick(&mut app).is_empty());
+        // Another press while the panel is still up sends nothing.
+        for _ in 0..2 {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyR);
+            keys.clear();
+            keys.press(KeyCode::KeyR);
+            app.update();
+            assert!(app.world_mut().resource_mut::<Messages<RollRequest>>().drain().next().is_none());
+        }
         // Once it closes, a fresh press picks again.
         close_the_panel(&mut app, &sent[0]);
         {
@@ -1444,7 +1423,7 @@ mod tests {
             keys.clear();
             keys.press(KeyCode::KeyR);
         }
-        assert_eq!(hold_the_pick(&mut app).len(), 1);
+        assert_eq!(press_the_pick(&mut app).len(), 1);
     }
 
     #[test]
@@ -1742,17 +1721,17 @@ mod tests {
     }
 
     #[test]
-    fn holding_the_pick_on_a_portcullis_does_nothing() {
-        // Holds the pick, shows the dice to their end, and says whether the door unlocked.
+    fn pressing_the_pick_on_a_portcullis_does_nothing() {
+        // Presses the pick, shows the dice to their end, and says whether the door unlocked.
         fn picked(app: &mut App, cell: (i32, i32)) -> bool {
-            for request in hold_the_pick(app) {
+            for request in press_the_pick(app) {
                 close_the_panel(app, &request);
             }
             app.world().resource::<Doors>().0[&cell].unlocked
         }
         let (mut app, cell, _) = picking(-75, seed_rolling(20), false, false);
         app.world_mut().resource_mut::<Doors>().0.get_mut(&cell).unwrap().kind = DoorKind::Portcullis;
-        assert!(hold_the_pick(&mut app).is_empty(), "no dice for a grate");
+        assert!(press_the_pick(&mut app).is_empty(), "no dice for a grate");
         let door = &app.world().resource::<Doors>().0[&cell];
         assert!(!door.unlocked && !door.open, "a natural 20 picked a grate");
         // And a steel door shrugs off the roll that a wooden one yields to: 14 + 1 (picks) is 15.

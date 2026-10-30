@@ -592,6 +592,8 @@ mod tests {
             .init_resource::<crate::inventory::OpenContainer>()
             .init_resource::<crate::barter::Barter>()
             .init_resource::<NearBodies>()
+            .init_resource::<ScreenOpen>()
+            .init_resource::<crate::play::SheetTab>()
             .insert_resource(inventory)
             .add_systems(Update, place_windows);
         app
