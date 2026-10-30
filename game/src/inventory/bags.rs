@@ -75,6 +75,9 @@ pub struct BagWindows {
     /// first carried ([`place_windows`]); one in `order` is open, one not is shut and stays so until
     /// the delver opens it. A bag put away and taken up again is new.
     pub seen: Vec<ItemId>,
+    /// The bags set down underfoot whose windows the delver shut, which stay shut while the bag lies
+    /// there (one set down shows on the left by itself); a click on the bag opens it again.
+    pub shut: Vec<ItemId>,
     /// Those of `order` the screen had no room for at the last layout, which come back by themselves
     /// when room frees (another window closes, or a smaller one is in the way).
     pub hidden: Vec<ItemId>,
@@ -101,7 +104,7 @@ pub struct BagWindows {
 
 impl Default for BagWindows {
     fn default() -> Self {
-        BagWindows { order: Vec::new(), seen: Vec::new(), hidden: Vec::new(), scale: 1.0, left: Vec::new(), left_scale: 1.0, at: HashMap::new(), moved: HashMap::new(), grab: None, pending: None }
+        BagWindows { order: Vec::new(), seen: Vec::new(), shut: Vec::new(), hidden: Vec::new(), scale: 1.0, left: Vec::new(), left_scale: 1.0, at: HashMap::new(), moved: HashMap::new(), grab: None, pending: None }
     }
 }
 
@@ -145,14 +148,20 @@ impl BagWindows {
         if self.is_shown(id) {
             self.close(id);
         } else {
-            self.close(id);
+            self.order.retain(|&o| o != id);
+            self.hidden.retain(|&o| o != id);
+            self.shut.retain(|&o| o != id);
             self.order.push(id);
         }
     }
 
+    /// Shuts `id`'s window. One on the left (a bag set down) is kept shut, as it would show by itself.
     pub fn close(&mut self, id: ItemId) {
         self.order.retain(|&o| o != id);
         self.hidden.retain(|&o| o != id);
+        if id != FLOOR && self.left.contains(&id) && !self.shut.contains(&id) {
+            self.shut.push(id);
+        }
     }
 
     /// Brings `id` in front of the others. False if it already was, or is not open.
@@ -426,11 +435,11 @@ pub fn settle_click(time: Res<Time<Real>>, mut windows: ResMut<BagWindows>, inve
     }
 }
 
-/// Drops windows whose container is out of reach and, while the inventory page shows them, lays
-/// the open ones out in columns beside the doll, shrinking their cells to fit them and, when they
-/// still do not all fit, hiding the oldest. With another party on the screen (a trader's shelf, an
-/// opened container, a body, a bag set down) its windows go on the left half and the delver's on
-/// the right, each laid out by the same code ([`fit_sizes`]).
+/// Opens every bag the delver newly carries, drops windows whose container is out of reach and, while
+/// the inventory page shows them, lays them out: the world side's (the trader's shelf, an opened
+/// container or body, the floor, bags set down and their own bags) in the left region and the delver's
+/// in the right, each in columns by the same code ([`fit_sizes`]), shrinking cells to fit and, when
+/// they still do not all fit, hiding the oldest.
 #[allow(clippy::too_many_arguments)]
 pub fn place_windows(
     mut windows: ResMut<BagWindows>,
@@ -474,6 +483,10 @@ pub fn place_windows(
             }
         }
     }
+    // A bag set down that was shut is forgotten once it leaves the floor.
+    if windows.shut.iter().any(|id| !underfoot.bags.contains(id)) {
+        windows.shut.retain(|id| underfoot.bags.contains(id));
+    }
     // Windows are laid out only where they are drawn: the inventory page.
     if !open.is(Screen::Inventory) || *tab != SheetTab::Inventory {
         return;
@@ -489,7 +502,7 @@ pub fn place_windows(
     let mut keep = left.len();
     if !barter.active() {
         left.push(FLOOR);
-        let set_down: Vec<ItemId> = underfoot.bags.iter().copied().filter(|b| !left.contains(b)).collect();
+        let set_down: Vec<ItemId> = underfoot.bags.iter().copied().filter(|b| !left.contains(b) && !windows.shut.contains(b)).collect();
         left.extend(set_down);
         keep += 1;
     }

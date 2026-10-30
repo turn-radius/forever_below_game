@@ -72,17 +72,6 @@ use crate::tuning::Tuning;
 
 /// Width of a grid line, in logical pixels.
 const LINE_PX: f32 = 2.0;
-/// The widest the left leaf grows, in logical pixels: a pack and a belt pouch side by side at
-/// the shipped 72-pixel cells (8 + 4 cells and the gap between).
-const LEAF_MAX_PX: f32 = 900.0;
-/// The left page's width on every tab, so the header and tabs never move when switching. The
-/// interface scale grows it with the window.
-pub const LEAF_PX: f32 = 620.0;
-/// The ledger's padding, and the gap between its leaf and the doll, in logical pixels.
-const LEDGER_PAD_PX: f32 = 22.0;
-const LEDGER_GAP_PX: f32 = 28.0;
-/// The ledger's height as a share of the screen's.
-const LEDGER_HEIGHT: f32 = 0.92;
 /// Radius of a grid's rounded corners, in logical pixels (the plate's `.grid`).
 const GRID_RADIUS_PX: f32 = 12.0;
 /// How far the mouse moves with the button down before a press becomes a drag, in logical
@@ -1048,7 +1037,7 @@ pub(crate) fn build_screen(
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
-                justify_content: if delver_screen { JustifyContent::FlexStart } else { JustifyContent::Center },
+                justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Center,
                 ..default()
             },
@@ -1058,33 +1047,22 @@ pub(crate) fn build_screen(
             GlobalZIndex(10),
         ))
         .with_children(|root| {
+            // The same on every tab, so the header and tabs sit at one place whatever the page holds: across
+            // the whole screen, with the world side's room on the left, the delver's column in the middle
+            // ([`bags::regions`]) and the pages scrolling inside it. The delver's column takes the screen's
+            // whole height, so the doll is never scaled down to fit.
             root.spawn((
                 Ledger,
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(LEDGER_GAP_PX),
-                    padding: if delver_screen { UiRect::ZERO } else { UiRect::all(px(LEDGER_PAD_PX)) },
-                    // Across the whole screen on the inventory tab, so the world side's windows are on the page.
-                    width: if delver_screen { percent(100) } else { Val::Auto },
-                    max_width: percent(if delver_screen { 100 } else { 94 }),
-                    justify_content: JustifyContent::FlexStart,
-                    // One height on every tab, so the header and tabs sit at the same place
-                    // whatever the page holds; the pages scroll inside it.
-                    // The delver's column takes the whole height: the doll is never scaled down to fit.
-                    height: percent(if delver_screen { 100.0 } else { LEDGER_HEIGHT * 100.0 }),
-                    max_height: percent(if delver_screen { 100.0 } else { LEDGER_HEIGHT * 100.0 }),
-                    ..default()
-                },
+                Node { flex_direction: FlexDirection::Row, width: percent(100), height: percent(100), max_height: percent(100), justify_content: JustifyContent::FlexStart, ..default() },
             ))
             .with_children(|ledger| {
-                if delver_screen {
-                    // The world side's windows are laid out over the left; then the delver, who they are over the
-                    // doll with the quickslots and the help, at one size and place; their windows go beside it.
-                    ledger.spawn(Node { width: px(bags::LEFT_PX), flex_shrink: 0.0, ..default() });
-                    ledger.spawn(Node { width: px(bags::MIDDLE_PX), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(8), padding: UiRect::vertical(px(8)), ..default() }).with_children(|middle| {
-                        middle
-                            .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(bags::MIDDLE_PX), ..default() }, LeafPage))
-                            .with_children(|leaf| header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab));
+                ledger.spawn(Node { width: px(bags::LEFT_PX), flex_shrink: 0.0, ..default() });
+                ledger.spawn(Node { width: px(bags::MIDDLE_PX), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(8), padding: UiRect::vertical(px(8)), ..default() }).with_children(|middle| {
+                    middle
+                        .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(bags::MIDDLE_PX), ..default() }, LeafPage))
+                        .with_children(|leaf| header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab));
+                    if delver_screen {
+                        // The doll with the quickslots and the help under it.
                         middle
                             .spawn((bags::DollColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(bags::MIDDLE_PX), ..default() }))
                             .with_children(|column| {
@@ -1095,17 +1073,11 @@ pub(crate) fn build_screen(
                                 });
                                 column.spawn((Text::new(help_text(keymap)), UiFonts::style(&fonts.body, 14.0, MUTED)));
                             });
-                    });
-                    return;
-                }
-                ledger
-                    // Wide enough for a pack and a belt pouch side by side, and for underfoot
-                    // and a bag set down beside it.
-                    .spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(12), min_width: px(420), max_width: px(LEAF_MAX_PX), width: px(LEAF_PX), ..default() }, LeafPage))
-                    .with_children(|leaf| {
-                        header::header(leaf, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, doll_assets.portrait.clone(), *tab);
-                        // The page scrolls under the header, whatever the window.
-                        leaf.spawn((
+                        return;
+                    }
+                    // The page scrolls under the header, whatever the window.
+                    middle
+                        .spawn((
                             ScrollColumn,
                             ScrollPosition(Vec2::new(0.0, scrolled.0)),
                             Node { flex_direction: FlexDirection::Column, min_height: px(0), padding: UiRect::right(px(8)), overflow: Overflow::scroll_y(), ..default() },
@@ -1122,13 +1094,15 @@ pub(crate) fn build_screen(
                             );
                             sheet::sheet(page, &fonts, crate::rules::GameRules::of(&rules), &character, &inventory, &needs, exhaustion, vitals);
                         });
-                    });
-                // The doll beside the page.
-                ledger
-                    .spawn((bags::DollColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(12), width: px(doll::FRAME.x), ..default() }))
-                    .with_children(|leaf| {
-                        doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
-                    });
+                });
+                if !delver_screen {
+                    // The doll beside the page.
+                    ledger
+                        .spawn((bags::DollColumn, Node { flex_direction: FlexDirection::Column, width: px(doll::FRAME.x), padding: UiRect::vertical(px(8)), ..default() }))
+                        .with_children(|leaf| {
+                            doll::doll_leaf(leaf, &doll_assets, &inventory, &fonts, &mut icons);
+                        });
+                }
             });
             // Opened bags float over the ledger, the last opened in front. The world side's go on the
             // left, laid out by [`bags::place_windows`], and the delver's on the right.
@@ -2317,20 +2291,38 @@ mod tests {
     }
 
     #[test]
-    fn the_sheet_tabs_keep_one_page_width_and_the_inventory_has_its_own_column() {
+    fn the_header_and_tabs_sit_at_one_place_and_width_on_every_tab() {
         let mut app = screen_app();
         press(&mut app, KeyCode::KeyI);
+        let mut seen = Vec::new();
         for tab in SheetTab::ALL {
             *app.world_mut().resource_mut::<SheetTab>() = tab;
             app.update();
             let mut pages = app.world_mut().query_filtered::<&Node, With<LeafPage>>();
-            let node = pages.single(app.world()).unwrap();
-            assert_eq!(node.width, px(if tab == SheetTab::Inventory { bags::MIDDLE_PX } else { LEAF_PX }), "{tab:?}");
+            assert_eq!(pages.single(app.world()).unwrap().width, px(bags::MIDDLE_PX), "{tab:?}");
+            let span = middle_span(&mut app);
             let mut ledgers = app.world_mut().query_filtered::<&Node, With<Ledger>>();
             let ledger = ledgers.single(app.world()).unwrap();
-            let height = if tab == SheetTab::Inventory { 100 } else { 92 };
-            assert_eq!((ledger.height, ledger.max_height), (percent(height), percent(height)), "{tab:?}");
+            assert_eq!((ledger.height, ledger.max_height, ledger.width), (percent(100), percent(100), percent(100)), "{tab:?}");
+            seen.push((span, ledger.padding, ledger.column_gap));
         }
+        assert!(seen.windows(2).all(|w| w[0] == w[1]), "the column is built at one place on all tabs: {seen:?}");
+    }
+
+    /// Where the delver's column (the ledger's second child, after the world side's room) is, from the nodes
+    /// the screen was built with: the ledger's padding, gaps and the widths before it, and its own width.
+    fn middle_span(app: &mut App) -> (f32, f32) {
+        let world = app.world_mut();
+        let ledger = world.query_filtered::<Entity, With<Ledger>>().single(world).unwrap();
+        let node = world.get::<Node>(ledger).unwrap().clone();
+        let kids: Vec<Entity> = world.get::<Children>(ledger).unwrap().iter().collect();
+        let width = |e: Entity| match world.get::<Node>(e).unwrap().width {
+            Val::Px(w) => w,
+            other => panic!("a fixed width, not {other:?}"),
+        };
+        let (Val::Px(pad), Val::Px(gap)) = (node.padding.left, node.column_gap) else { panic!("fixed padding and gap") };
+        let from = pad + width(kids[0]) + gap;
+        (from, from + width(kids[1]))
     }
 
     #[test]
@@ -3519,12 +3511,8 @@ mod tests {
             app.update();
             app.update();
             // The doll column's right edge, from the nodes the screen was built with: the world side's room, then the column.
-            let world = app.world_mut();
-            let doll = world.query_filtered::<&Node, With<bags::DollColumn>>().single(world).unwrap().clone();
-            let root = world.query_filtered::<&Node, With<InventoryScreen>>().single(world).unwrap().clone();
-            assert_eq!(root.justify_content, JustifyContent::FlexStart, "the ledger sits at the left");
-            let Val::Px(doll_w) = doll.width else { panic!("a fixed width") };
-            let doll_right = bags::LEFT_PX + doll_w;
+            let doll_right = middle_span(&mut app).1;
+            assert_eq!(doll_right, bags::regions(view / scale).1.max.x, "the built column ends where the regions say");
             let windows = app.world().resource::<bags::BagWindows>();
             assert!(windows.hidden.is_empty());
             let logical = view / scale;
@@ -4055,11 +4043,14 @@ mod tests {
                 app.update();
                 app.update();
                 let made = column_of(&mut app);
+                let (from, to) = middle_span(&mut app);
+                assert_eq!((from, to), (bags::regions(Vec2::new(1920.0, 1080.0)).1.min.x, bags::regions(Vec2::new(1920.0, 1080.0)).1.max.x), "{view} {name}: the built column is where the regions say");
                 let big = made.iter().find(|l| l.starts_with("Head")).unwrap();
                 assert!(big.contains(&format!("{:?}", px(doll::BIG_SLOT))), "{view} {name}: a big slot at full size: {big}");
                 assert!(made.iter().any(|l| l == &format!("column {:?} Auto", px(bags::MIDDLE_PX))), "{view} {name}: {made:?}");
                 assert_eq!(made.iter().filter(|l| l.starts_with("quickslot")).count(), crate::quickslots::SLOTS, "{view} {name}");
                 let at = app.world().resource::<bags::BagWindows>().at[&ids[0]];
+                assert!(at.x >= to, "{view} {name}: the pack is clear of the built column's right edge");
                 assert_eq!(*column.get_or_insert_with(|| made.clone()), made, "{view} {name}: the column is the one alone");
                 assert_eq!(*right.get_or_insert(at), at, "{view} {name}: the delver's pack stays where it was");
                 assert!(at.x >= bags::LEFT_PX + bags::MIDDLE_PX, "{view} {name}: the pack is right of the column");
@@ -4080,6 +4071,17 @@ mod tests {
             let row = world.get::<Node>(*rows.iter().next().unwrap()).unwrap();
             assert_eq!((row.flex_wrap, row.width), (FlexWrap::NoWrap, Val::Auto), "{name}: not wrapped into rows");
         }
+    }
+
+    #[test]
+    fn the_delver_s_column_fits_the_screen_s_height() {
+        // Estimated from the pieces, as nothing is laid out here: the padding and gaps, the header with its tabs
+        // (about 160 as captured), the whole doll, the strip under its label and the help's wrapped lines.
+        let help = help_text(&Keymap::default());
+        let lines = (help.chars().count() as f32 * 5.8 / bags::MIDDLE_PX).ceil();
+        let strip = 24.0 + 4.0 + crate::quickslots::STRIP_SIZE;
+        let total = 8.0 + 160.0 + 8.0 + doll::FRAME.y + 12.0 + strip + 12.0 + lines * 17.0 + 8.0;
+        assert!(total <= 1080.0, "{total} tall, of 1080");
     }
 
     #[test]
@@ -4123,6 +4125,63 @@ mod tests {
         assert_eq!(windows.left, vec![chest, bags::FLOOR]);
         assert_eq!(windows.at[&pack], before.1[&pack], "the pack did not move");
         assert_eq!(column_of(&mut app), before.0, "nor did the delver");
+    }
+
+    #[test]
+    fn a_bag_set_down_closes_by_its_cross_stays_shut_and_opens_again_on_a_click() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let loose = app.world_mut().resource_mut::<Inventory>().add(fb_items::roll_item("Sack", 4).unwrap());
+        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<bags::BagWindows>().left, vec![bags::FLOOR, loose], "a bag set down shows by itself");
+        // The cross, which is what `close_windows` calls.
+        app.world_mut().resource_mut::<bags::BagWindows>().close(loose);
+        for _ in 0..2 {
+            app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+            app.update();
+            app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+            app.update();
+        }
+        let windows = app.world().resource::<bags::BagWindows>();
+        assert_eq!((windows.left.clone(), windows.is_shown(loose)), (vec![bags::FLOOR], false), "shut, and still shut after the screen was closed and opened");
+        // A click on the bag, settled as `settle_click` does, opens it again; a second click shuts it.
+        app.world_mut().resource_mut::<bags::BagWindows>().toggle(loose);
+        app.update();
+        assert_eq!(app.world().resource::<bags::BagWindows>().left, vec![bags::FLOOR, loose]);
+        app.world_mut().resource_mut::<bags::BagWindows>().toggle(loose);
+        app.update();
+        assert_eq!(app.world().resource::<bags::BagWindows>().left, vec![bags::FLOOR]);
+        // Taken off the floor, it is forgotten: set down again it shows by itself.
+        app.world_mut().resource_mut::<Underfoot>().bags.clear();
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().shut.is_empty());
+        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
+        app.update();
+        assert_eq!(app.world().resource::<bags::BagWindows>().left, vec![bags::FLOOR, loose]);
+    }
+
+    #[test]
+    fn a_worn_bag_dropped_and_worn_again_opens_again_but_one_that_was_only_shut_stays_shut() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let pack = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            let pack = inventory.add(fb_items::roll_item("Pack", 7).unwrap());
+            inventory.wear(pack, Slot::Back).unwrap();
+            pack
+        };
+        app.update();
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().is_shown(pack));
+        app.world_mut().resource_mut::<bags::BagWindows>().close(pack);
+        app.update();
+        assert!(!app.world().resource::<bags::BagWindows>().is_shown(pack), "shut by the delver");
+        // Taken off and set down (or sold), then put on again: a bag newly carried, so it opens.
+        app.world_mut().resource_mut::<Inventory>().take_out(pack);
+        app.update();
+        app.world_mut().resource_mut::<Inventory>().wear(pack, Slot::Back).unwrap();
+        app.update();
+        assert!(app.world().resource::<bags::BagWindows>().is_shown(pack), "worn again, it opens as a newly carried bag");
     }
 
     #[test]
