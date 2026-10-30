@@ -695,6 +695,7 @@ fn deal_for_capture(
     mut shelves: Query<&mut Shelf>,
     mut record: Option<ResMut<WorldRecord>>,
     clock: Option<Res<crate::game_clock::GameClock>>,
+    mut windows: Option<ResMut<crate::inventory::bags::BagWindows>>,
     mut frames: Local<u32>,
 ) {
     let mode = std::env::var("FB_BARTER").unwrap_or_default();
@@ -708,6 +709,9 @@ fn deal_for_capture(
         if inventory.worn(Slot::Back).is_none() {
             let pack = inventory.add(fb_items::roll_item("Pack", 2).expect("a pack"));
             let _ = inventory.wear(pack, Slot::Back);
+            if let Some(windows) = windows.as_deref_mut() {
+                windows.order.push(pack);
+            }
             let blade = inventory.add(fb_items::roll_item("Dagger", 6).expect("a dagger"));
             let _ = inventory.stow(blade);
         }
@@ -754,6 +758,7 @@ fn open_barter(
     mut inventory: ResMut<Inventory>,
     mut barter: ResMut<Barter>,
     mut showing: ResMut<OpenContainer>,
+    mut windows: Option<ResMut<crate::inventory::bags::BagWindows>>,
     mut toasts: Toasts,
 ) {
     let from_talk = chosen.read().find(|c| c.service == Service::Barter).map(|c| c.folk);
@@ -797,6 +802,13 @@ fn open_barter(
     showing.0 = Some(session.shelf);
     barter.session = Some(session);
     barter.notice = None;
+    // The delver's pack is open on their side to trade from, when none of their bags is.
+    if let Some(windows) = windows.as_deref_mut()
+        && let Some(pack) = inventory.worn(Slot::Back).filter(|&p| inventory.grid(p).is_some()).or_else(|| inventory.carried_containers().first().copied())
+        && !inventory.carried_containers().iter().any(|&c| windows.is_open(c))
+    {
+        windows.order.push(pack);
+    }
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
 }
 
