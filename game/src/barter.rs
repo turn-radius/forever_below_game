@@ -189,6 +189,9 @@ pub struct Session {
     pub purse: u64,
     /// What the trader looks like, for the portrait over their shelf.
     pub look: Look,
+    /// The pack whose window the barter opened for the delver to trade from, which it closes again
+    /// when it ends; none if the delver had a bag open already.
+    pub opened_pack: Option<ItemId>,
 }
 
 impl Session {
@@ -395,6 +398,7 @@ impl Barter {
             spot: 0,
             purse: 0,
             look: Look { spec: fb_body::BodySpec::roll(fb_body::Folk::Human, 1), gear: vec![], dirt: 0.0 },
+            opened_pack: None,
         };
         Barter { session: Some(session), ..default() }
     }
@@ -527,6 +531,7 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
         spot: person.spot.seed,
         purse: shelf.purse,
         look: Look::of(person),
+        opened_pack: None,
     })
 }
 
@@ -802,14 +807,24 @@ fn open_barter(
     showing.0 = Some(session.shelf);
     barter.session = Some(session);
     barter.notice = None;
-    // The delver's pack is open on their side to trade from, when none of their bags is.
-    if let Some(windows) = windows.as_deref_mut()
-        && let Some(pack) = inventory.worn(Slot::Back).filter(|&p| inventory.grid(p).is_some()).or_else(|| inventory.carried_containers().first().copied())
-        && !inventory.carried_containers().iter().any(|&c| windows.is_open(c))
-    {
-        windows.order.push(pack);
+    if let Some(windows) = windows.as_deref_mut() {
+        let opened = open_pack(&inventory, windows);
+        if let Some(session) = barter.session.as_mut() {
+            session.opened_pack = opened;
+        }
     }
     show_screen(&mut open, Some(Screen::Inventory), cursor.as_deref_mut().map(|c| &mut **c));
+}
+
+/// Opens the delver's pack on their side to trade from, when none of their bags is open: the
+/// pack, else the first bag they carry. Gives the one opened.
+fn open_pack(inventory: &Inventory, windows: &mut crate::inventory::bags::BagWindows) -> Option<ItemId> {
+    let pack = inventory.worn(Slot::Back).filter(|&p| inventory.grid(p).is_some()).or_else(|| inventory.carried_containers().first().copied())?;
+    if inventory.carried_containers().iter().any(|&c| windows.is_open(c)) {
+        return None;
+    }
+    windows.order.push(pack);
+    Some(pack)
 }
 
 /// What a button on the balance does.
@@ -893,14 +908,15 @@ pub fn settled_line(done: &Receipt) -> String {
 
 /// Ends the barter when the screen closes, or the folk falls or turns on the delver: everything
 /// not settled goes back.
-#[allow(clippy::type_complexity)]
-fn close_barter(
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(crate) fn close_barter(
     mut open: ResMut<ScreenOpen>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
     mut barter: ResMut<Barter>,
     mut inventory: ResMut<Inventory>,
     mut showing: ResMut<OpenContainer>,
     mut folk: Query<(Option<&Hostility>, Option<&mut Routine>, Has<Corpse>)>,
+    mut windows: Option<ResMut<crate::inventory::bags::BagWindows>>,
     mut toasts: Toasts,
 ) {
     let Some(session) = barter.session.as_ref() else { return };
@@ -921,6 +937,10 @@ fn close_barter(
     let Some(session) = barter.session.take() else { return };
     if let Ok((_, Some(mut routine), _)) = folk.get_mut(session.folk) {
         routine.release();
+    }
+    // The pack the barter opened is shut again, as it was; one the delver had open stays.
+    if let (Some(pack), Some(windows)) = (session.opened_pack, windows.as_deref_mut()) {
+        windows.close(pack);
     }
     end(&mut inventory, session);
     showing.0 = None;

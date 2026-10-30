@@ -3945,21 +3945,6 @@ mod tests {
     }
 
     #[test]
-    fn a_ware_dragged_from_the_left_onto_the_pack_on_the_right_is_bought() {
-        let mut app = party_app(Vec2::new(1280.0, 720.0));
-        let (pack, shelf) = trade_in(&mut app);
-        let ware = app.world().resource::<Inventory>().grid(shelf).unwrap().entries()[0];
-        let drag = Drag { id: ware.id, grab: IVec2::ZERO, size: ware.size, turned: false, press: Vec2::ZERO, active: true, target: None };
-        let target = Target::Cell { view: GridView::Container(pack), cell: IVec2::new(1, 1) };
-        let mut barter = app.world_mut().remove_resource::<crate::barter::Barter>().unwrap();
-        let mut inventory = app.world_mut().resource_mut::<Inventory>();
-        assert!(barter.drop_at(&mut inventory, &drag, target).is_some_and(|r| r.is_ok()), "the trade takes it");
-        let deal = barter.session.as_ref().unwrap().deal(&inventory);
-        assert_eq!(deal.buying, vec![ware.id], "it is bought, as dragging it to the pack ever did");
-        assert!(matches!(inventory.location(ware.id), Some(Location::In { container, .. }) if container == pack));
-    }
-
-    #[test]
     fn an_opened_container_is_on_the_left_with_the_floor_under_it_and_the_delver_s_windows_on_the_right() {
         for view in SCREENS {
             let mut app = party_app(view);
@@ -4253,5 +4238,248 @@ mod tests {
         bevy::ecs::system::RunSystemOnce::run_system_once(app.world_mut(), leave_the_delve).unwrap();
         app.update();
         assert!(app.world().resource::<bags::BagWindows>().moved.is_empty());
+    }
+
+    /// Gives every window, grid and the shelf's scroll area the rectangle the layout would, as the
+    /// screen's nodes have none without a renderer, and the ledger the whole page.
+    fn lay_out(app: &mut App) {
+        let edge = bags::PAD_PX + bags::BORDER_PX;
+        let cell = app.world().resource::<Tuning>().interface.cell_size;
+        let shelf = app.world().resource::<crate::barter::Barter>().session.as_ref().map(|s| s.shelf);
+        let mut nodes: Vec<(Entity, Rect)> = Vec::new();
+        let ids: Vec<(Entity, ItemId)> = {
+            let world = app.world_mut();
+            world.query::<(Entity, &bags::BagWindow)>().iter(world).map(|(e, w)| (e, w.0)).collect()
+        };
+        for (frame, id) in ids {
+            let rect = window_rect(app, id);
+            nodes.push((frame, rect));
+            let windows = app.world().resource::<bags::BagWindows>();
+            let view = if id == bags::FLOOR { GridView::Underfoot } else { GridView::Container(id) };
+            let cell = cell * windows.cell_scale(view);
+            let inventory = app.world().resource::<Inventory>();
+            let grid = if id == bags::FLOOR { app.world().resource::<Underfoot>().grid.clone() } else { inventory.grid(id).unwrap().clone() };
+            let size = grid_size(&grid, cell);
+            let above = if shelf == Some(id) { 300.0 + 10.0 + 36.0 + 4.0 } else { bags::TITLE_PX + bags::GAP_PX };
+            let min = rect.min + Vec2::new(edge, edge + above);
+            let world = app.world_mut();
+            let grids: Vec<Entity> = world.query::<(Entity, &GridView)>().iter(world).filter(|(_, v)| **v == view).map(|(e, _)| e).collect();
+            for g in grids {
+                nodes.push((g, Rect::from_corners(min, min + size)));
+            }
+            if shelf == Some(id) {
+                let areas: Vec<Entity> = world.query_filtered::<Entity, With<ShelfScroll>>().iter(world).collect();
+                for a in areas {
+                    nodes.push((a, Rect::from_corners(min, min + Vec2::new(size.x, shelf_view_height(size.y)))));
+                }
+            }
+        }
+        let world = app.world_mut();
+        let ledgers: Vec<Entity> = world.query_filtered::<Entity, With<Ledger>>().iter(world).collect();
+        for l in ledgers {
+            nodes.push((l, Rect::from_corners(Vec2::ZERO, Vec2::new(1920.0, 1080.0))));
+        }
+        for (entity, rect) in nodes {
+            world.entity_mut(entity).insert((ComputedNode { size: rect.size(), inverse_scale_factor: 1.0, ..default() }, UiGlobalTransform::from(bevy::math::Affine2::from_translation(rect.center()))));
+        }
+    }
+
+    /// The centre of cell `cell` of the grid of `view`, in interface pixels, after [`lay_out`].
+    fn cell_centre(app: &mut App, view: GridView, cell: IVec2) -> Vec2 {
+        let scale = app.world().resource::<bags::BagWindows>().cell_scale(view) * app.world().resource::<Tuning>().interface.cell_size;
+        let world = app.world_mut();
+        let (node, transform) = world.query::<(&GridView, &ComputedNode, &UiGlobalTransform)>().iter(world).find(|(v, ..)| **v == view).map(|(_, n, t)| (*n, *t)).unwrap();
+        node_rect(&node, &transform).min + (cell.as_vec2() + 0.5) * scale
+    }
+
+    /// Lets go of an active drag of `id` with the mouse over `at` (interface pixels), as the screen does.
+    fn drop_at_point(app: &mut App, id: ItemId, at: Vec2) {
+        let scale = app.world().resource::<UiScale>().0;
+        let world = app.world_mut();
+        world.query::<&mut Window>().single_mut(world).unwrap().set_cursor_position(Some(at * scale));
+        let size = world.resource::<Inventory>().footprint(id).unwrap();
+        world.resource_mut::<Dragging>().0 = Some(Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None });
+        let mut mouse = world.resource_mut::<ButtonInput<MouseButton>>();
+        mouse.press(MouseButton::Left);
+        mouse.clear();
+        mouse.release(MouseButton::Left);
+        app.update();
+    }
+
+    /// A barter laid out with the pack open, the delver holding a dagger in it and 40 gp.
+    fn laid_out_barter() -> (App, ItemId, ItemId, ItemId) {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let (pack, shelf) = trade_in(&mut app);
+        let dagger = {
+            let mut inventory = app.world_mut().resource_mut::<Inventory>();
+            inventory.add_coins(fb_items::Coins::from_copper(4000));
+            let dagger = inventory.add(fb_items::roll_item("Dagger", 6).unwrap());
+            inventory.put(dagger, pack, Placement::new(0, 0, false)).unwrap();
+            dagger
+        };
+        app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+        app.update();
+        app.update();
+        lay_out(&mut app);
+        (app, pack, shelf, dagger)
+    }
+
+    /// A cell of `view` where `id` may be let go, by the trade's own reckoning.
+    fn room_in(app: &App, view: GridView, id: ItemId) -> IVec2 {
+        let inventory = app.world().resource::<Inventory>();
+        let grid = match view {
+            GridView::Container(c) => inventory.grid(c).unwrap(),
+            GridView::Underfoot => &app.world().resource::<Underfoot>().grid,
+        };
+        let size = inventory.footprint(id).unwrap();
+        let barter = app.world().resource::<crate::barter::Barter>();
+        let drag = Drag { id, grab: IVec2::ZERO, size, turned: false, press: Vec2::ZERO, active: true, target: None };
+        (0..grid.rows as i32)
+            .flat_map(|y| (0..grid.cols as i32).map(move |x| IVec2::new(x, y)))
+            .rev()
+            .find(|&cell| barter.check(inventory, &drag, Target::Cell { view, cell }).is_some_and(|r| r.is_ok()))
+            .expect("room")
+    }
+
+    fn deal_of(app: &App) -> crate::barter::Deal {
+        app.world().resource::<crate::barter::Barter>().session.as_ref().unwrap().deal(app.world().resource::<Inventory>())
+    }
+
+    #[test]
+    fn dragging_a_ware_from_the_shelf_to_a_cell_of_the_pack_buys_it_through_the_laid_out_windows() {
+        let (mut app, pack, shelf, _) = laid_out_barter();
+        let ware = app.world().resource::<Inventory>().grid(shelf).unwrap().entries()[0];
+        let free = room_in(&app, GridView::Container(pack), ware.id);
+        let at = cell_centre(&mut app, GridView::Container(pack), free);
+        assert!(at.x > 960.0, "the pack is on the right: {at}");
+        drop_at_point(&mut app, ware.id, at);
+        assert_eq!(deal_of(&app).buying, vec![ware.id], "bought, as dragging it to the pack ever did");
+        assert!(matches!(app.world().resource::<Inventory>().location(ware.id), Some(Location::In { container, .. }) if container == pack));
+    }
+
+    #[test]
+    fn dragging_a_thing_of_the_delver_s_from_their_window_onto_the_shelf_offers_it_for_sale() {
+        let (mut app, _, shelf, dagger) = laid_out_barter();
+        let bare = room_in(&app, GridView::Container(shelf), dagger);
+        let at = cell_centre(&mut app, GridView::Container(shelf), bare);
+        assert!(at.x < 960.0, "on the shelf, on the left: {at}");
+        drop_at_point(&mut app, dagger, at);
+        assert_eq!(deal_of(&app).selling, vec![dagger], "offered for sale, as dragging it to the shelf ever did");
+        assert!(matches!(app.world().resource::<Inventory>().location(dagger), Some(Location::In { container, .. }) if container == shelf));
+    }
+
+    /// The target under `point` over the laid-out screen, found as dragging finds it.
+    fn target_at(app: &mut App, point: Vec2) -> Target {
+        let world = app.world_mut();
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<(&QuickslotDrop, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&GridView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&SlotView, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&FittingSlot, &ComputedNode, &UiGlobalTransform)>,
+            Query<(&ComputedNode, &UiGlobalTransform), With<Ledger>>,
+            Query<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>,
+            Query<(&bags::BagWindow, &ComputedNode, &UiGlobalTransform, &ZIndex)>,
+        )>::new(world);
+        let (drops, grids, slots, fslots, ledgers, areas, frames) = state.get(world).unwrap();
+        let barter = world.resource::<crate::barter::Barter>();
+        let shelf = barter.session.as_ref().zip(areas.iter().next()).map(|(s, (n, t))| (GridView::Container(s.shelf), node_rect(n, t)));
+        let mut rects: Vec<(i32, Rect)> = frames.iter().map(|(_, n, t, z)| (z.0, node_rect(n, t))).collect();
+        rects.sort_by_key(|&(z, _)| std::cmp::Reverse(z));
+        let rects: Vec<Rect> = rects.into_iter().map(|(_, r)| r).collect();
+        let windows = world.resource::<bags::BagWindows>();
+        let ledger = ledgers.iter().next().map(|(n, t)| node_rect(n, t));
+        let cell = world.resource::<Tuning>().interface.cell_size;
+        target_under(point, &drops, &grids, &slots, &fslots, None, ledger, None, shelf, &rects, cell, &|view| cell * windows.cell_scale(view))
+    }
+
+    #[test]
+    fn the_left_side_resolves_the_floor_the_wares_the_card_and_empty_space() {
+        let mut app = party_app(Vec2::new(1280.0, 720.0));
+        let chest = chest_with_bread(&mut app.world_mut().resource_mut::<Inventory>()).0;
+        app.world_mut().resource_mut::<OpenContainer>().0 = Some(chest);
+        app.update();
+        app.update();
+        lay_out(&mut app);
+        // The floor window, its grid's first cell: the item is set down.
+        let floor = cell_centre(&mut app, GridView::Underfoot, IVec2::ZERO);
+        assert_eq!(target_at(&mut app, floor), Target::Cell { view: GridView::Underfoot, cell: IVec2::ZERO });
+        assert_eq!(target_at(&mut app, floor + Vec2::new(0.0, -50.0)), Target::Page, "its title bar is the page");
+        // Empty space on the left, away from every window.
+        assert_eq!(target_at(&mut app, Vec2::new(900.0, 1000.0)), Target::Page, "empty left space is the page, not the level");
+
+        let (mut app, _, shelf, _) = laid_out_barter();
+        let ware = cell_centre(&mut app, GridView::Container(shelf), IVec2::new(1, 1));
+        assert_eq!(target_at(&mut app, ware), Target::Cell { view: GridView::Container(shelf), cell: IVec2::new(1, 1) }, "the wares' scroll area");
+        let area = {
+            let world = app.world_mut();
+            let (n, t) = world.query_filtered::<(&ComputedNode, &UiGlobalTransform), With<ShelfScroll>>().single(world).unwrap();
+            node_rect(n, t)
+        };
+        let card = Vec2::new(area.center().x, area.min.y - 100.0);
+        assert_eq!(target_at(&mut app, card), Target::Page, "the card over the wares takes nothing");
+        // The grid scrolled up under the card is still clipped to the area.
+        assert_eq!(target_at(&mut app, Vec2::new(900.0, 1000.0)), Target::Page);
+    }
+
+    #[test]
+    fn a_barter_ended_by_cancel_returns_the_screen_to_one_side_with_the_delver_s_windows_as_they_were() {
+        for opened_by_barter in [false, true] {
+            let mut app = party_app(Vec2::new(1280.0, 720.0));
+            let (pack, _) = trade_in(&mut app);
+            app.add_systems(Update, crate::barter::close_barter.before(bags::place_windows));
+            let folk = app.world_mut().spawn_empty().id();
+            app.world_mut().resource_mut::<crate::barter::Barter>().session.as_mut().unwrap().folk = folk;
+            app.world_mut().resource_mut::<bags::BagWindows>().order = vec![pack];
+            app.world_mut().resource_mut::<crate::barter::Barter>().session.as_mut().unwrap().opened_pack = opened_by_barter.then_some(pack);
+            app.update();
+            app.update();
+            assert!(app.world().resource::<bags::BagWindows>().two_sided());
+            // Cancel shuts the screen; the barter ends with it.
+            app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+            app.update();
+            assert!(!app.world().resource::<crate::barter::Barter>().active());
+            assert_eq!(app.world().resource::<OpenContainer>().0, None);
+            app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+            app.update();
+            app.update();
+            let windows = app.world().resource::<bags::BagWindows>();
+            assert!(!windows.two_sided() && windows.left.is_empty(), "one side again");
+            assert_eq!(windows.order, if opened_by_barter { vec![] } else { vec![pack] }, "the delver's windows, less the one the barter opened");
+            let world = app.world_mut();
+            assert_eq!(world.query_filtered::<(), With<crate::barter::BarterButton>>().iter(world).count(), 0, "no card");
+            assert_eq!(world.query::<&bags::BagWindow>().iter(world).filter(|w| w.0 != pack).count(), 0, "no window left of the trader's");
+        }
+    }
+
+    #[test]
+    fn accepting_settles_the_deal_and_leaves_the_barter_up_until_the_screen_closes() {
+        let (mut app, pack, shelf, _) = laid_out_barter();
+        app.add_systems(Update, crate::barter::close_barter.before(bags::place_windows));
+        let folk = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<crate::barter::Barter>().session.as_mut().unwrap().folk = folk;
+        // Changing the trader rebuilds the screen, so its nodes are laid out again.
+        app.update();
+        lay_out(&mut app);
+        let ware = app.world().resource::<Inventory>().grid(shelf).unwrap().entries()[0].id;
+        let free = room_in(&app, GridView::Container(pack), ware);
+        let at = cell_centre(&mut app, GridView::Container(pack), free);
+        drop_at_point(&mut app, ware, at);
+        let wares: Vec<_> = (1..4).filter_map(|s| fb_items::roll_item("Sword", s)).collect();
+        let mut shelved = crate::shelf::Shelf { day: 0, wares, sold: vec![], purse: 6000 };
+        let mut barter = app.world_mut().remove_resource::<crate::barter::Barter>().unwrap();
+        let mut inventory = app.world_mut().remove_resource::<Inventory>().unwrap();
+        let receipt = crate::barter::settle(&mut inventory, barter.session.as_mut().unwrap(), &mut shelved).expect("settles");
+        assert_eq!(receipt.bought, 1);
+        app.insert_resource(barter).insert_resource(inventory);
+        app.update();
+        assert!(app.world().resource::<crate::barter::Barter>().active() && app.world().resource::<bags::BagWindows>().two_sided(), "Accept leaves the trade up for more");
+        assert!(matches!(app.world().resource::<Inventory>().location(ware), Some(Location::In { container, .. }) if container == pack), "and what was bought is the delver's");
+        app.world_mut().resource_mut::<ScreenOpen>().0 = None;
+        app.update();
+        app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
+        app.update();
+        app.update();
+        assert!(!app.world().resource::<bags::BagWindows>().two_sided(), "closing the screen ends it: one side");
+        assert!(matches!(app.world().resource::<Inventory>().location(ware), Some(Location::In { container, .. }) if container == pack), "and the purchase stays");
     }
 }
