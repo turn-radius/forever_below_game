@@ -14,7 +14,7 @@
 
 use std::collections::VecDeque;
 
-use bevy::camera::visibility::NoFrustumCulling;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::{asset::RenderAssetUsages, light::NotShadowCaster, mesh::{Indices, PrimitiveTopology}, prelude::*};
@@ -81,6 +81,8 @@ pub struct TrailPoint {
     pub life: f32,
 }
 
+/// Most points left in one frame.
+const MAX_CATCH_UP: f32 = 4.0;
 /// Bowl speed, world units a second, below which the smoke is whole, and above which it is gone.
 pub const CALM_SPEED: f32 = 5.0;
 pub const SMEAR_SPEED: f32 = 45.0;
@@ -99,9 +101,13 @@ pub fn calm(speed: f32) -> f32 {
     1.0 - x * x * (3.0 - 2.0 * x)
 }
 
-/// The wisp of a [`Smoke`], a child of it: its points, oldest first, and the mesh drawn along them.
+/// The wisp of a [`Smoke`]: its points, oldest first, and the mesh drawn along them. It is its own
+/// entity, not a child, so it outlives its emitter (a censer put out is drawn again as a new view
+/// model, and the old smoke rises out all the same).
 #[derive(Component, Clone, Debug)]
 pub struct Trail {
+    /// The entity it smokes from.
+    pub owner: Entity,
     pub points: VecDeque<TrailPoint>,
     clock: f32,
     since: f32,
@@ -112,9 +118,9 @@ pub struct Trail {
 }
 
 impl Trail {
-    fn new(seed: u32) -> Trail {
+    fn new(owner: Entity, seed: u32) -> Trail {
         let mut rng = Mulberry32::new(seed);
-        Trail { points: VecDeque::new(), clock: 0.0, since: 0.0, phase: Vec2::new(rng.range_f32(0.0, 6.28), rng.range_f32(0.0, 6.28)), last_bowl: None, speed: 0.0 }
+        Trail { owner, points: VecDeque::new(), clock: 0.0, since: 0.0, phase: Vec2::new(rng.range_f32(0.0, 6.28), rng.range_f32(0.0, 6.28)), last_bowl: None, speed: 0.0 }
     }
 
     /// Ages the points `dt` seconds, drops the ones that have risen out, and, if `bowl` is given,
@@ -137,7 +143,8 @@ impl Trail {
         }
         self.last_bowl = Some(bowl);
         let c = calm(self.speed);
-        self.since += dt;
+        // After a long frame, leave only a few points, not one for every step missed.
+        self.since = (self.since + dt).min(STEP * MAX_CATCH_UP);
         while self.since >= STEP {
             self.since -= STEP;
             self.points.push_back(TrailPoint { born: bowl, age: self.since, clock: self.clock - self.since, strength: SMEAR_STRENGTH + (1.0 - SMEAR_STRENGTH) * c, life: WISP_LIFE * (SMEAR_LIFE + (1.0 - SMEAR_LIFE) * c) });
@@ -397,14 +404,14 @@ impl Walls<'_> {
 /// smoke's colour and density.
 fn keep_trails(
     mut commands: Commands,
-    emitters: Query<(Entity, &Smoke, Option<&Children>), Changed<Smoke>>,
-    trails: Query<&MeshMaterial3d<StandardMaterial>, With<Trail>>,
+    emitters: Query<(Entity, &Smoke), Changed<Smoke>>,
+    trails: Query<(&Trail, &MeshMaterial3d<StandardMaterial>)>,
     assets: Res<WispAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (emitter, smoke, children) in &emitters {
-        if let Some(material) = children.into_iter().flatten().find_map(|&c| trails.get(c).ok()) {
+    for (emitter, smoke) in &emitters {
+        if let Some((_, material)) = trails.iter().find(|(trail, _)| trail.owner == emitter) {
             if let Some(mut look) = materials.get_mut(&material.0) {
                 *look = wisp_material(smoke, &assets.texture);
             }
@@ -413,41 +420,45 @@ fn keep_trails(
         let seed = emitter.to_bits() as u32 ^ 0x51ed_270b;
         commands.spawn((
             Name::new("Wisp"),
-            Trail::new(seed),
+            Trail::new(emitter, seed),
             Mesh3d(meshes.add(blank_mesh())),
             MeshMaterial3d(materials.add(wisp_material(smoke, &assets.texture))),
             NotShadowCaster,
             NoFrustumCulling,
             Transform::default(),
             Visibility::Hidden,
-            ChildOf(emitter),
         ));
     }
 }
 
 /// Leaves points at each lit bowl, moves them, and rebuilds every wisp's strip across the view.
 /// Points keep the world place they were left, so a censer that swings or is carried off leaves a
-/// bending trail behind it. The strip is built in world space, so its entity is set to sit at the
-/// world's origin however its emitter moves.
+/// bending trail behind it. The strip is built in world space, so its entity sits at the world's
+/// origin, in the render layers of its emitter.
 #[allow(clippy::type_complexity)]
 fn drift_trails(
     mut commands: Commands,
     time: Res<Time>,
     eyes: Query<&GlobalTransform, With<PlayerCamera>>,
-    emitters: Query<(&Smoke, &GlobalTransform)>,
-    mut trails: Query<(Entity, &mut Trail, &mut Transform, &mut Visibility, &Mesh3d, &ChildOf)>,
+    emitters: Query<(&Smoke, &GlobalTransform, Option<&RenderLayers>)>,
+    mut trails: Query<(Entity, &mut Trail, &mut Visibility, &Mesh3d, Option<&RenderLayers>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     walls: Walls,
 ) {
     let forward = eyes.iter().next().map_or(Vec3::NEG_Z, |eye| eye.forward().as_vec3());
-    for (entity, mut trail, mut transform, mut visibility, mesh, parent) in &mut trails {
-        let Ok((smoke, world)) = emitters.get(parent.parent()) else {
+    for (entity, mut trail, mut visibility, mesh, layers) in &mut trails {
+        // Without its emitter (put out and drawn again, or gone) the wisp only rises out.
+        let emitter = emitters.get(trail.owner).ok();
+        if let Some(wanted) = emitter.and_then(|(.., l)| l).filter(|&w| Some(w) != layers) {
+            commands.entity(entity).insert(wanted.clone());
+        }
+        let bowl = emitter.map_or(Vec3::ZERO, |(smoke, world, _)| world.transform_point(smoke.position));
+        let emitting = emitter.is_some_and(|(smoke, ..)| smoke.density > 0.01);
+        trail.advance(time.delta_secs(), emitting.then_some(bowl));
+        if emitter.is_none() && trail.points.is_empty() {
             commands.entity(entity).despawn();
             continue;
-        };
-        let emitting = smoke.density > 0.01;
-        let bowl = world.transform_point(smoke.position);
-        trail.advance(time.delta_secs(), emitting.then_some(bowl));
+        }
         // Lower end first: the live point at the bowl, then the newest left and on up.
         let mut samples: Vec<Sample> = Vec::with_capacity(trail.points.len() + 1);
         if emitting && !trail.points.is_empty() {
@@ -472,7 +483,6 @@ fn drift_trails(
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, strip.uvs);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, strip.colors);
         mesh.insert_indices(Indices::U32(strip.indices));
-        *transform = GlobalTransform::IDENTITY.reparented_to(world);
         visibility.set_if_neq(if count >= 4 { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
@@ -482,7 +492,7 @@ mod tests {
     use super::*;
 
     fn lit(at: Vec3, secs: f32) -> Trail {
-        let mut trail = Trail::new(9);
+        let mut trail = Trail::new(Entity::PLACEHOLDER, 9);
         let mut t = 0.0;
         while t < secs {
             trail.advance(1.0 / 60.0, Some(at));
@@ -517,8 +527,8 @@ mod tests {
 
     #[test]
     fn points_left_by_a_flying_bowl_are_fainter_and_shorter_lived() {
-        let mut slow = Trail::new(1);
-        let mut fast = Trail::new(1);
+        let mut slow = Trail::new(Entity::PLACEHOLDER, 1);
+        let mut fast = Trail::new(Entity::PLACEHOLDER, 1);
         for i in 0..30 {
             slow.advance(1.0 / 60.0, Some(Vec3::new(i as f32 * 0.01, 1.0, 0.0)));
             fast.advance(1.0 / 60.0, Some(Vec3::new(i as f32 * 0.8, 1.0, 0.0)));
@@ -613,8 +623,8 @@ mod tests {
         (app, emitter)
     }
 
-    fn trail_of(app: &App, emitter: Entity) -> Option<Trail> {
-        app.world().get::<Children>(emitter)?.iter().find_map(|c| app.world().get::<Trail>(c).cloned())
+    fn trails(app: &mut App) -> Vec<Trail> {
+        app.world_mut().query::<&Trail>().iter(app.world()).cloned().collect()
     }
 
     #[test]
@@ -622,19 +632,69 @@ mod tests {
         let (mut app, emitter) = smoking_app(1.0);
         app.update();
         app.update();
-        assert_eq!(app.world().get::<Children>(emitter).unwrap().len(), 1);
+        assert_eq!(trails(&mut app).len(), 1);
         app.world_mut().get_mut::<Smoke>(emitter).unwrap().density = 0.5;
         app.update();
-        assert_eq!(app.world().get::<Children>(emitter).unwrap().len(), 1, "a change keeps the one wisp");
-        // The censer goes out: its smoke is taken away and the wisp goes with the entity.
-        app.world_mut().entity_mut(emitter).despawn();
-        app.update();
-        assert!(app.world().get_entity(emitter).is_err());
+        assert_eq!(trails(&mut app).len(), 1, "a change keeps the one wisp");
         let (mut dark, emitter) = smoking_app(0.0);
         for _ in 0..5 {
             dark.update();
         }
-        assert!(trail_of(&dark, emitter).is_none_or(|t| t.points.is_empty()), "no incense, no wisp");
+        let _ = emitter;
+        assert!(trails(&mut dark).iter().all(|t| t.points.is_empty()), "no incense, no wisp");
+    }
+
+    fn stepping_app(density: f32) -> (App, Entity) {
+        let (mut app, emitter) = smoking_app(density);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(1.0 / 30.0)));
+        (app, emitter)
+    }
+
+    fn drawn(app: &mut App) -> bool {
+        app.world_mut().query::<(&Trail, &Visibility)>().iter(app.world()).any(|(_, v)| *v != Visibility::Hidden)
+    }
+
+    #[test]
+    fn a_censer_whose_incense_runs_out_keeps_its_wisp_for_a_moment_and_it_fades_within_its_life() {
+        let (mut app, emitter) = stepping_app(1.0);
+        for _ in 0..90 {
+            app.update();
+        }
+        assert!(drawn(&mut app));
+        app.world_mut().get_mut::<Smoke>(emitter).unwrap().density = 0.0;
+        for _ in 0..15 {
+            app.update();
+        }
+        assert!(drawn(&mut app) && !trails(&mut app)[0].points.is_empty(), "still rising out half a second on");
+        for _ in 0..((WISP_LIFE / STEP) as usize + 6) {
+            app.update();
+        }
+        assert!(trails(&mut app).iter().all(|t| t.points.is_empty()), "nothing left within its life");
+        assert!(!drawn(&mut app));
+    }
+
+    #[test]
+    fn a_wisp_outlives_a_censer_that_is_drawn_again_and_then_goes() {
+        let (mut app, emitter) = stepping_app(1.0);
+        for _ in 0..60 {
+            app.update();
+        }
+        app.world_mut().entity_mut(emitter).despawn();
+        for _ in 0..10 {
+            app.update();
+        }
+        assert!(drawn(&mut app), "rises on after its emitter is gone");
+        for _ in 0..((WISP_LIFE / STEP) as usize + 6) {
+            app.update();
+        }
+        assert!(trails(&mut app).is_empty(), "then the entity goes too");
+    }
+
+    #[test]
+    fn a_long_frame_leaves_only_a_few_points() {
+        let mut trail = Trail::new(Entity::PLACEHOLDER, 3);
+        trail.advance(2.0, Some(Vec3::ZERO));
+        assert!(trail.points.len() <= 4, "{}", trail.points.len());
     }
 
     #[test]
