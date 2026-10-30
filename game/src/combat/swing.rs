@@ -472,20 +472,19 @@ fn land_blows(
                 info!("swing: {}", attack.line());
                 if attack.hit {
                     let rolled = swing.weapon.roll(swing.damage_modifier(modifier(character.strength())), &mut dice.0);
-                    let mut damage = rolled + super::bane_damage_with_devotion(&swing.weapon.bane, &swing.weapon.devout, strikeable.kin(target), &mut dice.0);
+                    let damage = rolled + super::bane_damage_with_devotion(&swing.weapon.bane, &swing.weapon.devout, strikeable.kin(target), &mut dice.0);
                     let burning = inventory.as_deref().is_some_and(|i| flaming_blow(i, swing.hand));
+                    let fire = if burning { fire_damage(rules, strikeable.species(target), &mut dice.0) } else { 0 };
                     if burning {
-                        let fire = fire_damage(rules, strikeable.species(target), &mut dice.0);
                         info!("swing: {damage} + {fire} fire");
-                        damage += fire;
                     }
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false, fire });
                     if burning {
                         burned.write(Burned { target });
                     }
                 } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
                     info!("swing: grazes for {damage}");
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true, fire: 0 });
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }
