@@ -33,13 +33,19 @@ impl Plugin for ReadingPlugin {
 
 /// Reads a book or scroll written in a denizen tongue: the words it teaches join the `lexicon`
 /// for the rest of the delve. Returns the toast's line, "You learn 12 words of Minotaur speech:
-/// greetings and trade.", counting only the words that were new, or "You already know these
-/// words." when none were.
-pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &fb_denizens::tongue::Teaching) -> String {
+/// greetings and trade.", counting only the words that were new, or "There is nothing new in it."
+/// when the tongue is already complete. Topics the writing covers that are known are swapped for
+/// ones not yet known. A copy teaches only once: it is marked read ([`Teaching::studied`]) and
+/// after that says "You have learned all this writing can teach."
+pub fn study(lexicon: &mut fb_denizens::tongue::Lexicon, teaching: &mut fb_denizens::tongue::Teaching) -> String {
+    if teaching.studied {
+        return "You have learned all this writing can teach.".to_string();
+    }
+    teaching.studied = true;
     let learned = lexicon.learn_teaching(teaching);
     let n = learned.len();
     if n == 0 {
-        return "You already know these words.".to_string();
+        return if lexicon.is_complete(teaching.kind) { "There is nothing new in it.".to_string() } else { "You already know these words.".to_string() };
     }
     format!("You learn {n} {} of {}: {}.", if n == 1 { "word" } else { "words" }, fb_denizens::tongue::tongue_name(teaching.kind), teaching.topic_list())
 }
@@ -72,7 +78,7 @@ pub fn teaching_for_capture(spec: &str, index: u32) -> Option<fb_items::Item> {
 /// Reads every book and scroll in the pack that teaches words, a moment into the delve.
 fn read_teaching_for_capture(
     mut eating: crate::eat::Eating,
-    inventory: Res<crate::inventory::Inventory>,
+    mut inventory: ResMut<crate::inventory::Inventory>,
     mut toasts: crate::inventory::Toasts,
     mut frames: Local<u32>,
 ) {
@@ -83,7 +89,7 @@ fn read_teaching_for_capture(
     }
     let taught: Vec<_> = inventory.carried_containers().into_iter().filter_map(|c| inventory.grid(c)).flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>()).filter(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some())).collect();
     for id in taught {
-        if let Some(line) = eating.read(&inventory, id) {
+        if let Some(line) = eating.read(&mut inventory, id) {
             toasts.say(line);
         }
     }
@@ -233,13 +239,23 @@ mod tests {
     #[test]
     fn studying_counts_the_new_words_and_says_when_none_are() {
         use fb_denizens::tongue::{Lexicon, Teaching, Topic};
-        let greetings = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Greeting, Topic::Trade]);
+        let mut greetings = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Greeting, Topic::Trade]);
         let mut lexicon = Lexicon::new();
-        let said = study(&mut lexicon, &greetings);
+        let said = study(&mut lexicon, &mut greetings);
         assert_eq!(said, format!("You learn {} words of Minotaur speech: greetings and trade.", greetings.words.len()));
-        assert_eq!(study(&mut lexicon, &greetings), "You already know these words.");
-        let more = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]);
-        assert!(study(&mut lexicon, &more).contains("of Minotaur speech: trade and requests"));
+        // The same copy teaches once; another copy swaps the known topics for unknown ones.
+        assert_eq!(study(&mut lexicon, &mut greetings), "You have learned all this writing can teach.");
+        let mut second = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Greeting, Topic::Trade]);
+        assert!(study(&mut lexicon, &mut second).starts_with("You learn "));
+        let mut third = second.clone();
+        third.studied = false;
+        assert!(study(&mut lexicon, &mut third).starts_with("You learn "));
+        let mut fourth = second.clone();
+        fourth.studied = false;
+        assert_eq!(study(&mut lexicon, &mut fourth), "You learn 6 words of Minotaur speech: greetings and trade.");
+        assert!(lexicon.is_complete(fb_denizens::DenizenKind::Minotaur));
+        let mut more = Teaching::of_topics(fb_denizens::DenizenKind::Minotaur, &[Topic::Trade, Topic::Quest]);
+        assert_eq!(study(&mut lexicon, &mut more), "There is nothing new in it.");
     }
 
     #[test]

@@ -683,6 +683,23 @@ mod tests {
     }
 
     #[test]
+    fn a_read_scroll_stays_read_through_a_record() {
+        let mut scroll = crate::reading::teaching_for_capture("minotaur:scroll:7", 0).unwrap();
+        let other = crate::reading::teaching_for_capture("minotaur:scroll:8", 0).unwrap();
+        let mut lexicon = fb_denizens::tongue::Lexicon::new();
+        let mut parts = fb_items::ItemParts::from(scroll.clone());
+        assert!(crate::reading::study(&mut lexicon, parts.teaching.as_mut().unwrap()).starts_with("You learn "));
+        scroll = fb_items::Item::from_parts(parts).unwrap();
+        let json = serde_json::to_string(&item_record(&scroll)).unwrap();
+        let mut back = rebuild_item(&serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(back, scroll);
+        let again = crate::reading::study(&mut lexicon, back.teaching.as_mut().unwrap());
+        assert_eq!(again, "You have learned all this writing can teach.");
+        let mut other = other;
+        assert!(crate::reading::study(&mut lexicon, other.teaching.as_mut().unwrap()).starts_with("You learn "));
+    }
+
+    #[test]
     fn a_note_keeps_its_words_through_a_record() {
         let level = fb_level::generate(5, 2);
         let note = fb_items::roll_item("Note", 31).unwrap().in_world(&level.lore());
