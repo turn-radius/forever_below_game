@@ -73,6 +73,7 @@ pub mod props;
 pub mod book;
 pub mod casting;
 pub mod casting_influence;
+pub mod prayers;
 pub mod quickslots;
 pub mod reading;
 pub mod record;

@@ -1,12 +1,12 @@
 //! Casting in the game: the prayers and spells every caster shares ([`fb_character::casting`]).
 //!
 //! A caster writes prayers from terms ([`Spellbook`], on the delver as [`DelverSpellbook`] and
-//! saved with them); a cleric starts with Divine Light written. The Pray key ([`Action::Pray`],
-//! C) casts the chosen prayer at the chosen tier; the tier key ([`Action::CastTier`], V) steps
-//! the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
+//! saved with them); a cleric starts with Divine Light and Smite written. The Pray key
+//! ([`Action::Pray`], C) casts the chosen prayer at the chosen tier; the tier key
+//! ([`Action::CastTier`], V) steps the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
 //! ([`AbilitySlots`]): the slot's key then casts it at the chosen tier. A cleric starts with
-//! Divine Light in the first free slot; in the inventory the slot's key with the mouse over
-//! nothing binds the chosen prayer to that slot.
+//! Divine Light and Smite in the first free slots; in the inventory the slot's key with the
+//! mouse over nothing binds the chosen prayer to that slot.
 //!
 //! Every cast goes through a [`CastRequest`] message, which anything can send. [`cast_requests`]
 //! checks the caster and the terms, spends the mana from [`DelverMana`] and either sends a
@@ -78,6 +78,7 @@ impl Plugin for CastingPlugin {
                     .in_set(DelveSystems),
             );
         crate::casting_influence::register(app);
+        crate::prayers::register(app);
     }
 }
 
@@ -154,13 +155,19 @@ fn forget_the_abilities(mut slots: ResMut<AbilitySlots>, mut chosen: ResMut<Chos
     *chosen = Chosen::default();
 }
 
-/// A new cleric holds Divine Light in the first slot with nothing in it.
+/// The prayers a new cleric holds in their quickslots, in order, each in the first slot with
+/// nothing in it: Divine Light, Smite.
+const STARTING_PRAYERS: [&str; 2] = ["Divine Light", "Smite"];
+
+/// A new cleric holds their [`STARTING_PRAYERS`] in the first slots with nothing in them.
 fn give_clerics_their_prayer(new: Query<(), Added<Player>>, character: Option<Res<Character>>, items: Res<Quickslots>, mut slots: ResMut<AbilitySlots>) {
     if new.is_empty() || character.is_none_or(|c| c.class.casting() != Casting::Divine) || slots.0.iter().any(Option::is_some) {
         return;
     }
-    if let Some(free) = (0..SLOTS).find(|&s| items.get(s).is_none()) {
-        slots.bind(free, "Divine Light");
+    for name in STARTING_PRAYERS {
+        if let Some(free) = (0..SLOTS).find(|&s| items.get(s).is_none() && slots.get(s).is_none()) {
+            slots.bind(free, name);
+        }
     }
 }
 
@@ -234,6 +241,7 @@ pub(crate) fn cast_requests(
     character: Option<Res<Character>>,
     rules: Res<GameRules>,
     mut players: Query<(&mut DelverMana, &DelverSpellbook), With<Player>>,
+    sight: crate::prayers::Sight,
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
@@ -251,6 +259,11 @@ pub(crate) fn cast_requests(
         let casting = character.as_deref().map_or(Casting::Martial, |c| c.class.casting());
         let mut pool = mana.0;
         match cast_with(&rules, &mut pool, casting, &book.0.unlocked, written, request.tier) {
+            // A prayer that reaches what you see needs someone in sight. The cast was tried on a
+            // copy of the pool, which is only kept below, so one that finds no one costs nothing.
+            Ok(cast) if cast.written.reach == "sight" && sight.nearest_the_crosshair(cast.range).is_none() => {
+                toast.say("No one is in sight".to_string(), now);
+            }
             Ok(cast) => {
                 mana.0 = pool;
                 toast.say(format!("You cast {}, tier {}: {} mana", cast.written.name, cast.tier, points(cast.cost)), now);
@@ -1047,6 +1060,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_cleric_holds_divine_light_and_smite_in_the_first_two_slots() {
+        let (app, player) = delve(true, 10.0);
+        let slots = app.world().resource::<AbilitySlots>();
+        assert_eq!((slots.get(0), slots.get(1)), (Some("Divine Light"), Some("Smite")));
+        let book = &app.world().get::<DelverSpellbook>(player).unwrap().0;
+        assert_eq!(book.written.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Divine Light", "Smite"]);
+    }
+
+    #[test]
     fn the_chosen_prayer_is_what_c_casts() {
         let (mut app, player) = delve(true, 10.0);
         let mut mercy = fb_character::casting::Written::divine_light();
@@ -1095,7 +1117,7 @@ mod tests {
         assert_eq!(app.world().resource::<Chosen>().name, "", "a fighter chooses nothing");
         app.world_mut().resource_mut::<Character>().class = crate::character::Class::Cleric;
         app.update();
-        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 1);
+        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 2);
         assert_eq!(app.world().resource::<Chosen>().name, "Divine Light");
     }
 
