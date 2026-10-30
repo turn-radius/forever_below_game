@@ -361,13 +361,18 @@ pub fn breakdown(rules: &Rules, character: &Character, inventory: &Inventory, ro
 
 /// [`breakdown`] with a light of `spell` feet cast on the delver counted among the carried lights.
 pub fn breakdown_lit(rules: &Rules, character: &Character, inventory: &Inventory, spell: Option<f64>, row: usize) -> Vec<String> {
+    breakdown_prayed(rules, character, inventory, spell, 0, row)
+}
+
+/// [`breakdown_lit`] with a Shield prayer of `shield` armour on the delver as a term of their armour class.
+pub fn breakdown_prayed(rules: &Rules, character: &Character, inventory: &Inventory, spell: Option<f64>, shield: i32, row: usize) -> Vec<String> {
     let loadout = character.loadout_with_spell(inventory, spell);
     match row {
         0 => character.load_breakdown(rules, inventory),
         1 => vec![loadout.warmth().line(), format!("Warmth needed {}", character.warmth_need())],
         2 => vec![loadout.light().line()],
         3 => vec![loadout.darkvision().line()],
-        4 => vec![character.armour_class_with(rules, inventory).line()],
+        4 => vec![character.armour_class_shielded(rules, inventory, shield).line()],
         5 => vec![loadout.rate_with(rules, MeterKind::Hunger, fb_character::Activity::Walking).line()],
         6 => vec![loadout.rate_with(rules, MeterKind::Sleepiness, fb_character::Activity::Walking).line()],
         7 => vec![loadout.heal_on_kill().line()],
@@ -463,6 +468,7 @@ pub fn show_breakdown(
     rules: Option<Res<GameRules>>,
     fonts: Res<UiFonts>,
     lights: Query<&crate::casting::DivineLight>,
+    shields: Query<&crate::prayers::ShieldPrayer>,
     mut tips: Query<(Entity, &mut Node, &mut Visibility, &ComputedNode, Option<&ComputedUiRenderTargetInfo>), With<BreakdownTip>>,
     mut shown: Local<Option<usize>>,
 ) {
@@ -478,7 +484,7 @@ pub fn show_breakdown(
         if *shown != Some(row) || hovered.is_changed() || character.is_changed() || inventory.is_changed() || rules_changed {
             commands.entity(tip).despawn_children().with_children(|tip| {
                 tip.spawn((Text::new(GEAR_ROWS[row]), UiFonts::style(&fonts.display, 18.0, INK)));
-                for line in breakdown_lit(GameRules::of(&rules), &character, &inventory, crate::casting::spell_light_feet(&lights), row) {
+                for line in breakdown_prayed(GameRules::of(&rules), &character, &inventory, crate::casting::spell_light_feet(&lights), crate::prayers::shield_bonus(shields.iter()), row) {
                     tip.spawn((Text::new(line), UiFonts::style(&fonts.mono, 12.0, MUTED)));
                 }
             });
@@ -504,11 +510,14 @@ pub fn update_gear(
     lights: Query<&crate::casting::DivineLight>,
     new_lights: Query<(), Added<crate::casting::DivineLight>>,
     mut gone: RemovedComponents<crate::casting::DivineLight>,
+    shields: Query<&crate::prayers::ShieldPrayer>,
+    new_shields: Query<(), Added<crate::prayers::ShieldPrayer>>,
+    mut shield_gone: RemovedComponents<crate::prayers::ShieldPrayer>,
     mut attributes: Query<(&AttributeLine, &mut Text), Without<GearLine>>,
     mut gear: Query<(&GearLine, &mut Text, &mut TextColor), Without<AttributeLine>>,
 ) {
     let rules_changed = rules.as_ref().is_some_and(|r| r.is_changed());
-    let light_changed = !new_lights.is_empty() | (gone.read().count() > 0);
+    let light_changed = !new_lights.is_empty() | (gone.read().count() > 0) | !new_shields.is_empty() | (shield_gone.read().count() > 0);
     if !character.is_changed() && !inventory.is_changed() && !rules_changed && !light_changed {
         return;
     }
@@ -518,7 +527,7 @@ pub fn update_gear(
             text.0 = lines[*i].clone();
         }
     }
-    let derived = character.derive_lit(GameRules::of(&rules), &inventory, crate::casting::spell_light_feet(&lights));
+    let derived = character.derive_prayed(GameRules::of(&rules), &inventory, crate::casting::spell_light_feet(&lights), crate::prayers::shield_bonus(shields.iter()));
     let values = gear_values(&character, &derived);
     for (GearLine(i), mut text, mut colour) in &mut gear {
         if text.0 != values[*i] {

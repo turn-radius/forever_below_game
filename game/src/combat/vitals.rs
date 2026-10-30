@@ -3,7 +3,7 @@
 //! - The delver starts with a 1st-level character's hit points
 //!   ([`super::first_level_hit_points_with`]).
 //! - The delver carries an [`ArmourClass`], the one the sheet shows (10, the Dexterity modifier
-//!   and what they wear, `Character::armour_class`), kept up as they dress ([`armour_the_delver`]).
+//!   what they wear and a Shield prayer, `Character::armour_class_shielded`), kept up as they dress ([`armour_the_delver`]).
 //!   Every creature's and folk's blow rolls to hit against it
 //!   (`creatures::behaviour::BlowsAtDelver`); one that misses whooshes past ([`whoosh_past`]).
 //! - Each [`AttackOnDelver`] (a blow that hit) takes its bite, and a poisonous snake's venom after the delver's
@@ -171,10 +171,10 @@ pub fn starting_health(max: i32, start: Option<i32>) -> Health {
 /// on the delver for every blow at them to roll against, and the chance their shield turns a
 /// hit aside ([`BlockChance`]).
 #[allow(clippy::type_complexity)]
-fn armour_the_delver(mut commands: Commands, character: Res<Character>, inventory: Option<Res<Inventory>>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>, Option<&Shunned>), With<Player>>) {
+pub(crate) fn armour_the_delver(mut commands: Commands, character: Res<Character>, rules: Option<Res<crate::rules::GameRules>>, inventory: Option<Res<Inventory>>, shields: Query<&crate::prayers::ShieldPrayer>, players: Query<(Entity, Option<&ArmourClass>, Option<&BlockChance>, Option<&Shunned>), With<Player>>) {
     let none = Inventory::default();
     let inventory = inventory.as_deref().unwrap_or(&none);
-    let ac = ArmourClass(character.armour_class(inventory).value().round() as i32);
+    let ac = ArmourClass(character.armour_class_shielded(crate::rules::GameRules::of(&rules), inventory, crate::prayers::shield_bonus(shields.iter())).value().round() as i32);
     let gear = character.gear(inventory);
     let block = BlockChance(gear.block_chance as f32);
     let shun = Shunned(gear.shun.map(|c| c as f32));
@@ -871,7 +871,7 @@ mod tests {
         assert_eq!(app.world().get::<Slowed>(player), Some(&Slowed(HELD_PACE)));
         app.update();
         assert!(app.world().get::<Constricted>(player).is_some(), "still held");
-        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false, fire: 0 });
+        app.world_mut().write_message(Struck { target: snake, damage: 1, from: Vec2::ZERO, bludgeoning: false, critical: false, by_ally: false, graze: false, extra: 0 });
         app.update();
         assert!(app.world().get::<Constricted>(player).is_none());
         assert!(app.world().get::<Slowed>(player).is_none());

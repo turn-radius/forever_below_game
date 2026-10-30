@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/procgen_rng", "crates/procgen_grammar", "crates/fb_faction", "crates/fb_denizens", "crates/armory", "crates/fb_items", "crates/fb_body", "crates/fb_creatures", "crates/fb_level", "crates/fb_character", "game"]
+members = ["crates/procgen_rng", "crates/procgen_grammar", "crates/fb_faction", "crates/fb_denizens", "crates/armory", "crates/fb_items", "crates/fb_body", "crates/fb_creatures", "crates/fb_level", "crates/fb_character", "crates/fb_effects", "game"]
 
 [workspace.package]
 edition = "2024"
@@ -60,6 +60,7 @@ fb_denizens = { path = "crates/fb_denizens" }
 fb_level = { path = "crates/fb_level" }
 fb_creatures = { path = "crates/fb_creatures" }
 fb_character = { path = "crates/fb_character" }
+fb_effects = { path = "crates/fb_effects" }
 
 # Bevy is slow in debug; optimise dependencies, keep our code debuggable.
 # Debug info is most of a build's size: dependencies build without it, and our crates keep

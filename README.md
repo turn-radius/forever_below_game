@@ -211,6 +211,7 @@ These environment variables are for checking the game without playing it. Put th
 | `FB_DEBUG_POSE=x,y,yaw,pitch` | holds the player at a grid point (cells), turned `yaw` degrees from north and tilted `pitch` degrees |
 | `FB_DEBUG_CAMERA=start\|back\|shut\|top\|brazier\|glowcaps\|denizen` | a lit camera at a fixed view of the level |
 | `FB_BURN_TROLL=1\|scorch` | with `FB_SPAWN=troll`, fells the troll in front of you and burns it where it lies (`1`), or burns it standing (`scorch`), a couple of seconds in, for captures of its flames and char; try `FB_DEBUG_LIGHT=lantern` |
+| `FB_PLAY_EFFECT=<name>` | a moment into the delve, plays the effect `data/effects/<name>.toml` from the eye on the floor 40 units ahead (`test_burst`), for captures of effects; try `FB_DEBUG_LIGHT=lantern` |
 | `FB_DEBUG_LIGHT=1` | a dim light on the player's camera, and on what is held |
 | `FB_OPEN_INVENTORY=1` | opens the inventory at the start (`=character` on the character tab) |
 | `FB_DRAG_WINDOW=<bag>:<dx>,<dy>` | with the inventory open and `FB_OPEN_BAGS=1`, drags the carried bag whose name has that word (`satchel`) by that many interface pixels over a second or so, some frames after the inventory opens, then closes the inventory and opens it again to show the window where it was left (`FB_DRAG_WINDOW=satchel:300,200`) |

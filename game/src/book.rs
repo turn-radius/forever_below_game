@@ -709,6 +709,35 @@ mod tests {
     }
 
     #[test]
+    fn the_book_composes_smite_and_shows_an_instant_prayer_sensibly() {
+        let (rules, book, mut draft) = start();
+        // Smite only reaches what you see, so the reach comes first.
+        let refused = draft.pick(&rules, &book, Casting::Divine, TermKind::Effect, "smite").unwrap_err();
+        assert_eq!(refused.say(), "Smite must reach at one you see");
+        for (kind, id) in [(TermKind::Reach, "sight"), (TermKind::Effect, "smite"), (TermKind::Duration, "instant")] {
+            draft.pick(&rules, &book, Casting::Divine, kind, id).unwrap();
+        }
+        assert!(draft.pick(&rules, &book, Casting::Divine, TermKind::Reach, "touch").is_err(), "and it keeps it");
+        let smite = draft.as_written(Casting::Divine);
+        assert_eq!((smite.effect.as_str(), smite.reach.as_str(), smite.duration.as_str()), ("smite", "sight", "instant"));
+        let p = smite.preview_with(&rules, 2);
+        assert_eq!((p.cost, p.range, p.duration), (6.0, 120.0, 0.0));
+        assert_eq!((lasts(p.duration).as_str(), reaches(p.range).as_str()), ("instant", "120 ft"));
+    }
+
+    #[test]
+    fn the_book_composes_shield_for_the_caster_alone() {
+        let (rules, book, mut draft) = start();
+        draft.pick(&rules, &book, Casting::Divine, TermKind::Effect, "shield").unwrap();
+        draft.pick(&rules, &book, Casting::Divine, TermKind::Reach, "self").unwrap();
+        let shield = draft.as_written(Casting::Divine);
+        assert_eq!((shield.effect.as_str(), shield.reach.as_str(), shield.duration.as_str()), ("shield", "self", "short"));
+        let p = shield.preview_with(&rules, 2);
+        assert_eq!((p.cost, p.range, p.duration), (6.0, 0.0, 1200.0));
+        assert_eq!((reaches(p.range).as_str(), lasts(p.duration).as_str()), ("yourself", "20 min"));
+    }
+
+    #[test]
     fn a_locked_term_cannot_be_picked() {
         let (rules, book, mut draft) = start();
         let before = draft.clone();
@@ -741,9 +770,9 @@ mod tests {
         assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Ok(false));
         let written = book.find("Hand of Mercy").expect("kept under its trimmed name");
         assert_eq!((written.effect.as_str(), written.reach.as_str()), ("light", "touch"));
-        assert_eq!(book.written.len(), 2, "Divine Light is still there");
+        assert_eq!(book.written.len(), 4, "Divine Light, Smite and Shield are still there");
         assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Ok(true), "the same name is rewritten");
-        assert_eq!(book.written.len(), 2);
+        assert_eq!(book.written.len(), 4);
     }
 
     #[test]
@@ -753,7 +782,7 @@ mod tests {
             draft.name = name.into();
             assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Err(ComposeError::Unnamed));
         }
-        assert_eq!(book.written.len(), 1);
+        assert_eq!(book.written.len(), 3);
     }
 
     #[test]

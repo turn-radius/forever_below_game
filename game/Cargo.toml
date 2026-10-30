@@ -40,6 +40,7 @@ fb_level = { workspace = true }
 fb_faction = { workspace = true }
 fb_creatures = { workspace = true }
 fb_character = { workspace = true }
+fb_effects = { workspace = true }
 procgen_rng = { workspace = true }
 procgen_grammar = { workspace = true }
 serde = { workspace = true }

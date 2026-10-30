@@ -420,6 +420,13 @@ impl Character {
         armour_class_with(rules, self.dexterity(), inventory.equipped().iter().map(|(_, item)| (item.name.clone(), item.profile.stats.armour)))
     }
 
+    /// [`Character::armour_class_with`] with a Shield prayer of `shield` armour on them
+    /// ([`fb_character::casting::shield_bonus`]), its own term in the sum; none when it is 0.
+    pub fn armour_class_shielded(&self, rules: &Rules, inventory: &Inventory, shield: i32) -> Explained {
+        let ac = self.armour_class_with(rules, inventory);
+        if shield == 0 { ac } else { ac.add("Shield", f64::from(shield)) }
+    }
+
     /// Pounds worn and carried with their terms: a term for each worn item's weight and one for
     /// what a worn container holds, counted through every bag in it.
     pub fn load_explained(&self, inventory: &Inventory) -> Explained {
@@ -529,13 +536,19 @@ impl Character {
 
     /// [`Character::derive_with`] with a light of `spell` feet cast on them ([`Character::gear_with_spell`]).
     pub fn derive_lit(&self, rules: &Rules, inventory: &Inventory, spell: Option<f64>) -> Derived {
+        self.derive_prayed(rules, inventory, spell, 0)
+    }
+
+    /// [`Character::derive_lit`] with a Shield prayer of `shield` armour on them as well
+    /// ([`Character::armour_class_shielded`]).
+    pub fn derive_prayed(&self, rules: &Rules, inventory: &Inventory, spell: Option<f64>, shield: i32) -> Derived {
         let equipped = inventory.equipped();
         let load = self.load_explained(inventory).value() as f32;
         let gear = self.gear_with_spell(inventory, spell);
         let capacity = gear.capacity_lb_with(rules, self.strength()) as f32;
         let load_band = LoadBand::from_load_with(rules, load as f64, capacity as f64);
         Derived {
-            armour_class: self.armour_class_with(rules, inventory).value().round() as i32,
+            armour_class: self.armour_class_shielded(rules, inventory, shield).value().round() as i32,
             load,
             capacity,
             load_band,

@@ -66,10 +66,12 @@ pub struct Struck {
     /// Whether it is a missed swing that grazed ([`fb_character::combat::graze`]): its damage
     /// is taken as it is, whatever the target is vulnerable to.
     pub graze: bool,
-    /// The fire a lit torch's or censer's blow adds ([`super::swing::fire_damage`], already
-    /// weighed against the target's fire vulnerability or immunity): taken as it is, after the
-    /// blow's own multipliers, so a skeleton's bludgeoning weakness never doubles it.
-    pub fire: u32,
+    /// Damage added after the blow's own multipliers and taken as it is, so a skeleton's
+    /// bludgeoning weakness never doubles it: the fire a lit torch's or censer's blow adds
+    /// ([`super::swing::fire_damage`], already weighed against the target's fire vulnerability or
+    /// immunity), or the radiant damage of Smite (`crate::prayers`, which sends it with no
+    /// `damage` of its own).
+    pub extra: u32,
 }
 
 /// A blow of the delver's that was fire (a lit torch's, [`super::swing::flaming_blow`]) landing on
@@ -218,7 +220,7 @@ pub fn damage_to(critter: &Critter, blow: &Struck) -> u32 {
     } else {
         blow.damage
     };
-    blow_damage + blow.fire
+    blow_damage + blow.extra
 }
 
 fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
