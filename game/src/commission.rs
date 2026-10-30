@@ -873,6 +873,11 @@ fn clock_now(clock: Option<&GameClock>) -> f64 {
 /// over ([`hand_over`]). Refused, with a line that says what is short, nothing is taken.
 pub fn place_order(screen: &CommissionScreen, inventory: &mut Inventory, now: f64, delver: &str) -> Result<Commission, String> {
     let order = screen.order(now, delver).ok_or_else(|| "Nothing to order.".to_string())?;
+    // Nothing is taken for a piece the maker cannot make (a trade that sells nothing never opens
+    // the screen, so this is a guard, not a path).
+    if finished_item(&order).is_none() {
+        return Err("They cannot make that.".to_string());
+    }
     let held = wallet(inventory);
     if held.total_copper() < order.price_copper {
         return Err(format!("Needs {}, have {}.", order.price().short(), held.short()));
