@@ -3,6 +3,8 @@
 //!
 //! - Restoring hit points costs [`HealerRules::per_hit_point`] copper for each one missing, so
 //!   the price grows with the hurt.
+//! - Healing a permanent wound ([`crate::revival::Wound`]) costs [`HealerRules::wound`] copper, and
+//!   gives back one revive ([`crate::revival::RevivalRules::give_back`]).
 //! - Curing the poison costs [`HealerRules::cure_poison`] copper. Disease is not in the
 //!   simulation yet; when it is, it gets a price here.
 //! - Every price is then scaled by how the healer's faction regards the delver: a Friendly
@@ -27,6 +29,8 @@ pub struct HealerRules {
     pub per_hit_point: f64,
     /// Copper to cure the delver's poisoning.
     pub cure_poison: f64,
+    /// Copper to heal one permanent wound.
+    pub wound: f64,
     /// Share of the price a Friendly faction's healer charges.
     pub friendly: f64,
     /// Share of the price an Allied faction's healer charges.
@@ -35,7 +39,7 @@ pub struct HealerRules {
 
 impl Default for HealerRules {
     fn default() -> Self {
-        HealerRules { per_hit_point: 5.0, cure_poison: 50.0, friendly: 0.75, allied: 0.5 }
+        HealerRules { per_hit_point: 5.0, cure_poison: 50.0, wound: 500.0, friendly: 0.75, allied: 0.5 }
     }
 }
 
@@ -64,6 +68,11 @@ impl HealerRules {
     pub fn poison(&self, regard: Regard) -> u32 {
         self.price(self.cure_poison, regard)
     }
+
+    /// The price of healing one permanent wound.
+    pub fn wound(&self, regard: Regard) -> u32 {
+        self.price(self.wound, regard)
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +92,13 @@ mod tests {
         assert!(rules.hit_points(8, Regard::Friendly) < rules.hit_points(8, Regard::Indifferent));
         assert!(rules.poison(Regard::Allied) < rules.poison(Regard::Friendly));
         assert!(rules.poison(Regard::Friendly) < rules.poison(Regard::Indifferent));
+    }
+
+    #[test]
+    fn a_wound_costs_more_than_a_cure_and_a_friend_pays_less() {
+        let rules = HealerRules::default();
+        assert!(rules.wound(Regard::Indifferent) > rules.poison(Regard::Indifferent));
+        assert!(rules.wound(Regard::Friendly) < rules.wound(Regard::Indifferent));
     }
 
     #[test]

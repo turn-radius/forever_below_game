@@ -349,6 +349,8 @@ hours_alone = 4.0
 # hit point missing, and to cure poison. Disease is not in the game yet.
 per_hit_point = 5.0
 cure_poison = 50.0
+# To heal one permanent wound left by falling unconscious; it also gives back one revive.
+wound = 500.0
 # Share of the price a Friendly faction's healer charges, and an Allied one's. An Indifferent
 # faction's charges all of it; a Hostile or Wary one's will not tend the delver.
 friendly = 0.75

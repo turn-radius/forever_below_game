@@ -387,6 +387,7 @@ const LABELS: &[(&str, &str)] = &[
     ("revival/hours_alone", "Hours unconscious alone"),
     ("healer/per_hit_point", "Copper for each hit point missing"),
     ("healer/cure_poison", "Copper to cure poison"),
+    ("healer/wound", "Copper to heal a wound"),
     ("healer/friendly", "Price at a Friendly faction (share)"),
     ("healer/allied", "Price at an Allied faction (share)"),
 ];

@@ -10,6 +10,11 @@
 //! - **Poison.** Curing the `poisoned` effect, the same removal as the Antidote's
 //!   ([`crate::eat::CURED_BY_ANTIDOTE`]). There is no disease in the simulation yet, so there is
 //!   nothing to cure of that sort.
+//! - **Wounds.** Each permanent wound a fall left ([`fb_character::revival::WOUNDS`]) is listed
+//!   with its price. Healing one removes its effect and gives back one revive: the count of
+//!   times the delver has come to ([`Revives`]) goes down by one, so the revives left rise by one,
+//!   never above the world's starting count (`[revival] revives`). With the revives already full
+//!   the wound is still removed and the revives stay as they are.
 //!
 //! Each line shows its price, set by how the healer's faction regards the delver
 //! ([`regard_of`]: Friendly cheaper than Indifferent, Allied cheapest), and is paid from the
@@ -23,21 +28,23 @@
 //! ([`crate::talk`] treats the screen as the talk going on).
 //!
 //! Captures: `FB_SPAWN=folk:0:healer FB_TALK=folk FB_TALK_BAND=friendly FB_TALK_TOPIC=heal`
-//! opens it, and `FB_HEAL_KIT=<hurt,poisoned,poor>` (comma-separated) starts the delver at half
-//! their hit points, poisoned and/or with a thin purse.
+//! opens it, and `FB_HEAL_KIT=<hurt,poisoned,wounded,poor>` (comma-separated) starts the delver at
+//! half their hit points, poisoned, with a lame leg and one revive spent and/or with a thin purse.
 
 use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
 use fb_character::effect::Effects;
-use fb_character::healer::{HealerRules, Regard};
-use fb_character::revival::coin_words;
+use fb_character::healer::Regard;
+use fb_character::revival::{WOUNDS, coin_words};
+use fb_character::rules::Rules;
 use fb_faction::{Band, Profession};
 
 use crate::carry::ViewModelCamera;
 use crate::character::DelverEffects;
 use crate::combat::Health;
+use crate::combat::revival::Revives;
 use crate::enchanting::{pay, wallet};
 use crate::inventory::Inventory;
 use crate::keymap::{Action, ActionInput};
@@ -100,6 +107,8 @@ pub enum Care {
     HitPoints,
     /// Cure the poisoning.
     Poison,
+    /// Heal the permanent wound with this effect id ([`WOUNDS`]), and give back a revive.
+    Wound(&'static str),
 }
 
 /// One line of the healer's list: what they can tend and what it costs.
@@ -112,24 +121,32 @@ pub struct Tending {
     pub price: u32,
 }
 
-/// What a healer can tend in a delver of `health` with `effects`, with prices at `regard`.
-/// Empty when there is nothing to tend.
-pub fn menu(rules: &HealerRules, regard: Regard, health: Health, effects: &Effects) -> Vec<Tending> {
+/// What a healer can tend in a delver of `health` with `effects`, who has come to `revives`
+/// times in this world, with prices at `regard`. Empty when there is nothing to tend.
+pub fn menu(rules: &Rules, regard: Regard, health: Health, effects: &Effects, revives: u32) -> Vec<Tending> {
+    let prices = &rules.healer;
     let mut list = vec![];
     let missing = health.max - health.hp;
     if missing > 0 {
-        list.push(Tending { care: Care::HitPoints, label: "Restore hit points".into(), detail: format!("{missing} of {} missing", health.max), price: rules.hit_points(missing, regard) });
+        list.push(Tending { care: Care::HitPoints, label: "Restore hit points".into(), detail: format!("{missing} of {} missing", health.max), price: prices.hit_points(missing, regard) });
     }
     if effects.get(crate::eat::CURED_BY_ANTIDOTE, None).is_some() {
-        list.push(Tending { care: Care::Poison, label: "Cure the poison".into(), detail: "The venom in your blood".into(), price: rules.poison(regard) });
+        list.push(Tending { care: Care::Poison, label: "Cure the poison".into(), detail: "The venom in your blood".into(), price: prices.poison(regard) });
+    }
+    for wound in WOUNDS.iter().filter(|w| effects.get(w.effect, Some(w.part)).is_some()) {
+        let name = rules.effects.get(wound.effect).map_or(wound.effect, |def| def.name.as_str());
+        let gives = if rules.revival.give_back(revives) < revives { "Gives back a revive" } else { "Your revives are already full" };
+        list.push(Tending { care: Care::Wound(wound.effect), label: format!("Heal {}", name.to_lowercase()), detail: gives.into(), price: prices.wound(regard) });
     }
     list
 }
 
-/// Has the healer tend `care`, taking the price from the delver's purses. The line to tell them
+/// Has the healer tend `care`, taking the price from the delver's purses. Healing a wound
+/// removes it and gives back a revive: `revives` is how many times the delver has come to, and
+/// goes down by one ([`fb_character::revival::RevivalRules::give_back`]). The line to tell them
 /// on success; on failure the line saying why, and nothing changed.
-pub fn tend(care: Care, rules: &HealerRules, regard: Regard, health: &mut Health, effects: &mut Effects, inventory: &mut Inventory) -> Result<String, String> {
-    let Some(line) = menu(rules, regard, *health, effects).into_iter().find(|l| l.care == care) else {
+pub fn tend(care: Care, rules: &Rules, regard: Regard, health: &mut Health, effects: &mut Effects, inventory: &mut Inventory, revives: &mut u32) -> Result<String, String> {
+    let Some(line) = menu(rules, regard, *health, effects, *revives).into_iter().find(|l| l.care == care) else {
         return Err("There is nothing of that to tend.".into());
     };
     let held = wallet(inventory).total_copper();
@@ -145,6 +162,21 @@ pub fn tend(care: Care, rules: &HealerRules, regard: Regard, health: &mut Health
         Care::Poison => {
             effects.remove(crate::eat::CURED_BY_ANTIDOTE, None);
             format!("The venom is gone. Paid {paid}.")
+        }
+        Care::Wound(id) => {
+            if let Some(wound) = WOUNDS.iter().find(|w| w.effect == id) {
+                effects.remove(wound.effect, Some(wound.part));
+            }
+            let gave_back = rules.revival.give_back(*revives) < *revives;
+            *revives = rules.revival.give_back(*revives);
+            let left = rules.revival.left(*revives);
+            let name = rules.effects.get(id).map_or(id, |def| def.name.as_str()).to_lowercase();
+            let times = if left == 1 { "once more".to_string() } else { format!("{left} more times") };
+            if gave_back {
+                format!("Your {name} is mended, and the abyss will let you come to {times}. Paid {paid}.")
+            } else {
+                format!("Your {name} is mended. Paid {paid}.")
+            }
         }
     })
 }
@@ -213,6 +245,7 @@ pub(crate) fn open_heal(
     mut talk: ResMut<Talk>,
     mut healing: ResMut<Healing>,
     rules: Option<Res<GameRules>>,
+    revives: Option<Res<Revives>>,
     players: Query<(&Health, Option<&DelverEffects>), With<Player>>,
     mut open: ResMut<ScreenOpen>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
@@ -223,10 +256,10 @@ pub(crate) fn open_heal(
         }
         let Some(speaker) = talk.speaker.as_ref() else { continue };
         let regard = regard_of(speaker.band);
-        let rules = &GameRules::of(&rules).healer;
+        let rules = GameRules::of(&rules);
         let Ok((health, effects)) = players.single() else { continue };
         let none = Effects::default();
-        let list = menu(rules, regard, *health, effects.map_or(&none, |e| &e.0));
+        let list = menu(rules, regard, *health, effects.map_or(&none, |e| &e.0), revives.as_ref().map_or(0, |r| r.0));
         if list.is_empty() {
             let said = nothing_to_tend(speaker);
             talk.answer = Some((Topic::Service(Service::Heal), said));
@@ -253,6 +286,7 @@ fn click_heal(
     input: ActionInput,
     mut healing: ResMut<Healing>,
     rules: Option<Res<GameRules>>,
+    mut revives: ResMut<Revives>,
     mut players: Query<(Entity, &mut Health, Option<&mut DelverEffects>), With<Player>>,
     mut inventory: ResMut<Inventory>,
     mut screen: ResMut<ScreenOpen>,
@@ -276,9 +310,9 @@ fn click_heal(
     };
     let Some(open) = healing.open.as_mut() else { return };
     let Ok((player, mut health, effects)) = players.single_mut() else { return };
-    let rules = &GameRules::of(&rules).healer;
+    let rules = GameRules::of(&rules);
     let mut local = effects.as_ref().map(|e| e.0.clone()).unwrap_or_default();
-    open.notice = Some(match tend(care, rules, open.regard, &mut health, &mut local, &mut inventory) {
+    open.notice = Some(match tend(care, rules, open.regard, &mut health, &mut local, &mut inventory, &mut revives.0) {
         Ok(line) => {
             if let Some(mut effects) = effects {
                 effects.0 = local.clone();
@@ -321,6 +355,7 @@ fn build_heal(
     healing: Res<Healing>,
     rules: Option<Res<GameRules>>,
     inventory: Res<Inventory>,
+    revives: Option<Res<Revives>>,
     players: Query<(&Health, Option<&DelverEffects>), With<Player>>,
     fonts: Option<Res<UiFonts>>,
     cameras: Query<Entity, With<ViewModelCamera>>,
@@ -357,10 +392,10 @@ fn build_heal(
             .id(),
     };
     *drawn = Some(healing.revision);
-    let rules = &GameRules::of(&rules).healer;
+    let rules = GameRules::of(&rules);
     let purse = wallet(&inventory);
     let none = Effects::default();
-    let list = players.single().map(|(health, effects)| menu(rules, open.regard, *health, effects.map_or(&none, |e| &e.0))).unwrap_or_default();
+    let list = players.single().map(|(health, effects)| menu(rules, open.regard, *health, effects.map_or(&none, |e| &e.0), revives.as_ref().map_or(0, |r| r.0))).unwrap_or_default();
     let button_frame = |act| {
         (
             HealButton { act },
@@ -419,21 +454,33 @@ fn build_heal(
     });
 }
 
-/// For captures: `FB_HEAL_KIT=<hurt,poisoned,poor>` puts the delver at half their hit points,
-/// poisoned and/or with a thin purse, once, a few frames in.
-fn heal_kit_for_capture(mut players: Query<(Entity, &mut Health), With<Player>>, mut inventory: ResMut<Inventory>, rules: Option<Res<GameRules>>, mut commands: Commands, mut frames: Local<u32>) {
+/// For captures: `FB_HEAL_KIT=<hurt,poisoned,wounded,poor>` puts the delver at half their hit
+/// points, poisoned, with a lame leg and one revive spent, and/or with a thin purse, once, a few
+/// frames in.
+#[allow(clippy::too_many_arguments)]
+fn heal_kit_for_capture(mut players: Query<(Entity, &mut Health, Option<&DelverEffects>), With<Player>>, mut inventory: ResMut<Inventory>, mut revives: ResMut<Revives>, rules: Option<Res<GameRules>>, mut commands: Commands, mut frames: Local<u32>) {
     *frames += 1;
     if *frames != 6 {
         return;
     }
     let kit = std::env::var("FB_HEAL_KIT").unwrap_or_default();
     let has = |word: &str| kit.split(',').any(|w| w.trim() == word);
-    let Ok((player, mut health)) = players.single_mut() else { return };
+    let Ok((player, mut health, effects)) = players.single_mut() else { return };
+    let rules = GameRules::of(&rules);
     if has("hurt") {
         health.hp = (health.max / 2).max(1);
     }
+    let mut effects = effects.map(|e| e.0.clone()).unwrap_or_default();
     if has("poisoned") {
-        commands.entity(player).insert(DelverEffects::poisoned_for(GameRules::of(&rules), 6.0));
+        effects = DelverEffects::poisoned_for(rules, 6.0).0;
+    }
+    if has("wounded") {
+        let wound = WOUNDS[0];
+        effects.add(&rules.effects, wound.effect, 1.0, Some(wound.part), fb_character::effect::Source::Fall);
+        revives.0 = 1;
+    }
+    if !effects.active.is_empty() {
+        commands.entity(player).insert(DelverEffects(effects));
     }
     inventory.set_coins(if has("poor") { fb_items::Coins { gp: 0, sp: 0, cp: 3 } } else { fb_items::Coins { gp: 5, sp: 0, cp: 0 } });
 }
@@ -441,7 +488,8 @@ fn heal_kit_for_capture(mut players: Query<(Entity, &mut Health), With<Player>>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fb_items::Coins;
+    use fb_character::effect::Source;
+    use fb_items::{Coins, Slot};
 
     fn purse(copper: u64) -> Inventory {
         let mut inventory = Inventory::default();
@@ -450,11 +498,22 @@ mod tests {
     }
 
     fn poisoned() -> Effects {
-        DelverEffects::poisoned_for(fb_character::rules::defaults(), 6.0).0
+        DelverEffects::poisoned_for(rules(), 6.0).0
     }
 
-    fn rules() -> HealerRules {
-        HealerRules::default()
+    fn lame() -> Effects {
+        let mut effects = Effects::default();
+        effects.add(&rules().effects, "lame_leg", 1.0, Some(Slot::Legs), Source::Fall);
+        effects
+    }
+
+    fn rules() -> &'static Rules {
+        fb_character::rules::defaults()
+    }
+
+    /// The price of `care` for a delver as given, at `regard`.
+    fn price_of(care: Care, regard: Regard, health: Health, effects: &Effects, revives: u32) -> u32 {
+        menu(rules(), regard, health, effects, revives).into_iter().find(|l| l.care == care).expect("offered").price
     }
 
     #[test]
@@ -462,40 +521,39 @@ mod tests {
         let mut health = Health { hp: 6, max: 12 };
         let mut effects = poisoned();
         let mut inventory = purse(500);
-        let both = menu(&rules(), Regard::Indifferent, health, &effects);
+        let both = menu(rules(), Regard::Indifferent, health, &effects, 0);
         assert_eq!(both.iter().map(|l| l.care).collect::<Vec<_>>(), [Care::HitPoints, Care::Poison]);
         let cost = both.iter().map(|l| l.price as u64).sum::<u64>();
         for line in &both {
-            assert!(tend(line.care, &rules(), Regard::Indifferent, &mut health, &mut effects, &mut inventory).is_ok());
+            assert!(tend(line.care, rules(), Regard::Indifferent, &mut health, &mut effects, &mut inventory, &mut 0).is_ok());
         }
         assert_eq!(health.hp, 12);
         assert!(effects.get("poisoned", None).is_none());
         assert_eq!(wallet(&inventory).total_copper(), 500 - cost);
-        assert!(menu(&rules(), Regard::Indifferent, health, &effects).is_empty());
+        assert!(menu(rules(), Regard::Indifferent, health, &effects, 0).is_empty());
     }
 
     #[test]
     fn the_price_of_hit_points_grows_with_what_is_missing() {
         let effects = Effects::default();
-        let price = |hp| menu(&rules(), Regard::Indifferent, Health { hp, max: 12 }, &effects)[0].price;
+        let price = |hp| price_of(Care::HitPoints, Regard::Indifferent, Health { hp, max: 12 }, &effects, 0);
         assert!(price(2) > price(8));
     }
 
     #[test]
     fn curing_poison_leaves_other_effects() {
-        let defs = &fb_character::rules::defaults().effects;
         let mut effects = poisoned();
-        effects.add(defs, "lame_leg", 1.0, Some(fb_items::Slot::Legs), fb_character::effect::Source::Fall);
+        effects.add(&rules().effects, "lame_leg", 1.0, Some(Slot::Legs), Source::Fall);
         let mut health = Health::full(12);
-        assert!(tend(Care::Poison, &rules(), Regard::Indifferent, &mut health, &mut effects, &mut purse(500)).is_ok());
-        assert!(effects.get("poisoned", None).is_none() && effects.get("lame_leg", Some(fb_items::Slot::Legs)).is_some());
+        assert!(tend(Care::Poison, rules(), Regard::Indifferent, &mut health, &mut effects, &mut purse(500), &mut 0).is_ok());
+        assert!(effects.get("poisoned", None).is_none() && effects.get("lame_leg", Some(Slot::Legs)).is_some());
     }
 
     #[test]
     fn a_delver_with_nothing_wrong_has_nothing_to_tend() {
-        assert!(menu(&rules(), Regard::Friendly, Health::full(12), &Effects::default()).is_empty());
+        assert!(menu(rules(), Regard::Friendly, Health::full(12), &Effects::default(), 0).is_empty());
         let mut inventory = purse(500);
-        let refused = tend(Care::HitPoints, &rules(), Regard::Friendly, &mut Health::full(12), &mut Effects::default(), &mut inventory);
+        let refused = tend(Care::HitPoints, rules(), Regard::Friendly, &mut Health::full(12), &mut Effects::default(), &mut inventory, &mut 0);
         assert!(refused.is_err());
         assert_eq!(wallet(&inventory).total_copper(), 500);
     }
@@ -505,7 +563,7 @@ mod tests {
         let mut health = Health { hp: 6, max: 12 };
         let mut effects = poisoned();
         let mut inventory = purse(3);
-        let refused = tend(Care::HitPoints, &rules(), Regard::Indifferent, &mut health, &mut effects, &mut inventory);
+        let refused = tend(Care::HitPoints, rules(), Regard::Indifferent, &mut health, &mut effects, &mut inventory, &mut 0);
         assert!(refused.as_ref().is_err_and(|line| line.contains("costs")), "{refused:?}");
         assert_eq!((health.hp, wallet(&inventory).total_copper()), (6, 3));
         assert!(effects.get("poisoned", None).is_some());
@@ -515,7 +573,7 @@ mod tests {
     fn a_friendly_healer_charges_less_than_an_indifferent_one() {
         let hurt = Health { hp: 4, max: 12 };
         let effects = poisoned();
-        let price = |regard| menu(&rules(), regard, hurt, &effects).iter().map(|l| l.price).sum::<u32>();
+        let price = |regard| menu(rules(), regard, hurt, &effects, 0).iter().map(|l| l.price).sum::<u32>();
         assert!(price(regard_of(Band::Friendly)) < price(regard_of(Band::Neutral)));
         assert!(price(regard_of(Band::Allied)) < price(regard_of(Band::Friendly)));
     }
@@ -525,7 +583,76 @@ mod tests {
         let mut inventory = Inventory::default();
         inventory.set_coins(Coins { gp: 1, sp: 0, cp: 0 });
         let mut health = Health { hp: 11, max: 12 };
-        assert!(tend(Care::HitPoints, &rules(), Regard::Indifferent, &mut health, &mut Effects::default(), &mut inventory).is_ok());
+        assert!(tend(Care::HitPoints, rules(), Regard::Indifferent, &mut health, &mut Effects::default(), &mut inventory, &mut 0).is_ok());
         assert_eq!(wallet(&inventory).total_copper(), 95);
+    }
+
+    #[test]
+    fn a_lame_leg_with_one_revive_left_heals_for_a_second_revive() {
+        // Two revives in the world, one used: one left.
+        let mut effects = lame();
+        let mut used = 1;
+        let mut inventory = purse(1000);
+        let offered = menu(rules(), Regard::Indifferent, Health::full(12), &effects, used);
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].care, Care::Wound("lame_leg"));
+        assert_eq!(offered[0].price, 500);
+        assert!(offered[0].detail.contains("revive"));
+        let said = tend(Care::Wound("lame_leg"), rules(), Regard::Indifferent, &mut Health::full(12), &mut effects, &mut inventory, &mut used).unwrap();
+        assert!(effects.get("lame_leg", Some(Slot::Legs)).is_none());
+        assert_eq!(rules().revival.left(used), 2, "{said}");
+        assert_eq!(wallet(&inventory).total_copper(), 500);
+        // Walks at full pace.
+        assert_eq!(effects.pace(&rules().effects), 1.0);
+    }
+
+    #[test]
+    fn revives_never_rise_above_the_worlds_starting_count() {
+        let mut effects = lame();
+        let mut used = 0;
+        let mut inventory = purse(1000);
+        let offered = menu(rules(), Regard::Indifferent, Health::full(12), &effects, used);
+        assert!(offered[0].detail.contains("already full"), "{}", offered[0].detail);
+        assert!(tend(Care::Wound("lame_leg"), rules(), Regard::Indifferent, &mut Health::full(12), &mut effects, &mut inventory, &mut used).is_ok());
+        assert!(effects.get("lame_leg", Some(Slot::Legs)).is_none());
+        assert_eq!((used, rules().revival.left(used)), (0, rules().revival.revives));
+        assert_eq!(wallet(&inventory).total_copper(), 500, "the wound is still paid for");
+    }
+
+    #[test]
+    fn a_wound_is_refused_for_want_of_coin() {
+        let mut effects = lame();
+        let mut used = 1;
+        let mut inventory = purse(100);
+        let refused = tend(Care::Wound("lame_leg"), rules(), Regard::Indifferent, &mut Health::full(12), &mut effects, &mut inventory, &mut used);
+        assert!(refused.as_ref().is_err_and(|line| line.contains("costs")), "{refused:?}");
+        assert!(effects.get("lame_leg", Some(Slot::Legs)).is_some());
+        assert_eq!((used, wallet(&inventory).total_copper()), (1, 100));
+    }
+
+    #[test]
+    fn every_wound_a_fall_leaves_can_be_healed_and_a_friend_pays_less() {
+        for wound in WOUNDS {
+            let mut effects = Effects::default();
+            effects.add(&rules().effects, wound.effect, 1.0, Some(wound.part), Source::Fall);
+            let friendly = price_of(Care::Wound(wound.effect), Regard::Friendly, Health::full(12), &effects, 1);
+            let plain = price_of(Care::Wound(wound.effect), Regard::Indifferent, Health::full(12), &effects, 1);
+            assert!(friendly < plain, "{}", wound.effect);
+            assert!(tend(Care::Wound(wound.effect), rules(), Regard::Indifferent, &mut Health::full(12), &mut effects, &mut purse(1000), &mut 1).is_ok());
+            assert!(effects.active.is_empty(), "{}", wound.effect);
+        }
+    }
+
+    #[test]
+    fn a_healed_delver_survives_a_save_and_load() {
+        let mut health = Health { hp: 3, max: 12 };
+        let mut effects = lame();
+        let mut used = 2;
+        tend(Care::Wound("lame_leg"), rules(), Regard::Friendly, &mut health, &mut effects, &mut purse(2000), &mut used).unwrap();
+        tend(Care::HitPoints, rules(), Regard::Friendly, &mut health, &mut effects, &mut purse(2000), &mut used).unwrap();
+        // What the save keeps: hit points and effects as data, the revives count as a number.
+        let saved: Effects = serde_json::from_str(&serde_json::to_string(&effects).unwrap()).unwrap();
+        assert_eq!((health.hp, used), (12, 1));
+        assert!(saved.get("lame_leg", Some(Slot::Legs)).is_none() && saved.active.is_empty());
     }
 }
