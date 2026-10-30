@@ -293,11 +293,12 @@ pub fn clamp_into(at: Vec2, size: Vec2, area: Rect) -> Vec2 {
 }
 
 /// Where the delver's windows may be dragged on a screen of `screen` interface pixels: everything
-/// right of the header (the ledger's left page) when alone, and right of the middle of the screen,
-/// where the other party ends, with another party on the left.
+/// where the window columns start: right of the doll, quickslots and help when alone, and right of the
+/// delver's column (header, doll, quickslots) with another party on the left, so a window never
+/// covers what drops go to.
 pub fn drag_area(screen: Vec2, two_sided: bool) -> Rect {
-    let left = if two_sided { screen.x * 0.5 } else { super::LEDGER_PAD_PX + super::SOLO_LEAF_PX + super::LEDGER_GAP_PX };
-    Rect::from_corners(Vec2::new(left.min(screen.x), 0.0), screen)
+    let left = if two_sided { party_areas(screen).1.min.x } else { windows_area(screen).min.x } - AREA_MARGIN_PX;
+    Rect::from_corners(Vec2::new(left.clamp(0.0, screen.x), 0.0), screen)
 }
 
 /// The size of the interface in its logical pixels: that of the view it is drawn in (the held
@@ -462,6 +463,11 @@ pub fn place_windows(
     for id in gone {
         windows.close(id);
     }
+    // Where a window was left is kept only for a bag still in reach.
+    let lost: Vec<ItemId> = windows.moved.keys().copied().filter(|&id| inventory.grid(id).is_none() || !reachable(&inventory, &roots, opened, id)).collect();
+    for id in lost {
+        windows.moved.remove(&id);
+    }
     // Windows are laid out only where they are drawn: the inventory page.
     if !open.is(Screen::Inventory) || *tab != SheetTab::Inventory {
         return;
@@ -571,7 +577,6 @@ pub fn drag_windows(
             && !closes.iter().any(|(_, n, t)| node_rect(n, t).contains(point))
             && let Some(at) = windows.position(id)
         {
-            windows.raise(id);
             windows.grab = Some(WindowGrab { id, from: at, offset: point - at, live: at, by_mouse: true });
         }
     }
@@ -585,6 +590,10 @@ pub fn drag_windows(
     }
     if let Some(size) = size {
         live = clamp_into(live, size, drag_area(screen, windows.two_sided()));
+    }
+    // Moved past a click, it comes to the front; a click leaves the order, and so the columns, alone.
+    if live.distance(grab.from) >= WINDOW_CLICK_PX {
+        windows.raise(grab.id);
     }
     if live != grab.live {
         windows.bypass_change_detection().grab = Some(WindowGrab { live, ..grab });
@@ -1037,7 +1046,7 @@ mod tests {
         app.world_mut().insert_resource(UiScale(1280.0 / 1920.0));
         app.world_mut().resource_mut::<ScreenOpen>().0 = Some(Screen::Inventory);
         let area = windows_area(Vec2::new(1920.0, 1080.0));
-        let left_at = Vec2::new(900.0, 120.0);
+        let left_at = Vec2::new(1200.0, 120.0);
         app.world_mut().resource_mut::<BagWindows>().moved.insert(pack, left_at);
         app.world_mut().resource_mut::<BagWindows>().order = vec![pack];
         app.update();
@@ -1068,7 +1077,7 @@ mod tests {
         let size = window_size(app.world().resource::<Inventory>(), pack, 72.0).unwrap();
         let at = app.world().resource::<BagWindows>().at[&pack];
         assert!(at.x + size.x <= 1920.01 && at.y + size.y <= 1080.01, "{at} {size}: pulled in even at full size");
-        for screen in [Vec2::new(1280.0, 720.0), Vec2::new(1600.0, 900.0), Vec2::new(1440.0, 1080.0), Vec2::new(1920.0, 800.0)] {
+        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(1920.0, 1200.0), Vec2::new(2200.0, 1080.0), Vec2::new(1920.0, 900.0)] {
             app.world_mut().get_mut::<Window>(window).unwrap().resolution.set(screen.x, screen.y);
             app.update();
             let windows = app.world().resource::<BagWindows>();
@@ -1077,21 +1086,40 @@ mod tests {
             assert!(at.x >= drag_area(screen, false).min.x && at.y >= 0.0, "{screen}: {at}");
             assert!(at.x + size.x <= screen.x + 0.01 && at.y + size.y <= screen.y + 0.01, "{screen}: {at} {size}");
         }
-        assert_eq!(app.world().resource::<BagWindows>().moved[&pack], left_at, "what was left is kept, only the drawing is pulled in");
+        let windows = app.world().resource::<BagWindows>();
+        assert_eq!(windows.moved[&pack], left_at, "what was left is kept, only the drawing is pulled in");
+        assert!(windows.hidden.is_empty() && windows.is_shown(pack), "a moved window is placed, never hidden");
     }
 
     #[test]
-    fn the_delver_s_windows_are_dragged_right_of_the_header_alone_and_right_of_the_middle_with_another_party() {
+    fn the_delver_s_windows_are_dragged_where_the_columns_start_clear_of_the_doll_and_quickslots() {
         let screen = Vec2::new(1920.0, 1080.0);
         let alone = drag_area(screen, false);
-        assert_eq!((alone.min, alone.max), (Vec2::new(super::super::LEDGER_PAD_PX + super::super::SOLO_LEAF_PX + super::super::LEDGER_GAP_PX, 0.0), screen));
+        let doll_right = super::super::LEDGER_PAD_PX + super::super::SOLO_LEAF_PX + super::super::LEDGER_GAP_PX + super::super::doll::FRAME.x;
+        assert_eq!((alone.min, alone.max), (Vec2::new(windows_area(screen).min.x - AREA_MARGIN_PX, 0.0), screen));
+        assert!(alone.min.x >= doll_right, "right of the doll, which the area's margin sits beside");
         let party = drag_area(screen, true);
-        assert_eq!((party.min, party.max), (Vec2::new(960.0, 0.0), screen), "the middle column's left edge is the middle");
+        assert_eq!((party.min, party.max), (Vec2::new(party_areas(screen).1.min.x - AREA_MARGIN_PX, 0.0), screen));
+        assert!(party.min.x >= 960.0 + super::super::LEDGER_PAD_PX + PARTY_COLUMN_PX, "right of the delver's column, never on the other party's half");
         let size = Vec2::new(300.0, 200.0);
         for at in [Vec2::splat(-500.0), Vec2::splat(9999.0), Vec2::new(1000.0, 500.0)] {
             let put = clamp_into(at, size, party);
             assert!(put.x >= party.min.x && put.y >= 0.0 && put.x + size.x <= screen.x && put.y + size.y <= screen.y, "{at} -> {put}");
         }
         assert_eq!(clamp_into(Vec2::splat(50.0), Vec2::splat(5000.0), party), party.min, "one too big sits at the corner");
+    }
+
+    #[test]
+    fn where_a_window_was_left_is_forgotten_once_its_bag_is_out_of_reach() {
+        let (inventory, pack, _, loose) = bags();
+        let mut app = place_app(inventory);
+        app.world_mut().resource_mut::<Underfoot>().bags.push(loose);
+        app.world_mut().resource_mut::<BagWindows>().moved.extend([(pack, Vec2::splat(700.0)), (loose, Vec2::splat(800.0))]);
+        app.update();
+        assert_eq!(app.world().resource::<BagWindows>().moved.len(), 2, "both in reach");
+        app.world_mut().resource_mut::<Underfoot>().bags.clear();
+        app.update();
+        let moved = &app.world().resource::<BagWindows>().moved;
+        assert!(moved.contains_key(&pack) && !moved.contains_key(&loose), "the bag left behind is forgotten");
     }
 }
