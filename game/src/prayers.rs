@@ -38,7 +38,10 @@ use crate::casting::{Casted, cast_requests};
 use crate::combat::RunDice;
 use crate::combat::feedback::{Corpse, Struck};
 use crate::creatures::Critter;
-use crate::effects::{PlayEffect, Playing};
+use crate::camp::Asleep;
+use crate::effects::{EffectLibrary, PlayEffect, Playing};
+use crate::rules::GameRules;
+use crate::tuning::Tuning;
 use crate::creatures::behaviour::AttackOnDelver;
 use crate::game_clock::GameClock;
 use crate::launch::AppState;
@@ -101,15 +104,13 @@ pub fn register(app: &mut App) {
         .add_message::<PlayEffect>()
         .add_systems(
             Update,
-            (smite_the_seen, raise_the_shield, end_the_shield, ripple_the_shield, show_the_prayers, hold_the_shimmer, debug_blow).chain().after(cast_requests).in_set(DelveSystems),
+            (smite_the_seen, raise_the_shield, end_the_shield, ripple_the_shield, show_the_prayers, start_the_shimmer, hold_the_shimmer, debug_blow).chain().after(cast_requests).in_set(DelveSystems),
         );
 }
 
 /// The effect the shield plays for as long as it stands, and the one a blow on it plays.
 const SHIELD_EFFECT: &str = "shield";
 const SHIELD_STRUCK_EFFECT: &str = "shield_struck";
-/// The shimmer sputters out this many game seconds before the shield ends.
-const SHIELD_SPUTTER: f64 = 12.0;
 /// How far from the delver's feet a blow's ripple plays, toward where it came from, units.
 const RIPPLE_REACH: f32 = 9.0;
 /// And this far ahead of them, units.
@@ -231,7 +232,6 @@ fn show_the_prayers(
     mut struck: MessageReader<ShieldStruck>,
     mut plays: MessageWriter<PlayEffect>,
     creatures: Query<&Critter>,
-    fresh: Query<Entity, Added<ShieldPrayer>>,
     players: Query<&Transform, With<Player>>,
     mut seed: Local<u32>,
 ) {
@@ -247,10 +247,6 @@ fn show_the_prayers(
         }
         plays.write(play);
     }
-    for shield in &fresh {
-        *seed = seed.wrapping_add(1);
-        plays.write(PlayEffect::new(SHIELD_EFFECT, *seed).owned_by(shield));
-    }
     for blow in struck.read() {
         let Ok(me) = players.get(blow.caster) else { continue };
         let away = (blow.from - me.translation.xz()).normalize_or_zero();
@@ -261,33 +257,104 @@ fn show_the_prayers(
     }
 }
 
+/// How many game seconds pass in a real one now: the sleeping pace while the delver sleeps, else
+/// the clock's.
+fn clock_ratio(tuning: Option<&Tuning>, asleep: Option<&Asleep>, rules: Option<&GameRules>) -> f64 {
+    match (asleep.is_some_and(|a| a.0.is_some()), rules) {
+        (true, Some(rules)) => rules.camp.sleep_clock_ratio,
+        _ => tuning.map_or(1.0, |t| f64::from(t.clock.game_seconds_per_second)),
+    }
+}
+
+/// How many game seconds before the shield ends its shimmer starts to sputter out: the effect's
+/// sputter, which runs in real time, at the pace the game clock runs now. The clock holds still
+/// with a screen open, so the shimmer holds with it and never ends while the shield stands.
+fn sputter_lead(sputter_out: f32, ratio: f64) -> f64 {
+    f64::from(sputter_out) * ratio
+}
+
 /// Lets the shimmer go with its shield: it sputters out as the shield nears its end, and at once
 /// when the shield is gone or replaced.
-pub(crate) fn hold_the_shimmer(clock: Option<Res<GameClock>>, shields: Query<&ShieldPrayer>, mut shimmers: Query<&mut Playing>) {
+#[allow(clippy::type_complexity)]
+pub(crate) fn hold_the_shimmer(
+    clock: Option<Res<GameClock>>,
+    tuning: Option<Res<Tuning>>,
+    asleep: Option<Res<Asleep>>,
+    rules: Option<Res<GameRules>>,
+    shields: Query<&ShieldPrayer>,
+    mut shimmers: Query<&mut Playing>,
+) {
     let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+    let ratio = clock_ratio(tuning.as_deref(), asleep.as_deref(), rules.as_deref());
     for mut shimmer in &mut shimmers {
         let Some(owner) = shimmer.owner() else { continue };
+        if shimmer.name() != SHIELD_EFFECT {
+            continue;
+        }
         let ending = match shields.get(owner) {
-            Ok(shield) => shield.expires - now <= SHIELD_SPUTTER,
+            Ok(shield) => shield.expires - now <= sputter_lead(shimmer.sputter_out(), ratio),
             Err(_) => true,
         };
-        if ending && shimmer.name() == SHIELD_EFFECT {
+        if ending {
             shimmer.stop();
+        }
+    }
+}
+
+/// Starts the shimmer for each shield that has none, and starts it again if one goes missing
+/// (pushed out by [`crate::effects::MAX_PLAYING`], or never started). A moment is left for a
+/// requested one to appear, and none is started once the shield is on its last seconds.
+pub(crate) fn start_the_shimmer(
+    clock: Option<Res<GameClock>>,
+    tuning: Option<Res<Tuning>>,
+    asleep: Option<Res<Asleep>>,
+    rules: Option<Res<GameRules>>,
+    library: Option<Res<EffectLibrary>>,
+    shields: Query<(Entity, &ShieldPrayer)>,
+    shimmers: Query<&Playing>,
+    mut plays: MessageWriter<PlayEffect>,
+    mut waiting: Local<std::collections::HashMap<Entity, u8>>,
+    mut seed: Local<u32>,
+) {
+    /// Frames a requested shimmer is given to appear before it is asked for again.
+    const GRACE: u8 = 3;
+    let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
+    let ratio = clock_ratio(tuning.as_deref(), asleep.as_deref(), rules.as_deref());
+    let sputter = library.as_deref().and_then(|l| l.get(SHIELD_EFFECT)).map_or(0.0, |e| e.sputter_out);
+    waiting.retain(|shield, _| shields.contains(*shield));
+    for (entity, shield) in &shields {
+        if shimmers.iter().any(|p| p.owner() == Some(entity) && p.name() == SHIELD_EFFECT) {
+            waiting.remove(&entity);
+            continue;
+        }
+        if shield.expires - now <= sputter_lead(sputter, ratio) {
+            continue;
+        }
+        let waited = waiting.entry(entity).or_insert(GRACE);
+        if *waited >= GRACE {
+            *waited = 0;
+            *seed = seed.wrapping_add(1);
+            plays.write(PlayEffect::new(SHIELD_EFFECT, *seed).owned_by(entity));
+        } else {
+            *waited += 1;
         }
     }
 }
 
 /// For captures (`FB_PRAY_BLOW=60,120`): that many frames after the cast, a blow lands on the
 /// shielded delver from their left.
-fn debug_blow(mut frames: Local<u32>, shields: Query<&ShieldPrayer>, players: Query<(Entity, &Transform), With<Player>>, mut struck: MessageWriter<ShieldStruck>) {
+fn debug_blow(mut frames: Local<u32>, mut list: Local<Option<Vec<u32>>>, shields: Query<&ShieldPrayer>, players: Query<(Entity, &Transform), With<Player>>, mut struck: MessageWriter<ShieldStruck>) {
     *frames += 1;
-    let Ok(list) = std::env::var("FB_PRAY_BLOW") else { return };
+    let list = list.get_or_insert_with(|| std::env::var("FB_PRAY_BLOW").map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect()).unwrap_or_default());
+    if list.is_empty() {
+        return;
+    }
     let Some((caster, me)) = players.iter().next() else { return };
     if shields.is_empty() {
         *frames = 0;
         return;
     }
-    if list.split(',').filter_map(|n| n.trim().parse::<u32>().ok()).any(|n| n == *frames) {
+    if list.contains(&*frames) {
         let left = me.left().as_vec3().xz();
         struck.write(ShieldStruck { caster, from: me.translation.xz() + left * 30.0, damage: 3 });
     }
@@ -300,7 +367,6 @@ mod tests {
     use crate::character::{Character, Class, DelverMana};
     use crate::combat::feedback::damage_to;
     use crate::inventory::Toast;
-    use crate::rules::GameRules;
     use fb_character::Mana;
     use fb_character::casting::Spellbook;
     use fb_creatures::Species;
@@ -535,10 +601,18 @@ mod tests {
     #[test]
     fn a_new_shield_starts_the_lasting_shimmer_it_owns() {
         let (mut app, _, _) = shielded();
-        shield(&mut app, 1);
+        #[derive(Resource, Default)]
+        struct Log(Vec<PlayEffect>);
+        app.init_resource::<Log>().add_systems(Update, |mut asked: MessageReader<PlayEffect>, mut log: ResMut<Log>| log.0.extend(asked.read().cloned()));
+        app.world_mut().write_message(CastRequest { name: "Shield".into(), tier: 1 });
+        // Nothing here plays effects, so the shimmer is asked for again once its moment has passed.
+        for _ in 0..5 {
+            app.update();
+        }
+        let started: Vec<PlayEffect> = app.world().resource::<Log>().0.iter().filter(|p| p.name == "shield").cloned().collect();
         let owner = app.world_mut().query_filtered::<Entity, With<ShieldPrayer>>().single(app.world()).unwrap();
-        let started: Vec<PlayEffect> = plays(&app).into_iter().filter(|p| p.name == "shield").collect();
-        assert!(started.len() <= 1 && started.iter().all(|p| p.owner == Some(owner)));
+        assert_eq!(started.len(), 1, "once, and not again while it is given its moment to appear");
+        assert_eq!(started[0].owner, Some(owner));
     }
 
     #[test]

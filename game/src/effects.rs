@@ -187,6 +187,11 @@ impl Playing {
         self.owner
     }
 
+    /// Seconds it takes to sputter out once stopped.
+    pub fn sputter_out(&self) -> f32 {
+        self.sim.effect().sputter_out
+    }
+
     /// The effect's name.
     pub fn name(&self) -> &str {
         &self.sim.effect().name
@@ -321,18 +326,20 @@ fn start_effects(
     running: Query<(Entity, &Playing)>,
     mut serial: Local<u64>,
 ) {
-    let mut live: Vec<(u64, Entity)> = Vec::new();
+    // Oldest first, the effects that belong to something last: an owned effect (a lasting shimmer
+    // that its owner stops) is only ended to make room once no other is left.
+    let mut live: Vec<(bool, u64, Entity)> = Vec::new();
     for request in requests.read() {
         let Some(effect) = library.shared(&request.name) else {
             warn!("effects: no effect called {}", request.name);
             continue;
         };
         if live.is_empty() {
-            live.extend(running.iter().map(|(entity, p)| (p.serial, entity)));
+            live.extend(running.iter().map(|(entity, p)| (p.owner.is_some(), p.serial, entity)));
             live.sort_unstable();
         }
         while live.len() >= MAX_PLAYING {
-            commands.entity(live.remove(0).1).despawn();
+            commands.entity(live.remove(0).2).despawn();
         }
         let mut places = Places { caster: [0.0; 3], forward: [0.0, 0.0, -1.0], targets: Vec::new() };
         update_places(&mut places, request.caster, &request.targets, &things, &eyes);
@@ -349,7 +356,8 @@ fn start_effects(
             owner: request.owner,
         };
         let entity = commands.spawn((Name::new(format!("Effect {}", request.name)), playing, Transform::default(), Visibility::default())).id();
-        live.push((*serial, entity));
+        live.push((request.owner.is_some(), *serial, entity));
+        live.sort_unstable();
     }
 }
 
@@ -751,6 +759,71 @@ mod tests {
         assert_eq!(app.world().resource::<EffectLibrary>().get("test_burst").unwrap().length, 9.0);
     }
 
+    /// An app with the shield's shimmer kept by its prayer, as the game keeps it.
+    fn shimmered() -> App {
+        let mut app = app();
+        app.init_resource::<crate::game_clock::GameClock>().init_resource::<crate::tuning::Tuning>();
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        app.add_systems(Update, (crate::prayers::start_the_shimmer, crate::prayers::hold_the_shimmer).chain().in_set(DelveSystems));
+        app
+    }
+
+    fn shimmering(app: &mut App, shield: Entity) -> usize {
+        app.world_mut().query::<&Playing>().iter(app.world()).filter(|p| p.owner() == Some(shield)).count()
+    }
+
+    #[test]
+    fn the_shimmer_sputters_out_a_sputter_before_the_end_at_the_clocks_pace() {
+        let mut app = shimmered();
+        let ratio = f64::from(app.world().resource::<crate::tuning::Tuning>().clock.game_seconds_per_second);
+        let lead = 6.0 * ratio;
+        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1000.0, lasts: 1000.0 }).id();
+        app.world_mut().resource_mut::<crate::game_clock::GameClock>().advance(1000.0 - lead - 5.0);
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 1, "still going before its lead");
+        app.world_mut().resource_mut::<crate::game_clock::GameClock>().advance(10.0);
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 0, "gone once the shield is that close to its end");
+    }
+
+    #[test]
+    fn recasting_stops_the_old_shimmer_and_starts_the_new() {
+        let mut app = shimmered();
+        let old = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
+        for _ in 0..10 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, old), 1);
+        app.world_mut().despawn(old);
+        let new = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 2, bonus: 4, expires: 1e9, lasts: 1e9 }).id();
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!((shimmering(&mut app, old), shimmering(&mut app, new)), (0, 1));
+    }
+
+    #[test]
+    fn a_shield_with_no_shimmer_gets_one_again() {
+        let mut app = shimmered();
+        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 1, "started with no one asking");
+        let lost = app.world_mut().query::<(Entity, &Playing)>().iter(app.world()).map(|(e, _)| e).collect::<Vec<_>>();
+        for e in lost {
+            app.world_mut().despawn(e);
+        }
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 1, "and again once it is lost");
+    }
+
     #[test]
     fn the_shield_shimmer_holds_until_its_prayer_ends_and_then_sputters_out() {
         let mut app = app();
@@ -780,5 +853,22 @@ mod tests {
             let effect = Effect::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(effect.name, name);
         }
+    }
+
+    #[test]
+    fn an_owned_lasting_effect_survives_the_cap_while_others_play() {
+        let mut app = app();
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        let owner = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("shield", 1).owned_by(owner));
+        app.update();
+        for seed in 0..20 {
+            play(&mut app, seed);
+        }
+        app.update();
+        app.update();
+        assert_eq!(playing(&mut app), MAX_PLAYING);
+        let owned = app.world_mut().query::<&Playing>().iter(app.world()).filter(|p| p.owner() == Some(owner)).count();
+        assert_eq!(owned, 1, "the shimmer stays; the oldest unowned effects go instead");
     }
 }
