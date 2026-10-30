@@ -304,7 +304,7 @@ pub fn dev_burn(
             continue;
         }
         if *frame == fell_at {
-            struck.write(Struck { target: entity, damage: 500, from: at.translation.xz() + Vec2::Y * 5.0, bludgeoning: true, critical: false, by_ally: false, graze: false });
+            struck.write(Struck { target: entity, damage: 500, from: at.translation.xz() + Vec2::Y * 5.0, bludgeoning: true, critical: false, by_ally: false, graze: false, fire: 0 });
         } else {
             burned.write(Burned { target: entity });
         }

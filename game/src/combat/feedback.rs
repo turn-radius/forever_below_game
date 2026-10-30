@@ -66,6 +66,10 @@ pub struct Struck {
     /// Whether it is a missed swing that grazed ([`fb_character::combat::graze`]): its damage
     /// is taken as it is, whatever the target is vulnerable to.
     pub graze: bool,
+    /// The fire a lit torch's or censer's blow adds ([`super::swing::fire_damage`], already
+    /// weighed against the target's fire vulnerability or immunity): taken as it is, after the
+    /// blow's own multipliers, so a skeleton's bludgeoning weakness never doubles it.
+    pub fire: u32,
 }
 
 /// A blow of the delver's that was fire (a lit torch's, [`super::swing::flaming_blow`]) landing on
@@ -209,11 +213,12 @@ pub struct CreatureSounds {
 /// a bludgeoning blow (its stat block's vulnerability). `blow` is the damage as rolled. A graze
 /// is taken as it is.
 pub fn damage_to(critter: &Critter, blow: &Struck) -> u32 {
-    if critter.spot.species.is_skeleton() && !blow.graze {
+    let blow_damage = if critter.spot.species.is_skeleton() && !blow.graze {
         crate::creatures::skeletons::damage_taken(blow.damage, crate::creatures::skeletons::damage_type(blow.bludgeoning))
     } else {
         blow.damage
-    }
+    };
+    blow_damage + blow.fire
 }
 
 fn load_creature_sounds(mut commands: Commands, assets: Option<Res<AssetServer>>) {
