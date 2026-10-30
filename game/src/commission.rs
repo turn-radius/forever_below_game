@@ -7,17 +7,19 @@
 //! from the families of the trade ([`bases_of`]), then one of the maker's rolls of it, then
 //! shapes it. The price follows the base, material, size and ornament of the shaped item
 //! ([`fb_items::commission`]) and the maker's tier, and updates as the item is shaped. Confirming
-//! pays from the purses and records a [`Commission`] in [`crate::record::WorldRecord`]'s orders; cancelling (or Esc) closes the screen.
+//! pays from the purses and hands the finished item over at once; cancelling (or Esc) closes the screen.
 //!
 //! Open it with [`open`], or write an [`OpenCommission`] message, as the dialogue panel's
 //! Commission topic does. `FB_COMMISSION=<profession>:<tier>[:<style>]` opens it at the start
 //! for captures (`FB_COMMISSION=weaponsmith:master:blades`), and `FB_COMMISSION_SET=blade.length=1.4,etch.on=true`
 //! then sets fields the way a delver's hand would.
 //!
-//! Confirming takes the price from the delver's purses ([`place_order`]) and records the order in
-//! [`WorldRecord::orders`]. The maker hands the finished item over when the delver chooses "Your
-//! order" ([`collect_from_talk`], [`finished_item`]). `FB_COMMISSION_ORDER=ready` places an order
-//! with the nearest maker for captures.
+//! Confirming takes the price from the delver's purses ([`place_order`]) and the maker hands the
+//! finished item over at once ([`finished_item`], [`hand_over`]): into the pack, or set down
+//! underfoot when it is full. There is no wait. An order saved by an older build, still waiting in
+//! [`WorldRecord::orders`], is handed over when the delver chooses "Your order"
+//! ([`collect_from_talk`]). `FB_COMMISSION_ORDER=ready` places such an order with the nearest
+//! maker for captures.
 
 use armory::{
     Item as Shape,
@@ -204,8 +206,9 @@ pub fn controls_summary(tier: Tier) -> &'static str {
     }
 }
 
-/// An order placed with a maker, kept in the [`WorldRecord`] for the delve. The maker hands the
-/// item over ([`collect`]) once `ready_at` has come.
+/// An order placed with a maker. New orders are finished and handed over when they are placed;
+/// one saved by an older build waits in the [`WorldRecord`] until the maker hands it over
+/// ([`collect`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Commission {
     pub maker: String,
@@ -225,7 +228,7 @@ pub struct Commission {
     pub shape: Shape,
     /// What it costs, in copper.
     pub price_copper: u64,
-    /// The game time it is ready at.
+    /// The game time it was ready at. Kept so older saves load; no longer waited for.
     pub ready_at: GameTime,
 }
 
@@ -244,11 +247,6 @@ pub struct OpenCommission {
     /// The maker's spot seed and the depth they stand at.
     pub maker_seed: u32,
     pub depth: u32,
-}
-
-/// Game hours an order of `price_copper` takes: four, and more the dearer it is (our own).
-pub fn ready_hours(price_copper: u64) -> f64 {
-    (4.0 + (price_copper as f64).sqrt() * 0.5).min(72.0)
 }
 
 /// The commission being shaped. `open` is set while the screen is up.
@@ -485,7 +483,7 @@ impl CommissionScreen {
         Coins::from_copper(self.price_copper())
     }
 
-    /// The order as it stands, ready `ready_hours` after `now` (game seconds).
+    /// The order as it stands, made at `now` (game seconds).
     pub fn order(&self, now: f64, delver: &str) -> Option<Commission> {
         let shape = self.shape.clone()?;
         let price_copper = self.price_copper();
@@ -500,7 +498,7 @@ impl CommissionScreen {
             seed: self.roll_seed(self.base, self.roll),
             shape,
             price_copper,
-            ready_at: GameTime::from_seconds(now + ready_hours(price_copper) * 3600.0),
+            ready_at: GameTime::from_seconds(now),
         })
     }
 
@@ -727,7 +725,7 @@ enum Readout {
     Trade,
     Open,
     Price,
-    Ready,
+    Refusal,
 }
 
 /// The talk chose Commission: ask for the screen with the speaker as the maker.
@@ -843,6 +841,7 @@ fn order_for_capture(
     let now = clock_now(clock.as_deref());
     let delver = character.as_deref().map_or("the delver", |c| c.name.as_str());
     let Some(mut order) = screen.order(now, delver) else { return };
+    // An older save's waiting order, for captures of "Your order".
     let wait = std::env::var("FB_COMMISSION_ORDER").ok().and_then(|v| v.trim().parse::<f64>().ok());
     order.ready_at = GameTime::from_seconds(now + wait.map_or(0.0, |h| h * 3600.0));
     // `collect`: the maker has handed it over already, to capture the item's card.
@@ -870,11 +869,15 @@ fn clock_now(clock: Option<&GameClock>) -> f64 {
 }
 
 /// Confirms the order on `screen`: its whole price is taken from the delver's purses
-/// ([`crate::enchanting::pay`], all or nothing; no deposit) and the order is recorded for the
-/// delve in `record`. Refused, with a line that says what is short, nothing is taken and
-/// nothing recorded.
-pub fn place_order(screen: &CommissionScreen, inventory: &mut Inventory, record: &mut WorldRecord, now: f64, delver: &str) -> Result<Commission, String> {
+/// ([`crate::enchanting::pay`], all or nothing; no deposit). The caller hands the finished item
+/// over ([`hand_over`]). Refused, with a line that says what is short, nothing is taken.
+pub fn place_order(screen: &CommissionScreen, inventory: &mut Inventory, now: f64, delver: &str) -> Result<Commission, String> {
     let order = screen.order(now, delver).ok_or_else(|| "Nothing to order.".to_string())?;
+    // Nothing is taken for a piece the maker cannot make (a trade that sells nothing never opens
+    // the screen, so this is a guard, not a path).
+    if finished_item(&order).is_none() {
+        return Err("They cannot make that.".to_string());
+    }
     let held = wallet(inventory);
     if held.total_copper() < order.price_copper {
         return Err(format!("Needs {}, have {}.", order.price().short(), held.short()));
@@ -882,7 +885,6 @@ pub fn place_order(screen: &CommissionScreen, inventory: &mut Inventory, record:
     if !pay(inventory, order.price_copper) {
         return Err("Cannot pay.".to_string());
     }
-    record.orders.push(order.clone());
     Ok(order)
 }
 
@@ -894,41 +896,33 @@ pub fn finished_item(order: &Commission) -> Option<fb_items::Item> {
     fb_items::commission::finish(&shop, &order.base, &order.shape, order.seed, order.depth, &order.delver)
 }
 
-/// A wait in words: "under an hour", "5 hours", "2 days".
-pub fn wait_words(hours: f64) -> String {
-    if hours <= 1.0 {
-        "an hour".to_string()
-    } else if hours >= 48.0 {
-        format!("{:.0} days", (hours / 24.0).round())
+/// Hands the finished piece for `order` over: into the pack, or set down at the delver's feet
+/// when there is no room. Returns the piece's title and whether it went to the pack; `None` for
+/// a trade that sells nothing.
+pub fn hand_over(order: &Commission, inventory: &mut Inventory, changes: &mut FloorChanges) -> Option<(String, bool)> {
+    let item = finished_item(order)?;
+    let title = item.title().to_string();
+    let id = inventory.add(item);
+    if inventory.pick_up(id).is_ok() {
+        Some((title, true))
     } else {
-        format!("{:.0} hours", hours.ceil())
+        changes.0.push(FloorChange::SetDown(id, 0.0));
+        Some((title, false))
     }
 }
 
-/// What the maker `maker_seed` of the level at `depth` gives back at game time `now`: the orders
-/// that are ready (taken out of `orders`) and the hours the others still need. Orders with no
+/// What the maker `maker_seed` of the level at `depth` gives back: every order of theirs saved
+/// by an older build (taken out of `orders`), however long it had left to wait. Orders with no
 /// maker alive to ask (the folk fell: nobody asks) stay where they are; see "Commissions" in
 /// `docs/items.md`.
-pub fn collect(orders: &mut Vec<Commission>, maker_seed: u32, depth: u32, now: f64) -> (Vec<Commission>, Vec<f64>) {
-    let mut ready = Vec::new();
-    let mut waiting = Vec::new();
-    let mut kept = Vec::new();
-    for order in orders.drain(..) {
-        if order.maker_seed != maker_seed || order.depth != depth {
-            kept.push(order);
-        } else if order.ready_at.seconds() <= now {
-            ready.push(order);
-        } else {
-            waiting.push((order.ready_at.seconds() - now) / 3600.0);
-            kept.push(order);
-        }
-    }
+pub fn collect(orders: &mut Vec<Commission>, maker_seed: u32, depth: u32) -> Vec<Commission> {
+    let (ready, kept) = orders.drain(..).partition(|o| o.maker_seed == maker_seed && o.depth == depth);
     *orders = kept;
-    (ready, waiting)
+    ready
 }
 
-/// The talk chose "Your order": hands over what is ready (into the pack, or set down underfoot
-/// where it will not fit), or says how long the rest needs.
+/// The talk chose "Your order": hands over the maker's orders saved by an older build (into the
+/// pack, or set down underfoot where it will not fit).
 #[allow(clippy::too_many_arguments)]
 fn collect_from_talk(
     mut chosen: MessageReader<crate::talk::ServiceChosen>,
@@ -936,7 +930,6 @@ fn collect_from_talk(
     mut record: ResMut<WorldRecord>,
     mut inventory: ResMut<Inventory>,
     mut changes: ResMut<FloorChanges>,
-    clock: Option<Res<GameClock>>,
     mut toasts: Toasts,
 ) {
     for chosen in chosen.read() {
@@ -945,23 +938,19 @@ fn collect_from_talk(
         }
         let Some(speaker) = talk.speaker.as_ref() else { continue };
         let (seed, depth, name) = (speaker.seed, speaker.depth, speaker.name.clone());
-        let (ready, waiting) = collect(&mut record.orders, seed, depth, clock_now(clock.as_deref()));
         let mut said = Vec::new();
-        for order in ready {
-            let Some(item) = finished_item(&order) else { continue };
-            let title = item.title().to_string();
-            let id = inventory.add(item);
-            if inventory.pick_up(id).is_ok() {
-                toasts.say(format!("{name} hands you {title}."));
-                said.push(format!("Here: {title}, made for you."));
-            } else {
-                changes.0.push(FloorChange::SetDown(id, 0.0));
-                toasts.say(format!("{name} sets {title} down at your feet."));
-                said.push(format!("Your pack is full. I have set {title} down at your feet."));
+        for order in collect(&mut record.orders, seed, depth) {
+            match hand_over(&order, &mut inventory, &mut changes) {
+                Some((title, true)) => {
+                    toasts.say(format!("{name} hands you {title}."));
+                    said.push(format!("Here: {title}, made for you."));
+                }
+                Some((title, false)) => {
+                    toasts.say(format!("{name} sets {title} down at your feet."));
+                    said.push(format!("Your pack is full. I have set {title} down at your feet."));
+                }
+                None => {}
             }
-        }
-        if let Some(soonest) = waiting.iter().copied().reduce(f64::min) {
-            said.push(format!("It is not done yet. Come back in about {}.", wait_words(soonest)));
         }
         if said.is_empty() {
             said.push("There is nothing of yours here.".to_string());
@@ -980,7 +969,7 @@ fn press_controls(
     mut screen: ResMut<CommissionScreen>,
     mut open: ResMut<ScreenOpen>,
     mut inventory: ResMut<Inventory>,
-    mut record: ResMut<WorldRecord>,
+    mut changes: ResMut<FloorChanges>,
     character: Option<Res<Character>>,
     mut toasts: Toasts,
     clock: Option<Res<GameClock>>,
@@ -1002,9 +991,13 @@ fn press_controls(
         }
         Control::Confirm => {
             let delver = character.as_deref().map_or("the delver", |c| c.name.as_str());
-            match place_order(&screen, &mut inventory, &mut record, clock_now(clock.as_deref()), delver) {
+            match place_order(&screen, &mut inventory, clock_now(clock.as_deref()), delver) {
                 Ok(order) => {
-                    toasts.say(format!("{} will have it ready in about {}.", order.maker, wait_words(ready_hours(order.price_copper))));
+                    match hand_over(&order, &mut inventory, &mut changes) {
+                        Some((title, true)) => toasts.say(format!("{} hands you {title}, made for you.", order.maker)),
+                        Some((title, false)) => toasts.say(format!("{} sets {title} down at your feet; your pack is full.", order.maker)),
+                        None => {}
+                    }
                     screen.close();
                     show_screen(&mut open, None, cursor.as_deref_mut().map(|c| &mut **c));
                 }
@@ -1162,7 +1155,7 @@ fn spawn_ui(commands: &mut Commands, fonts: &UiFonts, screen: &CommissionScreen,
                         footer.spawn(Node { align_items: AlignItems::Baseline, column_gap: px(10), ..default() }).with_children(|row| {
                             row.spawn((Text::new("Price"), UiFonts::style(&fonts.body, 17.0, MUTED)));
                             row.spawn((Readout::Price, Text::new(""), UiFonts::style(&fonts.mono_bold, 22.0, BRIGHT)));
-                            row.spawn((Readout::Ready, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED), Node { margin: UiRect::left(px(8)), ..default() }));
+                            row.spawn((Readout::Refusal, Text::new(""), UiFonts::style(&fonts.body, 16.0, MUTED), Node { margin: UiRect::left(px(8)), ..default() }));
                         });
                         footer.spawn(Node { column_gap: px(8), ..default() }).with_children(|row| {
                             chip(row, fonts, "Confirm", Control::Confirm);
@@ -1305,7 +1298,7 @@ fn refresh_header(
             }
             Readout::Open => controls_summary(screen.tier()).to_string(),
             Readout::Price => Coins::from_copper(price).short(),
-            Readout::Ready => screen.refusal.clone().unwrap_or_else(|| format!("ready in {:.0} h", ready_hours(price))),
+            Readout::Refusal => screen.refusal.clone().unwrap_or_default(),
         };
         if text.0 != line {
             text.0 = line;
@@ -1404,14 +1397,20 @@ mod tests {
     }
 
     #[test]
-    fn confirming_takes_the_price_from_the_purses_and_records_the_order() {
+    fn confirming_takes_the_price_from_the_purses_and_hands_the_item_into_the_pack() {
         let screen = master_screen();
         let price = screen.price_copper();
         let mut inventory = delver_with(price + 500);
-        let mut record = WorldRecord::default();
-        let order = place_order(&screen, &mut inventory, &mut record, 100.0, "Wren").unwrap();
+        let pack = inventory.add(fb_items::roll_item("Pack", 2).unwrap());
+        inventory.pick_up(pack).unwrap();
+        let mut changes = FloorChanges::default();
+        let order = place_order(&screen, &mut inventory, 100.0, "Wren").unwrap();
         assert_eq!(wallet(&inventory).total_copper(), 500);
-        assert_eq!(record.orders, vec![order.clone()]);
+        let (_, packed) = hand_over(&order, &mut inventory, &mut changes).unwrap();
+        assert!(packed && changes.0.is_empty());
+        let made: Vec<_> = inventory.ids().filter(|&id| inventory.is_carried(id)).filter_map(|id| inventory.item(id)).filter(|i| i.base == "Sword").collect();
+        assert_eq!(made.len(), 1);
+        assert!(made[0].history.last().unwrap().ends_with("for Wren."));
         assert_eq!((order.maker_seed, order.depth, order.delver.as_str()), (4242, 6, "Wren"));
     }
 
@@ -1420,29 +1419,43 @@ mod tests {
         let screen = master_screen();
         let mut inventory = delver_with(screen.price_copper() - 1);
         let before = wallet(&inventory);
-        let mut record = WorldRecord::default();
-        let said = place_order(&screen, &mut inventory, &mut record, 100.0, "Wren").unwrap_err();
+        let said = place_order(&screen, &mut inventory, 100.0, "Wren").unwrap_err();
         assert!(said.starts_with("Needs ") && said.contains("have"), "{said}");
         assert_eq!(wallet(&inventory), before);
-        assert!(record.orders.is_empty());
     }
 
     #[test]
-    fn the_maker_says_how_long_before_it_is_ready_and_hands_it_over_after() {
+    fn a_full_pack_sets_the_finished_item_down_underfoot() {
         let screen = master_screen();
         let mut inventory = delver_with(screen.price_copper());
-        let mut record = WorldRecord::default();
-        let order = place_order(&screen, &mut inventory, &mut record, 0.0, "Wren").unwrap();
+        let mut changes = FloorChanges::default();
+        let order = place_order(&screen, &mut inventory, 0.0, "Wren").unwrap();
+        // Pack the delver's containers full.
+        for seed in 0..400 {
+            let junk = inventory.add(fb_items::roll_item("Tunic", seed).unwrap());
+            if inventory.stow(junk).is_err() {
+                inventory.forget(junk);
+            }
+        }
+        let (_, packed) = hand_over(&order, &mut inventory, &mut changes).unwrap();
+        assert!(!packed);
+        assert!(matches!(changes.0.as_slice(), [FloorChange::SetDown(..)]), "{:?}", changes.0);
+    }
+
+    #[test]
+    fn an_old_waiting_order_is_collected_from_its_maker_only_whatever_its_time() {
+        let screen = master_screen();
+        let mut inventory = delver_with(screen.price_copper());
+        let mut order = place_order(&screen, &mut inventory, 0.0, "Wren").unwrap();
+        order.ready_at = GameTime::from_seconds(50.0 * 3600.0);
+        let mut orders = vec![order];
         // Another maker, or another depth, holds nothing of the delver's.
-        assert_eq!(collect(&mut record.orders, 1, 6, 1e9), (vec![], vec![]));
-        assert_eq!(collect(&mut record.orders, 4242, 7, 1e9), (vec![], vec![]));
-        // An hour in, it needs the rest of the time.
-        let (ready, waiting) = collect(&mut record.orders, 4242, 6, 3600.0);
-        assert!(ready.is_empty() && record.orders.len() == 1);
-        assert!((waiting[0] - (ready_hours(order.price_copper) - 1.0)).abs() < 1e-6);
-        // Ready, it comes out of the record, once.
-        let (ready, waiting) = collect(&mut record.orders, 4242, 6, order.ready_at.seconds());
-        assert!(waiting.is_empty() && record.orders.is_empty());
+        assert!(collect(&mut orders, 1, 6).is_empty());
+        assert!(collect(&mut orders, 4242, 7).is_empty());
+        assert_eq!(orders.len(), 1);
+        // The right maker hands it over once.
+        let ready = collect(&mut orders, 4242, 6);
+        assert!(orders.is_empty() && ready.len() == 1);
         let item = finished_item(&ready[0]).unwrap();
         assert_eq!(item.history.last().unwrap(), "Made by Oda, master bladesmith of the Brothers of the Last Door, for Wren.");
         assert_eq!(item.base, "Sword");
@@ -1470,7 +1483,8 @@ mod tests {
         let screen = master_screen();
         let mut inventory = delver_with(screen.price_copper());
         let mut record = WorldRecord::default();
-        let order = place_order(&screen, &mut inventory, &mut record, 0.0, "Wren").unwrap();
+        let order = place_order(&screen, &mut inventory, 0.0, "Wren").unwrap();
+        record.orders.push(order.clone());
         // The order in the record reloads as it was.
         let reloaded: WorldRecord = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
         assert_eq!(reloaded, record);
@@ -1496,7 +1510,6 @@ mod tests {
             assert!(inventory.stow(sword).is_err(), "no room left");
             inventory.forget(sword);
         }
-        app.world_mut().resource_mut::<GameClock>().advance(80.0 * 3600.0);
         app.world_mut().write_message(crate::talk::ServiceChosen { folk, service: crate::talk::Service::Order });
         app.update();
         assert!(app.world().resource::<WorldRecord>().orders.is_empty());
@@ -1515,7 +1528,10 @@ mod tests {
             inventory.pick_up(id).unwrap();
         }
         let mut record = WorldRecord::default();
-        place_order(&screen, &mut inventory, &mut record, 0.0, "Wren").unwrap();
+        // An order saved by an older build, still waiting.
+        let mut order = place_order(&screen, &mut inventory, 0.0, "Wren").unwrap();
+        order.ready_at = GameTime::from_seconds(30.0 * 3600.0);
+        record.orders.push(order);
         let mut app = App::new();
         let folk = app.world_mut().spawn_empty().id();
         let speaker = crate::talk::Speaker {
@@ -1552,13 +1568,7 @@ mod tests {
             app.world_mut().write_message(crate::talk::ServiceChosen { folk, service: crate::talk::Service::Order });
             app.update();
         };
-        // Before it is ready: how long, and nothing handed over.
-        choose(&mut app);
-        let said = app.world().resource::<crate::talk::Talk>().answer.clone().unwrap().1;
-        assert!(said.contains("not done yet. Come back in about"), "{said}");
-        assert_eq!(app.world().resource::<WorldRecord>().orders.len(), 1);
-        // After: it is in the pack, once.
-        app.world_mut().resource_mut::<GameClock>().advance(80.0 * 3600.0);
+        // Waiting in the save or not, it is handed over: in the pack, once.
         choose(&mut app);
         assert!(app.world().resource::<WorldRecord>().orders.is_empty());
         let inventory = app.world().resource::<Inventory>();
@@ -1808,9 +1818,7 @@ mod tests {
         assert_eq!((order.maker.as_str(), order.faction.as_str(), order.base.as_str()), ("Orla Venn", "the Cinder Hold", "Sword"));
         assert_eq!(order.shape, *screen.shape().unwrap());
         assert_eq!(order.price_copper, screen.price_copper());
-        assert!(order.ready_at.seconds() > 1000.0 + 4.0 * 3600.0);
         assert!(order.price().total_copper() > 0);
-        assert!(ready_hours(10_000_000) <= 72.0);
     }
 
     #[test]
