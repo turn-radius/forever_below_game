@@ -286,7 +286,7 @@ fn click_heal(
     input: ActionInput,
     mut healing: ResMut<Healing>,
     rules: Option<Res<GameRules>>,
-    mut revives: ResMut<Revives>,
+    mut revives: Option<ResMut<Revives>>,
     mut players: Query<(Entity, &mut Health, Option<&mut DelverEffects>), With<Player>>,
     mut inventory: ResMut<Inventory>,
     mut screen: ResMut<ScreenOpen>,
@@ -312,8 +312,12 @@ fn click_heal(
     let Ok((player, mut health, effects)) = players.single_mut() else { return };
     let rules = GameRules::of(&rules);
     let mut local = effects.as_ref().map(|e| e.0.clone()).unwrap_or_default();
-    open.notice = Some(match tend(care, rules, open.regard, &mut health, &mut local, &mut inventory, &mut revives.0) {
+    let mut used = revives.as_deref().map_or(0, |r| r.0);
+    open.notice = Some(match tend(care, rules, open.regard, &mut health, &mut local, &mut inventory, &mut used) {
         Ok(line) => {
+            if let Some(revives) = revives.as_mut() {
+                revives.0 = used;
+            }
             if let Some(mut effects) = effects {
                 effects.0 = local.clone();
                 // The component goes with the last effect, as the clock takes it off.
@@ -488,6 +492,7 @@ fn heal_kit_for_capture(mut players: Query<(Entity, &mut Health, Option<&DelverE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::Affine2;
     use fb_character::effect::Source;
     use fb_items::{Coins, Slot};
 
@@ -644,15 +649,108 @@ mod tests {
     }
 
     #[test]
-    fn a_healed_delver_survives_a_save_and_load() {
-        let mut health = Health { hp: 3, max: 12 };
-        let mut effects = lame();
-        let mut used = 2;
-        tend(Care::Wound("lame_leg"), rules(), Regard::Friendly, &mut health, &mut effects, &mut purse(2000), &mut used).unwrap();
-        tend(Care::HitPoints, rules(), Regard::Friendly, &mut health, &mut effects, &mut purse(2000), &mut used).unwrap();
-        // What the save keeps: hit points and effects as data, the revives count as a number.
-        let saved: Effects = serde_json::from_str(&serde_json::to_string(&effects).unwrap()).unwrap();
-        assert_eq!((health.hp, used), (12, 1));
-        assert!(saved.get("lame_leg", Some(Slot::Legs)).is_none() && saved.active.is_empty());
+    fn a_healed_delver_is_what_a_save_file_keeps() {
+        let path = std::env::temp_dir().join(format!("fb-heal-save-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let file = path.clone();
+        let mut delve = crate::save::sample_delve();
+        // A delver hurt, poisoned and lame, with one revive spent.
+        let mut effects = poisoned();
+        effects.add(&rules().effects, "lame_leg", 1.0, Some(Slot::Legs), Source::Fall);
+        delve.body.hit_points = 5;
+        delve.body.effects = Some(effects.clone());
+        delve.revives = 1;
+        crate::save::write(&file, &delve).unwrap();
+        let before = crate::save::SavedGame::find(&file).delve.expect("saved");
+        assert_eq!((before.body.hit_points, before.revives), (5, 1));
+        assert!(before.body.effects.as_ref().is_some_and(|e| e.active.len() == 2));
+        // Heal it all, as the screen does: the component goes with the last effect.
+        let mut health = Health { hp: before.body.hit_points, max: before.body.max_hit_points };
+        let mut effects = before.body.effects.clone().unwrap();
+        let mut used = before.revives;
+        let mut inventory = purse(5000);
+        for care in [Care::HitPoints, Care::Poison, Care::Wound("lame_leg")] {
+            tend(care, rules(), Regard::Indifferent, &mut health, &mut effects, &mut inventory, &mut used).unwrap();
+        }
+        let mut healed = before.clone();
+        healed.body.hit_points = health.hp;
+        healed.body.effects = if effects.active.is_empty() { None } else { Some(effects) };
+        healed.revives = used;
+        crate::save::write(&file, &healed).unwrap();
+        let after = crate::save::SavedGame::find(&file).delve.expect("saved again");
+        assert_eq!((after.body.hit_points, after.revives), (after.body.max_hit_points, 0));
+        assert!(after.body.effects.is_none(), "no lame leg, no poison: no effects component");
+        assert_eq!(rules().revival.left(after.revives), 2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An app with the Heal screen open over a delver with `effects`, one revive spent and
+    /// 20 gp, with buttons for each of `acts` laid out one above the next, 100 by 40 logical pixels.
+    fn click_app(effects: Effects, acts: &[Act]) -> (App, Entity, Vec<Entity>) {
+        let mut app = App::new();
+        app.init_resource::<crate::keymap::Keymap>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(crate::keymap::ActiveContext(crate::keymap::Context::Menus))
+            .insert_resource(ScreenOpen(Some(Screen::Heal)))
+            .insert_resource(Revives(1))
+            .insert_resource(purse(2000))
+            .insert_resource(Healing { open: Some(Open { name: "Ysolde".into(), faction: "the Ash Rite".into(), regard: Regard::Indifferent, said: "said".into(), nothing: "nothing".into(), notice: None }), revision: 0 })
+            .add_systems(Update, click_heal);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        let player = app.world_mut().spawn((Player, Health::full(12), DelverEffects(effects))).id();
+        let buttons = acts
+            .iter()
+            .enumerate()
+            .map(|(i, act)| {
+                let node = ComputedNode { size: Vec2::new(100.0, 40.0), inverse_scale_factor: 1.0, ..default() };
+                let at = UiGlobalTransform::from(Affine2::from_translation(Vec2::new(50.0, 20.0 + 100.0 * i as f32)));
+                app.world_mut().spawn((HealButton { act: *act }, node, at)).id()
+            })
+            .collect();
+        (app, player, buttons)
+    }
+
+    /// Moves the cursor onto button `n` of [`click_app`] and clicks.
+    fn click(app: &mut App, n: usize) {
+        let mut windows = app.world_mut().query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows.single_mut(app.world_mut()).unwrap().set_physical_cursor_position(Some(bevy::math::DVec2::new(50.0, 20.0 + 100.0 * n as f64)));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.release(MouseButton::Left);
+        mouse.clear();
+    }
+
+    #[test]
+    fn clicking_a_line_tends_the_delver_and_writes_everything_back() {
+        let mut effects = poisoned();
+        effects.add(&rules().effects, "lame_leg", 1.0, Some(Slot::Legs), Source::Fall);
+        let (mut app, player, _) = click_app(effects, &[Act::Care(Care::Wound("lame_leg")), Act::Care(Care::Poison), Act::Back]);
+        let coin = |app: &App| wallet(app.world().resource::<Inventory>()).total_copper();
+        assert_eq!(coin(&app), 2000);
+        // The wound: gone from the effects, which stay (poison is on), a revive back, coin paid.
+        click(&mut app, 0);
+        let left = app.world().get::<DelverEffects>(player).expect("poison is still on");
+        assert!(left.0.get("lame_leg", Some(Slot::Legs)).is_none() && left.0.get("poisoned", None).is_some());
+        assert_eq!((app.world().resource::<Revives>().0, coin(&app)), (0, 1500));
+        assert!(app.world().resource::<Healing>().open.as_ref().unwrap().notice.as_ref().is_some_and(|(_, good)| *good));
+        // The poison: the last effect, so the component goes.
+        click(&mut app, 1);
+        assert!(app.world().get::<DelverEffects>(player).is_none());
+        assert_eq!((app.world().resource::<Revives>().0, coin(&app)), (0, 1450));
+        // Back returns to the talk.
+        click(&mut app, 2);
+        assert!(app.world().resource::<ScreenOpen>().is(Screen::Talk));
+    }
+
+    #[test]
+    fn a_click_with_too_little_coin_changes_nothing() {
+        let (mut app, player, _) = click_app(lame(), &[Act::Care(Care::Wound("lame_leg"))]);
+        app.insert_resource(purse(100));
+        click(&mut app, 0);
+        assert!(app.world().get::<DelverEffects>(player).is_some_and(|e| e.0.get("lame_leg", Some(Slot::Legs)).is_some()));
+        assert_eq!(app.world().resource::<Revives>().0, 1);
+        assert_eq!(wallet(app.world().resource::<Inventory>()).total_copper(), 100);
+        assert!(app.world().resource::<Healing>().open.as_ref().unwrap().notice.as_ref().is_some_and(|(_, good)| !*good));
     }
 }
