@@ -110,11 +110,11 @@ impl Draft {
 }
 
 /// What unlocks a term the caster does not have yet.
-pub fn unlocked_by(id: &str) -> &'static str {
+pub fn unlocked_by(rules: &Rules, school: Casting, id: &str) -> &'static str {
     match id {
         "bane" | "frighten" => "unlocked by a favored foe",
         "charm" => "unlocked by an alignment",
-        "heal" | "cure" => "unlocked by a prayer scroll",
+        _ if Spellbook::scroll_terms(rules, school).iter().any(|t| t == id) => "unlocked by a prayer scroll",
         _ => "not yet unlocked",
     }
 }
@@ -485,9 +485,10 @@ fn button_colours(button: &BookButton, over: bool) -> (Color, Color) {
 /// The terms of `kind` for the book: those the caster has first, then the locked ones.
 fn ordered<'a>(rules: &'a Rules, book: &Spellbook, school: Casting, kind: TermKind) -> impl Iterator<Item = (&'a String, &'a TermRules)> {
     let mut terms: Vec<_> = rules.casting.terms.iter().filter(|(_, t)| t.kind == kind && t.school == school).collect();
-    // A term nothing grants (cone) stays out of the picker until something does; the devotion
-    // and prayer scroll terms show locked meanwhile.
-    terms.retain(|(id, _)| book.unlocked.contains(*id) || Spellbook::DEVOTION_TERMS.contains(&id.as_str()) || Spellbook::SCROLL_TERMS.contains(&id.as_str()));
+    // A term nothing grants stays out of the picker until something does; the devotion and
+    // prayer scroll terms show locked meanwhile.
+    let scroll = Spellbook::scroll_terms(rules, school);
+    terms.retain(|(id, _)| book.unlocked.contains(*id) || Spellbook::DEVOTION_TERMS.contains(&id.as_str()) || scroll.contains(id));
     terms.sort_by_key(|(id, _)| !book.unlocked.contains(*id));
     terms.into_iter()
 }
@@ -612,7 +613,7 @@ fn build_book(
                                 if unlocked {
                                     line(b, term_effect(term), &fonts.mono, 12.0, MUTED);
                                 } else {
-                                    line(b, unlocked_by(id), &fonts.body_italic, 13.0, BAD.mix(&MUTED, 0.5).with_alpha(0.8));
+                                    line(b, unlocked_by(rules, school, id), &fonts.body_italic, 13.0, BAD.mix(&MUTED, 0.5).with_alpha(0.8));
                                 }
                             });
                         }
@@ -735,8 +736,13 @@ mod tests {
             assert!(matches!(draft.pick(&rules, &book, Casting::Divine, kind, id), Err(ComposeError::Locked(_))), "{id}");
         }
         assert_eq!(draft, before, "the draft is as it was");
-        assert!(unlocked_by("frighten").contains("favored foe"));
-        assert!(unlocked_by("heal").contains("prayer scroll") && unlocked_by("cure").contains("prayer scroll"));
+        let rules = fb_character::rules::defaults();
+        assert!(unlocked_by(rules, Casting::Divine, "frighten").contains("favored foe"));
+        for id in Spellbook::scroll_terms(rules, Casting::Divine) {
+            assert_eq!(unlocked_by(rules, Casting::Divine, &id), "unlocked by a prayer scroll", "{id}");
+        }
+        assert_eq!(unlocked_by(rules, Casting::Divine, "cone"), "unlocked by a prayer scroll");
+        assert_eq!(unlocked_by(rules, Casting::Divine, "light"), "not yet unlocked");
     }
 
     #[test]
@@ -798,13 +804,14 @@ mod tests {
     }
 
     #[test]
-    fn a_term_nothing_grants_is_left_out_of_the_picker() {
+    fn a_scroll_term_shows_in_the_picker_locked() {
         let (rules, book) = cleric();
         let ids: Vec<_> = ordered(&rules, &book, Casting::Divine, TermKind::Reach).map(|(id, _)| id.as_str()).collect();
-        assert!(!ids.contains(&"cone"));
+        assert!(ids.contains(&"cone"), "a scroll term shows locked in Reach");
         let effects: Vec<_> = ordered(&rules, &book, Casting::Divine, TermKind::Effect).map(|(id, _)| id.as_str()).collect();
         assert!(effects.contains(&"charm"), "a devotion term shows locked");
-        assert_eq!(unlocked_by("charm"), "unlocked by an alignment");
+        assert_eq!(unlocked_by(&rules, Casting::Divine, "charm"), "unlocked by an alignment");
+        assert!(!book.unlocked.contains("cone"), "and stays locked until a scroll is read");
     }
 
     #[test]
