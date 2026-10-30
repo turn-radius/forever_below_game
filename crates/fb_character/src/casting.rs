@@ -54,18 +54,20 @@ pub struct TermRules {
     pub range: f64,
     /// Game seconds a duration term lasts at the first tier; 0 for the rest.
     pub seconds: f64,
+    /// Hit points a heal term restores at the first tier; 0 for the rest.
+    pub power: f64,
     /// Known from the start, rather than unlocked by something else.
     pub known: bool,
 }
 
 impl Default for TermRules {
     fn default() -> Self {
-        TermRules { kind: TermKind::Effect, name: String::new(), school: Casting::Divine, cost: 0.0, range: 0.0, seconds: 0.0, known: true }
+        TermRules { kind: TermKind::Effect, name: String::new(), school: Casting::Divine, cost: 0.0, range: 0.0, seconds: 0.0, power: 0.0, known: true }
     }
 }
 
 fn term(kind: TermKind, name: &str, school: Casting, cost: f64, range: f64, seconds: f64, known: bool) -> TermRules {
-    TermRules { kind, name: name.to_string(), school, cost, range, seconds, known }
+    TermRules { kind, name: name.to_string(), school, cost, range, seconds, power: 0.0, known }
 }
 
 /// Every term's numbers, by id.
@@ -120,6 +122,8 @@ impl Default for CastingRules {
             ("frighten", term(Effect, "Frighten", Divine, 3.0, 0.0, 0.0, false)),
             ("charm", term(Effect, "Charm", Divine, 3.0, 0.0, 0.0, false)),
             ("bane", term(Effect, "Bane", Divine, 2.0, 0.0, 0.0, false)),
+            ("heal", TermRules { power: 4.0, ..term(Effect, "Heal", Divine, 3.0, 0.0, 0.0, false) }),
+            ("cure", term(Effect, "Cure", Divine, 2.0, 0.0, 0.0, false)),
             ("self", term(Reach, "Self", Divine, 0.0, 0.0, 0.0, true)),
             ("around", term(Reach, "Around you", Divine, 1.0, 20.0, 0.0, true)),
             ("touch", term(Reach, "Touch", Divine, 0.0, 5.0, 0.0, true)),
@@ -176,6 +180,8 @@ pub struct Preview {
     pub range: f64,
     /// Game seconds.
     pub duration: f64,
+    /// Hit points a heal restores.
+    pub power: f64,
 }
 
 /// A prayer or spell as written: its three terms by id. `school` is who writes it.
@@ -227,7 +233,7 @@ impl Written {
         let get = |id: &str| rules.casting.terms.get(id);
         let cost: f64 = self.terms().iter().filter_map(|(id, _)| get(id)).map(|t| t.cost).sum();
         let n = f64::from(tier);
-        Preview { tier, cost: cost * n, range: get(&self.reach).map_or(0.0, |t| t.range) * n, duration: get(&self.duration).map_or(0.0, |t| t.seconds) * n }
+        Preview { tier, cost: cost * n, range: get(&self.reach).map_or(0.0, |t| t.range) * n, duration: get(&self.duration).map_or(0.0, |t| t.seconds) * n, power: get(&self.effect).map_or(0.0, |t| t.power) * n }
     }
 
     /// [`Written::preview_with`] under the default rules.
@@ -287,6 +293,9 @@ impl Spellbook {
 
     /// The terms a devotion unlocks and a different one takes away again.
     pub const DEVOTION_TERMS: [&'static str; 3] = ["bane", "frighten", "charm"];
+
+    /// The terms a prayer scroll unlocks; a devotion never takes them away.
+    pub const SCROLL_TERMS: [&'static str; 2] = ["heal", "cure"];
 
     /// Whether the unlocked devotion terms are exactly those `devotion` grants.
     pub fn follows_devotion(&self, devotion: Option<crate::devotion::Devotion>) -> bool {
@@ -394,6 +403,8 @@ pub struct Cast {
     pub range: f64,
     /// Game seconds.
     pub duration: f64,
+    /// Hit points a heal restores.
+    pub power: f64,
 }
 
 /// Casts `written` at `tier` for a character who casts as `casting` with `unlocked` terms,
@@ -415,7 +426,7 @@ pub fn cast_with(rules: &Rules, mana: &mut Mana, casting: Casting, unlocked: &BT
     if !mana.spend(p.cost) {
         return Err(CastError::NotEnoughMana { needed: p.cost, have: mana.points });
     }
-    Ok(Cast { written: written.clone(), tier, cost: p.cost, range: p.range, duration: p.duration })
+    Ok(Cast { written: written.clone(), tier, cost: p.cost, range: p.range, duration: p.duration, power: p.power })
 }
 
 #[cfg(test)]
@@ -457,9 +468,9 @@ mod tests {
     fn changing_a_term_changes_cost_and_range() {
         let book = cleric();
         let ward = compose(&book.unlocked, Casting::Divine, "Ward", "ward", "around", "long").unwrap();
-        assert_eq!(ward.preview(1), Preview { tier: 1, cost: 5.0, range: 20.0, duration: 1800.0 });
+        assert_eq!(ward.preview(1), Preview { tier: 1, cost: 5.0, range: 20.0, duration: 1800.0, power: 0.0 });
         let touch = compose(&book.unlocked, Casting::Divine, "Touch", "ward", "touch", "short").unwrap();
-        assert_eq!(touch.preview(1), Preview { tier: 1, cost: 3.0, range: 5.0, duration: 600.0 });
+        assert_eq!(touch.preview(1), Preview { tier: 1, cost: 3.0, range: 5.0, duration: 600.0, power: 0.0 });
         assert_ne!(ward.preview(1).cost, Written::divine_light().preview(1).cost);
     }
 
@@ -556,7 +567,7 @@ mod tests {
         let book = Spellbook::starting(Casting::Arcane);
         assert!(book.written.is_empty());
         let w = compose(&book.unlocked, Casting::Arcane, "Spark", "arcane_light", "arcane_around", "arcane_short").unwrap();
-        assert_eq!(w.preview(2), Preview { tier: 2, cost: 6.0, range: 40.0, duration: 1200.0 });
+        assert_eq!(w.preview(2), Preview { tier: 2, cost: 6.0, range: 40.0, duration: 1200.0, power: 0.0 });
         assert!(matches!(compose(&book.unlocked, Casting::Arcane, "x", "light", "arcane_around", "arcane_short"), Err(ComposeError::WrongSchool { .. })));
         let mut mana = Mana::full(10.0);
         let cast = cast(&mut mana, Casting::Arcane, &book.unlocked, &w, 2).unwrap();
@@ -587,6 +598,17 @@ mod tests {
         assert_eq!(locked(&book), [true, true, false]);
         assert!(book.follow_devotion(None));
         assert_eq!(locked(&book), [true; 3]);
+    }
+
+    #[test]
+    fn heal_and_cure_are_locked_until_unlocked_and_heal_scales_with_tier() {
+        let mut book = Spellbook::starting(Casting::Divine);
+        let heal = compose(&book.unlocked, Casting::Divine, "Mend", "heal", "touch", "short");
+        assert!(matches!(heal, Err(ComposeError::Locked(_))));
+        assert!(book.unlock("heal") && book.unlock("cure"));
+        let heal = compose(&book.unlocked, Casting::Divine, "Mend", "heal", "touch", "short").unwrap();
+        assert_eq!(heal.preview(2).power, 2.0 * heal.preview(1).power);
+        assert_eq!(heal.preview(2).cost, 2.0 * heal.preview(1).cost);
     }
 
     #[test]

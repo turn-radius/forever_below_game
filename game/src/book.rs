@@ -13,7 +13,8 @@
 //!   ([`crate::ui`]); the mouse is read in the interface's own pixels ([`ui_cursor`]). It is a
 //!   screen like the others: the delver stands still behind it, and Esc or B closes it.
 //! - `FB_OPEN_BOOK=1` opens it a few frames in, for captures; `FB_OPEN_BOOK=swap` first
-//!   swaps "around you" for "touch", `FB_OPEN_BOOK=write` writes a second prayer.
+//!   swaps "around you" for "touch", `FB_OPEN_BOOK=write` writes a second prayer, `FB_OPEN_BOOK=heal` writes "Mending Hand" from
+//!   Heal (with `FB_UNLOCK_TERMS=heal,cure` to unlock terms at the start).
 
 use bevy::{
     input::{
@@ -113,6 +114,7 @@ pub fn unlocked_by(id: &str) -> &'static str {
     match id {
         "bane" | "frighten" => "unlocked by a favored foe",
         "charm" => "unlocked by an alignment",
+        "heal" | "cure" => "unlocked by a prayer scroll",
         _ => "not yet unlocked",
     }
 }
@@ -285,7 +287,23 @@ fn open_for_capture(
         return;
     }
     let school = character.as_deref().map_or(Casting::Divine, |c| c.class.casting());
+    // `FB_UNLOCK_TERMS=heal,cure` unlocks those terms first, as a prayer scroll will.
+    if let (Ok(ids), Some(mut sp)) = (std::env::var("FB_UNLOCK_TERMS"), players.iter_mut().next()) {
+        for id in ids.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+            sp.0.unlock_with(&rules, id);
+        }
+    }
     open_book(&mut book, &mut open, None, &players.as_readonly(), &chosen);
+    if mode == "heal" {
+        if let Some(sp) = players.iter().next() {
+            let _ = book.draft.pick(&rules, &sp.0, school, TermKind::Effect, "heal");
+            let _ = book.draft.pick(&rules, &sp.0, school, TermKind::Reach, "touch");
+        }
+        book.draft.name = "Mending Hand".into();
+        if let Some(mut sp) = players.iter_mut().next() {
+            let _ = book.draft.save(&rules, &mut sp.0, school);
+        }
+    }
     if mode == "swap" || mode == "write" {
         if let Some(sp) = players.iter().next() {
             let _ = book.draft.pick(&rules, &sp.0, school, TermKind::Reach, "touch");
@@ -467,8 +485,9 @@ fn button_colours(button: &BookButton, over: bool) -> (Color, Color) {
 /// The terms of `kind` for the book: those the caster has first, then the locked ones.
 fn ordered<'a>(rules: &'a Rules, book: &Spellbook, school: Casting, kind: TermKind) -> impl Iterator<Item = (&'a String, &'a TermRules)> {
     let mut terms: Vec<_> = rules.casting.terms.iter().filter(|(_, t)| t.kind == kind && t.school == school).collect();
-    // A term nothing grants (cone) stays out of the picker until something does.
-    terms.retain(|(id, _)| book.unlocked.contains(*id) || Spellbook::DEVOTION_TERMS.contains(&id.as_str()));
+    // A term nothing grants (cone) stays out of the picker until something does; the devotion
+    // and prayer scroll terms show locked meanwhile.
+    terms.retain(|(id, _)| book.unlocked.contains(*id) || Spellbook::DEVOTION_TERMS.contains(&id.as_str()) || Spellbook::SCROLL_TERMS.contains(&id.as_str()));
     terms.sort_by_key(|(id, _)| !book.unlocked.contains(*id));
     terms.into_iter()
 }
@@ -717,6 +736,7 @@ mod tests {
         }
         assert_eq!(draft, before, "the draft is as it was");
         assert!(unlocked_by("frighten").contains("favored foe"));
+        assert!(unlocked_by("heal").contains("prayer scroll") && unlocked_by("cure").contains("prayer scroll"));
     }
 
     #[test]

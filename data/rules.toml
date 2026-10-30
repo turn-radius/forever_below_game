@@ -179,6 +179,27 @@ range = 0.0
 seconds = 0.0
 known = false
 
+# Heal restores `power` hit points at the first tier (times the tier), never above the maximum.
+# Cure ends the poisoned effect. Both are unlocked by a prayer scroll.
+[casting.terms.heal]
+kind = "effect"
+name = "Heal"
+school = "Divine"
+cost = 3.0
+range = 0.0
+seconds = 0.0
+power = 4.0
+known = false
+
+[casting.terms.cure]
+kind = "effect"
+name = "Cure"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = false
+
 [casting.terms.self]
 kind = "reach"
 name = "Self"
