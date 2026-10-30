@@ -633,7 +633,7 @@ fn every_resource_and_component_is_accounted_for() {
         ("combat::revival::Prayers", "Divine Protection's prayer: a save is written on lying down, and sleep renews it"),
         ("book::Book", "the spellbook screen: open-screen state"),
         ("devotion::Offered", "an open devotion offer: the deed tally offers it again"),
-        ("smoke::PuffAssets", "the smoke puffs' mesh, made when the app starts"),
+        ("smoke::WispAssets", "the smoke wisp's texture, made when the app starts"),
         // Set again by the delve that starts, from what the save holds.
         ("save::SaveFile", "where the file is"),
         ("save::Saveable", "whether this delve may save: set by the title"),
