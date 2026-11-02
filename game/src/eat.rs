@@ -242,14 +242,14 @@ impl Eating<'_, '_> {
     /// denizen tongue teaches its words ([`crate::reading::study`]), and a book teaches
     /// ([`Character::read`]), the score it teaches rising for good, once per delver. Returns what
     /// the toast says; `None` if there is nothing to read on it or no delver to read a book.
-    pub fn read(&mut self, inventory: &Inventory, id: ItemId) -> Option<String> {
+    pub fn read(&mut self, inventory: &mut Inventory, id: ItemId) -> Option<String> {
+        if let (Some(teaching), Some(record)) = (inventory.teaching_mut(id), self.record.as_mut()) {
+            return Some(crate::reading::study(&mut record.lexicon, teaching));
+        }
         let book = inventory.item(id)?;
         if let (Some(words), Some(page)) = (&book.words, self.page.as_mut()) {
             page.open(book.title(), words.clone());
             return Some(format!("You read the {}", book.title().to_lowercase()));
-        }
-        if let (Some(teaching), Some(record)) = (book.teaching(), self.record.as_mut()) {
-            return Some(crate::reading::study(&mut record.lexicon, teaching));
         }
         let character = self.character.as_mut()?;
         book.lesson()?;
@@ -376,7 +376,7 @@ fn act_on_hovered(
                 toast.say(said, now);
             }
             Some(Verb::Read) => {
-                if let Some(line) = eating.read(&inventory, id) {
+                if let Some(line) = eating.read(&mut inventory, id) {
                     toast.say(line, now);
                 }
             }
@@ -604,8 +604,9 @@ mod tests {
         assert!(lexicon.known_share(DenizenKind::Minotaur) > 0.0 && lexicon.known_share(DenizenKind::Cyclops) == 0.0);
         assert_eq!(lexicon.known_words(DenizenKind::Minotaur).len(), teaching.words.len());
         assert!(app.world().resource::<Inventory>().item(id).is_some(), "the scroll is kept");
+        // A writing teaches once; a second reading of the same copy teaches nothing.
         press_u(&mut app);
-        assert_eq!(app.world().resource::<Toast>().text, "You already know these words.");
+        assert_eq!(app.world().resource::<Toast>().text, "You have learned all this writing can teach.");
         assert_eq!(app.world().resource::<crate::record::WorldRecord>().lexicon(), &lexicon);
     }
 
