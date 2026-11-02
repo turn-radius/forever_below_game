@@ -333,7 +333,7 @@ impl Sim {
         let m = e.motion;
         let jitter = |me: &mut Sim| [me.signed() * m.scatter, me.signed() * m.scatter * 0.5, me.signed() * m.scatter];
         let v0 = match m.kind {
-            MotionKind::Still | MotionKind::Orbit | MotionKind::Gather | MotionKind::Path | MotionKind::Curl => [0.0; 3],
+            MotionKind::Still | MotionKind::Orbit | MotionKind::Helix | MotionKind::Gather | MotionKind::Path | MotionKind::Curl => [0.0; 3],
             MotionKind::Rise => add([0.0, m.speed, 0.0], jitter(self)),
             MotionKind::Fall => add([0.0, -m.speed, 0.0], jitter(self)),
             MotionKind::Burst => {
@@ -374,6 +374,11 @@ impl Sim {
                 let u = norm(cross(p.normal, [0.0, 0.0, 1.0]), [1.0, 0.0, 0.0]);
                 let w = cross(p.normal, u);
                 add(add(p.p0, [0.0, m.speed * age, 0.0]), add(mul(u, m.orbit_radius * angle.cos()), mul(w, m.orbit_radius * angle.sin())))
+            }
+            MotionKind::Helix => {
+                let angle = p.phase + std::f32::consts::TAU * m.orbits * share;
+                let r = m.orbit_radius + m.scatter * (p.phase * 7.31).sin();
+                [p.goal[0] + r * angle.cos(), p.p0[1] + m.speed * age, p.goal[2] + r * angle.sin()]
             }
             MotionKind::Gather => lerp(p.p0, p.goal, share * share * (3.0 - 2.0 * share)),
             MotionKind::Path => arc_at(p.p0, p.goal, p.arc, share),
@@ -580,6 +585,56 @@ mod tests {
                 assert!(((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - 5.0).abs() < 1e-3);
             }
         }
+    }
+
+    #[test]
+    fn a_helix_winds_round_the_axis_and_climbs() {
+        let mut e = burst(8);
+        e.emitters[0].spawn = Spawn { at: Anchor::Caster, nudge: [0.0, -15.0, 0.0], ..Spawn::default() };
+        e.emitters[0].timing.life = 0.8;
+        e.emitters[0].motion = Motion { kind: MotionKind::Helix, speed: 20.0, scatter: 1.0, orbit_radius: 6.0, orbits: 2.0, ..Motion::default() };
+        let run = || {
+            let mut sim = Sim::new(e.clone(), 5, 1);
+            let p = places(1);
+            let mut track: Vec<Vec<V3>> = Vec::new();
+            for _ in 0..22 {
+                sim.step(1.0 / 30.0, &p);
+                let ps = sim.particles();
+                if track.is_empty() {
+                    track = vec![Vec::new(); ps.len()];
+                }
+                for (t, q) in track.iter_mut().zip(ps) {
+                    t.push(q.pos);
+                }
+            }
+            track
+        };
+        let track = run();
+        assert_eq!(track.len(), 8);
+        for t in &track {
+            let mut turned = 0.0;
+            let mut last: Option<f32> = None;
+            for w in t.windows(2) {
+                assert!(w[1][1] > w[0][1], "height rises");
+            }
+            for q in t {
+                let r = (q[0] * q[0] + q[2] * q[2]).sqrt();
+                assert!((r - 6.0).abs() <= 1.001, "stays near the radius: {r}");
+                let a = q[2].atan2(q[0]);
+                if let Some(l) = last {
+                    let mut d = a - l;
+                    while d < 0.0 {
+                        d += std::f32::consts::TAU;
+                    }
+                    turned += d;
+                }
+                last = Some(a);
+            }
+            let expect = std::f32::consts::TAU * 2.0 * (t.len() - 1) as f32 / (0.8 * 30.0);
+            assert!((turned - expect).abs() < 0.3, "{turned} vs {expect}");
+            assert!((t[0][1] - 1.0).abs() < 1.0 + 20.0 / 30.0, "starts at the feet: {}", t[0][1]);
+        }
+        assert_eq!(track, run(), "same seed, same path");
     }
 
     #[test]

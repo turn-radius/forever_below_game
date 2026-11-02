@@ -62,7 +62,10 @@ In a lasting effect (`lasts = true`) bursts go off again each `length`.
 
 `kind`: `still`, `rise`, `fall`, `burst` (outward at about `speed`), `drift`, `curl` (rises
 winding a spiral `scatter` wide), `orbit` (a tilted ring of `orbit_radius` about the spawn
-point, `orbits` turns in a life), `gather` (spawn to `to`) and `path` (spawn to `to`, bowed by
+point, `orbits` turns in a life), `helix` (a helix round the anchor's upright axis: radius
+`orbit_radius`, strayed up to `scatter` a particle, `orbits` turns in a life, negative the other way,
+rising at `speed` from the spawn's height; spawn it low on a `point` and it climbs past the head),
+`gather` (spawn to `to`) and `path` (spawn to `to`, bowed by
 `arc`). `speed` is units a second, `scatter` strays each particle's velocity, `gravity` pulls
 down, `wind` pushes.
 
@@ -89,15 +92,18 @@ steps give the same particles.
 ## The effects
 
 - `smite`, `shield`, `shield_struck`: the Smite and Shield prayers (see `docs/design.md`, Prayers).
-- `heal`: when a Heal prayer mends something, warm gold and soft green motes spiral up around and
-  ahead of the view and draw in, with sparks and a soft warm glow, about 1.5 s. A cast at full
-  hit points plays nothing.
-- `cure`: when a Cure prayer lifts a poison, a sickly green haze swirls out around the view, then
-  a brief white flash scatters it into sparks, about 1.6 s. A cast with nothing to cure plays nothing.
+- `heal`: when a Heal prayer mends something, a swirl of warm gold and a few soft green motes
+  winds round the delver and up from the feet past the head, with soft wisps trailing so the
+  circling reads, under a warm glow, about 1.9 s. A cast at full hit points plays nothing.
+- `cure`: when a Cure prayer lifts a poison, the same swirl in a sickly yellow-green winds the
+  other way, then a brief white flash scatters it into sparks, about 1.9 s. A cast with nothing
+  to cure plays nothing.
 - `test_burst`: the worked example.
 
-Both are caster-anchored a little below and ahead of the eye, so the swirl is seen at the edges
-of a first-person view and not hidden behind the camera.
+Both are `helix` swirls on the caster's own axis: the spawn is the eye nudged 15 units down (the
+feet), the radius 3.6 to 5.8 units so the motes pass in front of the view and cross it left to
+right and back (clear of the near plane), and they climb past the head. The same swirl seen from
+outside circles the body. Cure's flash and sparks go off just ahead of the eye.
 
 ## Adding a card
 

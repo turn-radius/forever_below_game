@@ -1,8 +1,8 @@
-# Cure: a sickly green haze is drawn out of the body and swirls around the view, then a brief white
-# flash scatters it into sparks. Played at the delver when a Cure prayer lifts something. See
-# docs/effects.md.
+# Cure: a sickly yellow-green swirl is drawn out of the delver, winding round and up the same way
+# Heal does, then a brief white flash scatters it into sparks. Played at the delver when a Cure
+# prayer lifts something. See docs/effects.md.
 name = "cure"
-length = 1.6
+length = 1.9
 lasts = false
 bloom_in = 0.2
 sputter_out = 0.5
@@ -12,53 +12,55 @@ at = "caster"
 peak = 0.4
 reach = 90.0
 colour = [0.8, 1.0, 0.8]
-follows = { flash = { at_s = 1.0 } }
-
-[[emitters]]
-name = "haze"
-card = "wisp"
-size = [{ at = 0.0, size = 3.0 }, { at = 0.5, size = 6.0 }, { at = 1.0, size = 8.0 }]
-colour = [{ at = 0.0, rgb = [0.65, 0.85, 0.2] }, { at = 1.0, rgb = [0.4, 0.7, 0.25] }]
-
-[emitters.spawn]
-at = "caster"
-nudge = [0.0, -4.0, 14.0]
-
-[emitters.timing]
-kind = "stream"
-count = 30
-life = 1.0
-start = 0.0
-end = 1.0
-
-[emitters.motion]
-kind = "orbit"
-speed = 3.0
-orbit_radius = 9.0
-orbits = 1.2
+follows = { flash = { at_s = 1.3 } }
 
 [[emitters]]
 name = "motes"
 card = "mote"
-size = [{ at = 0.0, size = 1.2 }, { at = 1.0, size = 0.7 }]
-colour = [{ at = 0.0, rgb = [0.6, 0.8, 0.2] }, { at = 1.0, rgb = [0.4, 0.7, 0.35] }]
+size = [{ at = 0.0, size = 1.2 }, { at = 0.5, size = 2.6 }, { at = 1.0, size = 0.8 }]
+colour = [{ at = 0.0, rgb = [0.95, 1.0, 0.35] }, { at = 1.0, rgb = [0.75, 1.0, 0.45] }]
 
 [emitters.spawn]
 at = "caster"
-nudge = [0.0, -4.0, 14.0]
+nudge = [0.0, -15.0, 0.0]
 
 [emitters.timing]
 kind = "stream"
-count = 50
-life = 1.0
+count = 300
+life = 1.2
 start = 0.0
 end = 1.0
 
 [emitters.motion]
-kind = "orbit"
-speed = 4.0
-orbit_radius = 11.0
-orbits = 1.5
+kind = "helix"
+speed = 14.0
+scatter = 1.8
+orbit_radius = 4.8
+orbits = -1.6
+
+[[emitters]]
+name = "haze"
+card = "wisp"
+size = [{ at = 0.0, size = 2.5 }, { at = 0.5, size = 5.0 }, { at = 1.0, size = 6.0 }]
+colour = [{ at = 0.0, rgb = [0.9, 1.0, 0.3] }, { at = 1.0, rgb = [0.65, 0.95, 0.35] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -15.0, 0.0]
+
+[emitters.timing]
+kind = "stream"
+count = 40
+life = 1.3
+start = 0.0
+end = 1.0
+
+[emitters.motion]
+kind = "helix"
+speed = 13.0
+scatter = 1.0
+orbit_radius = 5.8
+orbits = -1.3
 
 [[emitters]]
 name = "flash"
@@ -68,13 +70,13 @@ colour = [{ at = 0.0, rgb = [1.0, 1.0, 1.0] }, { at = 1.0, rgb = [0.9, 1.0, 0.95
 
 [emitters.spawn]
 at = "caster"
-nudge = [0.0, -2.0, 16.0]
+nudge = [0.0, 0.0, 12.0]
 
 [emitters.timing]
 kind = "burst"
 count = 1
 life = 0.35
-start = 1.0
+start = 1.3
 
 [[emitters]]
 name = "scatter"
@@ -85,13 +87,13 @@ colour = [{ at = 0.0, rgb = [1.0, 1.0, 1.0] }, { at = 1.0, rgb = [0.55, 0.85, 0.
 
 [emitters.spawn]
 at = "caster"
-nudge = [0.0, -3.0, 14.0]
+nudge = [0.0, 0.0, 8.0]
 
 [emitters.timing]
 kind = "burst"
 count = 36
 life = 0.6
-start = 1.0
+start = 1.3
 
 [emitters.motion]
 kind = "burst"

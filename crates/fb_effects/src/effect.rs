@@ -152,6 +152,11 @@ pub enum MotionKind {
     Curl,
     /// Circles the spawn point on a tilted ring of `orbit_radius`, `orbits` times in its life.
     Orbit,
+    /// A helix: circles the anchor's upright axis (the vertical through the spawn's anchor, so
+    /// through the caster's body) at `orbit_radius`, strayed up to `scatter` per particle,
+    /// `orbits` turns in its life, while rising at `speed`. Start the spawn low and it climbs
+    /// past the head.
+    Helix,
     /// Draws in from the spawn to the `to` anchor.
     Gather,
     /// Arcs from the spawn to the `to` anchor, bowed by `arc`.
