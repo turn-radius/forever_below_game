@@ -263,6 +263,6 @@ mod tests {
                 feed(format!("{:?}{:?}{}", b.faction, b.site, b.room).as_bytes());
             }
         }
-        assert_eq!(hash, 14285324094290484949, "banner fingerprint");
+        assert_eq!(hash, 17287689020126041408, "banner fingerprint");
     }
 }
