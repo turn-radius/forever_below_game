@@ -482,13 +482,13 @@ fn land_blows(
                     if burning {
                         info!("swing: {damage} + {fire} fire");
                     }
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false, fire });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: attack.natural == 20, by_ally: false, graze: false, extra: fire });
                     if burning {
                         burned.write(Burned { target });
                     }
                 } else if let Some(damage) = fb_character::combat::graze(rules, &attack, &mut dice.0) {
                     info!("swing: grazes for {damage}");
-                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true, fire: 0 });
+                    struck.write(Struck { target, damage, from, bludgeoning: swing.weapon.bludgeoning, critical: false, by_ally: false, graze: true, extra: 0 });
                 } else {
                     callouts.write(Callout { target, outcome: Outcome::Miss });
                 }

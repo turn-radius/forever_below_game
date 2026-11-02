@@ -1,0 +1,65 @@
+# A blow on the shield: a flash and a ripple toward the side it came from, and a short ring on
+# the floor. Played at a point on the floor just that side of the delver.
+name = "shield_struck"
+length = 0.9
+lasts = false
+bloom_in = 0.05
+sputter_out = 0.4
+
+[light]
+at = "target"
+peak = 0.5
+reach = 70.0
+colour = [1.0, 0.85, 0.5]
+follows = { flash = { at_s = 0.05 } }
+
+[[emitters]]
+name = "flash"
+card = "wisp"
+size = [{ at = 0.0, size = 6.0 }, { at = 0.3, size = 26.0 }, { at = 1.0, size = 34.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.75] }, { at = 1.0, rgb = [1.0, 0.75, 0.35] }]
+
+[emitters.spawn]
+at = "targets_feet"
+nudge = [0.0, 10.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.45
+start = 0.0
+
+[[emitters]]
+name = "ring"
+card = "ring"
+size = [{ at = 0.0, size = 6.0 }, { at = 1.0, size = 34.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.92, 0.65] }, { at = 1.0, rgb = [1.0, 0.7, 0.3] }]
+
+[emitters.spawn]
+at = "targets_feet"
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.6
+start = 0.02
+
+[[emitters]]
+name = "motes"
+card = "mote"
+size = [{ at = 0.0, size = 0.6 }, { at = 1.0, size = 0.15 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.7] }, { at = 1.0, rgb = [1.0, 0.7, 0.3] }]
+
+[emitters.spawn]
+at = "targets_feet"
+nudge = [0.0, 8.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 14
+life = 0.6
+
+[emitters.motion]
+kind = "burst"
+speed = 22.0
+scatter = 6.0
