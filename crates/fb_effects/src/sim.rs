@@ -172,6 +172,8 @@ struct Spawner {
     /// The cycle a burst or a prefill was thrown in.
     fired: Option<u32>,
     carry: f32,
+    /// Particles thrown so far, which deals a helix's strands.
+    thrown: u32,
 }
 
 /// A running effect.
@@ -348,6 +350,8 @@ impl Sim {
         };
         let id = self.next_id;
         self.next_id += 1;
+        self.spawners[s].thrown += 1;
+        let phase = if m.kind == MotionKind::Helix && m.strands > 0 { std::f32::consts::TAU * (self.spawners[s].thrown % m.strands) as f32 / m.strands as f32 } else { phase };
         let normal = ring_normal(id);
         self.live.push(Live { id, emitter: self.spawners[s].emitter, born, p0, v0, goal, arc: sp.arc, phase, normal });
     }
@@ -377,7 +381,7 @@ impl Sim {
             }
             MotionKind::Helix => {
                 let angle = p.phase + std::f32::consts::TAU * m.orbits * share;
-                let r = m.orbit_radius + m.scatter * (p.phase * 7.31).sin();
+                let r = m.orbit_radius + m.scatter * (p.id as f32 * 12.9898).sin();
                 [p.goal[0] + r * angle.cos(), p.p0[1] + m.speed * age, p.goal[2] + r * angle.sin()]
             }
             MotionKind::Gather => lerp(p.p0, p.goal, share * share * (3.0 - 2.0 * share)),
@@ -635,6 +639,19 @@ mod tests {
             assert!((t[0][1] - 1.0).abs() < 1.0 + 20.0 / 30.0, "starts at the feet: {}", t[0][1]);
         }
         assert_eq!(track, run(), "same seed, same path");
+    }
+
+    #[test]
+    fn helix_strands_share_a_few_start_angles() {
+        let mut e = burst(12);
+        e.emitters[0].spawn = Spawn { at: Anchor::Caster, ..Spawn::default() };
+        e.emitters[0].motion = Motion { kind: MotionKind::Helix, speed: 10.0, orbit_radius: 4.0, orbits: 1.0, strands: 3, ..Motion::default() };
+        let mut sim = Sim::new(e, 2, 1);
+        sim.step(0.0, &places(1));
+        let mut angles: Vec<i32> = sim.particles().iter().map(|q| (q.pos[2].atan2(q.pos[0]) * 100.0).round() as i32).collect();
+        angles.sort();
+        angles.dedup();
+        assert_eq!(angles.len(), 3, "{angles:?}");
     }
 
     #[test]

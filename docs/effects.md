@@ -4,7 +4,8 @@ What a spell or an item shows when it goes off is data: one TOML file per effect
 `data/effects/`, read by `crates/fb_effects` (plain Rust) and played by `game/src/effects.rs`.
 Edit a file while the game runs and the next play of that effect changes (a file added while it
 runs shows after a restart). `data/effects/test_burst.toml` is the worked example; play it with
-`FB_PLAY_EFFECT=test_burst`.
+`FB_PLAY_EFFECT=test_burst`. Add `FB_PLAY_FROM=ahead` to cast it from a figure standing there, to
+see it from outside.
 
 ## An effect
 
@@ -64,7 +65,9 @@ In a lasting effect (`lasts = true`) bursts go off again each `length`.
 winding a spiral `scatter` wide), `orbit` (a tilted ring of `orbit_radius` about the spawn
 point, `orbits` turns in a life), `helix` (a helix round the anchor's upright axis: radius
 `orbit_radius`, strayed up to `scatter` a particle, `orbits` turns in a life, negative the other way,
-rising at `speed` from the spawn's height; spawn it low on a `point` and it climbs past the head),
+rising at `speed` from the spawn's height; spawn it low on a `point` and it climbs past the head;
+`strands` deals the start angles round that many evenly spaced strands in the order thrown, so a
+stream follows itself up a few spiral lines, 0 spreads them freely),
 `gather` (spawn to `to`) and `path` (spawn to `to`, bowed by
 `arc`). `speed` is units a second, `scatter` strays each particle's velocity, `gravity` pulls
 down, `wind` pushes.
@@ -92,17 +95,17 @@ steps give the same particles.
 ## The effects
 
 - `smite`, `shield`, `shield_struck`: the Smite and Shield prayers (see `docs/design.md`, Prayers).
-- `heal`: when a Heal prayer mends something, a swirl of warm gold and a few soft green motes
-  winds round the delver and up from the feet past the head, with soft wisps trailing so the
-  circling reads, under a warm glow, about 1.9 s. A cast at full hit points plays nothing.
+- `heal`: when a Heal prayer mends something, three strands of small warm gold motes and a few
+  soft green ones wind up a body-wide column round the delver from the feet past the head, with
+  short streaks and soft wisps trailing so the spiral reads, under a warm glow, about 1.9 s. A cast at full hit points plays nothing.
 - `cure`: when a Cure prayer lifts a poison, the same swirl in a sickly yellow-green winds the
   other way, then a brief white flash scatters it into sparks, about 1.9 s. A cast with nothing
   to cure plays nothing.
 - `test_burst`: the worked example.
 
 Both are `helix` swirls on the caster's own axis: the spawn is the eye nudged 15 units down (the
-feet), the radius 3.6 to 5.8 units so the motes pass in front of the view and cross it left to
-right and back (clear of the near plane), and they climb past the head. The same swirl seen from
+feet), the radius 3.6 units (a body's width), so the strands cross the lower view and climb past it,
+clear of the near plane. The same swirl seen from
 outside circles the body. Cure's flash and sparks go off just ahead of the eye.
 
 ## Adding a card
