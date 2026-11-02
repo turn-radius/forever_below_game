@@ -86,6 +86,19 @@ Send `crate::effects::PlayEffect` (`PlayEffect::new("smite", seed).on(entity, he
 `.at(point)`, `.from(Caster::...)`). The simulation is deterministic: the same effect, seed and
 steps give the same particles.
 
+## The effects
+
+- `smite`, `shield`, `shield_struck`: the Smite and Shield prayers (see `docs/design.md`, Prayers).
+- `heal`: when a Heal prayer mends something, warm gold and soft green motes spiral up around and
+  ahead of the view and draw in, with sparks and a soft warm glow, about 1.5 s. A cast at full
+  hit points plays nothing.
+- `cure`: when a Cure prayer lifts a poison, a sickly green haze swirls out around the view, then
+  a brief white flash scatters it into sparks, about 1.6 s. A cast with nothing to cure plays nothing.
+- `test_burst`: the worked example.
+
+Both are caster-anchored a little below and ahead of the eye, so the swirl is seen at the edges
+of a first-person view and not hidden behind the camera.
+
 ## Adding a card
 
 Add the variant to `fb_effects::Card`, a `WispKind` and a function in `wisp.wesl` for it

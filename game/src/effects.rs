@@ -848,6 +848,8 @@ mod tests {
         for (name, text) in [
             ("smite", include_str!("../../data/effects/smite.toml")),
             ("shield", include_str!("../../data/effects/shield.toml")),
+            ("heal", include_str!("../../data/effects/heal.toml")),
+            ("cure", include_str!("../../data/effects/cure.toml")),
             ("shield_struck", include_str!("../../data/effects/shield_struck.toml")),
         ] {
             let effect = Effect::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
