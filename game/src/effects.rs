@@ -1,0 +1,874 @@
+//! Spell and item effects played from data: every `data/effects/*.toml` ([`fb_effects::Effect`])
+//! is read into the [`EffectLibrary`] by file name, and reloaded when it is saved, so an edited
+//! file changes the next play. Send a [`PlayEffect`] to play one by name at a caster and some
+//! targets; [`fb_effects::Sim`] throws its particles, each drawn as a [`WispMaterial`] card
+//! (turned to the eye, or lying on the floor for a ring), and its light is a real point light in
+//! the level and another on the view model's stage, so the stone round it and what is held are
+//! both lit. Everything goes when the effect ends, and with the delve. See `docs/effects.md`.
+//!
+//! The files live in the `data` asset source like `rules.toml` ([`crate::rules`]); the folder is
+//! read once at startup, so a file added while the game runs shows after a restart, while an
+//! edit to one that was there shows at once.
+
+use std::{collections::HashMap, sync::Arc};
+
+use bevy::{
+    asset::{AssetLoader, LoadContext, io::Reader},
+    camera::Exposure,
+    light::NotShadowCaster,
+    mesh::MeshTag,
+    prelude::*,
+};
+use fb_effects::{Card, Effect, LightOut, ParticleOut, Places, Sim, Target};
+
+use crate::carry::{VIEW_MODEL_LAYER, ViewModelCamera};
+use crate::casting::{stage_light, stage_spot};
+use crate::launch::AppState;
+use crate::light::{cast_shadows, point_light};
+use crate::play::{DelveSystems, Player, PlayerCamera};
+use crate::render::{WispKind, WispMaterial, wisp_card};
+use crate::rules::DATA_SOURCE;
+
+/// The folder under the `data` source the effects are read from.
+pub const EFFECTS_FOLDER: &str = "effects";
+
+/// How many effects play at once: past it, starting one ends the oldest.
+pub const MAX_PLAYING: usize = 16;
+/// The longest step an effect takes, seconds, so a stall does not throw a burst's worth at once.
+const MAX_STEP: f32 = 0.1;
+/// A card lying on the floor stands this far over it, so it never fights the floor's depth.
+const FLOOR_LIFT: f32 = 0.15;
+/// The tall beam's height when its emitter gives no tail, as a multiple of its width.
+const BEAM_ASPECT: f32 = 8.0;
+
+/// A `data/effects/*.toml` file as an asset.
+#[derive(Asset, TypePath, Deref, Clone, Debug)]
+pub struct EffectFile(pub Effect);
+
+/// Reads an effect file. A file that is not a valid effect is an error the asset server logs,
+/// and the effect stays as it was.
+#[derive(Default, TypePath)]
+pub struct EffectLoader;
+
+impl AssetLoader for EffectLoader {
+    type Asset = EffectFile;
+    type Settings = ();
+    type Error = std::io::Error;
+
+    async fn load(&self, reader: &mut dyn Reader, _settings: &(), _load_context: &mut LoadContext<'_>) -> Result<EffectFile, Self::Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await?;
+        Effect::from_toml(&String::from_utf8_lossy(&bytes)).map(EffectFile).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["toml"]
+    }
+}
+
+/// Every effect by file name (`smite` for `smite.toml`).
+#[derive(Resource, Default, Debug)]
+pub struct EffectLibrary {
+    files: HashMap<String, Handle<EffectFile>>,
+    effects: HashMap<String, Arc<Effect>>,
+}
+
+impl EffectLibrary {
+    /// The effect called `name`.
+    pub fn get(&self, name: &str) -> Option<&Effect> {
+        self.effects.get(name).map(|e| &**e)
+    }
+
+    /// The effect called `name`, shared with whatever plays it.
+    pub fn shared(&self, name: &str) -> Option<Arc<Effect>> {
+        self.effects.get(name).cloned()
+    }
+
+    /// Adds or replaces the effect called `name`, as a loaded file does.
+    pub fn insert(&mut self, name: &str, effect: Effect) {
+        self.effects.insert(name.to_string(), Arc::new(effect));
+    }
+
+    /// The names of every effect, sorted.
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.effects.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
+}
+
+/// Who an effect comes from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Caster {
+    /// The delver, from the first-person camera.
+    Delver,
+    /// A creature or person, from `eye` units over where it stands.
+    Entity { entity: Entity, eye: f32 },
+    /// A place, looking along `forward`.
+    Point { eye: Vec3, forward: Vec3 },
+}
+
+/// What an effect plays on. An effect placed by the target plays on each one given.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EffectTarget {
+    /// A creature or person, followed as it moves, `height` units tall.
+    Entity { entity: Entity, height: f32 },
+    /// A point on the floor.
+    Point(Vec3),
+}
+
+/// Plays the effect called `name`. The one way anything shows an effect. Who the caster and
+/// targets are is fixed when it starts: it follows those entities as they move, but a target
+/// cannot be added later, and one that is despawned stays where it was last seen.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct PlayEffect {
+    pub name: String,
+    pub caster: Caster,
+    pub targets: Vec<EffectTarget>,
+    /// Seeds its particles: the same seed plays the same.
+    pub seed: u32,
+    /// The entity it is the effect of, so it can be found and stopped again ([`Playing::owner`]).
+    pub owner: Option<Entity>,
+}
+
+impl PlayEffect {
+    /// `name` from the delver's eye, on nothing in particular.
+    pub fn new(name: &str, seed: u32) -> PlayEffect {
+        PlayEffect { name: name.to_string(), caster: Caster::Delver, targets: Vec::new(), seed, owner: None }
+    }
+
+    /// Also plays on `entity`, `height` units tall.
+    pub fn on(mut self, entity: Entity, height: f32) -> PlayEffect {
+        self.targets.push(EffectTarget::Entity { entity, height });
+        self
+    }
+
+    /// Also plays on the floor at `point`.
+    pub fn at(mut self, point: Vec3) -> PlayEffect {
+        self.targets.push(EffectTarget::Point(point));
+        self
+    }
+
+    /// Marks it as the effect of `owner`, to stop it by (a lasting one needs this).
+    pub fn owned_by(mut self, owner: Entity) -> PlayEffect {
+        self.owner = Some(owner);
+        self
+    }
+
+    /// Cast by `caster` instead of the delver.
+    pub fn from(mut self, caster: Caster) -> PlayEffect {
+        self.caster = caster;
+        self
+    }
+}
+
+/// An effect being played: what it is the effect of, and what it last drew.
+#[derive(Component, Debug)]
+#[require(DespawnOnExit<AppState> = DespawnOnExit(AppState::Delving))]
+pub struct Playing {
+    sim: Sim,
+    caster: Caster,
+    targets: Vec<EffectTarget>,
+    /// Where the caster and targets were last found, kept when one has gone.
+    places: Places,
+    particles: Vec<ParticleOut>,
+    lights: Vec<LightOut>,
+    /// The cards drawn so far, reused as particles come and go.
+    cards: Vec<Entity>,
+    /// Counts up from the first effect played, so the oldest is the lowest.
+    serial: u64,
+    /// The entity it is the effect of, if it was played as one's ([`PlayEffect::owned_by`]).
+    owner: Option<Entity>,
+}
+
+impl Playing {
+    /// The entity it is the effect of, if any.
+    pub fn owner(&self) -> Option<Entity> {
+        self.owner
+    }
+
+    /// Seconds it takes to sputter out once stopped.
+    pub fn sputter_out(&self) -> f32 {
+        self.sim.effect().sputter_out
+    }
+
+    /// The effect's name.
+    pub fn name(&self) -> &str {
+        &self.sim.effect().name
+    }
+
+    /// The particles it drew last step.
+    pub fn particles(&self) -> &[ParticleOut] {
+        &self.particles
+    }
+
+    /// Whether the effect has played out.
+    pub fn finished(&self) -> bool {
+        self.sim.finished()
+    }
+
+    /// Ends it now: no more is thrown and its light sputters out. A lasting effect only ends so.
+    pub fn stop(&mut self) {
+        self.sim.stop();
+    }
+}
+
+/// A point light of a playing effect in the level, with the intensity it has at full.
+#[derive(Component, Clone, Copy, Debug)]
+struct EffectLight {
+    of: Entity,
+    index: usize,
+    full: f32,
+}
+
+/// The light a playing effect casts on the view model's stage, a child of the stage camera.
+#[derive(Component, Clone, Copy, Debug)]
+struct EffectStageLight {
+    of: Entity,
+    full: f32,
+}
+
+pub struct EffectsPlugin;
+
+impl Plugin for EffectsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<EffectLibrary>().add_message::<PlayEffect>();
+        let has_source = app.world().get_resource::<AssetServer>().is_some_and(|server| server.get_source(DATA_SOURCE).is_ok());
+        if has_source {
+            app.init_asset::<EffectFile>().init_asset_loader::<EffectLoader>().add_systems(Startup, load_effect_files).add_systems(PreUpdate, apply_effect_files);
+        }
+        app.add_systems(
+            Update,
+            (
+                debug_play_effect,
+                start_effects,
+                step_effects,
+                draw_cards.run_if(resource_exists::<Assets<WispMaterial>>),
+                light_effects,
+                light_the_stage,
+            )
+                .chain()
+                .in_set(DelveSystems),
+        );
+    }
+}
+
+/// Loads every file in the effects folder.
+fn load_effect_files(mut library: ResMut<EffectLibrary>, assets: Res<AssetServer>) {
+    let folder = std::path::PathBuf::from(crate::rules::data_folder()).join(EFFECTS_FOLDER);
+    let Ok(entries) = std::fs::read_dir(&folder) else {
+        warn!("effects: no folder {folder:?}");
+        return;
+    };
+    let mut names: Vec<String> = entries.flatten().filter_map(|e| e.file_name().into_string().ok()).filter_map(|f| f.strip_suffix(".toml").map(str::to_string)).collect();
+    names.sort_unstable();
+    for name in names {
+        let handle = assets.load::<EffectFile>(format!("{DATA_SOURCE}://{EFFECTS_FOLDER}/{name}.toml"));
+        library.files.insert(name, handle);
+    }
+}
+
+/// Copies a file into the library when it loads and each time it is saved.
+fn apply_effect_files(mut events: MessageReader<AssetEvent<EffectFile>>, files: Res<Assets<EffectFile>>, mut library: ResMut<EffectLibrary>) {
+    for event in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::Modified { id }) = *event else { continue };
+        let Some(name) = library.files.iter().find(|(_, handle)| handle.id() == id).map(|(name, _)| name.clone()) else { continue };
+        if let Some(file) = files.get(id) {
+            info!("effects: applied {name}.toml");
+            library.effects.insert(name, Arc::new(file.0.clone()));
+        }
+    }
+}
+
+/// Puts into `places` where the caster and targets are now, leaving where each was last found
+/// for one that cannot be found.
+fn update_places(places: &mut Places, caster: Caster, targets: &[EffectTarget], things: &Query<&GlobalTransform, Without<Playing>>, eyes: &Query<&GlobalTransform, With<PlayerCamera>>) {
+    match caster {
+        Caster::Delver => {
+            if let Some(eye) = eyes.iter().next() {
+                places.caster = eye.translation().to_array();
+                places.forward = eye.forward().as_vec3().to_array();
+            }
+        }
+        Caster::Entity { entity, eye } => {
+            if let Ok(at) = things.get(entity) {
+                places.caster = (at.translation() + Vec3::Y * eye).to_array();
+                places.forward = at.forward().as_vec3().to_array();
+            }
+        }
+        Caster::Point { eye, forward } => {
+            places.caster = eye.to_array();
+            places.forward = forward.to_array();
+        }
+    }
+    let caster_at = places.caster;
+    places.targets.resize(targets.len(), Target { feet: caster_at, height: 0.0 });
+    for (target, found) in targets.iter().zip(&mut places.targets) {
+        match *target {
+            EffectTarget::Entity { entity, height } => {
+                if let Ok(at) = things.get(entity) {
+                    *found = Target { feet: at.translation().to_array(), height };
+                }
+            }
+            EffectTarget::Point(p) => *found = Target { feet: p.to_array(), height: 0.0 },
+        }
+    }
+}
+
+/// Starts each requested effect: a [`Playing`] entity the other systems step and draw. Past
+/// [`MAX_PLAYING`] the oldest ends to make room.
+fn start_effects(
+    mut commands: Commands,
+    mut requests: MessageReader<PlayEffect>,
+    library: Res<EffectLibrary>,
+    things: Query<&GlobalTransform, Without<Playing>>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    running: Query<(Entity, &Playing)>,
+    mut serial: Local<u64>,
+) {
+    // Oldest first, the effects that belong to something last: an owned effect (a lasting shimmer
+    // that its owner stops) is only ended to make room once no other is left.
+    let mut live: Vec<(bool, u64, Entity)> = Vec::new();
+    for request in requests.read() {
+        let Some(effect) = library.shared(&request.name) else {
+            warn!("effects: no effect called {}", request.name);
+            continue;
+        };
+        if live.is_empty() {
+            live.extend(running.iter().map(|(entity, p)| (p.owner.is_some(), p.serial, entity)));
+            live.sort_unstable();
+        }
+        while live.len() >= MAX_PLAYING {
+            commands.entity(live.remove(0).2).despawn();
+        }
+        let mut places = Places { caster: [0.0; 3], forward: [0.0, 0.0, -1.0], targets: Vec::new() };
+        update_places(&mut places, request.caster, &request.targets, &things, &eyes);
+        *serial += 1;
+        let playing = Playing {
+            sim: Sim::new(effect, request.seed, request.targets.len()),
+            caster: request.caster,
+            targets: request.targets.clone(),
+            places,
+            particles: Vec::new(),
+            lights: Vec::new(),
+            cards: Vec::new(),
+            serial: *serial,
+            owner: request.owner,
+        };
+        let entity = commands.spawn((Name::new(format!("Effect {}", request.name)), playing, Transform::default(), Visibility::default())).id();
+        live.push((request.owner.is_some(), *serial, entity));
+        live.sort_unstable();
+    }
+}
+
+/// Steps each playing effect and despawns it, cards and lights with it, once it has played out.
+fn step_effects(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut playing: Query<(Entity, &mut Playing)>,
+    things: Query<&GlobalTransform, Without<Playing>>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+) {
+    for (entity, mut p) in &mut playing {
+        let Playing { sim, caster, targets, places, particles, lights, .. } = &mut *p;
+        update_places(places, *caster, targets, &things, &eyes);
+        sim.step(time.delta_secs().min(MAX_STEP), places);
+        sim.particles_into(particles);
+        sim.lights_into(places, lights);
+        if sim.finished() {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// The picture a card shows and how it is placed: wisps and motes face the eye, sparks stretch
+/// along their travel, beams stand on their foot and turn about it, rings lie on the floor.
+/// Returns the card's kind and its transform.
+fn place_card(p: &ParticleOut, eye: Vec3) -> (WispKind, Transform) {
+    let at = Vec3::from_array(p.pos);
+    let away = at - eye;
+    match p.card {
+        Card::Wisp | Card::Mote => {
+            let kind = if p.card == Card::Wisp { WispKind::Heart } else { WispKind::Mote };
+            (kind, Transform::from_translation(at).looking_to(away, Vec3::Y).with_scale(Vec3::splat(p.size)))
+        }
+        Card::Spark => {
+            let v = Vec3::from_array(p.vel);
+            let dir = v.try_normalize().unwrap_or(Vec3::Y);
+            let length = (v.length() * p.tail).max(p.size);
+            // The head is at the particle; the card stretches back behind it.
+            (WispKind::Spark, Transform::from_translation(at - dir * length * 0.5).looking_to(away, dir).with_scale(Vec3::new(p.size, length, 1.0)))
+        }
+        Card::Beam => {
+            let height = if p.tail > 0.0 { p.tail } else { p.size * BEAM_ASPECT };
+            let across = Vec3::new(away.x, 0.0, away.z);
+            (WispKind::Beam, Transform::from_translation(at + Vec3::Y * height * 0.5).looking_to(across, Vec3::Y).with_scale(Vec3::new(p.size, height, 1.0)))
+        }
+        Card::Ring => (WispKind::Ring, Transform::from_translation(at + Vec3::Y * FLOOR_LIFT).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)).with_scale(Vec3::splat(p.size))),
+    }
+}
+
+/// Draws each playing effect's particles on cards, spawning more when it throws more than it
+/// has cards and hiding the spare ones. Every card of a kind shares one material
+/// ([`WispMaterial::tagged`]); its colour and alpha ride in its [`MeshTag`], and nothing is
+/// written that has not changed.
+#[allow(clippy::type_complexity)]
+fn draw_cards(
+    mut commands: Commands,
+    mut playing: Query<(Entity, &mut Playing)>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut cards: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<WispMaterial>, &mut MeshTag)>,
+    mut shared: Local<Option<(Handle<Mesh>, [Handle<WispMaterial>; 5])>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<WispMaterial>>,
+) {
+    let Some(eye) = eyes.iter().next().map(GlobalTransform::translation) else { return };
+    let (mesh, handles) = shared.get_or_insert_with(|| {
+        let kinds = [WispKind::Heart, WispKind::Mote, WispKind::Spark, WispKind::Beam, WispKind::Ring];
+        (meshes.add(wisp_card()), kinds.map(|kind| materials.add(WispMaterial::tagged(kind))))
+    });
+    for (entity, mut p) in &mut playing {
+        let Playing { particles, cards: pool, .. } = &mut *p;
+        while pool.len() < particles.len() {
+            pool.push(
+                commands
+                    .spawn((Name::new("Effect card"), Mesh3d(mesh.clone()), MeshMaterial3d(handles[WispKind::Mote as usize].clone()), MeshTag::new(0), NotShadowCaster, Transform::from_scale(Vec3::ZERO), Visibility::Hidden, ChildOf(entity)))
+                    .id(),
+            );
+        }
+        for (i, card) in pool.iter().enumerate() {
+            let Ok((mut at, mut visible, mut material, mut tag)) = cards.get_mut(*card) else { continue };
+            let Some(particle) = particles.get(i) else {
+                if *visible != Visibility::Hidden {
+                    *visible = Visibility::Hidden;
+                }
+                continue;
+            };
+            let (kind, transform) = place_card(particle, eye);
+            if *at != transform {
+                *at = transform;
+            }
+            if *visible != Visibility::Inherited {
+                *visible = Visibility::Inherited;
+            }
+            let handle = &handles[kind as usize];
+            if material.0 != *handle {
+                material.0 = handle.clone();
+            }
+            let packed = WispMaterial::tag(particle.colour, particle.alpha);
+            if tag.value != packed {
+                tag.value = packed;
+            }
+        }
+    }
+}
+
+/// Lights the level with each playing effect's light: a shadowed point light for each the
+/// effect has, following its position and brightness.
+fn light_effects(mut commands: Commands, playing: Query<(Entity, &Playing)>, mut lights: Query<(&EffectLight, &mut PointLight, &mut Transform)>) {
+    for (entity, p) in &playing {
+        let Some(light) = p.sim.effect().light else { continue };
+        for (index, out) in p.lights.iter().enumerate() {
+            let at = Vec3::from_array(out.pos);
+            if let Some((l, mut point, mut place)) = lights.iter_mut().find(|(l, _, _)| l.of == entity && l.index == index) {
+                if place.translation != at {
+                    place.translation = at;
+                }
+                let intensity = l.full * out.brightness.max(0.0);
+                if point.intensity != intensity {
+                    point.intensity = intensity;
+                }
+                continue;
+            }
+            let [r, g, b] = light.colour;
+            let mut point = cast_shadows(point_light(Color::srgb(r, g, b), light.peak, light.reach, &Exposure::INDOOR));
+            let full = point.intensity;
+            point.intensity = 0.0;
+            commands.spawn((Name::new("Effect light"), EffectLight { of: entity, index, full }, point, Transform::from_translation(at), ChildOf(entity)));
+        }
+    }
+}
+
+/// Lights what is held with the light of the playing effect nearest the eye, on the view model's
+/// stage the way Divine Light does ([`crate::casting`]): the level's lights never reach it. One
+/// stage light serves them all; it moves to a nearer effect's and goes when the effect does.
+#[allow(clippy::type_complexity)]
+fn light_the_stage(
+    mut commands: Commands,
+    playing: Query<(Entity, &Playing)>,
+    stages: Query<(Entity, Option<&Exposure>), With<ViewModelCamera>>,
+    eyes: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut lights: Query<(Entity, &EffectStageLight, &mut PointLight, &mut Transform), Without<Playing>>,
+) {
+    let eye = eyes.iter().next();
+    let from = eye.map_or(Vec3::ZERO, GlobalTransform::translation);
+    let nearest = playing
+        .iter()
+        .filter(|(_, p)| p.sim.effect().light.is_some())
+        .filter_map(|(entity, p)| p.lights.first().map(|out| (entity, p, out, from.distance_squared(Vec3::from_array(out.pos)))))
+        .min_by(|a, b| a.3.total_cmp(&b.3));
+    let mut have = false;
+    for (entity, stage, mut light, mut at) in &mut lights {
+        let Some((_, _, out, _)) = nearest.filter(|(owner, ..)| *owner == stage.of && !have) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        have = true;
+        if let Some(eye) = eye {
+            let spot = stage_spot(eye, Vec3::from_array(out.pos));
+            if at.translation != spot {
+                at.translation = spot;
+            }
+        }
+        let intensity = stage.full * out.brightness.max(0.0);
+        if light.intensity != intensity {
+            light.intensity = intensity;
+        }
+    }
+    let (false, Some((owner, p, _, _))) = (have, nearest) else { return };
+    let Some((stage, exposure)) = stages.iter().next() else { return };
+    let Some(effect_light) = p.sim.effect().light else { return };
+    let [r, g, b] = effect_light.colour;
+    let (light, full) = stage_light(Color::srgb(r, g, b), crate::casting::HOLY_STAGE_PEAK * effect_light.peak, exposure);
+    commands.spawn((
+        Name::new("Effect light on the hands"),
+        EffectStageLight { of: owner, full },
+        light,
+        Transform::default(),
+        bevy::camera::visibility::RenderLayers::layer(VIEW_MODEL_LAYER),
+        ChildOf(stage),
+    ));
+}
+
+/// For captures (`FB_PLAY_EFFECT=<name>`): a moment into the delve, plays that effect from the
+/// eye on a point of the floor 40 units ahead.
+fn debug_play_effect(mut frames: Local<u32>, mut plays: MessageWriter<PlayEffect>, eyes: Query<&GlobalTransform, With<PlayerCamera>>, players: Query<&GlobalTransform, With<Player>>) {
+    if *frames >= 60 {
+        return;
+    }
+    *frames += 1;
+    if *frames != 60 {
+        return;
+    }
+    let Ok(name) = std::env::var("FB_PLAY_EFFECT") else { return };
+    let (Some(eye), Some(feet)) = (eyes.iter().next(), players.iter().next()) else { return };
+    let ahead = Vec3::new(eye.forward().x, 0.0, eye.forward().z).normalize_or(Vec3::NEG_Z);
+    plays.write(PlayEffect::new(name.trim(), 7).at(feet.translation() + ahead * 40.0));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use bevy::state::app::StatesPlugin;
+
+    use super::*;
+    use crate::play::{EYE_HEIGHT, run_delve_systems_while_delving};
+
+    const SAMPLE: &str = include_str!("../../data/effects/test_burst.toml");
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, bevy::asset::AssetPlugin::default()))
+            .insert_state(AppState::Delving)
+            .init_asset::<Mesh>()
+            .init_asset::<WispMaterial>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)))
+            .add_plugins(EffectsPlugin);
+        run_delve_systems_while_delving(&mut app);
+        app.world_mut().spawn((Player, GlobalTransform::default()));
+        app.world_mut().spawn((PlayerCamera, GlobalTransform::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0))));
+        app.world_mut().resource_mut::<EffectLibrary>().insert("test_burst", Effect::from_toml(SAMPLE).unwrap());
+        app.update();
+        app
+    }
+
+    fn play(app: &mut App, seed: u32) {
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("test_burst", seed).at(Vec3::new(0.0, 0.0, -40.0)));
+    }
+
+    fn playing(app: &mut App) -> usize {
+        app.world_mut().query::<&Playing>().iter(app.world()).count()
+    }
+
+    #[test]
+    fn playing_an_effect_spawns_its_cards_and_light_and_despawns_them_at_the_end() {
+        let mut app = app();
+        play(&mut app, 1);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 1);
+        let cards = app.world_mut().query::<&MeshMaterial3d<WispMaterial>>().iter(app.world()).count();
+        assert!(cards > 30, "{cards}");
+        let lights = app.world_mut().query::<&EffectLight>().iter(app.world()).count();
+        assert_eq!(lights, 1);
+        for _ in 0..40 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 0);
+        assert_eq!(app.world_mut().query::<&MeshMaterial3d<WispMaterial>>().iter(app.world()).count(), 0);
+        assert_eq!(app.world_mut().query::<&EffectLight>().iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn the_same_seed_plays_the_same_particles() {
+        let run = |seed: u32| {
+            let mut app = app();
+            play(&mut app, seed);
+            for _ in 0..6 {
+                app.update();
+            }
+            app.world_mut().query::<&Playing>().single(app.world()).unwrap().particles().to_vec()
+        };
+        assert_eq!(run(5), run(5));
+        assert_ne!(run(5), run(6));
+    }
+
+    #[test]
+    fn editing_a_file_changes_the_next_play() {
+        let mut app = app();
+        play(&mut app, 1);
+        app.update();
+        app.update();
+        let before = app.world_mut().query::<&Playing>().single(app.world()).unwrap().sim.effect().length;
+        let mut edited = Effect::from_toml(SAMPLE).unwrap();
+        edited.length = 5.0;
+        app.world_mut().resource_mut::<EffectLibrary>().insert("test_burst", edited);
+        play(&mut app, 1);
+        app.update();
+        let lengths: Vec<f32> = app.world_mut().query::<&Playing>().iter(app.world()).map(|p| p.sim.effect().length).collect();
+        assert!(lengths.contains(&before) && lengths.contains(&5.0), "{lengths:?}");
+    }
+
+    #[test]
+    fn an_unknown_effect_plays_nothing() {
+        let mut app = app();
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("nothing_by_that_name", 1));
+        app.update();
+        assert_eq!(playing(&mut app), 0);
+    }
+
+    #[test]
+    fn an_effect_plays_on_each_target_it_is_given() {
+        let mut app = app();
+        let message = PlayEffect::new("test_burst", 1).at(Vec3::new(-10.0, 0.0, -40.0)).at(Vec3::new(10.0, 0.0, -40.0));
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(message);
+        for _ in 0..3 {
+            app.update();
+        }
+        let lights = app.world_mut().query::<&EffectLight>().iter(app.world()).count();
+        assert_eq!(lights, 2);
+    }
+
+    #[test]
+    fn the_shipped_effects_all_read() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../data").join(EFFECTS_FOLDER);
+        for entry in std::fs::read_dir(folder).unwrap().flatten() {
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let effect = Effect::from_toml(&text).unwrap_or_else(|e| panic!("{:?}: {e}", entry.path()));
+            assert_eq!(Effect::from_toml(&effect.to_toml().unwrap()).unwrap(), effect, "{:?}", entry.path());
+        }
+    }
+
+    #[test]
+    fn a_target_that_despawns_mid_play_stays_where_it_was_last_seen() {
+        let mut app = app();
+        let creature = app.world_mut().spawn(GlobalTransform::from_translation(Vec3::new(5.0, 0.0, -30.0))).id();
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("test_burst", 1).on(creature, 10.0));
+        app.update();
+        app.update();
+        app.world_mut().despawn(creature);
+        app.update();
+        app.update();
+        let p = app.world_mut().query::<&Playing>().single(app.world()).unwrap();
+        assert_eq!(p.places.targets[0].feet, [5.0, 0.0, -30.0]);
+        assert!(!p.particles().is_empty());
+    }
+
+    #[test]
+    fn the_stage_light_appears_with_the_effect_and_goes_with_it() {
+        let mut app = app();
+        let camera = app.world_mut().query_filtered::<Entity, With<PlayerCamera>>().single(app.world()).unwrap();
+        app.world_mut().spawn(ViewModelCamera { follows: camera });
+        let stage_lights = |app: &mut App| app.world_mut().query::<&EffectStageLight>().iter(app.world()).count();
+        play(&mut app, 1);
+        play(&mut app, 2);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(stage_lights(&mut app), 1, "one for every effect playing");
+        for _ in 0..40 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 0);
+        assert_eq!(stage_lights(&mut app), 0);
+    }
+
+    #[test]
+    fn a_spammed_effect_stays_within_the_cap_and_ends_the_oldest() {
+        let mut app = app();
+        for seed in 0..40 {
+            play(&mut app, seed);
+        }
+        app.update();
+        app.update();
+        assert_eq!(playing(&mut app), MAX_PLAYING);
+        let serials: Vec<u64> = app.world_mut().query::<&Playing>().iter(app.world()).map(|p| p.serial).collect();
+        assert!(serials.iter().all(|s| *s > 40 - MAX_PLAYING as u64), "{serials:?}");
+    }
+
+    #[test]
+    fn a_card_shares_its_materials_and_carries_its_colour_in_its_tag() {
+        let mut app = app();
+        play(&mut app, 1);
+        for _ in 0..4 {
+            app.update();
+        }
+        let materials = app.world().resource::<Assets<WispMaterial>>().len();
+        assert_eq!(materials, 5, "one for each kind of card");
+        let tags: std::collections::HashSet<u32> = app.world_mut().query::<&MeshTag>().iter(app.world()).map(|t| t.value).collect();
+        assert!(tags.len() > 3, "{tags:?}");
+    }
+
+    #[test]
+    fn a_saved_file_goes_through_the_loader_into_the_library() {
+        let mut app = App::new();
+        crate::rules::use_data_folder(&mut app);
+        app.add_plugins((MinimalPlugins, StatesPlugin, bevy::asset::AssetPlugin::default()))
+            .insert_state(AppState::Delving)
+            .add_plugins(EffectsPlugin);
+        run_delve_systems_while_delving(&mut app);
+        // The file on disk is read by the loader and reaches the library.
+        for _ in 0..600 {
+            app.update();
+            if app.world().resource::<EffectLibrary>().get("test_burst").is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let loaded = app.world().resource::<EffectLibrary>().get("test_burst").expect("the shipped file loads").clone();
+        assert_eq!(loaded, Effect::from_toml(SAMPLE).unwrap());
+        // Saving it again replaces the asset, and the library follows within a frame or two.
+        let handle = app.world().resource::<EffectLibrary>().files["test_burst"].clone();
+        let mut edited = loaded.clone();
+        edited.length = 9.0;
+        let _ = app.world_mut().resource_mut::<Assets<EffectFile>>().insert(&handle, EffectFile(edited));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<EffectLibrary>().get("test_burst").unwrap().length, 9.0);
+    }
+
+    /// An app with the shield's shimmer kept by its prayer, as the game keeps it.
+    fn shimmered() -> App {
+        let mut app = app();
+        app.init_resource::<crate::game_clock::GameClock>().init_resource::<crate::tuning::Tuning>();
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        app.add_systems(Update, (crate::prayers::start_the_shimmer, crate::prayers::hold_the_shimmer).chain().in_set(DelveSystems));
+        app
+    }
+
+    fn shimmering(app: &mut App, shield: Entity) -> usize {
+        app.world_mut().query::<&Playing>().iter(app.world()).filter(|p| p.owner() == Some(shield)).count()
+    }
+
+    #[test]
+    fn the_shimmer_sputters_out_a_sputter_before_the_end_at_the_clocks_pace() {
+        let mut app = shimmered();
+        let ratio = f64::from(app.world().resource::<crate::tuning::Tuning>().clock.game_seconds_per_second);
+        let lead = 6.0 * ratio;
+        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1000.0, lasts: 1000.0 }).id();
+        app.world_mut().resource_mut::<crate::game_clock::GameClock>().advance(1000.0 - lead - 5.0);
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 1, "still going before its lead");
+        app.world_mut().resource_mut::<crate::game_clock::GameClock>().advance(10.0);
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 0, "gone once the shield is that close to its end");
+    }
+
+    #[test]
+    fn recasting_stops_the_old_shimmer_and_starts_the_new() {
+        let mut app = shimmered();
+        let old = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
+        for _ in 0..10 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, old), 1);
+        app.world_mut().despawn(old);
+        let new = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 2, bonus: 4, expires: 1e9, lasts: 1e9 }).id();
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!((shimmering(&mut app, old), shimmering(&mut app, new)), (0, 1));
+    }
+
+    #[test]
+    fn a_shield_with_no_shimmer_gets_one_again() {
+        let mut app = shimmered();
+        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 1, "started with no one asking");
+        let lost = app.world_mut().query::<(Entity, &Playing)>().iter(app.world()).map(|(e, _)| e).collect::<Vec<_>>();
+        for e in lost {
+            app.world_mut().despawn(e);
+        }
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(shimmering(&mut app, shield), 1, "and again once it is lost");
+    }
+
+    #[test]
+    fn the_shield_shimmer_holds_until_its_prayer_ends_and_then_sputters_out() {
+        let mut app = app();
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        app.add_systems(Update, crate::prayers::hold_the_shimmer.in_set(DelveSystems));
+        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("shield", 1).owned_by(shield));
+        for _ in 0..200 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 1, "a lasting effect holds past its length while the shield stands");
+        assert!(!app.world_mut().query::<&Playing>().single(app.world()).unwrap().particles().is_empty());
+        app.world_mut().despawn(shield);
+        for _ in 0..300 {
+            app.update();
+        }
+        assert_eq!(playing(&mut app), 0, "it goes with the shield");
+    }
+
+    #[test]
+    fn the_new_effects_validate() {
+        for (name, text) in [
+            ("smite", include_str!("../../data/effects/smite.toml")),
+            ("shield", include_str!("../../data/effects/shield.toml")),
+            ("shield_struck", include_str!("../../data/effects/shield_struck.toml")),
+        ] {
+            let effect = Effect::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(effect.name, name);
+        }
+    }
+
+    #[test]
+    fn an_owned_lasting_effect_survives_the_cap_while_others_play() {
+        let mut app = app();
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        let owner = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("shield", 1).owned_by(owner));
+        app.update();
+        for seed in 0..20 {
+            play(&mut app, seed);
+        }
+        app.update();
+        app.update();
+        assert_eq!(playing(&mut app), MAX_PLAYING);
+        let owned = app.world_mut().query::<&Playing>().iter(app.world()).filter(|p| p.owner() == Some(owner)).count();
+        assert_eq!(owned, 1, "the shimmer stays; the oldest unowned effects go instead");
+    }
+}

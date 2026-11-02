@@ -154,6 +154,27 @@ seconds = 0.0
 known = true
 power = 0.0
 
+[casting.terms.smite]
+kind = "effect"
+name = "Smite"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+power = 0.0
+
+# Raises the caster's armour class (not the Ward term, which is another thing).
+[casting.terms.shield]
+kind = "effect"
+name = "Shield"
+school = "Divine"
+cost = 2.0
+range = 0.0
+seconds = 0.0
+known = true
+power = 0.0
+
 [casting.terms.frighten]
 kind = "effect"
 name = "Frighten"
@@ -216,6 +237,17 @@ seconds = 0.0
 known = true
 power = 0.0
 
+# "At one you see": the creature nearest the crosshair within the range that the caster can see.
+[casting.terms.sight]
+kind = "reach"
+name = "At one you see"
+school = "Divine"
+cost = 1.0
+range = 60.0
+seconds = 0.0
+known = true
+power = 0.0
+
 [casting.terms.around]
 kind = "reach"
 name = "Around you"
@@ -244,6 +276,17 @@ cost = 2.0
 range = 30.0
 seconds = 0.0
 known = false
+power = 0.0
+
+# Over as soon as it is cast: a duration of nothing.
+[casting.terms.instant]
+kind = "duration"
+name = "Instant"
+school = "Divine"
+cost = 0.0
+range = 0.0
+seconds = 0.0
+known = true
 power = 0.0
 
 [casting.terms.short]

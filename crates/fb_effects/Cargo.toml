@@ -1,0 +1,15 @@
+[package]
+name = "fb_effects"
+description = "Forever Below effects: spell and item effects described as data (emitters, cards, motion, light) and a deterministic particle simulation of them. No Bevy."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+procgen_rng = { workspace = true }
