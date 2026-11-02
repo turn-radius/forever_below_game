@@ -1,0 +1,108 @@
+# Smite: a pillar of light falls onto the target's feet, motes fall down the column, a ring runs
+# out along the floor and sparks burst from the foot. Played at each target; see docs/effects.md.
+name = "smite"
+length = 1.8
+lasts = false
+bloom_in = 0.12
+sputter_out = 0.7
+
+[light]
+at = "above_target"
+peak = 0.55
+reach = 110.0
+colour = [1.0, 0.92, 0.72]
+follows = { flash = { at_s = 0.3 } }
+
+[[emitters]]
+name = "pillar"
+card = "beam"
+tail = 90.0
+size = [{ at = 0.0, size = 2.0 }, { at = 0.25, size = 11.0 }, { at = 0.7, size = 8.0 }, { at = 1.0, size = 3.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.97, 0.88] }, { at = 1.0, rgb = [1.0, 0.8, 0.45] }]
+
+[emitters.spawn]
+at = "targets_feet"
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 1.2
+start = 0.2
+
+[[emitters]]
+name = "core"
+card = "beam"
+tail = 90.0
+size = [{ at = 0.0, size = 1.0 }, { at = 0.25, size = 4.0 }, { at = 1.0, size = 1.5 }]
+colour = [{ at = 0.0, rgb = [1.0, 1.0, 0.97] }, { at = 1.0, rgb = [1.0, 0.92, 0.7] }]
+
+[emitters.spawn]
+at = "targets_feet"
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 1.1
+start = 0.22
+
+[[emitters]]
+name = "motes"
+card = "mote"
+size = [{ at = 0.0, size = 0.7 }, { at = 0.5, size = 1.1 }, { at = 1.0, size = 0.3 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.97, 0.85] }, { at = 1.0, rgb = [1.0, 0.75, 0.35] }]
+
+[emitters.spawn]
+shape = "column"
+at = "targets_feet"
+spread = 5.0
+height = 70.0
+
+[emitters.timing]
+kind = "stream"
+count = 30
+life = 0.7
+start = 0.2
+end = 1.2
+
+[emitters.motion]
+kind = "fall"
+speed = 55.0
+scatter = 5.0
+
+[[emitters]]
+name = "ring"
+card = "ring"
+size = [{ at = 0.0, size = 4.0 }, { at = 0.4, size = 30.0 }, { at = 1.0, size = 54.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.97, 0.85] }, { at = 1.0, rgb = [1.0, 0.7, 0.3] }]
+
+[emitters.spawn]
+at = "targets_feet"
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.9
+start = 0.3
+
+[[emitters]]
+name = "sparks"
+card = "spark"
+tail = 0.06
+size = [{ at = 0.0, size = 0.6 }, { at = 1.0, size = 0.2 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.98, 0.88] }, { at = 0.6, rgb = [1.0, 0.82, 0.45] }, { at = 1.0, rgb = [0.9, 0.45, 0.15] }]
+
+[emitters.spawn]
+at = "targets_feet"
+nudge = [0.0, 1.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 40
+life = 0.8
+start = 0.3
+
+[emitters.motion]
+kind = "burst"
+speed = 40.0
+scatter = 8.0
+gravity = 70.0

@@ -1,12 +1,12 @@
 //! Casting in the game: the prayers and spells every caster shares ([`fb_character::casting`]).
 //!
 //! A caster writes prayers from terms ([`Spellbook`], on the delver as [`DelverSpellbook`] and
-//! saved with them); a cleric starts with Divine Light written. The Pray key ([`Action::Pray`],
-//! C) casts the chosen prayer at the chosen tier; the tier key ([`Action::CastTier`], V) steps
-//! the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
+//! saved with them); a cleric starts with Divine Light, Smite and Shield written. The Pray key
+//! ([`Action::Pray`], C) casts the chosen prayer at the chosen tier; the tier key
+//! ([`Action::CastTier`], V) steps the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
 //! ([`AbilitySlots`]): the slot's key then casts it at the chosen tier. A cleric starts with
-//! Divine Light in the first free slot; in the inventory the slot's key with the mouse over
-//! nothing binds the chosen prayer to that slot.
+//! Divine Light, Smite and Shield in the first free slots; in the inventory the slot's key with the
+//! mouse over nothing binds the chosen prayer to that slot.
 //!
 //! Every cast goes through a [`CastRequest`] message, which anything can send. [`cast_requests`]
 //! checks the caster and the terms, spends the mana from [`DelverMana`] and either sends a
@@ -78,6 +78,7 @@ impl Plugin for CastingPlugin {
                     .in_set(DelveSystems),
             );
         crate::casting_influence::register(app);
+        crate::prayers::register(app);
     }
 }
 
@@ -154,13 +155,19 @@ fn forget_the_abilities(mut slots: ResMut<AbilitySlots>, mut chosen: ResMut<Chos
     *chosen = Chosen::default();
 }
 
-/// A new cleric holds Divine Light in the first slot with nothing in it.
+/// The prayers a new cleric holds in their quickslots, in order, each in the first slot with
+/// nothing in it: Divine Light, Smite, Shield.
+const STARTING_PRAYERS: [&str; 3] = ["Divine Light", "Smite", "Shield"];
+
+/// A new cleric holds their [`STARTING_PRAYERS`] in the first slots with nothing in them.
 fn give_clerics_their_prayer(new: Query<(), Added<Player>>, character: Option<Res<Character>>, items: Res<Quickslots>, mut slots: ResMut<AbilitySlots>) {
     if new.is_empty() || character.is_none_or(|c| c.class.casting() != Casting::Divine) || slots.0.iter().any(Option::is_some) {
         return;
     }
-    if let Some(free) = (0..SLOTS).find(|&s| items.get(s).is_none()) {
-        slots.bind(free, "Divine Light");
+    for name in STARTING_PRAYERS {
+        if let Some(free) = (0..SLOTS).find(|&s| items.get(s).is_none() && slots.get(s).is_none()) {
+            slots.bind(free, name);
+        }
     }
 }
 
@@ -228,12 +235,14 @@ fn bind_ability_hovered(
 }
 
 /// Does each request: spends the mana and sends [`Casted`], or says why not.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cast_requests(
     mut requests: MessageReader<CastRequest>,
     mut done: MessageWriter<Casted>,
     character: Option<Res<Character>>,
     rules: Res<GameRules>,
     mut players: Query<(&mut DelverMana, &DelverSpellbook), With<Player>>,
+    sight: crate::prayers::Sight,
     mut toast: ResMut<Toast>,
     time: Option<Res<Time<Real>>>,
 ) {
@@ -251,6 +260,12 @@ pub(crate) fn cast_requests(
         let casting = character.as_deref().map_or(Casting::Martial, |c| c.class.casting());
         let mut pool = mana.0;
         match cast_with(&rules, &mut pool, casting, &book.0.unlocked, written, request.tier) {
+            // Smite needs someone in sight (the range rule `smite_the_seen` uses). The cast was
+            // tried on a copy of the pool, which is only kept below, so one that finds no one
+            // costs nothing.
+            Ok(cast) if cast.written.effect == "smite" && sight.nearest_the_crosshair(cast.range).is_none() => {
+                toast.say("No one is in sight".to_string(), now);
+            }
             Ok(cast) => {
                 mana.0 = pool;
                 toast.say(format!("You cast {}, tier {}: {} mana", cast.written.name, cast.tier, points(cast.cost)), now);
@@ -366,12 +381,10 @@ pub struct Glow {
 /// and its motes loosen from their orbits.
 pub fn glow(age: f32, left: f32, t: f32) -> Glow {
     let risen = (age / RISE_SECONDS).clamp(0.0, 1.0);
-    // An ease that overshoots and settles back: a bloom.
-    let (c1, c3) = (1.70158, 2.70158);
-    let bloom = (1.0 + c3 * (risen - 1.0).powi(3) + c1 * (risen - 1.0).powi(2)).max(0.0);
+    // The curves any lasting glow follows (`fb_effects::envelope`), shared with effects' lights.
+    let bloom = fb_effects::envelope::bloom(risen);
     let dying = 1.0 - left.clamp(0.0, 1.0);
-    let flutter = (0.5 + 0.5 * (t * 17.0 + 3.0 * (t * 5.3).sin()).sin()) * (0.5 + 0.5 * (t * 29.0 + 1.3).sin());
-    let sputter = 1.0 - 0.7 * dying.powf(1.5) * flutter;
+    let sputter = fb_effects::envelope::sputter(left, t);
     let gathering = (1.0 - risen).powi(2);
     Glow {
         light: bloom * left * sputter,
@@ -557,11 +570,28 @@ fn fade_the_light(mut commands: Commands, clock: Option<Res<GameClock>>, time: R
 /// How bright the bauble's light on the view model's stage is close up, against a held
 /// torch's there (`crate::carry`'s 1.8, scaled by the tuning's holy against torch peak), and how
 /// far it reaches, view model units.
-const HOLY_STAGE_PEAK: f32 = 1.1;
+pub(crate) const HOLY_STAGE_PEAK: f32 = 1.1;
 const HOLY_STAGE_REACH: f32 = 40.0;
 /// The furthest from the eye the bauble's stage light stands, so what is held is lit about as
 /// a held light lights it however far ahead the bauble floats.
 const HOLY_STAGE_NEAR: f32 = 18.0;
+
+/// Where a light at `place` in the level stands on the view model's stage, seen from `eye`:
+/// no further out than [`HOLY_STAGE_NEAR`], so what is held is lit about as a held light lights
+/// it however far off the light is. Shared with the effects' lights (`crate::effects`).
+pub(crate) fn stage_spot(eye: &GlobalTransform, place: Vec3) -> Vec3 {
+    eye.affine().inverse().transform_point3(place).clamp_length_max(HOLY_STAGE_NEAR)
+}
+
+/// A light for the view model's stage in `color`, `peak` times full close up and out to
+/// [`HOLY_STAGE_REACH`], put out, and the intensity it is at full. The caller sets its
+/// intensity each frame, gives it the stage layer and parents it to the stage camera.
+pub(crate) fn stage_light(color: Color, peak: f32, exposure: Option<&bevy::camera::Exposure>) -> (PointLight, f32) {
+    let mut light = crate::light::point_light(color, peak, HOLY_STAGE_REACH, &exposure.copied().unwrap_or_default());
+    let full = light.intensity;
+    light.intensity = 0.0;
+    (light, full)
+}
 
 /// The light a [`DivineLight`] casts on the view model's stage, a child of the view model
 /// camera: the level's lights never reach what is held, so without it a cleric with no torch
@@ -593,8 +623,7 @@ fn light_the_hands(
             continue;
         };
         if let Some(eye) = eye {
-            let seen = eye.affine().inverse().transform_point3(place.translation());
-            at.translation = seen.clamp_length_max(HOLY_STAGE_NEAR);
+            at.translation = stage_spot(eye, place.translation());
         }
         light.intensity = stage.peak * glow(t - bauble.cast_at, bauble.brightness(now), t).light;
     }
@@ -604,9 +633,7 @@ fn light_the_hands(
             continue;
         }
         let (r, g, b) = (HOLY_LIGHT.0, HOLY_LIGHT.1, HOLY_LIGHT.2);
-        let mut light = crate::light::point_light(Color::srgb(r, g, b), HOLY_STAGE_PEAK, HOLY_STAGE_REACH, &exposure.copied().unwrap_or_default());
-        let peak = light.intensity;
-        light.intensity = 0.0;
+        let (light, peak) = stage_light(Color::srgb(r, g, b), HOLY_STAGE_PEAK, exposure);
         commands.spawn((
             Name::new("Divine Light on the hands"),
             BaubleStageLight { of: bauble, peak },
@@ -709,7 +736,8 @@ fn shimmer_baubles(
 /// `FB_PRAY=1` casts once, a moment into the delve; `FB_PRAY_TIER=2` chooses the tier first and
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. `FB_PRAY_TURN=180` turns the
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
-/// the light last only that many game seconds, to see it sputter out. The prayer's quickslot
+/// the light last only that many game seconds, to see it sputter out. `FB_PRAY_NAME=Smite`
+/// casts that prayer instead of the chosen one. The prayer's quickslot
 /// flashes as if its key were pressed, since captures ignore the keyboard. For captures.
 #[allow(clippy::type_complexity)]
 fn debug_cast(
@@ -739,6 +767,11 @@ fn debug_cast(
         }
     }
     if *frames == 60 {
+        if let Ok(name) = std::env::var("FB_PRAY_NAME")
+            && !name.trim().is_empty()
+        {
+            chosen.name = name.trim().to_string();
+        }
         if let Some(tier) = std::env::var("FB_PRAY_TIER").ok().and_then(|v| v.trim().parse::<u8>().ok()) {
             chosen.tier = tier.clamp(1, MAX_TIER);
         }
@@ -819,16 +852,33 @@ fn show_slot_labels(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, Wit
     }
 }
 
-/// The pictures that stand for prayers in a quickslot, by effect: Divine Light's bauble.
+/// The pictures that stand for prayers in a quickslot, by effect: Divine Light's bauble, Smite's
+/// pillar of light and Shield's faint gold shield.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbilityPicture {
     Bauble,
+    Pillar,
+    Shield,
+}
+
+impl AbilityPicture {
+    const ALL: [AbilityPicture; 3] = [AbilityPicture::Bauble, AbilityPicture::Pillar, AbilityPicture::Shield];
+
+    fn pixels(self) -> Vec<[u8; 4]> {
+        match self {
+            AbilityPicture::Bauble => bauble_icon_pixels(),
+            AbilityPicture::Pillar => pillar_icon_pixels(),
+            AbilityPicture::Shield => shield_icon_pixels(),
+        }
+    }
 }
 
 /// The picture for a prayer of `effect`, if it has one; a prayer without one is named instead.
 pub fn icon_for(effect: &str) -> Option<AbilityPicture> {
     match effect {
         "light" => Some(AbilityPicture::Bauble),
+        "smite" => Some(AbilityPicture::Pillar),
+        "shield" => Some(AbilityPicture::Shield),
         _ => None,
     }
 }
@@ -867,48 +917,115 @@ pub fn bauble_icon_pixels() -> Vec<[u8; 4]> {
     out
 }
 
+/// A picture as pixels from `light` (0 to 1 per pixel) and a `tint` that runs from the gold rim
+/// to the near-white core by `white` (0 to 1 per pixel), in sRGB with straight alpha.
+fn icon_from(light: impl Fn(Vec2) -> (f32, f32)) -> Vec<[u8; 4]> {
+    let n = ICON_SIZE as f32;
+    let rim = HOLY_RIM.to_srgba();
+    let core = HOLY_CORE.to_srgba();
+    let mut out = Vec::with_capacity((ICON_SIZE * ICON_SIZE) as usize);
+    for y in 0..ICON_SIZE {
+        for x in 0..ICON_SIZE {
+            let (light, white) = light(Vec2::new((x as f32 + 0.5) / n * 2.0 - 1.0, (y as f32 + 0.5) / n * 2.0 - 1.0));
+            let (light, white) = (light.clamp(0.0, 1.0), white.clamp(0.0, 1.0));
+            let mix = |a: f32, b: f32| ((a + (b - a) * white) * 255.0).round() as u8;
+            out.push([mix(rim.red, core.red), mix(rim.green, core.green), mix(rim.blue, core.blue), (light * 255.0).round() as u8]);
+        }
+    }
+    out
+}
+
+/// Smite's picture: a pillar of near-white light falling onto a flat ring of light on the floor,
+/// with sparks thrown off the foot.
+pub fn pillar_icon_pixels() -> Vec<[u8; 4]> {
+    icon_from(|p| {
+        // The shaft: narrow at the top, widening as it lands, brightest down its middle.
+        let reach = ((p.y + 1.0) / 1.7).clamp(0.0, 1.0);
+        let half = 0.07 + 0.13 * reach;
+        let shaft = (-(p.x / half).powi(2)).exp() * (0.35 + 0.65 * reach) * ((0.75 - p.y) / 0.25).clamp(0.0, 1.0);
+        let core = (-(p.x / (half * 0.35)).powi(2)).exp() * ((0.7 - p.y) / 0.3).clamp(0.0, 1.0);
+        // The ring on the floor, seen from a little above.
+        let q = Vec2::new(p.x / 0.78, (p.y - 0.62) / 0.2);
+        let ring = (-((q.length() - 1.0).abs() / 0.12).powi(2)).exp() * 0.8;
+        let foot = (-(Vec2::new(p.x / 0.22, (p.y - 0.62) / 0.1)).length_squared()).exp();
+        let sparks: f32 = [(0.4_f32, 0.3_f32), (-0.45, 0.4), (0.22, 0.05), (-0.25, 0.12)].iter().map(|&(x, y)| (-((p - Vec2::new(x, y)).length() / 0.045).powi(2)).exp() * 0.85).sum();
+        (shaft * 0.85 + ring + foot * 0.7 + sparks + core, core + foot * 0.9 + shaft * 0.35)
+    })
+}
+
+/// Shield's picture: a faint gold shield outline in a soft glow, a ring of motes inside it.
+pub fn shield_icon_pixels() -> Vec<[u8; 4]> {
+    icon_from(|p| {
+        // A heater shield: straight sides to the middle, then curving in to a point at the foot.
+        let top = -0.7;
+        let half = |y: f32| if y < 0.0 { 0.56 } else { 0.56 * (1.0 - (y / 0.85).powf(1.8)).max(0.0).powf(0.6) };
+        let inside = p.y > top && p.y < 0.85 && p.x.abs() < half(p.y);
+        let edge = if p.y < top || p.y > 0.85 {
+            ((p.y - top).abs().min((p.y - 0.85).abs()) + 0.4).max(0.4)
+        } else {
+            let side = (p.x.abs() - half(p.y)).abs();
+            let lid = (p.y - top).abs().max(if p.x.abs() < half(p.y) { 0.0 } else { side });
+            side.min(lid)
+        };
+        let outline = (-(edge / 0.045).powi(2)).exp() * 0.85;
+        let glow = if inside { 0.16 } else { (-(edge / 0.18).powi(2)).exp() * 0.2 };
+        // A ring of motes inside, brighter toward the top left.
+        let q = Vec2::new(p.x, p.y - 0.05);
+        let along = q.y.atan2(q.x);
+        let motes = (0.5 + 0.5 * (along * 7.0).cos()).powi(8) * (-((q.length() - 0.3) / 0.035).powi(2)).exp() * (0.5 + 0.5 * (-along).cos());
+        (outline + glow + motes * 0.8, outline * 0.35 + motes * 0.6)
+    })
+}
+
 /// The picture of a prayer in a quickslot, a child of the slot under its number.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct AbilityIcon(pub usize);
+pub struct AbilityIcon(pub usize, pub AbilityPicture);
 
 /// Gives each quickslot its prayer picture and its [`crate::time_left::TimeLeft`] veil, once.
 fn dress_ability_slots(
     mut commands: Commands,
     slots: Query<(Entity, &crate::quickslots::QuickSlot), Without<crate::time_left::TimeLeft>>,
     images: Option<ResMut<Assets<Image>>>,
-    mut bauble: Local<Option<Handle<Image>>>,
+    mut pictures: Local<Option<Vec<Handle<Image>>>>,
 ) {
     let Some(mut images) = images else { return };
     for (entity, slot) in &slots {
-        let picture = bauble
-            .get_or_insert_with(|| {
-                let data = bauble_icon_pixels().into_iter().flatten().collect();
-                let size = bevy::render::render_resource::Extent3d { width: ICON_SIZE, height: ICON_SIZE, depth_or_array_layers: 1 };
-                images.add(Image::new(
-                    size,
-                    bevy::render::render_resource::TextureDimension::D2,
-                    data,
-                    bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                    bevy::asset::RenderAssetUsages::default(),
-                ))
-            })
-            .clone();
-        commands.entity(entity).insert(crate::time_left::TimeLeft(None)).with_child((
-            AbilityIcon(slot.0),
-            ImageNode::new(picture),
-            Node { position_type: PositionType::Absolute, width: percent(86), height: percent(86), ..default() },
-            // Under the slot's number and above its square.
-            ZIndex(-1),
-            Visibility::Hidden,
-            Pickable::IGNORE,
-        ));
+        let handles = pictures.get_or_insert_with(|| {
+            AbilityPicture::ALL
+                .iter()
+                .map(|picture| {
+                    let data = picture.pixels().into_iter().flatten().collect();
+                    let size = bevy::render::render_resource::Extent3d { width: ICON_SIZE, height: ICON_SIZE, depth_or_array_layers: 1 };
+                    images.add(Image::new(
+                        size,
+                        bevy::render::render_resource::TextureDimension::D2,
+                        data,
+                        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                        bevy::asset::RenderAssetUsages::default(),
+                    ))
+                })
+                .collect()
+        });
+        commands.entity(entity).insert(crate::time_left::TimeLeft(None)).with_children(|slot_node| {
+            for (picture, handle) in AbilityPicture::ALL.into_iter().zip(handles.iter()) {
+                slot_node.spawn((
+                    AbilityIcon(slot.0, picture),
+                    ImageNode::new(handle.clone()),
+                    Node { position_type: PositionType::Absolute, width: percent(86), height: percent(86), ..default() },
+                    // Under the slot's number and above its square.
+                    ZIndex(-1),
+                    Visibility::Hidden,
+                    Pickable::IGNORE,
+                ));
+            }
+        });
     }
 }
 
 /// Shows each slot's prayer picture while it holds a prayer that has one.
 fn show_ability_icons(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, With<Player>>, mut icons: Query<(&AbilityIcon, &mut Visibility)>) {
     for (icon, mut shown) in &mut icons {
-        let pictured = slots.get(icon.0).and_then(|name| written(&books, name)).is_some_and(|w| icon_for(&w.effect) == Some(AbilityPicture::Bauble));
+        let pictured = slots.get(icon.0).and_then(|name| written(&books, name)).is_some_and(|w| icon_for(&w.effect) == Some(icon.1));
         let want = if pictured { Visibility::Inherited } else { Visibility::Hidden };
         if *shown != want {
             *shown = want;
@@ -916,20 +1033,26 @@ fn show_ability_icons(slots: Res<AbilitySlots>, books: Query<&DelverSpellbook, W
     }
 }
 
-/// Veils each slot holding Divine Light by the time its bauble has left, swept clockwise as it
-/// runs down; nothing while no light burns or the slot holds something else.
+/// Veils each slot holding a prayer that lasts by the time it has left, swept clockwise as it
+/// runs down: Divine Light by its bauble's, Shield by its shield's; nothing while none holds or
+/// the slot holds something else.
 fn show_time_left(
     slots: Res<AbilitySlots>,
     books: Query<&DelverSpellbook, With<Player>>,
     clock: Option<Res<GameClock>>,
     lights: Query<&DivineLight>,
+    shields: Query<&crate::prayers::ShieldPrayer>,
     mut veils: Query<(&crate::quickslots::QuickSlot, &mut crate::time_left::TimeLeft)>,
 ) {
     let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
-    let left = lights.iter().map(|l| l.time_left(now)).reduce(f32::max);
+    let light = lights.iter().map(|l| l.time_left(now)).reduce(f32::max);
+    let shield = shields.iter().map(|s| s.time_left(now)).reduce(f32::max);
     for (slot, mut time) in &mut veils {
-        let light = slots.get(slot.0).and_then(|name| written(&books, name)).is_some_and(|w| w.effect == "light");
-        let want = if light { left } else { None };
+        let want = match slots.get(slot.0).and_then(|name| written(&books, name)).map(|w| w.effect.as_str()) {
+            Some("light") => light,
+            Some("shield") => shield,
+            _ => None,
+        };
         if time.0 != want {
             time.0 = want;
         }
@@ -1035,6 +1158,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_cleric_holds_divine_light_smite_and_shield_in_the_first_three_slots() {
+        let (app, player) = delve(true, 10.0);
+        let slots = app.world().resource::<AbilitySlots>();
+        assert_eq!((slots.get(0), slots.get(1), slots.get(2)), (Some("Divine Light"), Some("Smite"), Some("Shield")));
+        let book = &app.world().get::<DelverSpellbook>(player).unwrap().0;
+        assert_eq!(book.written.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Divine Light", "Smite", "Shield"]);
+    }
+
+    #[test]
     fn the_chosen_prayer_is_what_c_casts() {
         let (mut app, player) = delve(true, 10.0);
         let mut mercy = fb_character::casting::Written::divine_light();
@@ -1083,7 +1215,7 @@ mod tests {
         assert_eq!(app.world().resource::<Chosen>().name, "", "a fighter chooses nothing");
         app.world_mut().resource_mut::<Character>().class = crate::character::Class::Cleric;
         app.update();
-        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 1);
+        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 3);
         assert_eq!(app.world().resource::<Chosen>().name, "Divine Light");
     }
 
@@ -1213,6 +1345,18 @@ mod tests {
     }
 
     #[test]
+    fn smite_and_shield_have_their_own_pictures() {
+        assert_eq!((icon_for("smite"), icon_for("shield")), (Some(AbilityPicture::Pillar), Some(AbilityPicture::Shield)));
+        let side = ICON_SIZE as usize;
+        for picture in [AbilityPicture::Pillar, AbilityPicture::Shield] {
+            let pixels = picture.pixels();
+            assert_eq!(pixels.len(), side * side);
+            assert!(pixels[0][3] < 10, "{picture:?} is clear in the corner");
+            assert!(pixels.iter().map(|p| p[3]).max().unwrap() > 150, "{picture:?} has something bright in it");
+        }
+    }
+
+    #[test]
     fn a_slot_holding_divine_light_shows_its_picture_and_its_time_left() {
         let (mut app, _) = delve(true, 10.0);
         app.init_resource::<Assets<Image>>();
@@ -1238,6 +1382,28 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(left(&mut app), None, "gone with the light");
+    }
+
+    #[test]
+    fn a_slot_holding_shield_shows_its_time_left_and_only_while_it_holds() {
+        let (mut app, _) = delve(true, 20.0);
+        let slot = app.world_mut().spawn((crate::quickslots::QuickSlot(2), Node::default(), crate::time_left::TimeLeft(None))).id();
+        let light_slot = app.world_mut().spawn((crate::quickslots::QuickSlot(0), Node::default(), crate::time_left::TimeLeft(None))).id();
+        app.update();
+        let left = |app: &App, slot| app.world().get::<crate::time_left::TimeLeft>(slot).copied().unwrap().0;
+        assert_eq!(app.world().resource::<AbilitySlots>().get(2), Some("Shield"));
+        assert_eq!(left(&app, slot), None, "no veil before it is cast");
+        press(&mut app, KeyCode::Digit3);
+        app.update();
+        assert!(left(&app, slot).is_some_and(|l| l > 0.99), "all its time left at the cast");
+        assert_eq!(left(&app, light_slot), None, "Divine Light's slot is not veiled by it");
+        app.world_mut().resource_mut::<GameClock>().advance(600.0 * 0.25);
+        app.update();
+        assert!(left(&app, slot).is_some_and(|l| (l - 0.75).abs() < 0.01), "a quarter gone: {:?}", left(&app, slot));
+        app.world_mut().resource_mut::<GameClock>().advance(600.0);
+        app.update();
+        app.update();
+        assert_eq!(left(&app, slot), None, "gone with the shield");
     }
 
     #[test]
