@@ -27,9 +27,44 @@ impl Lexicon {
         words.iter().filter(|w| known.insert(w.key.to_string())).copied().collect()
     }
 
-    /// Learns what a book or scroll teaches, and returns the words that were new.
+    /// Learns what a book or scroll teaches, and returns the words that were new. A topic it
+    /// covers that is already fully known is swapped for the next topic not yet known (table
+    /// order), so a writing never repeats what the delver has: any three scrolls of a tongue, in
+    /// any order, teach all of it. Once the tongue is complete it teaches nothing.
     pub fn learn_teaching(&mut self, teaching: &Teaching) -> Vec<Word> {
-        self.learn(teaching.kind, &teaching.words)
+        let kind = teaching.kind;
+        let mut chosen: Vec<Topic> = Vec::new();
+        let mut spare = 0;
+        for t in Topic::ALL {
+            if teaching.topics.contains(&t) {
+                if self.topic_known(kind, t) {
+                    spare += 1;
+                } else {
+                    chosen.push(t);
+                }
+            }
+        }
+        for t in Topic::ALL {
+            if spare == 0 {
+                break;
+            }
+            if !teaching.topics.contains(&t) && !self.topic_known(kind, t) {
+                chosen.push(t);
+                spare -= 1;
+            }
+        }
+        let words: Vec<Word> = chosen.iter().flat_map(|t| t.words()).copied().collect();
+        self.learn(kind, &words)
+    }
+
+    /// Whether every word of `topic` is learned in `kind`'s tongue.
+    pub fn topic_known(&self, kind: DenizenKind, topic: Topic) -> bool {
+        topic.words().all(|w| self.knows(kind, w))
+    }
+
+    /// Whether the whole tongue is learned, so no writing has anything left to teach.
+    pub fn is_complete(&self, kind: DenizenKind) -> bool {
+        Topic::ALL.iter().all(|t| self.topic_known(kind, *t))
     }
 
     /// Whether the delver knows this word of `kind`'s tongue.
