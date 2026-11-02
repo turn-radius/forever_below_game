@@ -753,13 +753,16 @@ fn shimmer_baubles(
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. `FB_PRAY_TURN=180` turns the
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
 /// the light last only that many game seconds, to see it sputter out. The prayer's quickslot
-/// flashes as if its key were pressed, since captures ignore the keyboard. For captures.
+/// flashes as if its key were pressed, since captures ignore the keyboard. `FB_PRAY_WRITE=heal`
+/// (or `cure`) first unlocks that term, writes a self-reach, short prayer of it ("Mending Hand",
+/// "Cleansing Word") and chooses it, so `FB_PRAY=1` casts it. For captures.
 #[allow(clippy::type_complexity)]
 fn debug_cast(
     mut frames: Local<u32>,
     mut chosen: ResMut<Chosen>,
     mut requests: MessageWriter<CastRequest>,
     mut players: Query<(&mut DelverMana, Option<&mut crate::player::Locomotion>), With<Player>>,
+    mut books: Query<&mut DelverSpellbook, With<Player>>,
     mut lights: Query<&mut DivineLight, Added<DivineLight>>,
     clock: Option<Res<GameClock>>,
     slots: Res<AbilitySlots>,
@@ -780,6 +783,23 @@ fn debug_cast(
             light.lasts = lasts;
             light.fade = light.fade.min(lasts);
         }
+    }
+    if *frames == 50
+        && let Ok(effect) = std::env::var("FB_PRAY_WRITE")
+        && let Some(mut book) = books.iter_mut().next()
+    {
+        let effect = effect.trim();
+        let name = if effect == "cure" { "Cleansing Word" } else { "Mending Hand" };
+        book.0.unlocked.insert(effect.to_string());
+        book.0.written.retain(|w| w.name != name);
+        book.0.written.push(fb_character::casting::Written {
+            name: name.into(),
+            school: Casting::Divine,
+            effect: effect.into(),
+            reach: "self".into(),
+            duration: "short".into(),
+        });
+        chosen.name = name.into();
     }
     if *frames == 60 {
         if let Some(tier) = std::env::var("FB_PRAY_TIER").ok().and_then(|v| v.trim().parse::<u8>().ok()) {
