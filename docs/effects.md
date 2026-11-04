@@ -88,7 +88,12 @@ steps give the same particles.
 
 ## The effects
 
-- `smite`, `shield`, `shield_struck`: the Smite and Shield prayers (see `docs/design.md`, Prayers).
+- `smite`: the Smite prayer (see `docs/design.md`, Prayers). The Shield plays no effect: golden ethereal shields circle
+  the holder instead. They are real Armory shields rolled from the prayer's seed (3 at tier one,
+  one more a tier), drawn with `EtherealMaterial` (`game/src/render/ethereal.wesl`: fresnel rim,
+  a faint fill, and bands of energy that run round and in from the edge, added onto the world),
+  driven by `game/src/prayers/shield_ring.rs`. A blow flares the shield nearest it (rim and bands
+  brighten and race, settling over about 0.6 s).
 - `heal`: when a Heal prayer mends something, warm gold and soft green motes spiral up around and
   ahead of the view and draw in, with sparks and a soft warm glow, about 1.5 s. A cast at full
   hit points plays nothing.
