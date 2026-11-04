@@ -8,7 +8,11 @@
 //! The ring follows an entity's `Transform` ([`ShieldHolder`], else the delver), so a folk
 //! cleric under the prayer gets the same ring.
 
-use armory::{Family, Item};
+use armory::Item;
+use armory::MaterialKind;
+use armory::families::shield::{Shield, ShieldBend, ShieldShape, ShieldState};
+use armory::heraldry::{Division, Tincture};
+use armory::sections::device::Device;
 use bevy::prelude::*;
 
 use super::{ShieldPrayer, ShieldStruck, clock_ratio, sputter_lead};
@@ -61,8 +65,6 @@ pub struct RingShield {
     pub angle: f32,
     /// 1 on a blow, settling to 0.
     pub flare: f32,
-    /// The shield's own seed.
-    pub seed: u32,
     /// Its size at rest, a share of full scale from the shield's height.
     pub scale: f32,
     pub material: Handle<EtherealMaterial>,
@@ -73,16 +75,40 @@ pub fn shield_count(tier: u8) -> usize {
     SHIELDS_AT_TIER_ONE + usize::from(tier.max(1) - 1)
 }
 
-/// The seed of shield `index` of a prayer: the first ones never change as a tier adds more.
-pub fn shield_seed(prayer_seed: u32, index: usize) -> u32 {
-    prayer_seed.wrapping_add((index as u32).wrapping_mul(0x9E37_79B1))
+/// The one design every ethereal shield wears, set out in full so that a later change to what
+/// the generator rolls can never swap it for a round one: a tall heater (flat top, straight sides
+/// curving to a point), bent round a vertical axis, painted plain silver with a golden cross, and
+/// an iron rim. It has no boss, so the cross reads clearly.
+pub fn holy_state() -> ShieldState {
+    holy_variant(ShieldShape::Heater, Device::Cross, Tincture::Argent, Tincture::Or)
 }
 
-/// An armory shield as the parts of an ethereal mesh, centred, and the factor that makes it
+/// A candidate holy design: `shape` painted `field` with a `device` in `charge`.
+pub fn holy_variant(shape: ShieldShape, device: Device, field: Tincture, charge: Tincture) -> ShieldState {
+    let mut state = ShieldState { seed: 7, ..ShieldState::default() };
+    state.body.shape = shape;
+    state.body.size = 7.0;
+    state.body.width = if shape == ShieldShape::Kite { 0.72 } else { 0.8 };
+    state.body.bend = ShieldBend::Cylinder;
+    state.body.curve = 0.35;
+    state.body.planks = 0;
+    state.body.material = MaterialKind::Wood;
+    state.field.painted = true;
+    state.field.division = Division::Plain;
+    state.field.tincture = field;
+    state.field.charge = device;
+    state.field.charge_tincture = charge;
+    state.field.charge_size = 0.55;
+    state.boss.on = false;
+    state.studs.count = 0;
+    state.rim.on = true;
+    state
+}
+
+/// The holy armory shield as the parts of an ethereal mesh, centred, and the factor that makes it
 /// [`SHIELD_HEIGHT`] tall. The shield lies in the x/y plane facing +z.
-pub fn ethereal_shield(seed: u32) -> Option<(Vec<Mesh>, Vec3, f32)> {
-    let item = Item::roll(Family::Shield, seed)?;
-    let built = item.build();
+pub fn ethereal_shield() -> Option<(Vec<Mesh>, Vec3, f32)> {
+    let built = Item::Shield(holy_state()).build();
     let bounds = crate::render::item_bounds(&built)?;
     let centre = Vec3::from(bounds.center());
     let half = Vec3::from(bounds.half_size());
@@ -124,11 +150,10 @@ fn raise_the_rings(
         let count = shield_count(shield.tier);
         let ring = commands.spawn((ShieldRing { prayer, holder, age: 0.0, spin: 0.0 }, Name::new("Shield ring"), Transform::default(), Visibility::default())).id();
         for index in 0..count {
-            let seed = shield_seed(shield.seed, index);
-            let Some((parts, centre, scale)) = ethereal_shield(seed) else { continue };
+            let Some((parts, centre, scale)) = ethereal_shield() else { continue };
             let angle = std::f32::consts::TAU * index as f32 / count as f32;
             let material = materials.add(EtherealMaterial { band_phase: index as f32 * 2.1, ..EtherealMaterial::gold() });
-            let pivot = commands.spawn((RingShield { index, angle, flare: 0.0, seed, scale, material: material.clone() }, Name::new("Ethereal shield"), Transform::from_scale(Vec3::ZERO), Visibility::default())).id();
+            let pivot = commands.spawn((RingShield { index, angle, flare: 0.0, scale, material: material.clone() }, Name::new("Ethereal shield"), Transform::from_scale(Vec3::ZERO), Visibility::default())).id();
             for mesh in parts {
                 let part = commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone()), Transform::from_translation(-centre))).id();
                 commands.entity(pivot).add_child(part);
@@ -237,6 +262,44 @@ fn debug_ring_folk(mut commands: Commands, folk: Query<(Entity, &Transform), Wit
     commands.spawn((Name::new("Shield on folk"), ShieldPrayer { tier: 2, bonus: 4, expires: 1e12, lasts: 1e12, seed: 0x5eed }, ShieldHolder(folk)));
 }
 
+/// For captures (`FB_SHIELD_CANDIDATES=1`): sets out a sheet of candidate holy designs, drawn as
+/// the toon items they are, a few paces ahead of the delver.
+fn debug_candidates(mut spawner: crate::render::ItemSpawner, players: Query<&Transform, With<Player>>, mut done: Local<u32>) {
+    if !std::env::var("FB_SHIELD_CANDIDATES").is_ok_and(|v| !v.is_empty()) {
+        return;
+    }
+    *done += 1;
+    if *done != 60 {
+        return;
+    }
+    let Some(me) = players.iter().next() else { return };
+    use armory::families::shield::ShieldArchetype;
+    let mut states: Vec<ShieldState> = Vec::new();
+    for shape in [ShieldShape::Heater, ShieldShape::Kite] {
+        for device in [Device::Cross, Device::Star, Device::Wheel, Device::Crescent] {
+            states.push(holy_variant(shape, device, Tincture::Argent, Tincture::Or));
+        }
+    }
+    for device in [Device::Cross, Device::Star, Device::Cross, Device::Star] {
+        states.push(holy_variant(ShieldShape::Heater, device, Tincture::Azure, Tincture::Or));
+    }
+    for seed in 1..=4 {
+        states.push(Shield::roll_as(seed, if seed % 2 == 0 { ShieldArchetype::Kite } else { ShieldArchetype::Heater }));
+    }
+    let forward = me.forward().as_vec3().with_y(0.0).normalize_or_zero();
+    let right = me.right().as_vec3().with_y(0.0).normalize_or_zero();
+    for (i, state) in states.into_iter().enumerate() {
+        let (col, row) = ((i % 4) as f32 - 1.5, 1.5 - (i / 4) as f32);
+        let item = Item::Shield(state);
+        let built = item.build();
+        let at = me.translation + forward * 40.0 + right * col * 4.6 + Vec3::Y * (EYE_HEIGHT - 1.0 + row * 4.6);
+        let look = Transform::from_translation(at).looking_at(Vec3::new(me.translation.x, at.y, me.translation.z), Vec3::Y);
+        // An item faces +Z; looking_at points -Z at the target, so turn it round.
+        let appearance = crate::carry::appearance_of(&item);
+        spawner.spawn(&built, &appearance).insert((look.with_rotation(look.rotation * Quat::from_rotation_y(std::f32::consts::PI)).with_scale(Vec3::splat(0.55)), Visibility::default()));
+    }
+}
+
 /// For captures (`FB_PRAY_LASTS=70`): a new Shield lasts only that many game seconds, to see it
 /// flicker out.
 fn debug_shield_lasts(clock: Option<Res<GameClock>>, mut fresh: Query<&mut ShieldPrayer, Added<ShieldPrayer>>) {
@@ -251,6 +314,9 @@ fn debug_shield_lasts(clock: Option<Res<GameClock>>, mut fresh: Query<&mut Shiel
 }
 
 pub fn register(app: &mut App) {
+    if std::env::var("FB_SHIELD_CANDIDATES").is_ok_and(|v| !v.is_empty()) {
+        app.add_systems(Update, debug_candidates.in_set(DelveSystems));
+    }
     app.add_systems(
         Update,
         (debug_shield_lasts, raise_the_rings, reap_the_rings, flare_the_struck, turn_the_rings, debug_ring_folk)
@@ -300,22 +366,30 @@ mod tests {
     }
 
     #[test]
-    fn a_tier_adds_a_shield_and_the_first_ones_keep_their_seeds() {
+    fn a_tier_adds_a_shield() {
         assert_eq!((shield_count(1), shield_count(2), shield_count(4)), (3, 4, 6));
-        assert_eq!(shield_seed(77, 1), shield_seed(77, 1));
-        assert_ne!(shield_seed(77, 0), shield_seed(77, 1));
     }
 
     #[test]
-    fn the_same_seed_gives_the_same_shield_and_it_lies_in_the_xy_plane() {
-        for seed in 0..40u32 {
-            let (a, centre_a, scale_a) = ethereal_shield(seed).expect("a shield");
-            let (b, centre_b, scale_b) = ethereal_shield(seed).expect("again");
-            assert_eq!((centre_a, scale_a, a.len()), (centre_b, scale_b, b.len()));
-            let built = Item::roll(Family::Shield, seed).unwrap().build();
-            let half = Vec3::from(crate::render::item_bounds(&built).unwrap().half_size());
-            assert!(half.z < half.x.min(half.y), "seed {seed}: a shield is thin along z: {half}");
-        }
+    fn the_holy_shield_is_deterministic_lies_in_the_xy_plane_and_is_not_round() {
+        let (a, centre_a, scale_a) = ethereal_shield().expect("a shield");
+        let (b, centre_b, scale_b) = ethereal_shield().expect("again");
+        assert_eq!((centre_a, scale_a, a.len()), (centre_b, scale_b, b.len()));
+        let built = Item::Shield(holy_state()).build();
+        let half = Vec3::from(crate::render::item_bounds(&built).unwrap().half_size());
+        assert!(half.z < half.x.min(half.y), "thin along z: {half}");
+        assert!(half.y > half.x * 1.1, "taller than wide: {half}");
+        let state = holy_state();
+        assert!(!state.body.shape.is_round() && matches!(state.body.shape, ShieldShape::Heater | ShieldShape::Kite));
+        // A point at the bottom: the outline is narrower at its foot than at its shoulders.
+        let outline = armory::families::shield::Shield::outline(&state.body);
+        let width_at = |lo: f32, hi: f32| {
+            let xs: Vec<f32> = outline.iter().filter(|p| p[1] >= lo && p[1] <= hi).map(|p| p[0].abs()).collect();
+            xs.into_iter().fold(0.0, f32::max)
+        };
+        let (top, bottom) = outline.iter().fold((f32::MIN, f32::MAX), |(t, b), p| (t.max(p[1]), b.min(p[1])));
+        let height = top - bottom;
+        assert!(width_at(bottom, bottom + height * 0.1) < width_at(top - height * 0.3, top) * 0.5, "pointed at the foot");
     }
 
     #[test]
