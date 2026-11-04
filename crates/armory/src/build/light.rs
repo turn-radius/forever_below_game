@@ -97,14 +97,12 @@ pub struct FlameShape {
     pub hem: f32,
     /// How far up the veil its core starts, as a share of the height.
     pub core_rise: f32,
-    /// Tongues that lick up the sides of what burns, round the skirt's rim.
-    pub licks: u32,
 }
 
 impl FlameShape {
     /// An upright flame with a slim core: a candle's, a lantern's, a brazier's.
     pub fn upright(height: f32, radius: f32, lean: f32) -> FlameShape {
-        FlameShape { height, radius, lean, tilt: 0.0, bend: 0.0, core: CORE_GIRTH, hem: 0.0, core_rise: CORE_RISE, licks: 0 }
+        FlameShape { height, radius, lean, tilt: 0.0, bend: 0.0, core: CORE_GIRTH, hem: 0.0, core_rise: CORE_RISE }
     }
 }
 
@@ -123,7 +121,7 @@ pub fn flame(height: f32, radius: f32, lean: f32, seed: u32) -> (MeshBuilder, Me
 /// no RNG, and the game only has to turn the flame upright and face it. Returns
 /// `(outer, core)`.
 pub fn flame_shaped(shape: &FlameShape, seed: u32) -> (MeshBuilder, MeshBuilder) {
-    let FlameShape { height, radius, lean, tilt, bend, core, hem, core_rise, licks: _ } = *shape;
+    let FlameShape { height, radius, lean, tilt, bend, core, hem, core_rise } = *shape;
     // `rise` is how far up the whole flame the veil starts, so the core follows the same spine.
     let veil = move |h: f32, r: f32, tongues: f32, rise: f32, hem: f32| {
         let profile = spline_profile(&[[r * hem, 0.0], [r * (0.75 + 0.25 * hem), h * 0.08], [r, h * 0.26], [r * 0.82, h * 0.48], [r * 0.4, h * 0.76], [0.0, h]], 28);
@@ -139,38 +137,9 @@ pub fn flame_shaped(shape: &FlameShape, seed: u32) -> (MeshBuilder, MeshBuilder)
             [p[0] * lick + sway, p[1], p[2] * lick + forward]
         })
     };
-    let mut outer = veil(height, radius, 3.0, 0.0, hem);
-    for lick in side_licks(shape, seed) {
-        outer.append(&lick);
-    }
+    let outer = veil(height, radius, 3.0, 0.0, hem);
     // The core is closed to a point however wide the veil's rim is: it rises from inside.
     (outer, veil(height * 0.62, radius * core, 2.0, height * core_rise, 0.0))
-}
-
-/// The tongues of a skirted flame: slim flames standing round its rim, hugging the sides of
-/// what burns and leaning a little away from it, each its own height and its own turn about
-/// the rim, so fire reads as licking up round a head and not as one shell over it. Drawn in
-/// the veil's mesh. Pure of `seed`.
-fn side_licks(shape: &FlameShape, seed: u32) -> Vec<MeshBuilder> {
-    let FlameShape { height, radius, licks, hem, .. } = *shape;
-    if licks == 0 {
-        return Vec::new();
-    }
-    (0..licks)
-        .map(|k| {
-            let noise = |salt: f32| value_noise3([k as f32 * 3.7 + salt, seed as f32 * 0.021, salt * 1.3], seed ^ 0x51ce);
-            // Evenly round the rim, each pushed a little off its slot.
-            let angle = std::f32::consts::TAU * (k as f32 + 0.6 * (noise(0.3) - 0.5)) / licks as f32 + (seed % 31) as f32 * 0.2;
-            let l = height * (0.3 + 0.18 * noise(1.1));
-            let w = radius * (0.2 + 0.07 * noise(2.9));
-            let profile = spline_profile(&[[0.0, 0.0], [w * 0.8, l * 0.1], [w, l * 0.34], [w * 0.55, l * 0.7], [0.0, l]], 14);
-            let mut tongue = lathe_warped(&profile, &LatheOptions::new(10, Shading::SMOOTH), |p| p);
-            // Stands out from the rim and leans away from the head, tip curling back up.
-            tongue.rotate_x(0.2).translate([0.0, 0.0, radius * (0.5 + 0.3 * hem)]).rotate_y(angle);
-            tongue.translate([0.0, height * 0.015, 0.0]);
-            tongue
-        })
-        .collect()
 }
 
 /// How far up the veil its core starts, as a share of the flame's height.

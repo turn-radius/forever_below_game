@@ -383,8 +383,6 @@ const FLAME_CORE_SINK: f32 = 0.08;
 /// above a flat-bottomed flame (#884).
 const FLAME_HEM: f32 = 0.85;
 
-/// Tongues licking up the head's sides round the flame's skirt.
-const FLAME_LICKS: u32 = 7;
 
 /// How wide a torch's flame is at its belly, as a multiple of the head's girth: the bulb
 /// wraps the burning head without swallowing it (#276, #280).
@@ -611,7 +609,6 @@ fn build_torch(s: &TorchState) -> ItemMesh {
             core: FLAME_CORE,
             hem: FLAME_HEM,
             core_rise,
-            licks: FLAME_LICKS,
             ..FlameShape::upright(g.flame_height, g.flame_radius, 0.0)
         };
         add_flame_shaped(&mut parts, g.flame_base, &shape, s.seed);
@@ -941,8 +938,7 @@ mod tests {
                         let (cx, cz) = (pts.iter().map(|p| p[0]).sum::<f32>() / n, pts.iter().map(|p| p[2]).sum::<f32>() / n);
                         pts.iter().map(|p| ((p[0] - cx).powi(2) + (p[2] - cz).powi(2)).sqrt()).sum::<f32>() / n
                     };
-                    // Only the veil's own rings (20 facets and the seam), not the side tongues' (10 and the seam).
-                    let widest = rings.iter().filter(|r| r.1.len() == 21).max_by(|a, b| ring_radius(&a.1).total_cmp(&ring_radius(&b.1))).unwrap();
+                    let widest = rings.iter().max_by(|a, b| ring_radius(&a.1).total_cmp(&ring_radius(&b.1))).unwrap();
                     let (belly_y, belly_r) = (widest.1[0][1], ring_radius(&widest.1));
                     assert!(belly_y >= g.head_base && belly_y <= g.head_top + 0.15, "belly off the head: {what} y {belly_y} base {} top {} flame_base {} lo {lo} hi {hi}", g.head_base, g.head_top, g.flame_base[1]);
                     // The head's own radius round that height, taken no higher than its upper
