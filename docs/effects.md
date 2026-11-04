@@ -97,9 +97,9 @@ steps give the same particles.
 - `smite`, `shield`, `shield_struck`: the Smite and Shield prayers (see `docs/design.md`, Prayers).
 - `heal`: when a Heal prayer mends something, three strands of small warm gold motes and a few
   soft green ones wind up a body-wide column round the delver from the feet past the head, with
-  short streaks and soft wisps trailing so the spiral reads, under a warm glow, about 1.9 s. A cast at full hit points plays nothing.
+  short streaks and soft wisps trailing so the spiral reads, inside a pillar of warm light whose bright band washes down over them from above the head to the feet (a `beam` column with a short bright `beam` band falling through it, then a ring on the floor), under a warm glow, about 1.9 s. A cast at full hit points plays nothing.
 - `cure`: when a Cure prayer lifts a poison, the same swirl in a sickly yellow-green winds the
-  other way, then a brief white flash scatters it into sparks, about 1.9 s. A cast with nothing
+  other way inside a pale pillar whose band washes up from the feet past the head (a short `beam` band on `rise`), then a brief white flash scatters it into sparks, about 1.9 s. A cast with nothing
   to cure plays nothing.
 - `test_burst`: the worked example.
 

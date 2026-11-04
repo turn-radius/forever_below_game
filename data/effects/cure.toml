@@ -1,5 +1,5 @@
 # Cure: three strands of sickly yellow-green motes are drawn out of the delver, winding up a
-# body-wide column the same way Heal's do, then a brief white flash scatters it into sparks. Played at the delver when a Cure
+# body-wide column the same way Heal's do, a pillar of pale light washes up past them, then a brief white flash scatters it into sparks. Played at the delver when a Cure
 # prayer lifts something. See docs/effects.md.
 name = "cure"
 length = 1.9
@@ -127,3 +127,57 @@ start = 1.3
 kind = "burst"
 speed = 22.0
 scatter = 6.0
+
+[[emitters]]
+name = "pillar"
+card = "beam"
+tail = 26.0
+size = [{ at = 0.0, size = 4.0 }, { at = 0.3, size = 10.0 }, { at = 1.0, size = 7.0 }]
+colour = [{ at = 0.0, rgb = [0.85, 1.0, 0.75] }, { at = 1.0, rgb = [0.95, 1.0, 0.9] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -16.0, 5.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 1.0
+start = 0.3
+
+[[emitters]]
+name = "wash"
+card = "beam"
+tail = 9.0
+size = [{ at = 0.0, size = 8.0 }, { at = 1.0, size = 11.0 }]
+colour = [{ at = 0.0, rgb = [0.9, 1.0, 0.85] }, { at = 1.0, rgb = [1.0, 1.0, 0.97] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -24.0, 5.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.95
+start = 0.35
+
+[emitters.motion]
+kind = "rise"
+speed = 30.0
+
+[[emitters]]
+name = "floor"
+card = "ring"
+size = [{ at = 0.0, size = 4.0 }, { at = 0.5, size = 22.0 }, { at = 1.0, size = 34.0 }]
+colour = [{ at = 0.0, rgb = [0.85, 1.0, 0.7] }, { at = 1.0, rgb = [0.6, 0.9, 0.4] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -16.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.8
+start = 0.35

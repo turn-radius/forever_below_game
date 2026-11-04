@@ -1,7 +1,7 @@
 # Heal: three strands of warm gold motes (and a few soft green ones) wind up a body-wide column
 # around the delver from the feet past the head, trailing short streaks and wisps so the spiral
 # reads, under a warm glow that swells and fades. Played at the delver when a Heal prayer mends
-# something. Cure is its sibling. See docs/effects.md.
+# something. A pillar of light washes down over the delver with it. Cure is its sibling. See docs/effects.md.
 name = "heal"
 length = 1.9
 lasts = false
@@ -115,3 +115,57 @@ scatter = 0.2
 orbit_radius = 3.6
 orbits = 1.5
 strands = 3
+
+[[emitters]]
+name = "pillar"
+card = "beam"
+tail = 26.0
+size = [{ at = 0.0, size = 4.0 }, { at = 0.3, size = 10.0 }, { at = 1.0, size = 7.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.9, 0.6] }, { at = 1.0, rgb = [1.0, 0.8, 0.45] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -16.0, 5.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 1.1
+start = 0.1
+
+[[emitters]]
+name = "wash"
+card = "beam"
+tail = 9.0
+size = [{ at = 0.0, size = 8.0 }, { at = 1.0, size = 11.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.98, 0.85] }, { at = 1.0, rgb = [1.0, 0.92, 0.65] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, 10.0, 5.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.95
+start = 0.1
+
+[emitters.motion]
+kind = "fall"
+speed = 30.0
+
+[[emitters]]
+name = "floor"
+card = "ring"
+size = [{ at = 0.0, size = 4.0 }, { at = 0.5, size = 22.0 }, { at = 1.0, size = 34.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.75] }, { at = 1.0, rgb = [1.0, 0.75, 0.35] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -16.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.8
+start = 0.85
