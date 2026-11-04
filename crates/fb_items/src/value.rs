@@ -73,11 +73,20 @@ pub struct ValueRules {
     /// How much richer each level below the first makes a purse: its coins times
     /// `1 + step * (depth - 1)`.
     pub coin_depth_step: f64,
+    /// What a healer's prayer scroll is worth in plain scrolls for each point of mana its term
+    /// costs: a Heal scroll (cost 3) at 4 is twelve plain scrolls, a Cure scroll (cost 2) eight.
+    pub prayer_per_cost: f64,
 }
 
 /// `data/value_rules.json`.
 pub static RULES: LazyLock<ValueRules> =
     LazyLock::new(|| serde_json::from_str(include_str!("../../../data/value_rules.json")).unwrap_or_else(|e| panic!("data/value_rules.json: {e}")));
+
+/// What a prayer scroll is worth in plain scrolls, for a term costing `cost` mana (our own): at
+/// least one. The game applies it when it prices a scroll, from the cost its rules give the term.
+pub fn prayer_factor(cost: f64) -> f64 {
+    (cost.max(0.0) * RULES.prayer_per_cost).max(1.0)
+}
 
 /// What rarity multiplies the price by (our own).
 pub fn rarity_factor(rarity: Rarity) -> f64 {

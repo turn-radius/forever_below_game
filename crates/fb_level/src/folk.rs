@@ -45,6 +45,10 @@ pub struct FolkSpot {
     /// Their profession, tier and style, if they have one ([`crate::trades`]).
     #[serde(default)]
     pub trade: Option<Trade>,
+    /// Made a cleric whatever their faction's outfits say, when a faction with no cleric of its
+    /// own needs a healer ([`crate::trades`]).
+    #[serde(default)]
+    pub cleric: bool,
 }
 
 fn default_sex() -> Sex {
@@ -55,7 +59,7 @@ impl FolkSpot {
     /// A member of `faction` with `seed` and `trade`, standing nowhere yet, of the faction's
     /// folk and the sex the faction gives them.
     pub(crate) fn of(faction: &FactionSpec, seed: u32, trade: Option<Trade>) -> FolkSpot {
-        FolkSpot { x: 0.0, y: 0.0, yaw: 0.0, folk: faction.folk, denizen: None, seed, sex: faction.member_sex(seed), faction: faction.id, trade }
+        FolkSpot { x: 0.0, y: 0.0, yaw: 0.0, folk: faction.folk, denizen: None, seed, sex: faction.member_sex(seed), faction: faction.id, trade, cleric: false }
     }
 
     /// The unit grid direction they face, `(dx, dy)` with `y` south.
@@ -68,6 +72,29 @@ impl FolkSpot {
     /// denizens have names of their own.
     pub fn name(&self) -> String {
         fb_items::naming::folk_name(&mut self.name_stream(), self.folk.key(), Some(self.sex))
+    }
+
+    /// The outfit they dress from, and so their class: one of their faction's two outfits, drawn
+    /// from their name's stream just after the name ([`NAME_SALT`]), or a cleric's if they were
+    /// made one ([`FolkSpot::cleric`]). The game dresses them from this. A denizen's is
+    /// meaningless: they dress from their own kind's row.
+    pub fn outfit(&self, faction: &FactionSpec) -> fb_faction::Outfit {
+        if self.cleric {
+            return fb_faction::Outfit::Cleric;
+        }
+        let mut rng = self.name_stream();
+        let key = if fb_items::tables::syllables().contains_key(self.folk.key()) { self.folk.key() } else { Folk::Human.key() };
+        fb_items::naming::folk_name(&mut rng, key, Some(self.sex));
+        *rng.pick(&faction.outfits)
+    }
+
+    /// Their class, if the outfit they dress from is a delver's class; `None` for a scavenger
+    /// and for a denizen.
+    pub fn class(&self, faction: &FactionSpec) -> Option<fb_faction::ClassKind> {
+        if self.denizen.is_some() {
+            return None;
+        }
+        self.outfit(faction).class()
     }
 
     /// The stream their name is drawn from first.
@@ -825,7 +852,7 @@ mod tests {
 
     #[test]
     fn facing_follows_the_yaw() {
-        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, denizen: None, seed: 0, sex: Sex::Male, faction: Faction(0), trade: None };
+        let spot = |yaw: f32| FolkSpot { x: 0.0, y: 0.0, yaw, folk: Folk::Human, denizen: None, seed: 0, sex: Sex::Male, faction: Faction(0), trade: None, cleric: false };
         let (dx, dy) = spot(crate::Facing::North.yaw()).facing();
         assert!(dx.abs() < 1e-6 && (dy + 1.0).abs() < 1e-6);
         let (dx, dy) = spot(crate::Facing::West.yaw()).facing();

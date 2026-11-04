@@ -1788,7 +1788,7 @@ fn unhang_without_belt(mut inventory: ResMut<Inventory>, mut floor_changes: ResM
 
 /// For captures: holds the card over the `FB_DEBUG_HOVER`th thing in the first carried grid,
 /// as if the mouse were on it; `u<n>` takes the `n`th thing underfoot instead, and `o<n>` the
-/// `n`th in the open container (a chest, or a trader's shelf).
+/// `n`th in the open container (a chest, or a trader's shelf); `t` the first teaching book or scroll in any carried bag.
 fn debug_hover(
     inventory: Res<Inventory>,
     underfoot: Res<Underfoot>,
@@ -1806,6 +1806,19 @@ fn debug_hover(
         let rect = node_rect(node, transform);
         if rect.width() > 0.0 {
             hovered.set_if_neq(Hovered(Some((id, rect))));
+        }
+        return;
+    }
+    // `t` is the first book or scroll that teaches (words or a prayer) in any carried bag.
+    if spec == "t" {
+        let id = inventory.carried_containers().into_iter().filter_map(|c| inventory.grid(c)).flat_map(|g| g.entries().iter().map(|e| e.id).collect::<Vec<_>>()).find(|&id| inventory.item(id).is_some_and(|i| i.teaching().is_some() || i.prayer().is_some()));
+        if let Some(id) = id
+            && let Some((_, node, transform)) = views.iter().find(|(v, ..)| v.id == id)
+        {
+            let rect = node_rect(node, transform);
+            if rect.width() > 0.0 {
+                hovered.set_if_neq(Hovered(Some((id, rect))));
+            }
         }
         return;
     }

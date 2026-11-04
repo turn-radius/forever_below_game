@@ -56,7 +56,7 @@ pub struct Trader {
 }
 
 /// The keys of what traders sell, one per trading profession: `wares_<key>` in `data/notes.json`.
-pub const WARES: [&str; 7] = ["armorer", "weaponsmith", "bowyer", "tentmaker", "general_goods", "alchemist", "enchanter"];
+pub const WARES: [&str; 8] = ["armorer", "weaponsmith", "bowyer", "tentmaker", "general_goods", "alchemist", "enchanter", "healer"];
 
 /// A book lying on a level.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +88,9 @@ pub struct Lore {
     pub tongues: Vec<fb_denizens::DenizenKind>,
     /// The denizen factions on it, as the grammar names them, with their kind.
     pub denizens: Vec<(String, fb_denizens::DenizenKind)>,
+    /// The Divine terms a prayer scroll found here may teach, by id: the game fills it from its
+    /// rules (`fb_character::casting::scroll_terms`). Empty, no scroll is a prayer.
+    pub prayers: Vec<String>,
 }
 
 /// The kinds of note, each an `origin` symbol of `data/notes.json`.
@@ -267,6 +270,7 @@ mod tests {
             books: vec![Book { place: Some("library".into()), teaches: Stat::Dexterity }],
             tongues: vec![],
             denizens: vec![],
+            prayers: vec![],
         }
     }
 

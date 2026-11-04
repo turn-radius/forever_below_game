@@ -40,3 +40,7 @@ Persuading ([`game/src/talk/persuade.rs`]): the Persuade topic rolls a d20 to wi
 
 Identifying ([`crates/fb_items/src/identify.rs`], [`game/src/identify.rs`]): magic and better items found in containers are unknown, shown as "Unknown ring" with their affixes hidden (what they do still counts). Y over one in the inventory rolls a d20 against 12, 15 or 18 by rarity with Intelligence and class as modifiers: meeting it reveals every affix, falling short reveals a share, falling 8 short reveals nothing. The item may be tried again, and what is revealed stays. The state is on the item record, so it lasts through saves, and records from before read as known.
 
+
+## Casting terms
+
+Prayers and spells are written from an effect, a reach and a duration term (`[casting.terms]` in `data/rules.toml`, `fb_character::casting`). Light and Ward are known from the start; Frighten, Charm and Bane are unlocked by a devotion or alignment; Heal and Cure are Divine effects unlocked by a prayer scroll (`Spellbook::unlock("heal")`), and show greyed in the book ("unlocked by a prayer scroll") until then. A term's `power` is the hit points Heal restores at tier 1; tier n restores n times that and costs n times the mana, and it never takes hit points above the maximum. Cure ends the `poisoned` effect (the simulation has no disease yet). Both act on the caster whatever the reach; folk have no hit points to mend yet. Written prayers, and the unlocked terms, are saved with the delver's spellbook.

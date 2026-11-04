@@ -25,12 +25,27 @@ pub enum Profession {
     GeneralGoods,
     Alchemist,
     Enchanter,
+    /// A cleric who tends the hurt for coin and sells incense and censers.
+    Healer,
     Guard,
 }
 
 impl Profession {
     /// The professions that trade (all but the guard).
-    pub const TRADES: [Profession; 7] = [
+    pub const TRADES: [Profession; 8] = [
+        Profession::Armorer,
+        Profession::Weaponsmith,
+        Profession::Bowyer,
+        Profession::Tentmaker,
+        Profession::GeneralGoods,
+        Profession::Alchemist,
+        Profession::Enchanter,
+        Profession::Healer,
+    ];
+
+    /// The trades the world places masters in: a healer is a cleric of a faction's own, so no
+    /// master healer is placed.
+    pub const MASTERABLE: [Profession; 7] = [
         Profession::Armorer,
         Profession::Weaponsmith,
         Profession::Bowyer,
@@ -50,6 +65,7 @@ impl Profession {
             Profession::GeneralGoods => "general goods merchant",
             Profession::Alchemist => "alchemist",
             Profession::Enchanter => "enchanter",
+            Profession::Healer => "healer",
             Profession::Guard => "guard",
         }
     }
@@ -171,6 +187,7 @@ impl Trade {
             Profession::Tentmaker => Line::Camp,
             Profession::GeneralGoods => Line::General,
             Profession::Alchemist => Line::Potions,
+            Profession::Healer => Line::Sacred,
             Profession::Enchanter | Profession::Guard => return None,
         };
         let grade = match self.tier {
@@ -317,7 +334,7 @@ impl World {
             let mut trades: Vec<Profession> = Vec::new();
             while trades.len() < count {
                 if bag.is_empty() {
-                    bag = Profession::TRADES.to_vec();
+                    bag = Profession::MASTERABLE.to_vec();
                     shuffle(&mut bag, &mut bag_rng);
                 }
                 let next = bag.pop().expect("a bag was just filled");

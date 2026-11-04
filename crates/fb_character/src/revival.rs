@@ -44,6 +44,14 @@ impl RevivalRules {
         self.revives.saturating_sub(used)
     }
 
+    /// How many times a delver who has come to `used` times has come to after a healer heals one
+    /// of their wounds (`[healer]`): one fewer, which gives back one revive, and never fewer than
+    /// none, so the revives left never rise above [`RevivalRules::revives`]. A delver who has
+    /// come to no times has all their revives already, and keeps them.
+    pub fn give_back(&self, used: u32) -> u32 {
+        used.saturating_sub(1)
+    }
+
     /// The hit points a delver of `max` comes to with, in a hall or alone: at least 1.
     pub fn hit_points(&self, max: i32, in_a_hall: bool) -> i32 {
         let share = if in_a_hall { self.hall_hit_points } else { self.alone_hit_points };
@@ -129,6 +137,15 @@ mod tests {
     fn two_revives_then_none() {
         let rules = RevivalRules::default();
         assert_eq!((rules.left(0), rules.left(1), rules.left(2), rules.left(5)), (2, 1, 0, 0));
+    }
+
+    #[test]
+    fn healing_a_wound_gives_back_a_revive_up_to_the_starting_count() {
+        let rules = RevivalRules::default();
+        assert_eq!(rules.left(rules.give_back(1)), 2);
+        assert_eq!(rules.left(rules.give_back(2)), 1);
+        // Full already: nothing more is given.
+        assert_eq!(rules.left(rules.give_back(0)), rules.revives);
     }
 
     #[test]

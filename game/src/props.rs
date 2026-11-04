@@ -380,6 +380,7 @@ fn lay_out_props(
     record: Option<Res<WorldRecord>>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
     character: Option<Res<crate::character::Character>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     mut spawner: ItemSpawner,
 ) {
     let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -387,7 +388,7 @@ fn lay_out_props(
     let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
     let mut ahead = staged.as_mut().and_then(|s| s.take_props(&level.0, odds)).map(Vec::into_iter);
     let saved = record.as_deref().and_then(|r| r.level(level.0.depth));
-    let lore = level.0.lore();
+    let lore = crate::rules::level_lore(&level.0, crate::rules::GameRules::of(&rules));
     for (entity, container) in &old {
         if let Some(container) = container {
             inventory.forget(container.id);

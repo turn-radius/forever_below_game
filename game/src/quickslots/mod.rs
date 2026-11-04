@@ -121,7 +121,7 @@ pub fn quick_use(item: &Item) -> Option<QuickUse> {
         Some(QuickUse::Light)
     } else if item.has_oil() || item.incense_kind().is_some() {
         Some(QuickUse::Refill)
-    } else if item.lesson().is_some() || item.teaching().is_some() || item.words.is_some() {
+    } else if item.lesson().is_some() || item.teaching().is_some() || item.prayer().is_some() || item.words.is_some() {
         Some(QuickUse::Read)
     } else if item.slots().iter().any(|s| matches!(s, Slot::Mainhand | Slot::Offhand)) {
         Some(QuickUse::Draw)

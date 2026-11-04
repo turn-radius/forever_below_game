@@ -30,7 +30,12 @@ pub fn reception(band: Band, turned_on_delver: bool) -> Reception {
 }
 
 /// The topics of a parley: persuasion is all a folk who will not talk will hear.
-pub fn parley_topics() -> Vec<Topic> {
+/// A healer's parley also lists Heal, so the delver is told why they will not be tended
+/// ([`crate::healer`]).
+pub fn parley_topics(speaker: &Speaker) -> Vec<Topic> {
+    if crate::healer::is_healer(speaker) {
+        return vec![Topic::Service(Service::Heal), Topic::Persuade];
+    }
     vec![Topic::Persuade]
 }
 
@@ -65,6 +70,8 @@ pub enum Service {
     /// with them.
     Order,
     Enchant,
+    /// A healer tends the delver ([`crate::healer`]).
+    Heal,
 }
 
 /// Something to ask a folk about.
@@ -98,6 +105,7 @@ impl Topic {
             Topic::Service(Service::Commission) => "Commission",
             Topic::Service(Service::Order) => "Your order",
             Topic::Service(Service::Enchant) => "Enchant",
+            Topic::Service(Service::Heal) => "Heal",
             Topic::Level => "This level",
             Topic::WayOut => "The way out",
             Topic::Threats => "Dangers",
@@ -204,6 +212,7 @@ pub fn topics(speaker: &Speaker) -> Vec<Topic> {
         match trade.profession {
             Profession::Armorer | Profession::Weaponsmith | Profession::Bowyer | Profession::Tentmaker => list.push(Topic::Service(Service::Commission)),
             Profession::Enchanter => list.push(Topic::Service(Service::Enchant)),
+            Profession::Healer => list.push(Topic::Service(Service::Heal)),
             _ => {}
         }
     }
@@ -288,6 +297,7 @@ pub fn answer(speaker: &Speaker, topic: Topic, rumour: Option<&MasterRumour>) ->
     match topic {
         Topic::Who => who(speaker),
         Topic::Trade => trade(speaker),
+        Topic::Service(Service::Heal) => crate::healer::offer(speaker),
         Topic::Service(_) => say(speaker, "not_yet", 0x05, &[]),
         Topic::Level => level(speaker),
         Topic::WayOut => way_out(speaker, rumour),
@@ -376,6 +386,7 @@ fn trade(speaker: &Speaker) -> String {
         Profession::GeneralGoods => "trade_general_goods",
         Profession::Alchemist => "trade_alchemist",
         Profession::Enchanter => "trade_enchanter",
+        Profession::Healer => "trade_healer",
         Profession::Guard => "trade_guard",
     };
     if trade.profession == Profession::Guard {
@@ -624,7 +635,7 @@ mod tests {
             assert_eq!(reception(band, false), Reception::Talks);
             assert_eq!(reception(band, true), Reception::Parley, "a folk who turned on the delver will only parley");
         }
-        assert_eq!(parley_topics(), [Topic::Persuade]);
+        assert_eq!(parley_topics(&speaker(None, Band::Neutral)), [Topic::Persuade]);
         let hostile = parley_greeting(&speaker(None, Band::Hostile), false);
         let wary = parley_greeting(&speaker(None, Band::Wary), false);
         assert!(grammar().symbols["parley_hostile"].contains(&hostile), "{hostile}");
@@ -691,9 +702,9 @@ mod tests {
 
     mod starts {
         /// The symbols a line is started from.
-        pub const START_SYMBOLS: [&str; 40] = [
+        pub const START_SYMBOLS: [&str; 41] = [
             "greet_neutral", "greet_friendly", "greet_allied", "wary", "who_way_out", "who_trade", "who_worship", "who_plunder", "who_calling", "who_guard", "trade_armorer", "trade_weaponsmith",
-            "trade_bowyer", "trade_tentmaker", "trade_general_goods", "trade_alchemist", "trade_enchanter", "trade_guard", "guard_traders", "guard_no_traders", "tier_novice", "tier_master", "level",
+            "trade_bowyer", "trade_tentmaker", "trade_general_goods", "trade_alchemist", "trade_enchanter", "trade_healer", "trade_guard", "guard_traders", "guard_no_traders", "tier_novice", "tier_master", "level",
             "level_alone", "way_out", "way_master", "not_yet", "dn_spit", "dn_wary", "dn_greet", "dn_greet_friendly", "dn_greet_allied", "dn_kin", "dn_place", "dn_threat", "dn_trade", "dn_quest",
             "dn_barter_refused", "dn_band_hostile", "dn_sound_minotaur",
         ];

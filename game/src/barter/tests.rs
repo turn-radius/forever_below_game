@@ -286,17 +286,17 @@ fn a_sold_sword_stays_on_the_shelf_through_a_restock() {
     let person = person(smith());
     let mine = sword(9);
     let shelf = Shelf { day: 0, wares: roll_wares(&person, 0), sold: vec![mine.clone()], purse: 100 };
-    let next = shelf.restocked(&person, 1);
+    let next = shelf.restocked(&person, 1, &[]);
     assert_eq!(next.day, 1);
     assert_eq!(next.sold, vec![mine]);
     assert_ne!(next.wares, roll_wares(&person, 0));
     // The purse is topped up to the tier's, never cut.
     assert_eq!(next.purse, purse_copper(Tier::Apprentice));
-    assert_eq!(Shelf { purse: 99_999, ..next }.restocked(&person, 2).purse, 99_999);
+    assert_eq!(Shelf { purse: 99_999, ..next }.restocked(&person, 2, &[]).purse, 99_999);
 }
 
 fn roll_wares(person: &Person, day: u32) -> Vec<Item> {
-    crate::shelf::roll_shelf(person, day)
+    crate::shelf::roll_shelf(person, day, &[])
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn barter_app() -> App {
 
 fn stand_in(app: &mut App, trade: Option<Trade>) -> Entity {
     let person = person(trade);
-    let shelf = trade.is_some_and(|t| t.shop("", "").is_some()).then(|| shelf_of(crate::shelf::roll_shelf(&person, 0), 6000));
+    let shelf = trade.is_some_and(|t| t.shop("", "").is_some()).then(|| shelf_of(crate::shelf::roll_shelf(&person, 0, &[]), 6000));
     let denizen = Denizen { person, radius: 3.0, min: Vec3::new(-2.0, 0.0, -2.0), max: Vec3::new(2.0, 17.0, 2.0) };
     let mut entity = app.world_mut().spawn(denizen);
     if let Some(shelf) = shelf {
@@ -762,3 +762,75 @@ fn a_shelf_stack_cannot_be_split_into_the_pouch_mid_deal() {
     assert_eq!(inventory.item(stack).unwrap().quantity, 3);
 }
 
+
+fn healer() -> Trade {
+    Trade { profession: Profession::Healer, tier: Tier::Apprentice, style: None }
+}
+
+fn costs() -> PrayerCosts {
+    PrayerCosts::from([("heal".to_string(), 3.0), ("cure".to_string(), 2.0)])
+}
+
+fn scroll(term: &str, seed: u32) -> Item {
+    fb_items::prayers::prayer_scroll(seed, term).unwrap()
+}
+
+#[test]
+fn a_dearer_term_asks_more_and_an_empty_map_or_unknown_term_is_plain() {
+    let ask = |term: &str, costs: &PrayerCosts| price_with(&scroll(term, 5), healer(), Band::Neutral, costs).unwrap();
+    let plain = price(&fb_items::roll_item("Scroll", 5).unwrap(), healer(), Band::Neutral).unwrap();
+    assert!(ask("heal", &costs()) > ask("cure", &costs()) && ask("cure", &costs()) > plain, "{} {} {plain}", ask("heal", &costs()), ask("cure", &costs()));
+    assert_eq!(ask("heal", &PrayerCosts::new()), plain);
+    assert_eq!(ask("cone", &costs()), plain, "a term the rules give no cost is plain");
+}
+
+#[test]
+fn the_real_rules_order_every_prayer_term_by_cost() {
+    let rules = fb_character::rules::defaults();
+    let costs = prayer_costs(rules);
+    assert!(costs["heal"] > costs["cure"]);
+    let ask = |term: &str| price_with(&scroll(term, 5), healer(), Band::Neutral, &costs).unwrap();
+    assert!(ask("heal") > ask("cure"));
+    let mut terms: Vec<_> = costs.iter().collect();
+    terms.sort_by(|a, b| a.1.total_cmp(b.1));
+    for pair in terms.windows(2).filter(|p| p[0].1 < p[1].1) {
+        assert!(ask(pair[0].0) < ask(pair[1].0), "{pair:?}");
+    }
+}
+
+#[test]
+fn a_found_scroll_and_a_shelf_scroll_of_a_term_price_and_sell_back_alike() {
+    let pool = vec!["heal".to_string()];
+    let shop = healer().shop("Bera", "the Ash Choir").unwrap();
+    let bought = (0..40).flat_map(|seed| fb_items::stock::stock_with(&shop, 3, seed, &pool)).find(|i| i.prayer() == Some("heal")).unwrap();
+    let lore = fb_items::notes::Lore { prayers: pool, ..Default::default() };
+    let found = (0..400).map(|s| fb_items::roll_item("Scroll", s).unwrap().in_world_at(&lore, None, true)).find(|i| i.prayer() == Some("heal")).unwrap();
+    let factor = fb_items::value::prayer_factor(3.0);
+    for scroll in [&bought, &found] {
+        assert_eq!(worth_copper(scroll, &costs()), (scroll.value_copper() as f64 * factor).round() as u64);
+        let (ask, pay) = (price_with(scroll, healer(), Band::Neutral, &costs()).unwrap(), offer_with(scroll, healer(), Band::Neutral, &costs()).unwrap());
+        assert!(ask > scroll.value_copper() && pay > scroll.value_copper() / 2, "{ask} {pay}");
+    }
+}
+
+#[test]
+fn the_deal_totals_use_the_prayer_costs() {
+    let person = person(Some(healer()));
+    let ware = scroll("heal", 5);
+    let mine = scroll("cure", 6);
+    let cost = price_with(&ware, healer(), Band::Neutral, &costs()).unwrap();
+    let pays = offer_with(&mine, healer(), Band::Neutral, &costs()).unwrap();
+    assert!(cost > price(&ware, healer(), Band::Neutral).unwrap());
+    let mut inventory = delver(Coins::from_copper(cost + 700));
+    let own = inventory.add(mine.clone());
+    inventory.stow(own).unwrap();
+    let shelf = shelf_of(vec![ware.clone()], 6000);
+    let mut session = begin(&mut inventory, Entity::PLACEHOLDER, &person, Band::Neutral, &shelf).unwrap();
+    session.prayers = costs();
+    let id = shelf_id(&inventory, &session, ware.title());
+    assert!(matches!(session.tag(&inventory, id), Some(Price::Costs { price, .. }) if price.total_copper() == cost));
+    inventory.stow(id).unwrap();
+    inventory.shelve(own, session.shelf).unwrap();
+    let deal = session.deal(&inventory);
+    assert_eq!((deal.cost, deal.offer), (cost, pays));
+}

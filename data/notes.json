@@ -107,6 +107,7 @@
   "wares_general_goods": ["supplies", "rope, oil and rations", "whatever you lack"],
   "wares_alchemist": ["potions and cures", "draughts and salves", "remedies"],
   "wares_enchanter": ["enchantments", "charms and wards", "a little magic"],
+  "wares_healer": ["healing and incense", "tended wounds", "smoke and prayer"],
 
   "topic_strength": [
     "lifting stones of increasing weight to strengthen the arm",

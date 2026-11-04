@@ -14,8 +14,12 @@
 //! light, reading `cast.written.effect`, `cast.range` and `cast.duration`), or says on screen
 //! why it failed. [`cast_effects`] is the one place a cast does what it says: it reads
 //! `cast.written.effect` and hands the cast to that effect (`"light"` sets Divine Light, a
-//! [`DivineLight`] bauble that follows the caster; the ward, frighten and charm effects join it
-//! the same way). The HUD shows the chosen prayer, its tier and its cost above the quickslot bar.
+//! [`DivineLight`] bauble that follows the caster; `"heal"` restores the caster's hit points,
+//! `power` of them per tier, never above the maximum, and `"cure"` ends the `poisoned` effect;
+//! the ward, frighten and charm effects join them the same way). Heal and Cure that land also play
+//! the `heal` and `cure` effects (`data/effects/`, `docs/effects.md`) around the delver; a cast that
+//! changes nothing plays none. Heal and Cure are unlocked by
+//! a prayer scroll (`Spellbook::unlock("heal")`) and reach the caster whatever the reach term. The HUD shows the chosen prayer, its tier and its cost above the quickslot bar.
 
 use armory::build::light::LightAnchor;
 use armory::material::Rgb;
@@ -25,7 +29,9 @@ use fb_character::Casting;
 use fb_character::casting::{Cast, CastError, MAX_TIER, Spellbook, cast_with, points};
 
 use crate::carry::holy_light;
-use crate::character::{Character, DelverMana};
+use crate::character::{Character, DelverEffects, DelverMana};
+use crate::combat::Health;
+use crate::effects::PlayEffect;
 use crate::game_clock::GameClock;
 use crate::render::{WispMaterial, wisp_card};
 use crate::tuning::Tuning;
@@ -50,6 +56,7 @@ impl Plugin for CastingPlugin {
             .init_resource::<Chosen>()
             .add_message::<CastRequest>()
             .add_message::<Casted>()
+            .add_message::<PlayEffect>()
             .add_systems(OnExit(AppState::Delving), forget_the_abilities)
             .add_systems(
                 Update,
@@ -475,8 +482,42 @@ fn cast_effects(
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     old: Query<Entity, With<DivineLight>>,
     walls: Walls,
+    mut healths: Query<&mut Health, With<Player>>,
+    mut effects: Query<(Entity, &mut DelverEffects), With<Player>>,
+    mut toast: ResMut<Toast>,
+    real: Option<Res<Time<Real>>>,
+    mut plays: MessageWriter<PlayEffect>,
 ) {
+    let said_at = real.map_or(0.0, |t| t.elapsed_secs());
+    // Each swirl is its own seed, so two in a row are never the same.
+    let seed = time.elapsed_secs().to_bits();
     for Casted(cast) in casts.read() {
+        if cast.written.effect == "heal" {
+            // Touch, self and around you all reach the caster; no other folk have hit points to
+            // mend yet.
+            for mut health in &mut healths {
+                let healed = heal_caster(&mut health, cast.power);
+                if healed > 0 {
+                    plays.write(PlayEffect::new("heal", seed));
+                }
+                toast.say(if healed == 0 { "You are already whole.".to_string() } else { format!("You mend {healed} hit point{}.", if healed == 1 { "" } else { "s" }) }, said_at);
+            }
+        }
+        if cast.written.effect == "cure" {
+            let mut cured = false;
+            for (player, mut effects) in &mut effects {
+                if cure_caster(&mut effects) {
+                    cured = true;
+                    if effects.0.active.is_empty() {
+                        commands.entity(player).remove::<DelverEffects>();
+                    }
+                }
+            }
+            if cured {
+                plays.write(PlayEffect::new("cure", seed));
+            }
+            toast.say(if cured { "The poison leaves you." } else { "There is nothing to cure." }, said_at);
+        }
         if cast.written.effect == "light" {
             let now = clock.as_deref().map_or(0.0, GameClock::game_seconds);
             let tuning = tuning.as_deref().cloned().unwrap_or_default();
@@ -496,6 +537,21 @@ fn cast_effects(
             set_divine_light(&mut commands, cast, now, time.elapsed_secs(), at, &tuning);
         }
     }
+}
+
+/// Heal restores `power` hit points to a standing caster, never above the maximum; the fallen
+/// are past it. Returns how many it restored.
+fn heal_caster(health: &mut Health, power: f64) -> u32 {
+    if health.is_down() { 0 } else { health.heal(power.round().max(0.0) as u32) }
+}
+
+/// Cure ends the poisoned effect (the simulation has no disease yet). Returns whether it did.
+fn cure_caster(effects: &mut DelverEffects) -> bool {
+    let poisoned = effects.0.get(crate::eat::CURED_BY_ANTIDOTE, None).is_some();
+    if poisoned {
+        effects.0.remove(crate::eat::CURED_BY_ANTIDOTE, None);
+    }
+    poisoned
 }
 
 /// The bauble lit for `cast` at `at`, cast at real time `cast_at`.
@@ -738,13 +794,16 @@ fn shimmer_baubles(
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
 /// the light last only that many game seconds, to see it sputter out. `FB_PRAY_NAME=Smite`
 /// casts that prayer instead of the chosen one. The prayer's quickslot
-/// flashes as if its key were pressed, since captures ignore the keyboard. For captures.
+/// flashes as if its key were pressed, since captures ignore the keyboard. `FB_PRAY_WRITE=heal`
+/// (or `cure`) first unlocks that term, writes a self-reach, short prayer of it ("Mending Hand",
+/// "Cleansing Word") and chooses it, so `FB_PRAY=1` casts it. For captures.
 #[allow(clippy::type_complexity)]
 fn debug_cast(
     mut frames: Local<u32>,
     mut chosen: ResMut<Chosen>,
     mut requests: MessageWriter<CastRequest>,
     mut players: Query<(&mut DelverMana, Option<&mut crate::player::Locomotion>), With<Player>>,
+    mut books: Query<&mut DelverSpellbook, With<Player>>,
     mut lights: Query<&mut DivineLight, Added<DivineLight>>,
     clock: Option<Res<GameClock>>,
     slots: Res<AbilitySlots>,
@@ -765,6 +824,23 @@ fn debug_cast(
             light.lasts = lasts;
             light.fade = light.fade.min(lasts);
         }
+    }
+    if *frames == 50
+        && let Ok(effect) = std::env::var("FB_PRAY_WRITE")
+        && let Some(mut book) = books.iter_mut().next()
+    {
+        let effect = effect.trim();
+        let name = if effect == "cure" { "Cleansing Word" } else { "Mending Hand" };
+        book.0.unlocked.insert(effect.to_string());
+        book.0.written.retain(|w| w.name != name);
+        book.0.written.push(fb_character::casting::Written {
+            name: name.into(),
+            school: Casting::Divine,
+            effect: effect.into(),
+            reach: "self".into(),
+            duration: "short".into(),
+        });
+        chosen.name = name.into();
     }
     if *frames == 60 {
         if let Ok(name) = std::env::var("FB_PRAY_NAME")
@@ -1103,6 +1179,79 @@ mod tests {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.release(key);
         keys.clear();
+    }
+
+    #[test]
+    fn casting_heal_and_cure_mends_the_delver_and_says_so() {
+        use fb_character::casting::Written;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Toast>().add_message::<Casted>().add_message::<PlayEffect>().add_systems(Update, cast_effects);
+        let rules = fb_character::rules::defaults();
+        let player = app.world_mut().spawn((Player, Transform::default(), Health { hp: 10, max: 12 }, DelverEffects::poisoned_for(rules, 1.0))).id();
+        let cast = |app: &mut App, effect: &str| {
+            let written = Written { name: "T".into(), school: Casting::Divine, effect: effect.into(), reach: "self".into(), duration: "short".into() };
+            let p = written.preview(2);
+            app.world_mut().resource_mut::<Messages<PlayEffect>>().clear();
+            app.world_mut().write_message(Casted(Cast { written, tier: 2, cost: p.cost, range: p.range, duration: p.duration, power: p.power }));
+            app.update();
+        };
+        let plays = |app: &App| app.world().resource::<Messages<PlayEffect>>().iter_current_update_messages().map(|p| p.name.clone()).collect::<Vec<_>>();
+        cast(&mut app, "heal");
+        assert_eq!(plays(&app), ["heal"], "a heal that mends swirls");
+        assert_eq!(app.world().get::<Health>(player).unwrap().hp, 12, "never above the maximum");
+        assert_eq!(app.world().resource::<Toast>().text, "You mend 2 hit points.");
+        cast(&mut app, "heal");
+        assert_eq!(app.world().resource::<Toast>().text, "You are already whole.");
+        assert!(plays(&app).is_empty(), "a heal that mends nothing shows nothing");
+        cast(&mut app, "cure");
+        assert_eq!(plays(&app), ["cure"], "a cure that lifts the poison swirls");
+        assert!(app.world().get::<DelverEffects>(player).is_none(), "the last effect takes the component with it");
+        assert_eq!(app.world().resource::<Toast>().text, "The poison leaves you.");
+        cast(&mut app, "cure");
+        assert_eq!(app.world().resource::<Toast>().text, "There is nothing to cure.");
+        assert!(plays(&app).is_empty(), "nothing to cure shows nothing");
+    }
+
+    #[test]
+    fn heal_scales_with_tier_and_never_overfills() {
+        use fb_character::casting::{Written, cast};
+        let heal = Written { name: "Mending".into(), school: Casting::Divine, effect: "heal".into(), reach: "touch".into(), duration: "short".into() };
+        let mut book = Spellbook::starting(Casting::Divine);
+        assert!(book.unlock("heal"));
+        let mut mana = fb_character::Mana { points: 30.0, max: 30.0 };
+        let one = cast(&mut mana, Casting::Divine, &book.unlocked, &heal, 1).unwrap();
+        let two = cast(&mut mana, Casting::Divine, &book.unlocked, &heal, 2).unwrap();
+        assert_eq!(two.power, 2.0 * one.power);
+        assert_eq!(two.cost, 2.0 * one.cost);
+        let mut hurt = Health { hp: 1, max: 30 };
+        assert_eq!(heal_caster(&mut hurt, one.power), one.power as u32);
+        let mut hurt2 = Health { hp: 1, max: 30 };
+        heal_caster(&mut hurt2, two.power);
+        assert_eq!(hurt2.hp - 1, 2 * (hurt.hp - 1));
+        let mut nearly = Health { hp: 29, max: 30 };
+        heal_caster(&mut nearly, two.power);
+        assert_eq!(nearly.hp, 30);
+        let mut fallen = Health { hp: 0, max: 30 };
+        assert_eq!(heal_caster(&mut fallen, two.power), 0);
+    }
+
+    #[test]
+    fn cure_clears_poison_and_locked_heal_cannot_be_cast_or_written() {
+        use fb_character::casting::{Written, cast};
+        let mut effects = DelverEffects::poisoned_for(fb_character::rules::defaults(), 1.0);
+        assert!(cure_caster(&mut effects));
+        assert!(effects.0.active.is_empty());
+        assert!(!cure_caster(&mut effects));
+        let heal = Written { name: "Mending".into(), school: Casting::Divine, effect: "heal".into(), reach: "self".into(), duration: "short".into() };
+        let mut book = Spellbook::starting(Casting::Divine);
+        let mut mana = fb_character::Mana { points: 30.0, max: 30.0 };
+        assert!(cast(&mut mana, Casting::Divine, &book.unlocked, &heal, 1).is_err());
+        assert!(book.save(heal.clone()).is_err(), "locked");
+        book.unlock("heal");
+        assert!(book.save(heal.clone()).is_ok());
+        let again = book.clone();
+        let json = serde_json::to_string(&again).unwrap();
+        assert_eq!(serde_json::from_str::<Spellbook>(&json).unwrap().find("Mending"), Some(&heal));
     }
 
     #[test]

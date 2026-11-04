@@ -874,6 +874,7 @@ pub(crate) fn lay_out_items(
     record: Option<Res<WorldRecord>>,
     mut staged: Option<ResMut<crate::staged::Staged>>,
     character: Option<Res<crate::character::Character>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     mut spawner: ItemSpawner,
 ) {
     for (entity, floor) in &old {
@@ -901,7 +902,7 @@ pub(crate) fn lay_out_items(
     // It rolls for the luck the delver wears as they come to the level.
     let odds = crate::character::loot_odds(character.as_deref(), Some(&inventory), level.0.depth);
     let mut ahead = staged.as_mut().and_then(|s| s.take_items(&level.0, odds)).map(Vec::into_iter);
-    let lore = level.0.lore();
+    let lore = crate::rules::level_lore(&level.0, crate::rules::GameRules::of(&rules));
     for spot in &level.0.items {
         let rolled = match ahead.as_mut() {
             Some(ahead) => ahead.next().flatten(),

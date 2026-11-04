@@ -26,6 +26,7 @@ pub mod deeds;
 pub mod devotion;
 pub mod effect;
 pub mod explain;
+pub mod healer;
 pub mod kin;
 pub mod poison;
 pub mod protection;

@@ -227,8 +227,12 @@ pub enum Opening {
 pub fn start_delve(commands: &mut Commands, run_seed: u32, depth: u32, saved: Option<LevelRecord>, then: Opening) {
     let odds = crate::character::loot_odds(None, None, depth);
     let key = (run_seed, depth);
-    let job = Fitting::start(key, move || Prepared::make_after(run_seed, depth, odds, saved.as_ref()));
-    commands.insert_resource(StartingDelve { job, ready: None, then: Some(then) });
+    // Queued, so the job starts with the prayers the loaded rules let a scroll teach.
+    commands.queue(move |world: &mut World| {
+        let prayers = crate::rules::prayer_pool(world.get_resource::<crate::rules::GameRules>().map_or(fb_character::rules::defaults(), |r| &r.0));
+        let job = Fitting::start(key, move || Prepared::make_after(run_seed, depth, odds, prayers, saved.as_ref()));
+        world.insert_resource(StartingDelve { job, ready: None, then: Some(then) });
+    });
     commands.insert_resource(LoadingLevel::from_title(depth, run_seed));
 }
 

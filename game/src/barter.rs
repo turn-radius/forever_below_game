@@ -125,8 +125,30 @@ pub fn is_their_trade(trade: Trade, item: &Item) -> bool {
 /// What a trader of `trade` asks of a delver in `band` for `item` from their shelf, in copper:
 /// its value, times the tier's markup, times the band's. `None` if that band will not trade.
 pub fn price(item: &Item, trade: Trade, band: Band) -> Option<u64> {
+    price_with(item, trade, band, &PrayerCosts::new())
+}
+
+/// What each prayer scroll's term costs in mana under the game's rules, by term id: what prices a
+/// prayer scroll ([`worth_copper`]).
+pub type PrayerCosts = BTreeMap<String, f64>;
+
+/// The costs of the terms a prayer scroll may teach under `rules`.
+pub fn prayer_costs(rules: &fb_character::rules::Rules) -> PrayerCosts {
+    crate::rules::prayer_pool(rules).into_iter().filter_map(|id| { let cost = rules.casting.terms.get(&id)?.cost; Some((id, cost)) }).collect()
+}
+
+/// What the whole stack is worth, in copper: its value, and for a prayer scroll that much again
+/// for each point of mana its term costs ([`fb_items::value::prayer_factor`]), found or bought.
+pub fn worth_copper(item: &Item, costs: &PrayerCosts) -> u64 {
+    let worth = item.stack_value_copper() as f64;
+    let factor = item.prayer().and_then(|t| costs.get(t)).map_or(1.0, |c| fb_items::value::prayer_factor(*c));
+    (worth * factor).round() as u64
+}
+
+/// [`price`], with what the rules say a prayer scroll's term costs.
+pub fn price_with(item: &Item, trade: Trade, band: Band, costs: &PrayerCosts) -> Option<u64> {
     let band = RULES.sell_band.of(band)?;
-    let worth = item.stack_value_copper() as f64 * RULES.tier_markup.of(trade.tier) * band;
+    let worth = worth_copper(item, costs) as f64 * RULES.tier_markup.of(trade.tier) * band;
     Some((worth.round() as u64).max(1))
 }
 
@@ -134,9 +156,14 @@ pub fn price(item: &Item, trade: Trade, band: Band) -> Option<u64> {
 /// value for goods of their trade, half that for anything else, scaled by the band. `None` if
 /// that band will not trade.
 pub fn offer(item: &Item, trade: Trade, band: Band) -> Option<u64> {
+    offer_with(item, trade, band, &PrayerCosts::new())
+}
+
+/// [`offer`], with what the rules say a prayer scroll's term costs.
+pub fn offer_with(item: &Item, trade: Trade, band: Band, costs: &PrayerCosts) -> Option<u64> {
     let band = RULES.buy_band.of(band)?;
     let share = if is_their_trade(trade, item) { RULES.trade_share } else { RULES.trade_share * RULES.other_share };
-    let worth = item.stack_value_copper() as f64 * share * band;
+    let worth = worth_copper(item, costs) as f64 * share * band;
     Some((worth.round() as u64).max(1))
 }
 
@@ -189,6 +216,8 @@ pub struct Session {
     pub purse: u64,
     /// What the trader looks like, for the portrait over their shelf.
     pub look: Look,
+    /// What the rules said each prayer scroll term costs when the barter opened.
+    pub prayers: PrayerCosts,
 }
 
 impl Session {
@@ -205,7 +234,7 @@ impl Session {
                 && let Some(item) = inventory.item(id)
             {
                 deal.buying.push(id);
-                deal.cost += price(item, self.trade, self.band).unwrap_or(0);
+                deal.cost += price_with(item, self.trade, self.band, &self.prayers).unwrap_or(0);
             }
         }
         for entry in inventory.grid(self.shelf).map(|g| g.entries()).unwrap_or_default() {
@@ -214,7 +243,7 @@ impl Session {
             }
             if let Some(item) = inventory.item(entry.id) {
                 deal.selling.push(entry.id);
-                deal.offer += offer(item, self.trade, self.band).unwrap_or(0);
+                deal.offer += offer_with(item, self.trade, self.band, &self.prayers).unwrap_or(0);
             }
         }
         deal
@@ -227,12 +256,12 @@ impl Session {
         if item.coins.is_some() || id == self.shelf {
             return None;
         }
-        let worth = item.stack_value();
+        let worth = Coins::from_copper(worth_copper(item, &self.prayers));
         if self.stock.contains(&id) {
-            return price(item, self.trade, self.band).map(|p| Price::Costs { price: Coins::from_copper(p), worth, afford: wallet(inventory).total_copper() >= p });
+            return price_with(item, self.trade, self.band, &self.prayers).map(|p| Price::Costs { price: Coins::from_copper(p), worth, afford: wallet(inventory).total_copper() >= p });
         }
         if inventory.is_carried(id) || self.on_shelf(inventory, id) {
-            return offer(item, self.trade, self.band).map(|p| Price::SellsFor { price: Coins::from_copper(p), worth });
+            return offer_with(item, self.trade, self.band, &self.prayers).map(|p| Price::SellsFor { price: Coins::from_copper(p), worth });
         }
         None
     }
@@ -395,6 +424,7 @@ impl Barter {
             spot: 0,
             purse: 0,
             look: Look { spec: fb_body::BodySpec::roll(fb_body::Folk::Human, 1), gear: vec![], dirt: 0.0 },
+            prayers: PrayerCosts::new(),
         };
         Barter { session: Some(session), ..default() }
     }
@@ -527,6 +557,7 @@ pub fn begin(inventory: &mut Inventory, folk: Entity, person: &crate::folk::Pers
         spot: person.spot.seed,
         purse: shelf.purse,
         look: Look::of(person),
+        prayers: PrayerCosts::new(),
     })
 }
 
@@ -750,6 +781,7 @@ fn open_barter(
     mut open: ResMut<ScreenOpen>,
     mut cursor: Option<Single<&mut CursorOptions, With<PrimaryWindow>>>,
     record: Option<Res<WorldRecord>>,
+    rules: Option<Res<crate::rules::GameRules>>,
     mut folk: Query<(&Denizen, Option<&Hostility>, Option<&Shelf>, Option<&mut Routine>), Without<Corpse>>,
     mut inventory: ResMut<Inventory>,
     mut barter: ResMut<Barter>,
@@ -785,7 +817,7 @@ fn open_barter(
         return;
     };
     let session = match begin(&mut inventory, entity, person, band, shelf) {
-        Ok(session) => session,
+        Ok(session) => Session { prayers: prayer_costs(crate::rules::GameRules::of(&rules)), ..session },
         Err(why) => {
             toasts.say(why);
             return;
