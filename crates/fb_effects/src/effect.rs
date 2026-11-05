@@ -152,6 +152,11 @@ pub enum MotionKind {
     Curl,
     /// Circles the spawn point on a tilted ring of `orbit_radius`, `orbits` times in its life.
     Orbit,
+    /// A helix: circles the anchor's upright axis (the vertical through the spawn's anchor, so
+    /// through the caster's body) at `orbit_radius`, strayed up to `scatter` per particle,
+    /// `orbits` turns in its life, while rising at `speed`. Start the spawn low and it climbs
+    /// past the head.
+    Helix,
     /// Draws in from the spawn to the `to` anchor.
     Gather,
     /// Arcs from the spawn to the `to` anchor, bowed by `arc`.
@@ -172,13 +177,17 @@ pub struct Motion {
     pub orbit_radius: f32,
     /// Turns round the ring in a particle's life; negative goes the other way.
     pub orbits: f32,
+    /// A helix only: how many strands it winds. Each particle takes the start angle of one strand
+    /// (in the order thrown), so particles follow each other up the same spiral lines. 0 spreads
+    /// the start angles freely.
+    pub strands: u32,
     /// A steady push, units a second.
     pub wind: V3,
 }
 
 impl Default for Motion {
     fn default() -> Motion {
-        Motion { kind: MotionKind::Still, speed: 0.0, scatter: 0.0, gravity: 0.0, orbit_radius: 0.0, orbits: 0.0, wind: [0.0; 3] }
+        Motion { kind: MotionKind::Still, speed: 0.0, scatter: 0.0, gravity: 0.0, orbit_radius: 0.0, orbits: 0.0, strands: 0, wind: [0.0; 3] }
     }
 }
 

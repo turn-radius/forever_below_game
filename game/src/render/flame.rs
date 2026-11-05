@@ -100,10 +100,19 @@ pub enum FlameLayer {
 pub fn flame_alpha(layer: FlameLayer, t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     match layer {
-        FlameLayer::Veil if t < 0.5 => 0.4 + 0.1 * t,
+        // The veil's rim hugs the head and fades in from nothing over its first fifth, so the
+        // flame melts into the head it wraps instead of ending in a line across it.
+        FlameLayer::Veil if t < 0.5 => (0.4 + 0.1 * t) * smooth((t / VEIL_FADE).clamp(0.0, 1.0)),
         FlameLayer::Veil => 0.45 + 0.3 * (t - 0.5),
         FlameLayer::Core => 0.5 + 0.4 * t,
     }
+}
+
+/// How much of the veil's height its rim fades in over.
+const VEIL_FADE: f32 = 0.2;
+
+fn smooth(x: f32) -> f32 {
+    x * x * (3.0 - 2.0 * x)
 }
 
 /// A flame's colour (display sRGB) `t` of the way up its layer: the core from a pale
@@ -309,16 +318,20 @@ mod tests {
             assert!(flame_alpha(layer, 0.0) < flame_alpha(layer, 0.5) && flame_alpha(layer, 0.5) < flame_alpha(layer, 1.0), "{layer:?}");
         }
         // The veil is under half opaque over its lower half, so what burns shows through it
-        // tinted; the core is what builds up.
+        // tinted, and its rim fades in from nothing so it melts into the head it wraps
+        // (#884); the core is what builds up.
+        assert_eq!(flame_alpha(FlameLayer::Veil, 0.0), 0.0);
         for i in 0..=10 {
             let alpha = flame_alpha(FlameLayer::Veil, i as f32 * 0.05);
-            assert!((0.4..=0.45 + 1e-6).contains(&alpha), "{alpha}");
+            assert!((0.0..=0.45 + 1e-6).contains(&alpha), "{alpha}");
         }
-        assert!((flame_alpha(FlameLayer::Veil, 0.0) - 0.4).abs() < 1e-6);
-        assert!(flame_alpha(FlameLayer::Core, 1.0) > 2.0 * flame_alpha(FlameLayer::Veil, 0.0));
+        let rim: Vec<f32> = (0..=4).map(|i| flame_alpha(FlameLayer::Veil, i as f32 * 0.05)).collect();
+        assert!(rim.windows(2).all(|w| w[1] > w[0]), "{rim:?}");
+        assert!((flame_alpha(FlameLayer::Veil, 0.3) - 0.43).abs() < 1e-6);
+        assert!(flame_alpha(FlameLayer::Core, 1.0) > 2.0 * flame_alpha(FlameLayer::Veil, 0.3));
         let points = cone();
         for (c, p) in flame_vertex_colours(&points, FlameLayer::Veil).iter().zip(&points) {
-            let want = if p[1] == 5.0 { 0.4 } else { 0.6 };
+            let want = if p[1] == 5.0 { 0.0 } else { 0.6 };
             assert!((c[3] - want).abs() < 1e-5, "{c:?}");
         }
     }

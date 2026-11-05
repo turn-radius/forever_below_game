@@ -4,7 +4,8 @@ What a spell or an item shows when it goes off is data: one TOML file per effect
 `data/effects/`, read by `crates/fb_effects` (plain Rust) and played by `game/src/effects.rs`.
 Edit a file while the game runs and the next play of that effect changes (a file added while it
 runs shows after a restart). `data/effects/test_burst.toml` is the worked example; play it with
-`FB_PLAY_EFFECT=test_burst`.
+`FB_PLAY_EFFECT=test_burst`. Add `FB_PLAY_FROM=ahead` to cast it from a figure standing there, to
+see it from outside.
 
 ## An effect
 
@@ -62,7 +63,12 @@ In a lasting effect (`lasts = true`) bursts go off again each `length`.
 
 `kind`: `still`, `rise`, `fall`, `burst` (outward at about `speed`), `drift`, `curl` (rises
 winding a spiral `scatter` wide), `orbit` (a tilted ring of `orbit_radius` about the spawn
-point, `orbits` turns in a life), `gather` (spawn to `to`) and `path` (spawn to `to`, bowed by
+point, `orbits` turns in a life), `helix` (a helix round the anchor's upright axis: radius
+`orbit_radius`, strayed up to `scatter` a particle, `orbits` turns in a life, negative the other way,
+rising at `speed` from the spawn's height; spawn it low on a `point` and it climbs past the head;
+`strands` deals the start angles round that many evenly spaced strands in the order thrown, so a
+stream follows itself up a few spiral lines, 0 spreads them freely),
+`gather` (spawn to `to`) and `path` (spawn to `to`, bowed by
 `arc`). `speed` is units a second, `scatter` strays each particle's velocity, `gravity` pulls
 down, `wind` pushes.
 
@@ -89,20 +95,23 @@ steps give the same particles.
 ## The effects
 
 - `smite`: the Smite prayer (see `docs/design.md`, Prayers). The Shield plays no effect: golden ethereal shields circle
-  the holder instead. They are real Armory shields rolled from the prayer's seed (3 at tier one,
-  one more a tier), drawn with `EtherealMaterial` (`game/src/render/ethereal.wesl`: fresnel rim,
+  the holder instead. They are one holy design from the Armory's shield family, a silver heater
+  with a gold cross fixed by its parameters (3 at tier one, one more a tier), drawn with `EtherealMaterial` (`game/src/render/ethereal.wesl`: fresnel rim,
   a faint fill, and bands of energy that run round and in from the edge, added onto the world),
   driven by `game/src/prayers/shield_ring.rs`. A blow flares the shield nearest it (rim and bands
   brighten and race, settling over about 0.6 s).
-- `heal`: when a Heal prayer mends something, warm gold and soft green motes spiral up around and
-  ahead of the view and draw in, with sparks and a soft warm glow, about 1.5 s. A cast at full
-  hit points plays nothing.
-- `cure`: when a Cure prayer lifts a poison, a sickly green haze swirls out around the view, then
-  a brief white flash scatters it into sparks, about 1.6 s. A cast with nothing to cure plays nothing.
+- `heal`: when a Heal prayer mends something, three strands of small warm gold motes and a few
+  soft green ones wind up a body-wide column round the delver from the feet past the head, with
+  short streaks and soft wisps trailing so the spiral reads, inside a pillar of warm light whose bright band washes down over them from above the head to the feet (a `beam` column with a short bright `beam` band falling through it, then a ring on the floor), under a warm glow, about 1.9 s. A cast at full hit points plays nothing.
+- `cure`: when a Cure prayer lifts a poison, the same swirl in a sickly yellow-green winds the
+  other way inside a pale pillar whose band washes up from the feet past the head (a short `beam` band on `rise`), then a brief white flash scatters it into sparks, about 1.9 s. A cast with nothing
+  to cure plays nothing.
 - `test_burst`: the worked example.
 
-Both are caster-anchored a little below and ahead of the eye, so the swirl is seen at the edges
-of a first-person view and not hidden behind the camera.
+Both are `helix` swirls on the caster's own axis: the spawn is the eye nudged 15 units down (the
+feet), the radius 3.6 units (a body's width), so the strands cross the lower view and climb past it,
+clear of the near plane. The same swirl seen from
+outside circles the body. Cure's flash and sparks go off just ahead of the eye.
 
 ## Adding a card
 

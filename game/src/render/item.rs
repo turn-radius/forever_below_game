@@ -139,6 +139,10 @@ impl ItemAppearance {
                 },
                 perceptual_roughness: 1.0,
                 reflectance: 0.0,
+                // A flame is a shell with a back: its far half is drawn too, so the head's
+                // near side hides it and fire shows round the head, not a single sheet over it.
+                double_sided: is_flame(part),
+                cull_mode: if is_flame(part) { None } else { Some(bevy::render::render_resource::Face::Back) },
                 ..default()
             },
             // Outlined parts already read through their ink line.
@@ -436,7 +440,10 @@ mod tests {
         assert_eq!(material.base.base_color, Color::srgb(1.0, 1.0, 1.0));
         let mesh = part_to_mesh(&veil);
         let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("no vertex colours") };
-        assert!((colors[0][3] - 0.4).abs() < 1e-5 && colors[2][3] > colors[0][3], "{colors:?}");
+        // The veil's rim fades in from nothing, so it melts into the head it wraps.
+        assert!(colors[0][3].abs() < 1e-5 && colors[2][3] > colors[0][3], "{colors:?}");
+        // Both faces are drawn, so the head's near side hides the flame's back half.
+        assert!(material.base.double_sided && material.base.cull_mode.is_none());
         // Yellow at the base, redder at the tip.
         assert!(colors[0][1] > colors[2][1]);
         // The core is paler and more opaque than the veil at the same height.
