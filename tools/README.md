@@ -44,6 +44,8 @@ ffmpeg -i "reference/audio/I went too far.m4a" -vn -f wav - | oggenc --ignorelen
 ffmpeg -i "reference/audio/I’m right where I started.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/im-right-where-i-started.ogg -
 ffmpeg -i "reference/audio/Missing Friends.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/missing-friends.ogg -
 ffmpeg -i "reference/audio/Sinking Bass.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/sinking-bass.ogg -
+ffmpeg -i "reference/audio/Falling Bass.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/falling-bass.ogg -
+ffmpeg -i "reference/audio/How can I do this?.m4a" -vn -f wav - | oggenc --ignorelength -q 6 -o game/assets/audio/how-can-i-do-this.ogg -
 ```
 
 **Sound effects**: there are no recorded sound effects. `tools/synth_door_shut.py` synthesises the entrance door's slam and latch by modal synthesis (decaying sine modes struck by filtered noise; the script's docstring cites the sources) with Python's standard library alone, the same on every run, and `oggenc` encodes it:
