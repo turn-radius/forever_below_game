@@ -90,6 +90,8 @@ impl Default for Playlist {
                 "audio/im-right-where-i-started.ogg",
                 "audio/missing-friends.ogg",
                 "audio/sinking-bass.ogg",
+                "audio/falling-bass.ogg",
+                "audio/how-can-i-do-this.ogg",
             ]
             .map(String::from)
             .into(),
@@ -532,9 +534,9 @@ mod tests {
     const FADE: f32 = 3.0;
 
     #[test]
-    fn playlist_opens_on_forever_below_and_holds_all_nineteen_tracks() {
+    fn playlist_opens_on_forever_below_and_holds_every_track() {
         let tracks = Playlist::default().tracks;
-        assert_eq!(tracks.len(), 19);
+        assert_eq!(tracks.len(), 21);
         assert_eq!(tracks[0], "audio/forever-below.ogg");
     }
 
