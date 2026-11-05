@@ -161,7 +161,7 @@ school = "Divine"
 cost = 2.0
 range = 0.0
 seconds = 0.0
-known = true
+known = false
 power = 0.0
 
 # Raises the caster's armour class (not the Ward term, which is another thing).
@@ -172,7 +172,7 @@ school = "Divine"
 cost = 2.0
 range = 0.0
 seconds = 0.0
-known = true
+known = false
 power = 0.0
 
 [casting.terms.frighten]

@@ -32,6 +32,8 @@ pub fn prayer_noun(id: &str) -> String {
     match id {
         "heal" => "Healing".to_string(),
         "cure" => "Curing".to_string(),
+        "smite" => "Smiting".to_string(),
+        "shield" => "Shielding".to_string(),
         _ => format!("the {}", term_name(id)),
     }
 }
@@ -139,5 +141,7 @@ mod tests {
         assert!(prayer_scroll(5, "").is_none());
         assert_eq!(scroll.clone().in_world_at(&lore(&["cure"]), None, true).prayer(), Some("heal"), "kept wherever it goes");
         assert_eq!(prayer_scroll(5, "cone").unwrap().name, "Scroll of the Cone");
+        assert_eq!(prayer_scroll(5, "smite").unwrap().name, "Scroll of Smiting");
+        assert_eq!(prayer_scroll(5, "shield").unwrap().name, "Scroll of Shielding");
     }
 }

@@ -730,7 +730,8 @@ mod tests {
 
     #[test]
     fn the_book_composes_smite_and_shows_an_instant_prayer_sensibly() {
-        let (rules, book, mut draft) = start();
+        let (rules, mut book, mut draft) = start();
+        book.unlock_with(&rules, "smite");
         // Smite only reaches what you see, so the reach comes first.
         let refused = draft.pick(&rules, &book, Casting::Divine, TermKind::Effect, "smite").unwrap_err();
         assert_eq!(refused.say(), "Smite must reach at one you see");
@@ -747,7 +748,8 @@ mod tests {
 
     #[test]
     fn the_book_composes_shield_for_the_caster_alone() {
-        let (rules, book, mut draft) = start();
+        let (rules, mut book, mut draft) = start();
+        book.unlock_with(&rules, "shield");
         draft.pick(&rules, &book, Casting::Divine, TermKind::Effect, "shield").unwrap();
         draft.pick(&rules, &book, Casting::Divine, TermKind::Reach, "self").unwrap();
         let shield = draft.as_written(Casting::Divine);
@@ -770,7 +772,9 @@ mod tests {
         for id in Spellbook::scroll_terms(rules, Casting::Divine) {
             assert_eq!(unlocked_by(rules, Casting::Divine, &id), "unlocked by a prayer scroll", "{id}");
         }
-        assert_eq!(unlocked_by(rules, Casting::Divine, "cone"), "unlocked by a prayer scroll");
+        for id in ["cone", "smite", "shield"] {
+            assert_eq!(unlocked_by(rules, Casting::Divine, id), "unlocked by a prayer scroll", "{id}");
+        }
         assert_eq!(unlocked_by(rules, Casting::Divine, "light"), "not yet unlocked");
     }
 
@@ -796,9 +800,9 @@ mod tests {
         assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Ok(false));
         let written = book.find("Hand of Mercy").expect("kept under its trimmed name");
         assert_eq!((written.effect.as_str(), written.reach.as_str()), ("light", "touch"));
-        assert_eq!(book.written.len(), 4, "Divine Light, Smite and Shield are still there");
+        assert_eq!(book.written.len(), 2, "Divine Light is still there");
         assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Ok(true), "the same name is rewritten");
-        assert_eq!(book.written.len(), 4);
+        assert_eq!(book.written.len(), 2);
     }
 
     #[test]
@@ -808,7 +812,7 @@ mod tests {
             draft.name = name.into();
             assert_eq!(draft.save(&rules, &mut book, Casting::Divine), Err(ComposeError::Unnamed));
         }
-        assert_eq!(book.written.len(), 3);
+        assert_eq!(book.written.len(), 1);
     }
 
     #[test]
