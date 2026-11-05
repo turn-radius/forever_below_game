@@ -1,11 +1,11 @@
 //! Casting in the game: the prayers and spells every caster shares ([`fb_character::casting`]).
 //!
 //! A caster writes prayers from terms ([`Spellbook`], on the delver as [`DelverSpellbook`] and
-//! saved with them); a cleric starts with Divine Light, Smite and Shield written. The Pray key
+//! saved with them); a cleric starts with Divine Light written, and learns other terms from scrolls. The Pray key
 //! ([`Action::Pray`], C) casts the chosen prayer at the chosen tier; the tier key
 //! ([`Action::CastTier`], V) steps the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
 //! ([`AbilitySlots`]): the slot's key then casts it at the chosen tier. A cleric starts with
-//! Divine Light, Smite and Shield in the first free slots; in the inventory the slot's key with the
+//! Divine Light in the first free slot; in the inventory the slot's key with the
 //! mouse over nothing binds the chosen prayer to that slot.
 //!
 //! Every cast goes through a [`CastRequest`] message, which anything can send. [`cast_requests`]
