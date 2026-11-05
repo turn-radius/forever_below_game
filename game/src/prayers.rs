@@ -297,7 +297,13 @@ mod tests {
         let mut character = Character::roll(1);
         character.class = Class::Cleric;
         app.insert_resource(character);
-        let book = DelverSpellbook(Spellbook::starting(fb_character::Casting::Divine));
+        // A cleric who has read the scrolls and written both prayers.
+        let mut book = Spellbook::starting(fb_character::Casting::Divine);
+        for (term, written) in [("smite", fb_character::casting::Written::smite()), ("shield", fb_character::casting::Written::shield())] {
+            book.unlock(term);
+            book.save(written).unwrap();
+        }
+        let book = DelverSpellbook(book);
         let player = app.world_mut().spawn((Player, Transform::default(), book, DelverMana(Mana { points: mana, max: 20.0 }))).id();
         (app, player)
     }

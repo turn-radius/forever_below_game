@@ -314,6 +314,22 @@ mod tests {
     }
 
     #[test]
+    fn a_scroll_teaches_smite_and_shield_which_a_cleric_then_writes_and_casts() {
+        use fb_character::casting::{Written, cast};
+        use fb_character::{Casting, Mana};
+        let rules = fb_character::rules::defaults();
+        let pool = crate::rules::prayer_pool(rules);
+        let mut book = fb_character::casting::Spellbook::starting(Casting::Divine);
+        for (term, written) in [("smite", Written::smite()), ("shield", Written::shield())] {
+            assert!(pool.iter().any(|t| t == term), "{term} is found on scrolls and a healer's shelf");
+            assert!(book.save(written.clone()).is_err(), "{term} cannot be written before it is read");
+            assert!(pray(Some(&mut book), true, rules, term).starts_with("You learn"));
+            book.save(written.clone()).unwrap();
+            assert!(cast(&mut Mana::full(10.0), Casting::Divine, &book.unlocked, &written, 1).is_ok(), "{term}");
+        }
+    }
+
+    #[test]
     fn capture_entries_name_a_tongue_a_size_and_a_seed() {
         let book = teaching_for_capture("Demon:book:5", 0).unwrap();
         assert_eq!((book.base.as_str(), book.seed, book.tongue()), ("Book", 5, Some(fb_denizens::DenizenKind::Demon)));

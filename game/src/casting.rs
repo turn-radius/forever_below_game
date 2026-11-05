@@ -1,11 +1,11 @@
 //! Casting in the game: the prayers and spells every caster shares ([`fb_character::casting`]).
 //!
 //! A caster writes prayers from terms ([`Spellbook`], on the delver as [`DelverSpellbook`] and
-//! saved with them); a cleric starts with Divine Light, Smite and Shield written. The Pray key
+//! saved with them); a cleric starts with Divine Light written, and learns other terms from scrolls. The Pray key
 //! ([`Action::Pray`], C) casts the chosen prayer at the chosen tier; the tier key
 //! ([`Action::CastTier`], V) steps the tier 1, 2, 3 and round again. A quickslot can hold a written prayer as well as an item
 //! ([`AbilitySlots`]): the slot's key then casts it at the chosen tier. A cleric starts with
-//! Divine Light, Smite and Shield in the first free slots; in the inventory the slot's key with the
+//! Divine Light in the first free slot; in the inventory the slot's key with the
 //! mouse over nothing binds the chosen prayer to that slot.
 //!
 //! Every cast goes through a [`CastRequest`] message, which anything can send. [`cast_requests`]
@@ -162,19 +162,13 @@ fn forget_the_abilities(mut slots: ResMut<AbilitySlots>, mut chosen: ResMut<Chos
     *chosen = Chosen::default();
 }
 
-/// The prayers a new cleric holds in their quickslots, in order, each in the first slot with
-/// nothing in it: Divine Light, Smite, Shield.
-const STARTING_PRAYERS: [&str; 3] = ["Divine Light", "Smite", "Shield"];
-
-/// A new cleric holds their [`STARTING_PRAYERS`] in the first slots with nothing in them.
+/// A new cleric holds Divine Light in the first slot with nothing in it.
 fn give_clerics_their_prayer(new: Query<(), Added<Player>>, character: Option<Res<Character>>, items: Res<Quickslots>, mut slots: ResMut<AbilitySlots>) {
     if new.is_empty() || character.is_none_or(|c| c.class.casting() != Casting::Divine) || slots.0.iter().any(Option::is_some) {
         return;
     }
-    for name in STARTING_PRAYERS {
-        if let Some(free) = (0..SLOTS).find(|&s| items.get(s).is_none() && slots.get(s).is_none()) {
-            slots.bind(free, name);
-        }
+    if let Some(free) = (0..SLOTS).find(|&s| items.get(s).is_none()) {
+        slots.bind(free, "Divine Light");
     }
 }
 
@@ -793,7 +787,8 @@ fn shimmer_baubles(
 /// `FB_PRAY_DRAIN=1` empties the pool to show a failed cast. `FB_PRAY_TURN=180` turns the
 /// delver that many degrees first (back at the door behind them), and `FB_PRAY_LASTS=150` has
 /// the light last only that many game seconds, to see it sputter out. `FB_PRAY_NAME=Smite`
-/// casts that prayer instead of the chosen one. The prayer's quickslot
+/// casts that prayer instead of the chosen one (`Smite` and `Shield` are learned and written first,
+/// as a scroll would let them be, and held in the next free slot). The prayer's quickslot
 /// flashes as if its key were pressed, since captures ignore the keyboard. `FB_PRAY_WRITE=heal`
 /// (or `cure`) first unlocks that term, writes a self-reach, short prayer of it ("Mending Hand",
 /// "Cleansing Word") and chooses it, so `FB_PRAY=1` casts it. For captures.
@@ -806,7 +801,8 @@ fn debug_cast(
     mut books: Query<&mut DelverSpellbook, With<Player>>,
     mut lights: Query<&mut DivineLight, Added<DivineLight>>,
     clock: Option<Res<GameClock>>,
-    slots: Res<AbilitySlots>,
+    mut slots: ResMut<AbilitySlots>,
+    items: Res<Quickslots>,
     mut rings: Query<&mut crate::quickslots::SlotGlow>,
 ) {
     *frames += 1;
@@ -847,6 +843,19 @@ fn debug_cast(
             && !name.trim().is_empty()
         {
             chosen.name = name.trim().to_string();
+            let learned = match chosen.name.as_str() {
+                "Smite" => Some(fb_character::casting::Written::smite()),
+                "Shield" => Some(fb_character::casting::Written::shield()),
+                _ => None,
+            };
+            if let (Some(written), Some(mut book)) = (learned, books.iter_mut().next()) {
+                book.0.unlocked.insert(written.effect.clone());
+                book.0.written.retain(|w| w.name != written.name);
+                book.0.written.push(written);
+                if let Some(free) = (0..SLOTS).find(|&s| slots.get(s).is_none() && items.get(s).is_none()) {
+                    slots.bind(free, &chosen.name);
+                }
+            }
         }
         if let Some(tier) = std::env::var("FB_PRAY_TIER").ok().and_then(|v| v.trim().parse::<u8>().ok()) {
             chosen.tier = tier.clamp(1, MAX_TIER);
@@ -1307,12 +1316,16 @@ mod tests {
     }
 
     #[test]
-    fn a_new_cleric_holds_divine_light_smite_and_shield_in_the_first_three_slots() {
-        let (app, player) = delve(true, 10.0);
+    fn a_new_cleric_holds_only_divine_light_and_has_not_written_smite_or_shield() {
+        let (mut app, player) = delve(true, 10.0);
         let slots = app.world().resource::<AbilitySlots>();
-        assert_eq!((slots.get(0), slots.get(1), slots.get(2)), (Some("Divine Light"), Some("Smite"), Some("Shield")));
+        assert_eq!((slots.get(0), slots.get(1), slots.get(2)), (Some("Divine Light"), None, None));
         let book = &app.world().get::<DelverSpellbook>(player).unwrap().0;
-        assert_eq!(book.written.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Divine Light", "Smite", "Shield"]);
+        assert_eq!(book.written.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Divine Light"]);
+        assert!(!book.unlocked.contains("smite") && !book.unlocked.contains("shield"));
+        app.world_mut().write_message(CastRequest { name: "Smite".into(), tier: 1 });
+        app.update();
+        assert_eq!(pool(&app, player), 10.0, "what is not written cannot be cast");
     }
 
     #[test]
@@ -1364,7 +1377,7 @@ mod tests {
         assert_eq!(app.world().resource::<Chosen>().name, "", "a fighter chooses nothing");
         app.world_mut().resource_mut::<Character>().class = crate::character::Class::Cleric;
         app.update();
-        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 3);
+        assert_eq!(app.world().get::<DelverSpellbook>(player).unwrap().0.written.len(), 1);
         assert_eq!(app.world().resource::<Chosen>().name, "Divine Light");
     }
 
@@ -1535,7 +1548,11 @@ mod tests {
 
     #[test]
     fn a_slot_holding_shield_shows_its_time_left_and_only_while_it_holds() {
-        let (mut app, _) = delve(true, 20.0);
+        let (mut app, player) = delve(true, 20.0);
+        let mut book = app.world_mut().get_mut::<DelverSpellbook>(player).unwrap();
+        book.0.unlock("shield");
+        book.0.save(fb_character::casting::Written::shield()).unwrap();
+        app.world_mut().resource_mut::<AbilitySlots>().bind(2, "Shield");
         let slot = app.world_mut().spawn((crate::quickslots::QuickSlot(2), Node::default(), crate::time_left::TimeLeft(None))).id();
         let light_slot = app.world_mut().spawn((crate::quickslots::QuickSlot(0), Node::default(), crate::time_left::TimeLeft(None))).id();
         app.update();
