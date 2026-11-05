@@ -541,7 +541,8 @@ fn light_the_stage(
 }
 
 /// For captures (`FB_PLAY_EFFECT=<name>`): a moment into the delve, plays that effect from the
-/// eye on a point of the floor 40 units ahead.
+/// eye on a point of the floor 40 units ahead (`FB_PLAY_FROM=ahead` casts it from a figure
+/// standing there instead, to see it from outside).
 fn debug_play_effect(mut frames: Local<u32>, mut plays: MessageWriter<PlayEffect>, eyes: Query<&GlobalTransform, With<PlayerCamera>>, players: Query<&GlobalTransform, With<Player>>) {
     if *frames >= 60 {
         return;
@@ -553,7 +554,13 @@ fn debug_play_effect(mut frames: Local<u32>, mut plays: MessageWriter<PlayEffect
     let Ok(name) = std::env::var("FB_PLAY_EFFECT") else { return };
     let (Some(eye), Some(feet)) = (eyes.iter().next(), players.iter().next()) else { return };
     let ahead = Vec3::new(eye.forward().x, 0.0, eye.forward().z).normalize_or(Vec3::NEG_Z);
-    plays.write(PlayEffect::new(name.trim(), 7).at(feet.translation() + ahead * 40.0));
+    let there = feet.translation() + ahead * 40.0;
+    if std::env::var("FB_PLAY_FROM").is_ok_and(|v| v == "ahead") {
+        // A stand-in for a folk caster: the caster stands where the effect would otherwise land, so the swirl is seen from outside.
+        plays.write(PlayEffect::new(name.trim(), 7).from(Caster::Point { eye: there + Vec3::Y * 16.0, forward: -ahead }));
+    } else {
+        plays.write(PlayEffect::new(name.trim(), 7).at(there));
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
-# Heal: warm gold and soft green motes spiral upward around the view and draw in, with a soft warm
-# glow that swells and fades. Played at the delver when a Heal prayer mends something. See
-# docs/effects.md.
+# Heal: three strands of warm gold motes (and a few soft green ones) wind up a body-wide column
+# around the delver from the feet past the head, trailing short streaks and wisps so the spiral
+# reads, under a warm glow that swells and fades. Played at the delver when a Heal prayer mends
+# something. A pillar of light washes down over the delver with it. Cure is its sibling. See docs/effects.md.
 name = "heal"
-length = 1.6
+length = 1.9
 lasts = false
 bloom_in = 0.5
 sputter_out = 0.7
@@ -15,69 +16,156 @@ colour = [1.0, 0.88, 0.55]
 follows = "envelope"
 
 [[emitters]]
-name = "spiral"
+name = "gold"
 card = "mote"
-size = [{ at = 0.0, size = 1.0 }, { at = 0.4, size = 2.6 }, { at = 1.0, size = 0.8 }]
-colour = [{ at = 0.0, rgb = [1.0, 0.85, 0.45] }, { at = 0.6, rgb = [0.75, 1.0, 0.6] }, { at = 1.0, rgb = [1.0, 0.95, 0.75] }]
+size = [{ at = 0.0, size = 0.5 }, { at = 0.5, size = 0.7 }, { at = 1.0, size = 0.3 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.85, 0.4] }, { at = 1.0, rgb = [1.0, 0.97, 0.75] }]
 
 [emitters.spawn]
 at = "caster"
-nudge = [0.0, -4.0, 14.0]
+nudge = [0.0, -15.0, 0.0]
+
+[emitters.timing]
+kind = "stream"
+count = 260
+life = 1.2
+start = 0.0
+end = 1.1
+
+[emitters.motion]
+kind = "helix"
+speed = 17.0
+scatter = 0.3
+orbit_radius = 3.6
+orbits = 1.5
+strands = 3
+
+[[emitters]]
+name = "green"
+card = "mote"
+size = [{ at = 0.0, size = 0.45 }, { at = 0.5, size = 0.65 }, { at = 1.0, size = 0.3 }]
+colour = [{ at = 0.0, rgb = [0.55, 1.0, 0.45] }, { at = 1.0, rgb = [0.85, 1.0, 0.7] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -15.0, 0.0]
 
 [emitters.timing]
 kind = "stream"
 count = 70
-life = 1.1
-start = 0.0
-end = 1.5
+life = 1.2
+start = 0.05
+end = 1.1
 
 [emitters.motion]
-kind = "orbit"
-speed = 7.0
-orbit_radius = 10.0
+kind = "helix"
+speed = 17.0
+scatter = 0.3
+orbit_radius = 3.6
 orbits = 1.5
+strands = 3
 
 [[emitters]]
-name = "gather"
-card = "mote"
-size = [{ at = 0.0, size = 0.8 }, { at = 0.5, size = 1.8 }, { at = 1.0, size = 0.5 }]
-colour = [{ at = 0.0, rgb = [0.7, 1.0, 0.55] }, { at = 1.0, rgb = [1.0, 0.9, 0.55] }]
+name = "streaks"
+card = "spark"
+tail = 0.025
+size = [{ at = 0.0, size = 0.35 }, { at = 1.0, size = 0.15 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.7] }, { at = 1.0, rgb = [1.0, 0.8, 0.4] }]
 
 [emitters.spawn]
-shape = "ring"
 at = "caster"
-spread = 16.0
-nudge = [0.0, -8.0, 12.0]
+nudge = [0.0, -15.0, 0.0]
 
 [emitters.timing]
 kind = "stream"
-count = 40
-life = 0.9
-start = 0.1
-end = 1.5
+count = 90
+life = 1.2
+start = 0.0
+end = 1.1
 
 [emitters.motion]
-kind = "rise"
-speed = 9.0
-scatter = 2.0
+kind = "helix"
+speed = 17.0
+scatter = 0.3
+orbit_radius = 3.6
+orbits = 1.5
+strands = 3
 
 [[emitters]]
-name = "sparks"
-card = "spark"
-tail = 0.08
-size = [{ at = 0.0, size = 0.6 }, { at = 1.0, size = 0.15 }]
-colour = [{ at = 0.0, rgb = [1.0, 0.97, 0.8] }, { at = 1.0, rgb = [1.0, 0.8, 0.4] }]
+name = "wisps"
+card = "wisp"
+size = [{ at = 0.0, size = 0.9 }, { at = 0.5, size = 1.6 }, { at = 1.0, size = 1.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.8, 0.4] }, { at = 1.0, rgb = [1.0, 0.95, 0.7] }]
 
 [emitters.spawn]
 at = "caster"
-nudge = [0.0, -2.0, 14.0]
+nudge = [0.0, -15.0, 0.0]
+
+[emitters.timing]
+kind = "stream"
+count = 30
+life = 1.2
+start = 0.0
+end = 1.1
+
+[emitters.motion]
+kind = "helix"
+speed = 17.0
+scatter = 0.2
+orbit_radius = 3.6
+orbits = 1.5
+strands = 3
+
+[[emitters]]
+name = "pillar"
+card = "beam"
+tail = 26.0
+size = [{ at = 0.0, size = 4.0 }, { at = 0.3, size = 10.0 }, { at = 1.0, size = 7.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.9, 0.6] }, { at = 1.0, rgb = [1.0, 0.8, 0.45] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -16.0, 5.0]
 
 [emitters.timing]
 kind = "burst"
-count = 14
-life = 0.9
-start = 0.5
+count = 1
+life = 1.1
+start = 0.1
+
+[[emitters]]
+name = "wash"
+card = "beam"
+tail = 9.0
+size = [{ at = 0.0, size = 8.0 }, { at = 1.0, size = 11.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.98, 0.85] }, { at = 1.0, rgb = [1.0, 0.92, 0.65] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, 10.0, 5.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.95
+start = 0.1
 
 [emitters.motion]
-kind = "drift"
-speed = 5.0
+kind = "fall"
+speed = 30.0
+
+[[emitters]]
+name = "floor"
+card = "ring"
+size = [{ at = 0.0, size = 4.0 }, { at = 0.5, size = 22.0 }, { at = 1.0, size = 34.0 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.95, 0.75] }, { at = 1.0, rgb = [1.0, 0.75, 0.35] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -16.0, 0.0]
+
+[emitters.timing]
+kind = "burst"
+count = 1
+life = 0.8
+start = 0.85
