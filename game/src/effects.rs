@@ -766,108 +766,51 @@ mod tests {
         assert_eq!(app.world().resource::<EffectLibrary>().get("test_burst").unwrap().length, 9.0);
     }
 
-    /// An app with the shield's shimmer kept by its prayer, as the game keeps it.
-    fn shimmered() -> App {
-        let mut app = app();
-        app.init_resource::<crate::game_clock::GameClock>().init_resource::<crate::tuning::Tuning>();
-        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
-        app.add_systems(Update, (crate::prayers::start_the_shimmer, crate::prayers::hold_the_shimmer).chain().in_set(DelveSystems));
-        app
-    }
-
-    fn shimmering(app: &mut App, shield: Entity) -> usize {
-        app.world_mut().query::<&Playing>().iter(app.world()).filter(|p| p.owner() == Some(shield)).count()
-    }
-
-    #[test]
-    fn the_shimmer_sputters_out_a_sputter_before_the_end_at_the_clocks_pace() {
-        let mut app = shimmered();
-        let ratio = f64::from(app.world().resource::<crate::tuning::Tuning>().clock.game_seconds_per_second);
-        let lead = 6.0 * ratio;
-        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1000.0, lasts: 1000.0 }).id();
-        app.world_mut().resource_mut::<crate::game_clock::GameClock>().advance(1000.0 - lead - 5.0);
-        for _ in 0..300 {
-            app.update();
-        }
-        assert_eq!(shimmering(&mut app, shield), 1, "still going before its lead");
-        app.world_mut().resource_mut::<crate::game_clock::GameClock>().advance(10.0);
-        for _ in 0..300 {
-            app.update();
-        }
-        assert_eq!(shimmering(&mut app, shield), 0, "gone once the shield is that close to its end");
-    }
-
-    #[test]
-    fn recasting_stops_the_old_shimmer_and_starts_the_new() {
-        let mut app = shimmered();
-        let old = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
-        for _ in 0..10 {
-            app.update();
-        }
-        assert_eq!(shimmering(&mut app, old), 1);
-        app.world_mut().despawn(old);
-        let new = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 2, bonus: 4, expires: 1e9, lasts: 1e9 }).id();
-        for _ in 0..300 {
-            app.update();
-        }
-        assert_eq!((shimmering(&mut app, old), shimmering(&mut app, new)), (0, 1));
-    }
-
-    #[test]
-    fn a_shield_with_no_shimmer_gets_one_again() {
-        let mut app = shimmered();
-        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
-        for _ in 0..6 {
-            app.update();
-        }
-        assert_eq!(shimmering(&mut app, shield), 1, "started with no one asking");
-        let lost = app.world_mut().query::<(Entity, &Playing)>().iter(app.world()).map(|(e, _)| e).collect::<Vec<_>>();
-        for e in lost {
-            app.world_mut().despawn(e);
-        }
-        for _ in 0..8 {
-            app.update();
-        }
-        assert_eq!(shimmering(&mut app, shield), 1, "and again once it is lost");
-    }
-
-    #[test]
-    fn the_shield_shimmer_holds_until_its_prayer_ends_and_then_sputters_out() {
-        let mut app = app();
-        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
-        app.add_systems(Update, crate::prayers::hold_the_shimmer.in_set(DelveSystems));
-        let shield = app.world_mut().spawn(crate::prayers::ShieldPrayer { tier: 1, bonus: 2, expires: 1e9, lasts: 1e9 }).id();
-        app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("shield", 1).owned_by(shield));
-        for _ in 0..200 {
-            app.update();
-        }
-        assert_eq!(playing(&mut app), 1, "a lasting effect holds past its length while the shield stands");
-        assert!(!app.world_mut().query::<&Playing>().single(app.world()).unwrap().particles().is_empty());
-        app.world_mut().despawn(shield);
-        for _ in 0..300 {
-            app.update();
-        }
-        assert_eq!(playing(&mut app), 0, "it goes with the shield");
-    }
-
     #[test]
     fn the_new_effects_validate() {
         for (name, text) in [
             ("smite", include_str!("../../data/effects/smite.toml")),
-            ("shield", include_str!("../../data/effects/shield.toml")),
             ("heal", include_str!("../../data/effects/heal.toml")),
             ("cure", include_str!("../../data/effects/cure.toml")),
-            ("shield_struck", include_str!("../../data/effects/shield_struck.toml")),
         ] {
             let effect = Effect::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(effect.name, name);
         }
     }
 
+    /// A small lasting effect: a ring of motes that holds for as long as its owner does.
+    const LASTING: &str = r#"
+name = "shield"
+length = 8.0
+lasts = true
+bloom_in = 1.2
+sputter_out = 6.0
+
+[[emitters]]
+name = "shimmer"
+card = "mote"
+size = [{ at = 0.0, size = 0.3 }, { at = 1.0, size = 0.3 }]
+colour = [{ at = 0.0, rgb = [1.0, 0.9, 0.6] }, { at = 1.0, rgb = [1.0, 0.8, 0.4] }]
+
+[emitters.spawn]
+at = "caster"
+nudge = [0.0, -1.0, 6.0]
+
+[emitters.timing]
+kind = "lasting"
+count = 36
+life = 8.0
+
+[emitters.motion]
+kind = "orbit"
+orbit_radius = 9.0
+orbits = 1.0
+"#;
+
     #[test]
     fn an_owned_lasting_effect_survives_the_cap_while_others_play() {
         let mut app = app();
-        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(include_str!("../../data/effects/shield.toml")).unwrap());
+        app.world_mut().resource_mut::<EffectLibrary>().insert("shield", Effect::from_toml(LASTING).unwrap());
         let owner = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<Messages<PlayEffect>>().write(PlayEffect::new("shield", 1).owned_by(owner));
         app.update();
